@@ -122,7 +122,9 @@ async fn new_codecs_recode_and_mux() {
             audio_copy: false,
             ..Default::default()
         };
-        let res = runner.convert_video(&src, &out, &opts, None, None).await;
+        let res = runner
+            .convert_video(&src, &out, &opts, None, None, None)
+            .await;
         assert!(res.is_ok(), "{enc} -> {cont} recode failed: {res:?}");
         assert_eq!(
             probe_video_codec(&out).as_deref(),

@@ -103,6 +103,9 @@ pub struct PipelineMessage {
     /// metadata instead of stamping their own name. `None` means no
     /// prior stage set it — pass-through stages use their own name.
     pub encoding_tool: Option<String>,
+    /// Job-scoped cancellation token. Fatal `FFmpeg` stages clone this into their
+    /// blocking work so an in-progress encode aborts promptly.
+    pub cancel: CancellationToken,
 }
 
 // ---------------------------------------------------------------------------
@@ -194,6 +197,15 @@ impl Pipeline {
 
         let (error_tx, error_rx) = oneshot::channel::<PipelineError>();
 
+        // `None` callers get a fresh token that nobody else holds — zero-cost.
+        // The isolation guarantee is load-bearing: a `None` caller can never
+        // observe a spurious cancel because the locally-created token is held
+        // exclusively by this function's scope (cloned only into the per-stage
+        // tasks below; never escapes outward via channels or shared state).
+        // A future refactor that hands the local token to a sibling supervisor
+        // task would silently break this property — keep it scope-local.
+        let token = cancel.unwrap_or_default();
+
         let msg = PipelineMessage {
             info,
             tracker,
@@ -205,16 +217,8 @@ impl Pipeline {
             error_tx: Some(error_tx),
             warnings: Vec::new(),
             encoding_tool: None,
+            cancel: token.clone(),
         };
-
-        // `None` callers get a fresh token that nobody else holds — zero-cost.
-        // The isolation guarantee is load-bearing: a `None` caller can never
-        // observe a spurious cancel because the locally-created token is held
-        // exclusively by this function's scope (cloned only into the per-stage
-        // tasks below; never escapes outward via channels or shared state).
-        // A future refactor that hands the local token to a sibling supervisor
-        // task would silently break this property — keep it scope-local.
-        let token = cancel.unwrap_or_default();
 
         // Build channel chain: one mpsc(1) between consecutive stages.
         // first_tx → stage_0 → stage_1 → ... → stage_N → final_rx
@@ -245,7 +249,11 @@ impl Pipeline {
         let current_files = tokio::task::spawn_blocking(move || {
             let mut tracker = final_msg.tracker;
             tracker.cleanup();
-            tracker.current_files
+            // `cleanup()` set `committed = true`, disarming the cancel-cleanup
+            // `Drop`. `FileTracker` now implements `Drop`, so the renamed final
+            // files can't be moved out of the field directly — take them,
+            // leaving the dropped tracker empty (and already committed).
+            std::mem::take(&mut tracker.current_files)
         })
         .await
         .map_err(|e| anyhow::anyhow!("pipeline cleanup task join failed: {e}"))?;

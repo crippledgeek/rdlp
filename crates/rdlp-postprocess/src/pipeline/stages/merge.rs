@@ -229,7 +229,14 @@ impl PipelineStage for MergeStage {
         });
 
         self.ffmpeg
-            .merge(&video_file, &audio_file, &output_path, &opts, callback)
+            .merge(
+                &video_file,
+                &audio_file,
+                &output_path,
+                &opts,
+                callback,
+                Some(msg.cancel.clone()),
+            )
             .await
             .context("merge stage failed")?;
 
@@ -273,6 +280,7 @@ mod tests {
             error_tx: Some(error_tx),
             warnings: Vec::new(),
             encoding_tool: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
         }
     }
 

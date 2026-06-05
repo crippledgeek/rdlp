@@ -27,6 +27,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use log::{debug, warn};
+use tokio_util::sync::CancellationToken;
 
 use crate::error::{FfmpegResultExt as _, PostProcessError};
 
@@ -54,7 +55,9 @@ impl FFmpegRunner {
     /// When `resilient` is true, the input is opened with
     /// `discardcorrupt+genpts` format flags to recover from corrupt
     /// containers. This is used as Tier 3 recovery in `with_mux_retry`.
-    #[allow(clippy::too_many_lines)]
+    // The cancel token pushes the unified encode helper to 8 params; the
+    // build_filter closure + cancel are both load-bearing per-call inputs.
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)]
     pub(super) fn encode_audio_only_sync(
         input: &Path,
         output: &Path,
@@ -62,6 +65,7 @@ impl FFmpegRunner {
         label: &str,
         resilient: bool,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+        cancel: Option<&CancellationToken>,
         build_filter: impl FnOnce(
             /*fmt:*/ &str,
             /*rate:*/ u32,
@@ -327,6 +331,7 @@ impl FFmpegRunner {
         let mut last_progress = Instant::now();
         let progress_throttle = Duration::from_millis(100);
         for result in ictx.packets() {
+            crate::ffmpeg::transcode::check_cancelled(cancel)?;
             let (stream, packet) =
                 result.ff_context("failed to read packet during audio encode")?;
             if stream.index() != audio_ist_index {

@@ -27,6 +27,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use log::{debug, info, warn};
+use tokio_util::sync::CancellationToken;
 
 use crate::error::{PostProcessError, Result};
 
@@ -60,6 +61,7 @@ impl FFmpegRunner {
         output: impl AsRef<Path>,
         opts: &NormalizeOptions,
         progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>>,
+        cancel: Option<CancellationToken>,
     ) -> Result<()> {
         let input = input.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
@@ -68,12 +70,20 @@ impl FFmpegRunner {
             let (effective_input, salvage_temp) = prepare_input_with_salvage(&input, opts.salvage)?;
 
             let result = match opts.mode {
-                AudioNormMode::Peak => {
-                    Self::normalize_peak_sync(&effective_input, &output, &opts, progress_fn.clone())
-                }
-                AudioNormMode::Loudnorm => {
-                    Self::normalize_loudnorm_sync(&effective_input, &output, &opts, progress_fn)
-                }
+                AudioNormMode::Peak => Self::normalize_peak_sync(
+                    &effective_input,
+                    &output,
+                    &opts,
+                    progress_fn.clone(),
+                    cancel.as_ref(),
+                ),
+                AudioNormMode::Loudnorm => Self::normalize_loudnorm_sync(
+                    &effective_input,
+                    &output,
+                    &opts,
+                    progress_fn,
+                    cancel.as_ref(),
+                ),
             };
 
             // Clean up salvage temp file regardless of success/failure
@@ -94,8 +104,9 @@ impl FFmpegRunner {
         output: &Path,
         opts: &NormalizeOptions,
         progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>>,
+        cancel: Option<&CancellationToken>,
     ) -> anyhow::Result<()> {
-        let analysis = Self::analyze_peak_sync(input, opts.target_peak_db)?;
+        let analysis = Self::analyze_peak_sync(input, opts.target_peak_db, cancel)?;
 
         debug!(
             "Peak analysis: peak={:.1} dBFS, RMS={:.1} dBFS, gain={:.1} dB",
@@ -121,7 +132,14 @@ impl FFmpegRunner {
             progress_fn.map(|p| -> Arc<dyn Fn(f64) + Send + Sync> {
                 Arc::new(move |frac: f64| p(frac.mul_add(0.7, 0.3)))
             });
-        Self::apply_peak_gain_sync(input, output, &analysis, opts, encode_progress.as_deref())
+        Self::apply_peak_gain_sync(
+            input,
+            output,
+            &analysis,
+            opts,
+            encode_progress.as_deref(),
+            cancel,
+        )
     }
 
     /// EBU R128 loudnorm two-pass normalization.
@@ -130,9 +148,10 @@ impl FFmpegRunner {
         output: &Path,
         opts: &NormalizeOptions,
         progress_fn: Option<Arc<dyn Fn(f64) + Send + Sync>>,
+        cancel: Option<&CancellationToken>,
     ) -> anyhow::Result<()> {
         info!("Loudnorm pass 1: analyzing EBU R128 levels...");
-        let measurements = Self::loudnorm_pass1_sync(input, opts)?;
+        let measurements = Self::loudnorm_pass1_sync(input, opts, cancel)?;
 
         debug!(
             "Loudnorm measurements: I={:.1} LUFS, TP={:.1} dBTP, LRA={:.1} LU",
@@ -157,7 +176,13 @@ impl FFmpegRunner {
                     opts.boost_gain_db
                 );
                 // Boost maps to full range 0.0–1.0
-                Self::apply_limiter_boost_sync(input, output, opts, progress_fn.as_deref())?;
+                Self::apply_limiter_boost_sync(
+                    input,
+                    output,
+                    opts,
+                    progress_fn.as_deref(),
+                    cancel,
+                )?;
                 Self::verify_loudness_sync(output, opts)?;
                 return Ok(());
             }
@@ -179,6 +204,7 @@ impl FFmpegRunner {
             opts,
             &measurements,
             pass2_progress.as_deref(),
+            cancel,
         )?;
 
         // Verify output loudness against targets
@@ -197,6 +223,7 @@ impl FFmpegRunner {
         output: &Path,
         opts: &NormalizeOptions,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+        cancel: Option<&CancellationToken>,
     ) -> anyhow::Result<()> {
         let ceiling_db = opts.target_tp - ALIMITER_TP_HEADROOM_DB;
         let limit_linear = 10f64.powf(ceiling_db / 20.0);
@@ -215,6 +242,13 @@ impl FFmpegRunner {
         let mut boost_opts = opts.clone();
         boost_opts.target_peak_db = ceiling_db;
 
-        Self::apply_peak_gain_sync(input, output, &synthetic_analysis, &boost_opts, progress_fn)
+        Self::apply_peak_gain_sync(
+            input,
+            output,
+            &synthetic_analysis,
+            &boost_opts,
+            progress_fn,
+            cancel,
+        )
     }
 }

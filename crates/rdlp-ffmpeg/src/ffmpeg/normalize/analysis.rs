@@ -9,6 +9,7 @@ use std::path::Path;
 
 use anyhow::Context as _;
 use log::{debug, warn};
+use tokio_util::sync::CancellationToken;
 
 use crate::error::{FfmpegResultExt as _, PostProcessError, Result};
 
@@ -32,6 +33,7 @@ pub(super) fn run_analysis_decode_loop(
     input: &Path,
     filter_spec: &str,
     label: &str,
+    cancel: Option<&CancellationToken>,
     on_drain: &mut dyn FnMut(
         &mut ffmpeg_the_third::filter::Graph,
         &mut ffmpeg_the_third::frame::Audio,
@@ -88,6 +90,7 @@ pub(super) fn run_analysis_decode_loop(
     let _log_suppress = LogSuppressGuard::new();
 
     for result in ictx.packets() {
+        crate::ffmpeg::transcode::check_cancelled(cancel)?;
         let (stream, packet) = result.ff_context("failed to read packet during analysis")?;
         if stream.index() != ist_index {
             continue;
@@ -228,6 +231,7 @@ impl FFmpegRunner {
     pub(super) fn analyze_peak_sync(
         input: &Path,
         target_peak_db: f64,
+        cancel: Option<&CancellationToken>,
     ) -> anyhow::Result<PeakAnalysis> {
         let mut peak_db = f64::NEG_INFINITY;
         let mut rms_db = f64::NEG_INFINITY;
@@ -239,6 +243,7 @@ impl FFmpegRunner {
             input,
             astats_spec,
             "peak analysis",
+            cancel,
             &mut |graph, filtered| {
                 drain_astats_metadata(graph, filtered, &mut peak_db, &mut rms_db)
             },
@@ -264,6 +269,7 @@ impl FFmpegRunner {
     pub(super) fn loudnorm_pass1_sync(
         input: &Path,
         opts: &NormalizeOptions,
+        cancel: Option<&CancellationToken>,
     ) -> anyhow::Result<LoudnormMeasurements> {
         let guard = begin_loudnorm_capture()?;
 
@@ -280,6 +286,7 @@ impl FFmpegRunner {
             input,
             &loudnorm_spec,
             "loudnorm analysis",
+            cancel,
             &mut |graph, filtered| drain_discard(graph, filtered),
         )?;
 
@@ -304,7 +311,9 @@ impl FFmpegRunner {
         opts: &NormalizeOptions,
     ) -> anyhow::Result<()> {
         debug!("Loudness verification: analyzing output...");
-        match Self::loudnorm_pass1_sync(output, opts) {
+        // Verification runs post-write on the finished output — never gated by
+        // user cancel (the output already exists; pass `None`).
+        match Self::loudnorm_pass1_sync(output, opts, None) {
             Ok(measured) => {
                 debug!(
                     "Loudness verification: I={:.1} LUFS, TP={:.1} dBTP, LRA={:.1} LU",

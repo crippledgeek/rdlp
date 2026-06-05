@@ -17,13 +17,23 @@ use crate::pipeline::registry::TempRegistry;
 /// the output to `current_files` and move the old files to `temp_files`.
 /// When the pipeline completes successfully, [`cleanup`] deletes all temp files.
 ///
-/// Crash cleanup is handled by [`TempRegistry`] — `FileTracker` does NOT
-/// implement `Drop` with file deletion.
+/// On `Drop` without a prior [`commit`] (or [`cleanup`], which commits as its
+/// last step), `FileTracker` performs graceful-cancel cleanup: it deletes every
+/// uncommitted path it issued via [`temp_path`] plus any `current_files`, and
+/// releases each from [`TempRegistry`]. This prevents partial recode output and
+/// intermediate files from leaking when a job is cancelled mid-pipeline (#335).
+/// [`TempRegistry`] remains the crash/stale backstop for the case where the
+/// process dies before `Drop` runs.
 pub struct FileTracker {
     /// The live files currently being processed.
     pub(crate) current_files: Vec<PathBuf>,
     /// Files that have been superseded by a later stage's output.
     pub(crate) temp_files: Vec<PathBuf>,
+    /// Every path handed out by [`temp_path`] — the uncommitted-output set
+    /// deleted on cancel-drop.
+    issued: Vec<PathBuf>,
+    /// Disarms the `Drop` cleanup once the job succeeds (`commit`/`cleanup`).
+    committed: bool,
     temp_registry: Arc<TempRegistry>,
 }
 
@@ -33,6 +43,8 @@ impl FileTracker {
         Self {
             current_files: files,
             temp_files: Vec::new(),
+            issued: Vec::new(),
+            committed: false,
             temp_registry,
         }
     }
@@ -55,7 +67,7 @@ impl FileTracker {
     /// The path is immediately registered with [`TempRegistry`] so that a
     /// crash before the stage completes will still clean it up.
     #[must_use]
-    pub fn temp_path(&self, base: &Path, ext: &str) -> PathBuf {
+    pub fn temp_path(&mut self, base: &Path, ext: &str) -> PathBuf {
         let dir = base.parent().unwrap_or_else(|| Path::new("."));
         let raw_stem = base.file_stem().and_then(|s| s.to_str()).unwrap_or("video");
         // Strip any existing .rdlp-tmp-{uuid} suffixes to prevent stacking
@@ -64,7 +76,15 @@ impl FileTracker {
         let filename = format!("{stem}.rdlp-tmp-{id}.{ext}");
         let path = dir.join(filename);
         self.temp_registry.register(&path);
+        // Record the issued path so an uncommitted Drop deletes it (#335).
+        self.issued.push(path.clone());
         path
+    }
+
+    /// Disarm the cancel-cleanup `Drop`, marking the job as successfully
+    /// committed so its output files are kept.
+    pub const fn commit(&mut self) {
+        self.committed = true;
     }
 
     /// Return the first current file (convenience for single-file stages).
@@ -119,6 +139,46 @@ impl FileTracker {
                 }
             }
         }
+
+        // Successful completion: disarm the cancel-cleanup Drop.
+        self.committed = true;
+    }
+}
+
+impl Drop for FileTracker {
+    /// Graceful-cancel cleanup: if the job did not [`commit`](FileTracker::commit)
+    /// (or [`cleanup`](FileTracker::cleanup), which commits last), delete every
+    /// uncommitted issued path and any `current_files`, releasing each from the
+    /// [`TempRegistry`] (#335).
+    // Safe: synchronous remove_file in Drop is unavoidable — Drop cannot be
+    // async, and this mirrors the existing justification on `cleanup()` and the
+    // registry's own shutdown hook.
+    #[allow(clippy::disallowed_methods)]
+    fn drop(&mut self) {
+        if self.committed {
+            return;
+        }
+        // Collect into an owned Vec to avoid borrowing self while mutating it.
+        let to_delete: Vec<PathBuf> = self
+            .issued
+            .iter()
+            .chain(self.current_files.iter())
+            .cloned()
+            .collect();
+        for path in to_delete {
+            // The issued and current sets may overlap (mark_temp re-files
+            // issued paths); the exists() guard + idempotent release make this
+            // safe to run per path.
+            if path.exists()
+                && let Err(e) = std::fs::remove_file(&path)
+            {
+                log::warn!(
+                    "FileTracker: failed to delete uncommitted {} on cancel: {e}",
+                    path.display(),
+                );
+            }
+            self.temp_registry.release(&path);
+        }
     }
 }
 
@@ -154,7 +214,7 @@ mod tests {
     #[test]
     fn test_temp_path_generates_unique_uuid_paths() {
         let reg = test_registry();
-        let tracker = FileTracker::new(vec![], reg);
+        let mut tracker = FileTracker::new(vec![], reg);
         let p1 = tracker.temp_path(&PathBuf::from("/tmp/video.mp4"), "mp4");
         let p2 = tracker.temp_path(&PathBuf::from("/tmp/video.mp4"), "mp4");
         assert_ne!(p1, p2);
@@ -169,7 +229,7 @@ mod tests {
         // and causes registration to skip silently.
         let dir = TempDir::new().unwrap();
         let reg = test_registry();
-        let tracker = FileTracker::new(vec![], reg.clone());
+        let mut tracker = FileTracker::new(vec![], reg.clone());
         let path = tracker.temp_path(&dir.path().join("video.mp4"), "mp4");
         assert!(reg.contains(&path));
     }
@@ -191,5 +251,58 @@ mod tests {
         tracker.replace(vec![dir.path().join("new.mp4")]);
         tracker.cleanup();
         assert!(!temp.exists());
+    }
+
+    #[test]
+    fn drop_uncommitted_deletes_issued_temp_output() {
+        let dir = TempDir::new().unwrap();
+        let reg = Arc::new(TempRegistry::new());
+        let input = dir.path().join("in.rdlp-tmp-aaa.mkv");
+        fs::write(&input, b"x").unwrap();
+        let partial = {
+            let mut tracker = FileTracker::new(vec![input.clone()], reg.clone());
+            let out = tracker.temp_path(&input, "mkv"); // issued, NOT replace()-promoted
+            fs::write(&out, b"partial").unwrap();
+            assert!(out.exists());
+            out
+            // tracker dropped here WITHOUT commit() → cancel semantics
+        };
+        assert!(
+            !partial.exists(),
+            "issued partial output must be deleted on uncommitted drop"
+        );
+        assert!(
+            !input.exists(),
+            "input intermediate (current_files) must be deleted too"
+        );
+        assert!(
+            !reg.contains(&partial),
+            "registry entry for partial must be released"
+        );
+    }
+
+    #[test]
+    fn drop_after_commit_keeps_files() {
+        let dir = TempDir::new().unwrap();
+        let reg = Arc::new(TempRegistry::new());
+        let input = dir.path().join("in.rdlp-tmp-bbb.mkv");
+        fs::write(&input, b"x").unwrap();
+        let kept = {
+            let mut tracker = FileTracker::new(vec![input.clone()], reg.clone());
+            let out = tracker.temp_path(&input, "mkv");
+            fs::write(&out, b"final").unwrap();
+            tracker.commit(); // success path disarms Drop
+            out
+        };
+        // `reg` is held alive past the tracker's drop, mirroring production
+        // (`Pipeline` owns the `Arc<TempRegistry>` for its whole lifetime).
+        // Without this keepalive, dropping the last `Arc` triggers
+        // `TempRegistry`'s own sweep, which deletes the committed-but-still-
+        // registered output and masks what this test is asserting.
+        assert!(
+            reg.contains(&kept),
+            "committed output stays registered until pipeline-level cleanup"
+        );
+        assert!(kept.exists(), "committed tracker must NOT delete on drop");
     }
 }

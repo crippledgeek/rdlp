@@ -371,6 +371,7 @@ impl PipelineStage for RecodeStage {
                 &opts,
                 progress_callback,
                 log_callback,
+                Some(msg.cancel.clone()),
             )
             .await
             .context("recode stage failed")?;
@@ -479,6 +480,7 @@ mod tests {
             error_tx: Some(error_tx),
             warnings: Vec::new(),
             encoding_tool: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
         }
     }
 

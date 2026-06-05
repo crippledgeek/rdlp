@@ -7,6 +7,7 @@ mod audio_extract;
 mod audio_pipeline;
 mod audio_pipeline_direct;
 mod audio_recode_pipeline;
+mod cancel;
 pub mod mux_timing;
 #[cfg(test)]
 mod tests;
@@ -16,4 +17,5 @@ mod video_transcode_context;
 mod video_transcode_phases;
 
 // Re-export public(crate) items used by normalize and other modules
+pub use cancel::check_cancelled;
 pub use mux_timing::MuxTimingState;

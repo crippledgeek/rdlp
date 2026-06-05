@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
 use log::debug;
+use tokio_util::sync::CancellationToken;
 
 use crate::error::PostProcessError;
 
@@ -542,6 +543,7 @@ impl FFmpegRunner {
     pub(super) fn run_encode_loop(
         ctx: &mut VideoTranscodeContext<'_>,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
+        cancel: Option<&CancellationToken>,
     ) -> anyhow::Result<()> {
         let VideoTranscodeContext {
             ictx,
@@ -567,6 +569,9 @@ impl FFmpegRunner {
 
         // Process packets: video -> decode/filter/encode, audio -> copy or transcode
         for result in ictx.packets() {
+            // Cooperative cancellation: abort the (CPU-bound, uninterruptible)
+            // encode loop promptly when the job is cancelled (#334).
+            crate::ffmpeg::transcode::check_cancelled(cancel)?;
             let (stream, mut packet) = result
                 .map_err(PostProcessError::from)
                 .context("failed to read packet during video transcode")?;

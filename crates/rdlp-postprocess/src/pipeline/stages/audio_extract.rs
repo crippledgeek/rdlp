@@ -143,7 +143,13 @@ impl PipelineStage for AudioExtractStage {
         });
 
         self.ffmpeg
-            .extract_audio(&input_file, &output_path, &opts, callback)
+            .extract_audio(
+                &input_file,
+                &output_path,
+                &opts,
+                callback,
+                Some(msg.cancel.clone()),
+            )
             .await
             .context("audio extract stage failed")?;
 
@@ -200,6 +206,7 @@ mod tests {
             error_tx: Some(error_tx),
             warnings: Vec::new(),
             encoding_tool: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
         }
     }
 

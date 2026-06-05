@@ -421,7 +421,9 @@ async fn merge_mkv_produces_clean_dts() {
 
     let runner = FFmpegRunner::new().expect("FFmpegRunner::new failed");
     let opts = rdlp_ffmpeg::RemuxOptions::default();
-    let result = runner.merge(&video, &audio, &output, &opts, None).await;
+    let result = runner
+        .merge(&video, &audio, &output, &opts, None, None)
+        .await;
 
     assert!(
         result.is_ok(),

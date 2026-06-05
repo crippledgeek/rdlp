@@ -61,6 +61,7 @@ impl FFmpegRunner {
         output: &Path,
         progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
         encoding_tool_override: Option<&str>,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<()> {
         use std::ffi::CString;
         use std::ptr;
@@ -432,6 +433,10 @@ impl FFmpegRunner {
                 let mut have_audio = read_next_raw(ifmt_audio, audio_stream_idx, apkt);
 
                 loop {
+                    // Cooperative cancel: `?` is leak-safe here — vpkt/apkt are
+                    // RAII `AvPacketOwned` and the IIFE's post-block teardown
+                    // (av_write_trailer + avformat_close/free) runs unconditionally.
+                    crate::ffmpeg::transcode::check_cancelled(cancel)?;
                     match (have_video, have_audio) {
                         (false, false) => break,
                         (true, false) => {

@@ -542,7 +542,7 @@ async fn mux_outputs(
             ..Default::default()
         };
         match runner
-            .merge(video_path, audio_path, output_path, &opts, None)
+            .merge(video_path, audio_path, output_path, &opts, None, None)
             .await
         {
             Ok(()) => {

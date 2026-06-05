@@ -153,7 +153,7 @@ async fn recode_preserves_color_range_and_matrix() {
 
     let runner = FFmpegRunner::new().expect("FFmpegRunner::new failed");
     let result = runner
-        .convert_video(&tagged, &out_mp4, &opts, None, None)
+        .convert_video(&tagged, &out_mp4, &opts, None, None, None)
         .await;
 
     assert!(

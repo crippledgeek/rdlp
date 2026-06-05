@@ -209,6 +209,7 @@ mod tests {
             error_tx: None,
             warnings: Vec::new(),
             encoding_tool: None,
+            cancel: tokio_util::sync::CancellationToken::new(),
         }
     }
 
