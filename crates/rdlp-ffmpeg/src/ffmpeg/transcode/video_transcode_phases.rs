@@ -192,8 +192,11 @@ impl FFmpegRunner {
         video_encoder.set_width(video_decoder.width());
         video_encoder.set_height(video_decoder.height());
 
-        let target_pix_fmt =
+        let picked_pix_fmt =
             Self::pick_video_pixel_format(&video_enc_codec, video_decoder.format());
+        // Force a decoder-readable pixel format (e.g. 8-bit for AVS2, which
+        // libdavs2 can't decode at 10-bit). See `enforce_decodable_pixfmt`.
+        let target_pix_fmt = Self::enforce_decodable_pixfmt(video_codec_name, picked_pix_fmt);
         video_encoder.set_format(target_pix_fmt);
 
         // Propagate color/signal metadata decoder -> encoder so recode preserves the
