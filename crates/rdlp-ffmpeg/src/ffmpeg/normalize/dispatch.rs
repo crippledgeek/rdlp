@@ -12,6 +12,7 @@ use tokio_util::sync::CancellationToken;
 use crate::error::PostProcessError;
 
 use super::super::{FFmpegRunner, LoudnormMeasurements, NormalizeOptions, PeakAnalysis};
+use super::encode::EncodeCallCtx;
 use super::helpers::{
     TRUE_PEAK_OVERSAMPLE_GAIN_THRESHOLD, audio_only_extension_for, build_alimiter_spec,
     build_loudnorm_pass2_filter, with_mux_retry,
@@ -33,15 +34,16 @@ impl FFmpegRunner {
             opts.salvage,
             progress_fn,
             |inp, out, ext, resilient, pfn| {
-                Self::peak_encode_audio_only(inp, out, ext, analysis, opts, resilient, pfn, cancel)
+                let ctx = EncodeCallCtx {
+                    progress_fn: pfn,
+                    cancel,
+                };
+                Self::peak_encode_audio_only(inp, out, ext, analysis, opts, resilient, &ctx)
             },
         )
     }
 
     /// Encode peak-normalized audio to an output file (video streams discarded).
-    // The cancel token pushes this internal encode-path helper to 8 params;
-    // bundling into a struct would obscure the call site for marginal benefit.
-    #[allow(clippy::too_many_arguments)]
     fn peak_encode_audio_only(
         input: &Path,
         output: &Path,
@@ -49,8 +51,7 @@ impl FFmpegRunner {
         analysis: &PeakAnalysis,
         opts: &NormalizeOptions,
         resilient: bool,
-        progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
-        cancel: Option<&CancellationToken>,
+        ctx: &EncodeCallCtx<'_>,
     ) -> anyhow::Result<()> {
         let gain_db = opts.target_peak_db - analysis.peak_db;
         let linear_limit = 10f64.powf(opts.target_peak_db / 20.0);
@@ -60,8 +61,7 @@ impl FFmpegRunner {
             final_output_ext,
             "peak encode",
             resilient,
-            progress_fn,
-            cancel,
+            ctx,
             |fmt, rate, ch_layout| {
                 let oversample_prefix = if gain_db >= TRUE_PEAK_OVERSAMPLE_GAIN_THRESHOLD {
                     let rate_4x = rate * 4;
@@ -94,24 +94,16 @@ impl FFmpegRunner {
             opts.salvage,
             progress_fn,
             |inp, out, ext, resilient, pfn| {
-                Self::loudnorm_encode_audio_only(
-                    inp,
-                    out,
-                    ext,
-                    opts,
-                    measurements,
-                    resilient,
-                    pfn,
+                let ctx = EncodeCallCtx {
+                    progress_fn: pfn,
                     cancel,
-                )
+                };
+                Self::loudnorm_encode_audio_only(inp, out, ext, opts, measurements, resilient, &ctx)
             },
         )
     }
 
     /// Encode loudnorm-normalized audio to an output file (video streams discarded).
-    // The cancel token pushes this internal encode-path helper to 8 params;
-    // bundling into a struct would obscure the call site for marginal benefit.
-    #[allow(clippy::too_many_arguments)]
     fn loudnorm_encode_audio_only(
         input: &Path,
         output: &Path,
@@ -119,8 +111,7 @@ impl FFmpegRunner {
         opts: &NormalizeOptions,
         measurements: &LoudnormMeasurements,
         resilient: bool,
-        progress_fn: Option<&(dyn Fn(f64) + Send + Sync)>,
-        cancel: Option<&CancellationToken>,
+        ctx: &EncodeCallCtx<'_>,
     ) -> anyhow::Result<()> {
         let loudnorm_core = build_loudnorm_pass2_filter(opts, measurements);
         let limiter = build_alimiter_spec(opts.target_tp);
@@ -130,8 +121,7 @@ impl FFmpegRunner {
             final_output_ext,
             "loudnorm pass 2",
             resilient,
-            progress_fn,
-            cancel,
+            ctx,
             |fmt, rate, ch_layout| {
                 format!(
                     "aformat=sample_fmts=dbl,{loudnorm_core},aresample,\
