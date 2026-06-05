@@ -39,6 +39,7 @@ use crate::error::{PostProcessError, Result};
 use super::log_capture::LogSuppressGuard;
 use super::{FFmpegRunner, RemuxOptions, ensure_init};
 
+use av_packet_owned::AvPacketOwned;
 use raw_ffi_helpers::{dts_in_us, out_codecpar_video_delay, read_next_raw, rescale_and_write_raw};
 
 impl FFmpegRunner {
@@ -216,8 +217,9 @@ impl FFmpegRunner {
         // and write them in DTS order to avoid ENOMEM from buffering an entire
         // stream while waiting for the other.
         //
-        // Set by the loop on cooperative cancel; checked after the unsafe block's
-        // manual packet cleanup runs, so the bare packets are freed before bail.
+        // Set by the loop on cooperative cancel; checked after the unsafe block,
+        // where the RAII-owned packets have already been dropped, so we bail
+        // before write_trailer without finalizing a partial mux.
         let mut cancelled = false;
 
         // SAFETY: ictx_video/ictx_audio own valid AVFormatContext instances.
@@ -232,24 +234,14 @@ impl FFmpegRunner {
             let in_video_stream = *(*video_ctx).streams.add(video_ist_index);
             let in_audio_stream = *(*audio_ctx).streams.add(audio_ist_index);
 
-            // SAFETY: av_packet_alloc returns a fully initialised AVPacket on the
-            // heap. Null check guards against allocation failure. av_packet_free
-            // is called in all exit paths to prevent leaks.
-            let vpkt = ffi::av_packet_alloc();
-            if vpkt.is_null() {
-                return Err(PostProcessError::FFmpegLibraryError {
-                    message: "av_packet_alloc failed for video packet".into(),
-                }
-                .into());
-            }
-            let apkt = ffi::av_packet_alloc();
-            if apkt.is_null() {
-                ffi::av_packet_free(&mut vpkt.cast());
-                return Err(PostProcessError::FFmpegLibraryError {
-                    message: "av_packet_alloc failed for audio packet".into(),
-                }
-                .into());
-            }
+            // RAII-owned packets: dropped on every exit path (write-error `?`,
+            // the cancel `break`, or normal loop completion), so a write error
+            // propagated via `?` no longer leaks the packets. Mirrors the MKV
+            // path in mkv_raw_ffi.rs.
+            let vpkt_owned = AvPacketOwned::alloc()?;
+            let apkt_owned = AvPacketOwned::alloc()?;
+            let vpkt = vpkt_owned.as_ptr();
+            let apkt = apkt_owned.as_ptr();
 
             // One DTS synthesizer per OUTPUT stream, seeded from the stream's
             // video_delay (B-frame reorder depth). av_write_frame is direct
@@ -266,10 +258,10 @@ impl FFmpegRunner {
             let mut have_audio = read_next_raw(audio_ctx, audio_ist_index, apkt);
 
             loop {
-                // Cooperative cancel: do NOT use `?` here — the packets below are
-                // bare `av_packet_alloc` pointers freed by the manual cleanup that
-                // follows the loop. An early `?`-return would leak them. Set a flag,
-                // `break`, let the cleanup run, then `bail!` before write_trailer.
+                // Cooperative cancel: set a flag and `break`. The RAII-owned
+                // packets drop when the unsafe block ends; the `cancelled` check
+                // after the block bails before write_trailer so a partial,
+                // cancelled mux is never finalized.
                 if cancel.is_some_and(CancellationToken::is_cancelled) {
                     cancelled = true;
                     break;
@@ -352,17 +344,20 @@ impl FFmpegRunner {
                 }
             }
 
-            // Clean up any unreleased packets
+            // Unref any still-referenced packet data, then drop the RAII owners
+            // which call av_packet_free. Explicit drops document the release
+            // point; they would otherwise run at end-of-scope all the same.
             ffi::av_packet_unref(vpkt);
             ffi::av_packet_unref(apkt);
-            ffi::av_packet_free(&mut vpkt.cast());
-            ffi::av_packet_free(&mut apkt.cast());
+            drop(vpkt_owned);
+            drop(apkt_owned);
         }
 
-        // Cancelled: the bare packets were freed by the cleanup above. The
-        // AVFormatContexts (ictx_video / ictx_audio / octx) are owned
-        // ffmpeg-the-third Input/Output values — RAII drop frees them with no
-        // leak. Skip write_trailer: do not finalize a partial, cancelled mux.
+        // Cancelled: the RAII-owned packets were freed when the unsafe block
+        // ended (Drop calls av_packet_free). The AVFormatContexts (ictx_video /
+        // ictx_audio / octx) are owned ffmpeg-the-third Input/Output values —
+        // RAII drop frees them with no leak. Skip write_trailer: do not finalize
+        // a partial, cancelled mux.
         if cancelled {
             anyhow::bail!("cancelled by user");
         }

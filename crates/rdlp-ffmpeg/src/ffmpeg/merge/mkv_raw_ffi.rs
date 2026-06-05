@@ -527,6 +527,18 @@ impl FFmpegRunner {
             })();
 
             // 14. Write trailer and cleanup (always runs, even on merge error)
+            //
+            // Note the asymmetry with the non-MKV path (mod.rs), which skips
+            // write_trailer on cancel to avoid finalizing a partial mux. Here
+            // av_write_trailer runs unconditionally — including when the IIFE
+            // returned Err (e.g. cooperative cancel) — because it is part of the
+            // raw-FFI teardown that must run before avio_closep/avformat_free to
+            // keep the AVIO + context state consistent. Finalizing the trailer on
+            // a cancelled MKV is harmless: the partial output file is reaped by
+            // FileTracker (#335), so it never reaches the user. Restructuring the
+            // teardown to conditionally skip the trailer would risk the ordering
+            // of the AVIO/context cleanup, so the symmetry is deliberately not
+            // pursued here.
             ffi::av_write_trailer(ofmt_ctx);
 
             if !(*ofmt_ctx).pb.is_null() {
