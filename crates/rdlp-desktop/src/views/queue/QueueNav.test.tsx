@@ -100,3 +100,45 @@ describe("QueueNav — STATS bucketing (#364)", () => {
         expect(screen.queryByRole("button", { name: /clear finished/i })).not.toBeInTheDocument();
     });
 });
+
+describe("QueueNav — processing bucket (#336)", () => {
+    beforeEach(() => {
+        setQueueFilter("all");
+    });
+
+    it("counts a processing job only in the Processing row", () => {
+        renderNav([makeJob("processing", "a")]);
+        expect(statValue("Processing")).toBe("1");
+        expect(statValue("Active")).toBe("0");
+        expect(statValue("Completed")).toBe("0");
+        expect(statValue("Failed")).toBe("0");
+    });
+
+    it("shows distinct counts for a mixed queue incl. processing", () => {
+        renderNav([
+            makeJob("running", "a"),
+            makeJob("processing", "b"),
+            makeJob("completed", "c"),
+            makeJob("cancelled", "d"),
+            makeJob("failed", "e"),
+        ]);
+        expect(statValue("Total")).toBe("5");
+        expect(statValue("Active")).toBe("1");
+        expect(statValue("Processing")).toBe("1");
+        expect(statValue("Completed")).toBe("1");
+        expect(statValue("Cancelled")).toBe("1");
+        expect(statValue("Failed")).toBe("1");
+    });
+
+    it("activates the processing filter on click", async () => {
+        const user = userEvent.setup();
+        renderNav([makeJob("processing", "a")]);
+        await user.click(screen.getByRole("button", { name: /processing/i }));
+        expect(queueFilterStore.state.filter).toBe("processing");
+    });
+
+    it("does not show 'Clear Finished' for a processing-only queue", () => {
+        renderNav([makeJob("processing", "a")]);
+        expect(screen.queryByRole("button", { name: /clear finished/i })).not.toBeInTheDocument();
+    });
+});
