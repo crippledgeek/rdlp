@@ -39,12 +39,17 @@ use std::time::{Duration, Instant};
 /// Usage: call `observe(bytes_delta, time_delta)` after each fragment
 /// completes; read `bytes_per_sec()` for the smoothed speed; read
 /// `eta(remaining)` for the projected time to completion.
+// Retained until Task 4 (SpeedTracker deletion); only `speed_tracker_tests`
+// references it — clippy's dead-code lint fires on pub(crate) with no lib
+// caller, so suppress until the whole struct is removed.
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 pub(crate) struct SpeedTracker {
     smooth_speed: f64,
     has_observation: bool,
 }
 
+#[allow(dead_code)] // removed in Task 4; suppresses impl items until then
 impl SpeedTracker {
     /// EWMA alpha — matches the inline value in `spawn_progress_reporter`.
     const ALPHA: f64 = 0.3;
@@ -93,16 +98,13 @@ impl SpeedTracker {
 
 /// Sliding-window duration for the raw rate.
 /// Source: yt-dlp `ProgressCalculator.SAMPLING_WINDOW` (`yt_dlp/utils/progress.py`).
-#[allow(dead_code)] // used in Task 2 when SpeedMeter replaces SpeedTracker callers
 const SPEED_WINDOW_SECS: f64 = 3.0;
 /// Minimum seconds between accepted samples; debounces bursty parallel-yield
 /// observations so one fragment is never divided by a microsecond gap.
 /// Source: yt-dlp `ProgressCalculator.SAMPLING_RATE`.
-#[allow(dead_code)]
 const SPEED_SAMPLE_GATE_SECS: f64 = 0.05;
 /// EWMA weight on the newest raw window rate; the prior smoothed value keeps
 /// `1 - weight`. Source: yt-dlp `SmoothValue(smoothing=0.7)` -> `1 - 0.7 = 0.3`.
-#[allow(dead_code)]
 const SPEED_EWMA_NEW_WEIGHT: f64 = 0.3;
 
 /// Sliding-window + EWMA download-rate meter (yt-dlp hybrid model).
@@ -119,7 +121,6 @@ pub(crate) struct SpeedMeter {
     last_sample: Option<Instant>,
 }
 
-#[allow(dead_code)] // callers wired in Task 2; silences new/update/bytes_per_sec/eta
 impl SpeedMeter {
     pub(crate) fn new() -> Self {
         Self::default()
