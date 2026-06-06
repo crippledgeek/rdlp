@@ -25,6 +25,7 @@ function makeJob(overrides: Partial<DownloadJob> = {}): DownloadJob {
         options: null,
         playlist: null,
         statusMessage: null,
+        stage: null,
         ...overrides,
     };
 }

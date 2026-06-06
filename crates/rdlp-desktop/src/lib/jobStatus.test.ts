@@ -3,6 +3,7 @@ import {
     cancelledJobPatch,
     isTerminal,
     isDoneNotFailed,
+    isInFlight,
     jobMatchesFilter,
     countByBucket,
     tallyByStatus,
@@ -39,10 +40,11 @@ function makeJob(status: JobStatus, id = "j"): DownloadJob {
         options: null,
         playlist: null,
         statusMessage: null,
+        stage: null,
     };
 }
 
-const ALL_STATUSES: JobStatus[] = ["pending", "running", "completed", "failed", "cancelled"];
+const ALL_STATUSES: JobStatus[] = ["pending", "running", "processing", "completed", "failed", "cancelled"];
 
 describe("isTerminal", () => {
     it("is true for completed, cancelled, failed", () => {
@@ -97,29 +99,29 @@ describe("jobMatchesFilter", () => {
 describe("countByBucket", () => {
     it("counts a single completed job", () => {
         expect(countByBucket([makeJob("completed")])).toEqual({
-            all: 1, active: 0, completed: 1, cancelled: 0, failed: 0,
+            all: 1, active: 0, processing: 0, completed: 1, cancelled: 0, failed: 0,
         });
     });
     it("counts active = running + pending", () => {
         expect(countByBucket([makeJob("running"), makeJob("pending")])).toEqual({
-            all: 2, active: 2, completed: 0, cancelled: 0, failed: 0,
+            all: 2, active: 2, processing: 0, completed: 0, cancelled: 0, failed: 0,
         });
     });
     it("counts a mixed list into distinct buckets", () => {
         const jobs = [makeJob("running"), makeJob("completed"), makeJob("cancelled"), makeJob("failed")];
         expect(countByBucket(jobs)).toEqual({
-            all: 4, active: 1, completed: 1, cancelled: 1, failed: 1,
+            all: 4, active: 1, processing: 0, completed: 1, cancelled: 1, failed: 1,
         });
     });
     it("returns all zeros for an empty list", () => {
         expect(countByBucket([])).toEqual({
-            all: 0, active: 0, completed: 0, cancelled: 0, failed: 0,
+            all: 0, active: 0, processing: 0, completed: 0, cancelled: 0, failed: 0,
         });
     });
-    it("partitions cleanly: all === active+completed+cancelled+failed", () => {
+    it("partitions cleanly: all === active+processing+completed+cancelled+failed", () => {
         const jobs = ALL_STATUSES.flatMap((s) => [makeJob(s), makeJob(s)]);
         const c = countByBucket(jobs);
-        expect(c.all).toBe(c.active + c.completed + c.cancelled + c.failed);
+        expect(c.all).toBe(c.active + c.processing + c.completed + c.cancelled + c.failed);
     });
     it("does NOT count a cancelled job as completed (regression: #364)", () => {
         const c = countByBucket([makeJob("cancelled")]);
@@ -138,17 +140,59 @@ describe("tallyByStatus", () => {
     it("counts each status exactly", () => {
         const jobs = [makeJob("running"), makeJob("completed"), makeJob("cancelled")];
         expect(tallyByStatus(jobs)).toEqual({
-            pending: 0, running: 1, completed: 1, failed: 0, cancelled: 1,
+            pending: 0, running: 1, processing: 0, completed: 1, failed: 0, cancelled: 1,
         });
     });
     it("returns all zeros for an empty list", () => {
         expect(tallyByStatus([])).toEqual({
-            pending: 0, running: 0, completed: 0, failed: 0, cancelled: 0,
+            pending: 0, running: 0, processing: 0, completed: 0, failed: 0, cancelled: 0,
         });
     });
     it("a cancelled job increments only cancelled (regression guard)", () => {
         const t = tallyByStatus([makeJob("cancelled")]);
         expect(t.cancelled).toBe(1);
         expect(t.completed).toBe(0);
+    });
+});
+
+describe("processing bucket + isInFlight", () => {
+    it("counts a processing job in its own bucket", () => {
+        expect(countByBucket([makeJob("processing")])).toEqual({
+            all: 1, active: 0, processing: 1, completed: 0, cancelled: 0, failed: 0,
+        });
+    });
+    it("counts a mixed list across all buckets", () => {
+        const jobs = [makeJob("running"), makeJob("processing"), makeJob("completed"), makeJob("cancelled"), makeJob("failed")];
+        expect(countByBucket(jobs)).toEqual({ all: 5, active: 1, processing: 1, completed: 1, cancelled: 1, failed: 1 });
+    });
+    it("partitions cleanly incl. processing", () => {
+        const jobs = ALL_STATUSES.map((s) => makeJob(s));
+        const c = countByBucket(jobs);
+        expect(c.all).toBe(c.active + c.processing + c.completed + c.cancelled + c.failed);
+    });
+    it("processing matches only its own filter", () => {
+        expect(jobMatchesFilter("processing", "processing")).toBe(true);
+        expect(jobMatchesFilter("processing", "all")).toBe(true);
+        expect(jobMatchesFilter("processing", "active")).toBe(false);
+        expect(jobMatchesFilter("processing", "completed")).toBe(false);
+    });
+    it("tallyByStatus counts processing", () => {
+        expect(tallyByStatus([makeJob("processing")]).processing).toBe(1);
+        expect(tallyByStatus([]).processing).toBe(0);
+    });
+    it("processing is not terminal", () => {
+        expect(isTerminal("processing")).toBe(false);
+        expect(isDoneNotFailed("processing")).toBe(false);
+    });
+    it("isInFlight is true for running and processing only", () => {
+        expect(isInFlight("running")).toBe(true);
+        expect(isInFlight("processing")).toBe(true);
+        expect(isInFlight("pending")).toBe(false);
+        expect(isInFlight("completed")).toBe(false);
+        expect(isInFlight("failed")).toBe(false);
+        expect(isInFlight("cancelled")).toBe(false);
+    });
+    it("countByBucket does not throw for processing", () => {
+        expect(() => countByBucket([makeJob("processing")])).not.toThrow();
     });
 });

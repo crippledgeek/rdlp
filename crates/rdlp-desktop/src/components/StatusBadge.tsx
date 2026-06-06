@@ -17,6 +17,10 @@ const statusConfig: Record<JobStatus, { label: string; className: string }> = {
         label: "Downloading",
         className: "text-[#e8a838] bg-[#2a1f0a] border border-[#3a2a0e]",
     },
+    processing: {
+        label: "Processing",
+        className: "text-[#a78bfa] bg-[#1e1733] border border-[#2a2147]",
+    },
     completed: {
         label: "Completed",
         className: "text-[#4a9e4a] bg-[#0a2010] border border-[#0e3014]",

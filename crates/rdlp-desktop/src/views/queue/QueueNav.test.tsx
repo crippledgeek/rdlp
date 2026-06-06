@@ -24,6 +24,7 @@ function makeJob(status: JobStatus, id: string): DownloadJob {
         options: null,
         playlist: null,
         statusMessage: null,
+        stage: null,
     };
 }
 
