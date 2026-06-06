@@ -104,4 +104,31 @@ describe("JobCard — progress display", () => {
         render(<JobCard job={job} compact />);
         expect(screen.getByText("Ep 2 — Unknown")).toBeInTheDocument();
     });
+
+    it("shows a 'retry may not help' hint on a non-retryable failure", () => {
+        render(<JobCard job={makeJob({ status: "failed", error: "403 Forbidden", retryable: false })} />);
+        expect(screen.getByText("403 Forbidden")).toBeInTheDocument();
+        expect(screen.getByText(/retry may not help/)).toBeInTheDocument();
+    });
+
+    it("omits the hint when the failure is retryable", () => {
+        render(<JobCard job={makeJob({ status: "failed", error: "503 Service Unavailable", retryable: true })} />);
+        expect(screen.getByText("503 Service Unavailable")).toBeInTheDocument();
+        expect(screen.queryByText(/retry may not help/)).not.toBeInTheDocument();
+    });
+
+    it("does not show the hint on a non-failed job", () => {
+        render(<JobCard job={makeJob({ status: "running", retryable: false })} />);
+        expect(screen.queryByText(/retry may not help/)).not.toBeInTheDocument();
+    });
+
+    it("does not show the hint on a completed job", () => {
+        render(<JobCard job={makeJob({ status: "completed", output_path: "/tmp/v.mp4" })} />);
+        expect(screen.queryByText(/retry may not help/)).not.toBeInTheDocument();
+    });
+
+    it("renders no hint when failed with no error message", () => {
+        render(<JobCard job={makeJob({ status: "failed", error: null, retryable: false })} />);
+        expect(screen.queryByText(/retry may not help/)).not.toBeInTheDocument();
+    });
 });

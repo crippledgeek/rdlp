@@ -98,7 +98,12 @@ export function JobCard({ job, compact = false }: JobCardProps) {
 
                 {/* Error message */}
                 {isFailed && job.error && (
-                    <p className="text-[11px] text-[#e85858] truncate">{job.error}</p>
+                    <>
+                        <p className="text-[11px] text-[#e85858] truncate">{job.error}</p>
+                        {!job.retryable && (
+                            <p className="text-[10px] text-[var(--text-muted)]">· retry may not help</p>
+                        )}
+                    </>
                 )}
 
                 {/* Output path for completed (hidden in compact mode) */}
