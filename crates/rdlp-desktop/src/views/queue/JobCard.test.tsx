@@ -2,9 +2,10 @@
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen, fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { render } from "@/test/test-utils";
 import { JobCard } from "./JobCard";
-import { setSelectedJob } from "@/stores/uiStore";
+import { uiStore, setSelectedJob } from "@/stores/uiStore";
 import { cancelDownload, removeJob, startDownload } from "@/api/downloads";
 import { invokeTyped } from "@/api/invokeClient";
 import type { DownloadJob } from "@/types";
@@ -179,10 +180,50 @@ describe("JobCard — progress display", () => {
         expect(screen.queryByLabelText("Reveal in folder")).not.toBeInTheDocument();
     });
 
-    it("card click selects the job", () => {
-        const { container } = render(<JobCard job={makeJob({ title: "Pick Me", status: "running" })} />);
-        fireEvent.click(container.firstChild as HTMLElement);
+    it("Select button click selects the job", () => {
+        render(<JobCard job={makeJob({ title: "Pick Me", status: "running" })} />);
+        fireEvent.click(screen.getByRole("button", { name: /^Select:/ }));
         expect(vi.mocked(setSelectedJob)).toHaveBeenCalledWith("job-1");
+    });
+
+    it("exposes a Select button with accessible name and aria-pressed=false when unselected", () => {
+        render(<JobCard job={makeJob({ id: "job-1", title: "Pick Me" })} />);
+        const sel = screen.getByRole("button", { name: "Select: Pick Me" });
+        expect(sel).toHaveAttribute("aria-pressed", "false");
+    });
+
+    it("exposes aria-pressed=true when the job is selected", () => {
+        uiStore.setState((prev) => ({ ...prev, selectedJobId: "job-1" }));
+        try {
+            render(<JobCard job={makeJob({ id: "job-1", title: "Pick Me" })} />);
+            const sel = screen.getByRole("button", { name: "Select: Pick Me" });
+            expect(sel).toHaveAttribute("aria-pressed", "true");
+        } finally {
+            uiStore.setState((prev) => ({ ...prev, selectedJobId: null }));
+        }
+    });
+
+    it("Enter on the Select button selects the job", async () => {
+        const user = userEvent.setup();
+        render(<JobCard job={makeJob({ title: "Pick Me", status: "running" })} />);
+        screen.getByRole("button", { name: /^Select:/ }).focus();
+        await user.keyboard("{Enter}");
+        expect(vi.mocked(setSelectedJob)).toHaveBeenCalledWith("job-1");
+    });
+
+    it("Space on the Select button selects the job", async () => {
+        const user = userEvent.setup();
+        render(<JobCard job={makeJob({ title: "Pick Me", status: "running" })} />);
+        screen.getByRole("button", { name: /^Select:/ }).focus();
+        await user.keyboard("{ }");
+        expect(vi.mocked(setSelectedJob)).toHaveBeenCalledWith("job-1");
+    });
+
+    it("action buttons are NOT descendants of the Select button (axe nested-interactive guard)", () => {
+        render(<JobCard job={makeJob({ status: "running" })} />);
+        const sel = screen.getByRole("button", { name: /^Select:/ });
+        expect(screen.getByLabelText("Cancel download")).toBeInTheDocument();
+        expect(sel.querySelector('[aria-label="Cancel download"]')).toBeNull();
     });
 
     it("a button click does not also select the job", () => {

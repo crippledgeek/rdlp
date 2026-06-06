@@ -4,6 +4,7 @@
 
 import { useStore } from "@tanstack/react-store";
 import { X, RotateCcw, FolderOpen } from "lucide-react";
+import { Button as AriaButton } from "react-aria-components";
 import { uiStore, setSelectedJob } from "@/stores/uiStore";
 import { cancelDownload, removeJob, startDownload } from "@/api/downloads";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -50,9 +51,8 @@ export function JobCard({ job, compact = false }: JobCardProps) {
 
     return (
         <div
-            onClick={() => setSelectedJob(job.id)}
             className={cn(
-                "flex gap-3 rounded-[6px] cursor-pointer transition-colors border",
+                "relative flex gap-3 rounded-[6px] transition-colors border",
                 compact
                     ? "p-2 border-l-2 border-l-[#4a9eff]"
                     : "p-3",
@@ -62,8 +62,18 @@ export function JobCard({ job, compact = false }: JobCardProps) {
                 compact && !isSelected && "border-t-[#1a1a2e] border-r-[#1a1a2e] border-b-[#1a1a2e]",
             )}
         >
+            {/* Full-card selection control (keyboard-operable). Action buttons are
+                DOM siblings (z-20), never descendants — keeps axe nested-interactive
+                from firing. */}
+            <AriaButton
+                onPress={() => setSelectedJob(job.id)}
+                aria-label={`Select: ${compactTitle}`}
+                aria-pressed={isSelected}
+                className="absolute inset-0 z-0 rounded-[6px] cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[#4a9eff] focus-visible:ring-inset"
+            />
+
             {/* Main content */}
-            <div className="flex-1 min-w-0 flex flex-col gap-1">
+            <div className="relative z-10 pointer-events-none flex-1 min-w-0 flex flex-col gap-1">
                 {/* Title + status */}
                 <div className="flex items-start gap-2">
                     <p className={cn(
@@ -112,7 +122,7 @@ export function JobCard({ job, compact = false }: JobCardProps) {
             </div>
 
             {/* Action buttons */}
-            <div className="flex items-center gap-1 shrink-0">
+            <div className="relative z-20 flex items-center gap-1 shrink-0">
                 {isRunning && (
                     <button
                         onClick={(e) => { e.stopPropagation(); void handleCancel(); }}
