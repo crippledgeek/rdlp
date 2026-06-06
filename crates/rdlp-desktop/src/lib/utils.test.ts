@@ -2,7 +2,7 @@
 // Unit tests for lib/utils.ts — cn() and parseUploadTimestamp().
 
 import { describe, test, expect } from "vitest";
-import { cn, displayTitle, parseUploadTimestamp, TITLE_PLACEHOLDER } from "./utils";
+import { cn, displayTitle, parseUploadTimestamp, progressPercent, TITLE_PLACEHOLDER } from "./utils";
 
 // ---------------------------------------------------------------------------
 // cn()
@@ -128,5 +128,20 @@ describe("displayTitle", () => {
         // change what users see; rename here too if you change the
         // shared placeholder.
         expect(TITLE_PLACEHOLDER).toBe("Unknown");
+    });
+});
+
+// ---------------------------------------------------------------------------
+// progressPercent()
+// ---------------------------------------------------------------------------
+
+describe("progressPercent", () => {
+    it("converts a 0-1 fraction to a whole percent", () => {
+        expect(progressPercent(0.47)).toBe(47);
+        expect(progressPercent(1)).toBe(100);
+    });
+    it("treats null/undefined as 0", () => {
+        expect(progressPercent(null)).toBe(0);
+        expect(progressPercent(undefined)).toBe(0);
     });
 });

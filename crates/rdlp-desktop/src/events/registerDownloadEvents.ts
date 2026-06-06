@@ -66,7 +66,7 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
 
                     const updates: Partial<DownloadJob> = { ...entry };
                     if (isMerge) {
-                        updates.statusMessage = `${unit.unitTitle} \u2014 ${Math.round(entry.progress)}%`;
+                        updates.statusMessage = `${unit.unitTitle} \u2014 ${Math.round(entry.progress * 100)}%`;
                     }
 
                     return { ...job, ...updates };
@@ -87,7 +87,7 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
         onDownloadProgress((p) => {
             if (!mounted) return;
             pending.set(p.jobId, {
-                progress: p.progress * 100,
+                progress: p.progress,
                 speed: p.speed,
                 eta: p.eta,
             });
@@ -107,7 +107,7 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
                             ? {
                                   ...job,
                                   status: "completed" as const,
-                                  progress: 100,
+                                  progress: 1,
                                   output_path: p.filepath || null,
                                   completed_at: Math.floor(Date.now() / 1000),
                                   statusMessage: null,
@@ -213,7 +213,7 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
                         job.id === p.jobId
                             ? {
                                   ...job,
-                                  progress: pct,
+                                  progress: p.progress,
                                   speed: null,
                                   eta: null,
                                   statusMessage: `${p.stage}… ${pct}%`,
