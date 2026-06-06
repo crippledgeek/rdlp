@@ -6,6 +6,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Search } from "lucide-react";
 import { historyFilterStore, setHistorySearch, setHistoryGroupBy } from "@/stores/historyFilterStore";
 import { downloadsQueryOptions } from "@/api/downloads";
+import { isTerminal } from "@/lib/jobStatus";
 import { cn } from "@/lib/utils";
 
 type GroupBy = "date" | "site" | "type";
@@ -19,7 +20,7 @@ export function HistoryNav() {
     const { search, groupBy } = useStore(historyFilterStore, (s) => s);
     const { data: jobs = [] } = useQuery(downloadsQueryOptions());
 
-    const completedCount = jobs.filter((j) => j.status === "completed" || j.status === "failed" || j.status === "cancelled").length;
+    const completedCount = jobs.filter((j) => isTerminal(j.status)).length;
 
     return (
         <div className="flex flex-col h-full overflow-y-auto p-2 gap-3">

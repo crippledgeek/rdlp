@@ -8,6 +8,7 @@ import { Button as AriaButton } from "react-aria-components";
 import { uiStore, setSelectedJob } from "@/stores/uiStore";
 import { cancelDownload, removeJob, startDownload } from "@/api/downloads";
 import { StatusBadge } from "@/components/StatusBadge";
+import { isTerminal as isTerminalStatus } from "@/lib/jobStatus";
 import { invokeTyped } from "@/api/invokeClient";
 import { cn, displayTitle, progressPercent } from "@/lib/utils";
 import type { DownloadJob } from "@/types";
@@ -23,7 +24,7 @@ export function JobCard({ job, compact = false }: JobCardProps) {
     const isRunning = job.status === "running";
     const isFailed = job.status === "failed";
     const isCompleted = job.status === "completed";
-    const isTerminal = isCompleted || isFailed || job.status === "cancelled";
+    const isTerminal = isTerminalStatus(job.status);
     const progress = job.progress ?? 0;
 
     async function handleCancel() {
