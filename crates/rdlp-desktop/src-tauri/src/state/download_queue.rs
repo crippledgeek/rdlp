@@ -71,16 +71,12 @@ pub struct DownloadJob {
 impl DownloadJob {
     /// Mark the job as entering a post-processing stage (download finished,
     /// `FFmpeg` work in progress). Sets status to [`JobStatus::Processing`].
-    // Wired into the background event loop in Task 2 of #336.
-    #[allow(dead_code)]
     pub(crate) fn begin_postprocessing(&mut self, stage: String) {
         self.status = JobStatus::Processing;
         self.stage = Some(stage);
     }
 
     /// Update post-processing progress for the current stage.
-    // Wired into the background event loop in Task 2 of #336.
-    #[allow(dead_code)]
     pub(crate) fn set_postprocess_progress(&mut self, stage: String, fraction: f64) {
         self.status = JobStatus::Processing;
         self.stage = Some(stage);
