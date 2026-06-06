@@ -21,8 +21,6 @@ use serde::Serialize;
 /// # Errors
 /// Returns an `std::io::Error` if serialization, the temp write, or the rename
 /// fails, or if the blocking task panics/cancels.
-// Callsite is in Task 2 (DASH save migration) — not yet wired.
-#[allow(dead_code)]
 pub async fn atomic_write_json<T: Serialize + Send + 'static>(
     path: &Path,
     value: T,
