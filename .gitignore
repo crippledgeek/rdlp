@@ -6,6 +6,8 @@
 # Debug artifacts
 **/*.rs.bk
 *.pdb
+# Stray binary from ad-hoc `cargo build`/run output redirection at repo root
+/rust_out
 
 # IDE files
 .idea/
