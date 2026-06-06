@@ -8,7 +8,7 @@ import { uiStore, setSelectedJob } from "@/stores/uiStore";
 import { cancelDownload, removeJob, startDownload } from "@/api/downloads";
 import { StatusBadge } from "@/components/StatusBadge";
 import { invokeTyped } from "@/api/invokeClient";
-import { cn } from "@/lib/utils";
+import { cn, progressPercent } from "@/lib/utils";
 import type { DownloadJob } from "@/types";
 
 interface JobCardProps {
@@ -82,11 +82,11 @@ export function JobCard({ job, compact = false }: JobCardProps) {
                         <div className="h-[3px] rounded-full bg-[#1a1a2e] overflow-hidden mb-1">
                             <div
                                 className="h-full bg-[#4a9eff] transition-[width] duration-300 rounded-full"
-                                style={{ width: `${progress}%` }}
+                                style={{ width: `${progress * 100}%` }}
                             />
                         </div>
                         <div className="flex items-center gap-3 text-[10px] text-[var(--text-muted)] font-mono">
-                            <span className="text-[#aaaaaa]">{Math.round(progress)}%</span>
+                            <span className="text-[#aaaaaa]">{progressPercent(job.progress)}%</span>
                             {job.speed && <span>{job.speed}</span>}
                             {job.eta && <span>ETA {job.eta}</span>}
                             {job.statusMessage && (
