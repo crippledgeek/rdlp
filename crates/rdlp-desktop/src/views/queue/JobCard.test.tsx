@@ -74,4 +74,34 @@ describe("JobCard — progress display", () => {
         render(<JobCard job={makeJob({ status: "running", progress: 1.0 })} />);
         expect(screen.getByText("100%")).toBeInTheDocument();
     });
+
+    it("renders the title when present", () => {
+        render(<JobCard job={makeJob({ title: "My Video" })} />);
+        expect(screen.getByText("My Video")).toBeInTheDocument();
+    });
+
+    it("renders 'Unknown' for a null title (not the URL)", () => {
+        render(<JobCard job={makeJob({ title: null, url: "https://x.example/y" })} />);
+        expect(screen.getByText("Unknown")).toBeInTheDocument();
+        expect(screen.queryByText("https://x.example/y")).not.toBeInTheDocument();
+    });
+
+    it("renders 'Unknown' for an empty-string title", () => {
+        render(<JobCard job={makeJob({ title: "" })} />);
+        expect(screen.getByText("Unknown")).toBeInTheDocument();
+    });
+
+    it("renders 'Unknown' for a whitespace-only title", () => {
+        render(<JobCard job={makeJob({ title: "   " })} />);
+        expect(screen.getByText("Unknown")).toBeInTheDocument();
+    });
+
+    it("compact mode renders 'Ep N — Unknown' for a null title", () => {
+        const job = makeJob({
+            title: null,
+            playlist: { playlistId: "p", playlistTitle: "P", playlistIndex: 2, playlistCount: 5 },
+        });
+        render(<JobCard job={job} compact />);
+        expect(screen.getByText("Ep 2 — Unknown")).toBeInTheDocument();
+    });
 });

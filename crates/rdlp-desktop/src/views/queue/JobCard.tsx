@@ -8,7 +8,7 @@ import { uiStore, setSelectedJob } from "@/stores/uiStore";
 import { cancelDownload, removeJob, startDownload } from "@/api/downloads";
 import { StatusBadge } from "@/components/StatusBadge";
 import { invokeTyped } from "@/api/invokeClient";
-import { cn, progressPercent } from "@/lib/utils";
+import { cn, displayTitle, progressPercent } from "@/lib/utils";
 import type { DownloadJob } from "@/types";
 
 interface JobCardProps {
@@ -46,8 +46,8 @@ export function JobCard({ job, compact = false }: JobCardProps) {
 
     // Episode label for compact mode (e.g. "Ep 3 — Episode Title")
     const compactTitle = compact && job.playlist
-        ? `Ep ${job.playlist.playlistIndex} — ${job.title ?? "Untitled"}`
-        : (job.title ?? job.url);
+        ? `Ep ${job.playlist.playlistIndex} — ${displayTitle(job.title)}`
+        : displayTitle(job.title);
 
     return (
         <div
