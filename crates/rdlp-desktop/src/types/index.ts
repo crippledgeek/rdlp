@@ -334,13 +334,6 @@ export interface DownloadCancelledPayload {
     jobId: string;
 }
 
-/** Format-selected payload emitted as "format-selected". */
-export interface FormatSelectedPayload {
-    jobId: string;
-    formatId: string;
-    quality: string;
-}
-
 /** Log message payload emitted as "download-log". */
 export interface DownloadLogPayload {
     jobId: string;
@@ -361,12 +354,6 @@ export interface UnitStartedPayload {
     unitIndex: number;
     unitTotal: number;
     unitTitle: string;
-}
-
-/** Unit-completed payload emitted as "unit-completed" (playlist episode or merge stream done). */
-export interface UnitCompletedPayload {
-    jobId: string;
-    unitIndex: number;
 }
 
 // ========== Settings Types ==========

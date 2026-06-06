@@ -73,21 +73,6 @@ pub(crate) enum LogLevel {
     Debug,
 }
 
-/// Format-selected payload emitted as `"format-selected"`.
-///
-/// Sent when the download engine selects a format, informing the
-/// frontend of the chosen quality and format identifier.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct FormatSelectedPayload {
-    /// The UUID of the download job.
-    pub(crate) job_id: String,
-    /// The selected format identifier (e.g. `"hls-720"`).
-    pub(crate) format_id: String,
-    /// Human-readable quality description (e.g. `"1080p"`).
-    pub(crate) quality: String,
-}
-
 /// Post-processing progress payload emitted as `"postprocess-progress"`.
 ///
 /// Sent for every [`Event::PostProcessProgress`] update. The `progress`
@@ -111,14 +96,6 @@ pub(crate) struct UnitStartedPayload {
     pub(crate) unit_index: usize,
     pub(crate) unit_total: usize,
     pub(crate) unit_title: String,
-}
-
-/// Payload for "unit-completed" Tauri event.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct UnitCompletedPayload {
-    pub(crate) job_id: String,
-    pub(crate) unit_index: usize,
 }
 
 /// Log message payload emitted as `"download-log"`.
@@ -281,16 +258,7 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
         Event::FormatSelected {
             format_id, quality, ..
         } => {
-            let payload = FormatSelectedPayload {
-                job_id: job_id.to_owned(),
-                format_id: format_id.clone(),
-                quality: quality.clone(),
-            };
-            if let Err(e) = app.emit("format-selected", &payload) {
-                debug!("Failed to emit format-selected for job {job_id}: {e}");
-            }
-
-            // Also emit as a log message for the status bar
+            // Emit as a log message for the status bar
             let log = DownloadLogPayload {
                 job_id: job_id.to_owned(),
                 level: LogLevel::Info,
@@ -341,16 +309,6 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
             }
         }
 
-        Event::UnitCompleted { index, .. } => {
-            let payload = UnitCompletedPayload {
-                job_id: job_id.to_owned(),
-                unit_index: *index,
-            };
-            if let Err(e) = app.emit("unit-completed", &payload) {
-                debug!("Failed to emit unit-completed for job {job_id}: {e}");
-            }
-        }
-
         Event::Cancelled { .. } => {
             let payload = DownloadCancelledPayload {
                 job_id: job_id.to_owned(),
@@ -360,7 +318,8 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
             }
         }
 
-        // Remaining unhandled events (SubtitlesFound, SubtitlesMissing, Started, Retrying from playlist)
+        // Remaining unhandled events (SubtitlesFound, SubtitlesMissing, Started,
+        // UnitCompleted, Retrying from playlist)
         _ => {}
     }
 }
@@ -429,19 +388,6 @@ mod tests {
         assert_eq!(json["jobId"], "abc-123");
         assert_eq!(json["error"], "connection timeout");
         assert_eq!(json["retryable"], true);
-    }
-
-    #[test]
-    fn test_format_selected_payload_serializes() {
-        let payload = FormatSelectedPayload {
-            job_id: "abc-123".to_owned(),
-            format_id: "hls-720".to_owned(),
-            quality: "720p".to_owned(),
-        };
-        let json = serde_json::to_value(&payload).expect("serialization should succeed");
-        assert_eq!(json["jobId"], "abc-123");
-        assert_eq!(json["formatId"], "hls-720");
-        assert_eq!(json["quality"], "720p");
     }
 
     #[test]
