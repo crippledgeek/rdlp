@@ -43,6 +43,9 @@ const BUCKET_STATUSES: Record<QueueBucket, readonly JobStatus[]> = {
 /** Terminal states — used by "Clear Finished" and playlist auto-collapse. */
 export const TERMINAL_STATUSES: readonly JobStatus[] = ["completed", "cancelled", "failed"];
 
+/** The terminal buckets (mirror of TERMINAL_STATUSES in bucket space). */
+export const TERMINAL_BUCKETS: readonly QueueBucket[] = ["completed", "cancelled", "failed"];
+
 /** True when the job has reached a terminal state (completed, cancelled, or failed). */
 export function isTerminal(status: JobStatus): boolean {
     return TERMINAL_STATUSES.includes(status);
