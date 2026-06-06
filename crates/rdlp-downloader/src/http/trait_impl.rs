@@ -18,6 +18,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::config::PROGRESS_UPDATE_INTERVAL;
 use super::{HttpDownloader, with_retry};
+use crate::progress::SpeedMeter;
 
 #[allow(clippy::too_many_lines, clippy::option_if_let_else)]
 #[async_trait]
@@ -255,6 +256,8 @@ impl HttpDownloader {
             let mut last_update = Instant::now();
             let update_interval = PROGRESS_UPDATE_INTERVAL;
             let read_timeout = self.config.read_timeout;
+            let mut speed_meter = SpeedMeter::new();
+            speed_meter.update(downloaded, start_time);
 
             loop {
                 let next = super::next_with_cancel_and_timeout(
@@ -299,12 +302,8 @@ impl HttpDownloader {
                         if let Some(ref callback) = progress {
                             let now = Instant::now();
                             if now.duration_since(last_update) >= update_interval {
-                                let elapsed = now.duration_since(start_time).as_secs_f64();
-                                let speed = if elapsed > 0.0 {
-                                    downloaded as f64 / elapsed
-                                } else {
-                                    0.0
-                                };
+                                speed_meter.update(downloaded, now);
+                                let speed = speed_meter.bytes_per_sec().unwrap_or(0.0);
 
                                 let progress_info =
                                     DownloadProgress::new(downloaded, total_size, speed);
@@ -473,6 +472,8 @@ impl HttpDownloader {
             let mut last_update = Instant::now();
             let update_interval = PROGRESS_UPDATE_INTERVAL;
             let read_timeout = self.config.read_timeout;
+            let mut speed_meter = SpeedMeter::new();
+            speed_meter.update(downloaded, start_time);
 
             loop {
                 let next = match crate::http::next_with_cancel_and_timeout(
@@ -504,12 +505,8 @@ impl HttpDownloader {
                 if let Some(ref callback) = progress {
                     let now = Instant::now();
                     if now.duration_since(last_update) >= update_interval {
-                        let elapsed = now.duration_since(start_time).as_secs_f64();
-                        let speed = if elapsed > 0.0 {
-                            (downloaded - resume_from) as f64 / elapsed
-                        } else {
-                            0.0
-                        };
+                        speed_meter.update(downloaded, now);
+                        let speed = speed_meter.bytes_per_sec().unwrap_or(0.0);
 
                         let progress_info = DownloadProgress::new(downloaded, total_size, speed);
                         callback.on_progress(&progress_info);
