@@ -484,8 +484,10 @@ mod tests {
         assert_eq!(job.stage, None);
     }
 
+    /// Documents the field shape the event-loop `Completed` arm produces
+    /// (that arm lives in a spawn closure and isn't unit-testable here).
     #[test]
-    fn completed_after_processing_clears_stage() {
+    fn completed_job_shape_has_no_stage() {
         let mut q = DownloadQueue::new();
         let job = running_job(&mut q);
         job.set_postprocess_progress("Recode".to_owned(), 0.4);

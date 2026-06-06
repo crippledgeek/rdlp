@@ -369,6 +369,7 @@ pub async fn start_download(
                         job.output_path = output_files.first().map(|p| p.display().to_string());
                     }
                     Event::Failed { error, .. } => {
+                        // stage intentionally left as-is: only read while status == Processing.
                         job.status = JobStatus::Failed;
                         job.completed_at = Some(chrono::Utc::now().timestamp());
                         job.error = Some(error.user_message().into_owned());
