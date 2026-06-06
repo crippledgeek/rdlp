@@ -18,8 +18,7 @@ interface JobCardProps {
 }
 
 export function JobCard({ job, compact = false }: JobCardProps) {
-    const selectedJobId = useStore(uiStore, (s) => s.selectedJobId);
-    const isSelected = selectedJobId === job.id;
+    const isSelected = useStore(uiStore, (s) => s.selectedJobId === job.id);
     const isRunning = job.status === "running";
     const isFailed = job.status === "failed";
     const isCompleted = job.status === "completed";
