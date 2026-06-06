@@ -29,6 +29,15 @@ pub enum JobStatus {
     Cancelled,
 }
 
+/// Live snapshot of the in-progress sub-unit (playlist episode or merge phase).
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CurrentUnit {
+    pub(crate) index: usize,
+    pub(crate) total: usize,
+    pub(crate) title: String,
+}
+
 /// Serializable metadata for a single download job.
 ///
 /// This struct is sent to the frontend over IPC. Progress and speed
@@ -52,6 +61,9 @@ pub struct DownloadJob {
     pub(crate) eta: Option<String>,
     /// Active post-processing stage name (e.g. "Recode"); `None` outside post-processing.
     pub(crate) stage: Option<String>,
+    /// Live snapshot of the in-progress sub-unit; `None` when not in a unit.
+    #[serde(rename = "currentUnit")]
+    pub(crate) current_unit: Option<CurrentUnit>,
     /// Error message if the job failed.
     pub(crate) error: Option<String>,
     /// Whether a failed job can be retried.
@@ -81,6 +93,20 @@ impl DownloadJob {
         self.status = JobStatus::Processing;
         self.stage = Some(stage);
         self.progress = Some(fraction);
+    }
+
+    /// Record the in-progress sub-unit (playlist episode or merge Video/Audio).
+    pub(crate) fn set_current_unit(&mut self, index: usize, total: usize, title: String) {
+        self.current_unit = Some(CurrentUnit {
+            index,
+            total,
+            title,
+        });
+    }
+
+    /// Clear the in-progress sub-unit (unit finished / job done).
+    pub(crate) fn clear_current_unit(&mut self) {
+        self.current_unit = None;
     }
 }
 
@@ -155,6 +181,7 @@ impl DownloadQueue {
             speed: None,
             eta: None,
             stage: None,
+            current_unit: None,
             error: None,
             retryable: false,
             started_at: None,
@@ -569,5 +596,42 @@ mod tests {
         assert_eq!(job.status, JobStatus::Running);
         assert_eq!(job.started_at, Some(1_700_000_000));
         assert!(queue.take_cancel("job-1").is_some());
+    }
+
+    #[test]
+    fn set_current_unit_records_snapshot() {
+        let mut q = DownloadQueue::new();
+        q.add_job("j", "https://example.com/v", None, None);
+        let job = q.get_job_mut("j").unwrap();
+        job.set_current_unit(1, 2, "Video".to_owned());
+        let u = job.current_unit.as_ref().expect("set");
+        assert_eq!((u.index, u.total, u.title.as_str()), (1, 2, "Video"));
+    }
+
+    #[test]
+    fn clear_current_unit_resets() {
+        let mut q = DownloadQueue::new();
+        q.add_job("j", "https://example.com/v", None, None);
+        let job = q.get_job_mut("j").unwrap();
+        job.set_current_unit(3, 12, "Ep 3".to_owned());
+        job.clear_current_unit();
+        assert!(job.current_unit.is_none());
+    }
+
+    #[test]
+    fn current_unit_serializes_to_camelcase_key_or_null() {
+        let mut q = DownloadQueue::new();
+        q.add_job("j", "https://example.com/v", None, None);
+        let job = q.get_job_mut("j").unwrap();
+        job.set_current_unit(2, 2, "Audio".to_owned());
+        let v = serde_json::to_value(&*job).unwrap();
+        assert_eq!(
+            v["currentUnit"],
+            serde_json::json!({"index":2,"total":2,"title":"Audio"})
+        );
+
+        q.add_job("k", "https://example.com/w", None, None);
+        let v2 = serde_json::to_value(q.get_job("k").unwrap()).unwrap();
+        assert_eq!(v2["currentUnit"], serde_json::json!(null));
     }
 }

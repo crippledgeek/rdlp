@@ -365,6 +365,7 @@ pub async fn start_download(
                         job.status = JobStatus::Completed;
                         job.progress = Some(1.0);
                         job.stage = None;
+                        job.clear_current_unit();
                         job.completed_at = Some(chrono::Utc::now().timestamp());
                         job.output_path = output_files.first().map(|p| p.display().to_string());
                     }
@@ -388,6 +389,17 @@ pub async fn start_download(
                         // PostProcessProgress.progress is a `Progress` directly (NOT the
                         // Option<Progress> wrapped in Event::Progress.progress).
                         job.set_postprocess_progress(stage.clone(), f64::from(progress.fraction()));
+                    }
+                    Event::PlaylistItemStarted {
+                        index,
+                        total,
+                        title,
+                        ..
+                    } => {
+                        job.set_current_unit(*index, *total, title.clone());
+                    }
+                    Event::UnitCompleted { .. } => {
+                        job.clear_current_unit();
                     }
                     _ => {}
                 }
