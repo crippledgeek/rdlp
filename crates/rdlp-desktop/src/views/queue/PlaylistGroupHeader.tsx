@@ -4,7 +4,7 @@
 import { useMemo } from "react";
 import { ChevronDown, ChevronRight, XCircle } from "lucide-react";
 import { cancelDownload } from "@/api/downloads";
-import { tallyByStatus } from "@/lib/jobStatus";
+import { isInFlight, isTerminal, tallyByStatus } from "@/lib/jobStatus";
 import type { DownloadJob } from "@/types";
 
 interface PlaylistGroupHeaderProps {
@@ -29,12 +29,12 @@ export function PlaylistGroupHeader({
         return { ...tally, total, progressFraction };
     }, [jobs]);
 
-    const hasActive = stats.running > 0 || stats.pending > 0;
+    const hasActive = stats.running > 0 || stats.pending > 0 || stats.processing > 0;
 
     async function handleCancelAll() {
-        const activeJobs = jobs.filter((j) => j.status === "running" || j.status === "pending");
+        const activeJobs = jobs.filter((j) => !isTerminal(j.status));
         for (const job of activeJobs) {
-            if (job.status === "running") {
+            if (isInFlight(job.status)) {
                 void cancelDownload(job.id);
             }
         }

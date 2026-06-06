@@ -5,6 +5,7 @@ import { useStore } from "@tanstack/react-store";
 import { useQuery } from "@tanstack/react-query";
 import { uiStore } from "@/stores/uiStore";
 import { downloadsQueryOptions } from "@/api/downloads";
+import { isTerminal } from "@/lib/jobStatus";
 import { JobMiniCard } from "@/components/JobMiniCard";
 import { QueueNav } from "@/views/queue/QueueNav";
 import { HistoryNav } from "@/views/history/HistoryNav";
@@ -12,7 +13,7 @@ import { SettingsNav } from "@/views/settings/SettingsNav";
 
 function AnalyzeNav() {
     const { data: jobs = [] } = useQuery(downloadsQueryOptions());
-    const activeJobs = jobs.filter((j) => j.status === "running" || j.status === "pending");
+    const activeJobs = jobs.filter((j) => !isTerminal(j.status));
 
     return (
         <div className="flex flex-col h-full overflow-y-auto p-2 gap-3">

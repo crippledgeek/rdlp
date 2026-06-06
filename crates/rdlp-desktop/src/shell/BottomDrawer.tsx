@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabList, Tab, TabPanel } from "@/components/ui/tabs";
 import { uiStore, toggleBottomDrawer, setSelectedJob, setView } from "@/stores/uiStore";
 import { downloadsQueryOptions } from "@/api/downloads";
+import { isInFlight, isTerminal } from "@/lib/jobStatus";
 import { LogViewer, appendLog } from "@/components/LogViewer";
 import { StatusBadge } from "@/components/StatusBadge";
 import { progressPercent } from "@/lib/utils";
@@ -45,7 +46,7 @@ function JobsPanel({ jobs }: JobsPanelProps) {
                             : (job.title ?? job.url)}
                     </span>
                     <StatusBadge status={job.status} className="shrink-0" />
-                    {(job.status === "running" || job.status === "pending") && job.progress !== null && (
+                    {isInFlight(job.status) && job.progress !== null && (
                         <span className="text-[10px] text-[var(--text-muted)] font-mono shrink-0">
                             {progressPercent(job.progress)}%
                         </span>
@@ -61,8 +62,8 @@ export function BottomDrawer() {
     const [activeTab, setActiveTab] = useState<string>("logs");
     const { data: jobs = [] } = useQuery(downloadsQueryOptions());
 
-    const activeJob = jobs.find((j) => j.status === "running");
-    const activeCount = jobs.filter((j) => j.status === "running" || j.status === "pending").length;
+    const activeJob = jobs.find((j) => isInFlight(j.status));
+    const activeCount = jobs.filter((j) => !isTerminal(j.status)).length;
 
     return (
         <Tabs
