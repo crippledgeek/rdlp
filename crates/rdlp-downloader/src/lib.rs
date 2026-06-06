@@ -278,6 +278,8 @@
 
 /// Adaptive chunk sizing and connection tuning (AIMD controller)
 pub(crate) mod adaptive;
+/// Shared atomic JSON sidecar writer
+pub(crate) mod atomic;
 /// Intelligent chunk size calculation for optimal download performance
 pub mod chunking;
 /// DASH (Dynamic Adaptive Streaming over HTTP) downloader for static VoD MPDs
