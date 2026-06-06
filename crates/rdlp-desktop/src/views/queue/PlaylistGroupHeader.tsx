@@ -101,6 +101,9 @@ export function PlaylistGroupHeader({
                 {stats.running > 0 && (
                     <span className="text-[#4a9eff]">{stats.running} downloading</span>
                 )}
+                {stats.processing > 0 && (
+                    <span className="text-[#a78bfa]">{stats.processing} processing</span>
+                )}
                 {stats.completed > 0 && (
                     <span className="text-[#22C55E]">{stats.completed} completed</span>
                 )}

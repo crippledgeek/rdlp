@@ -7,7 +7,7 @@ import { FolderOpen, RotateCcw, X } from "lucide-react";
 import { uiStore, setSelectedJob } from "@/stores/uiStore";
 import { downloadsQueryOptions, cancelDownload, removeJob, startDownload } from "@/api/downloads";
 import { StatusBadge } from "@/components/StatusBadge";
-import { isTerminal as isTerminalStatus } from "@/lib/jobStatus";
+import { isTerminal as isTerminalStatus, isInFlight } from "@/lib/jobStatus";
 import { invokeTyped } from "@/api/invokeClient";
 import { cn, progressPercent } from "@/lib/utils";
 
@@ -30,9 +30,9 @@ export function JobDetails() {
         );
     }
 
-    const isRunning = job.status === "running";
     const isFailed = job.status === "failed";
     const isCompleted = job.status === "completed";
+    const inFlight = isInFlight(job.status);
     const isTerminal = isTerminalStatus(job.status);
 
     const handleCancel = () => { cancelDownload(job.id).catch(console.error); };
@@ -63,7 +63,7 @@ export function JobDetails() {
             </div>
 
             {/* Progress (running) */}
-            {isRunning && (
+            {inFlight && (
                 <div>
                     <div className="flex items-center justify-between text-[10px] text-[var(--text-muted)] mb-1">
                         <span className="font-mono text-[#aaaaaa]">{progressPercent(job.progress)}%</span>
@@ -205,7 +205,7 @@ export function JobDetails() {
                         Retry
                     </button>
                 )}
-                {isRunning && (
+                {inFlight && (
                     <button
                         onClick={handleCancel}
                         className="flex items-center gap-2 px-3 py-1.5 rounded-[4px] text-[12px] text-[var(--text-muted)] hover:text-[#e85858] hover:bg-[#2a0a0a] transition-colors"
