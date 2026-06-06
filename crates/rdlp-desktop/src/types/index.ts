@@ -205,6 +205,7 @@ export interface PlaylistContext {
 export type JobStatus =
     | "pending"
     | "running"
+    | "processing"
     | "completed"
     | "failed"
     | "cancelled";
@@ -229,6 +230,8 @@ export interface DownloadJob {
     playlist?: PlaylistContext | null;
     /** Latest log message from the download-log event (frontend-only, not from Rust). */
     statusMessage: string | null;
+    /** Current post-processing stage label (e.g. "Merging", "Transcoding"); null outside processing. */
+    stage: string | null;
     /** Accumulated log messages from download-log events (frontend-only, not from Rust). */
     logMessages?: string[];
     /** Current unit info set by unit-started (frontend-only, not from Rust). */

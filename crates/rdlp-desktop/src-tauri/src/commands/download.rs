@@ -364,10 +364,12 @@ pub async fn start_download(
                     Event::Completed { output_files, .. } => {
                         job.status = JobStatus::Completed;
                         job.progress = Some(1.0);
+                        job.stage = None;
                         job.completed_at = Some(chrono::Utc::now().timestamp());
                         job.output_path = output_files.first().map(|p| p.display().to_string());
                     }
                     Event::Failed { error, .. } => {
+                        // stage intentionally left as-is: only read while status == Processing.
                         job.status = JobStatus::Failed;
                         job.completed_at = Some(chrono::Utc::now().timestamp());
                         job.error = Some(error.user_message().into_owned());
@@ -376,6 +378,16 @@ pub async fn start_download(
                     Event::Cancelled { .. } => {
                         job.status = JobStatus::Cancelled;
                         job.completed_at = Some(chrono::Utc::now().timestamp());
+                    }
+                    Event::PostProcessing { stage, .. } => {
+                        job.begin_postprocessing(stage.clone());
+                    }
+                    Event::PostProcessProgress {
+                        stage, progress, ..
+                    } => {
+                        // PostProcessProgress.progress is a `Progress` directly (NOT the
+                        // Option<Progress> wrapped in Event::Progress.progress).
+                        job.set_postprocess_progress(stage.clone(), f64::from(progress.fraction()));
                     }
                     _ => {}
                 }

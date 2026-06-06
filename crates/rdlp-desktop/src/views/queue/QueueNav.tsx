@@ -13,6 +13,7 @@ import { cn } from "@/lib/utils";
 const filters: { key: QueueFilter; label: string }[] = [
     { key: "all", label: "All" },
     { key: "active", label: "Active" },
+    { key: "processing", label: "Processing" },
     { key: "completed", label: "Completed" },
     { key: "cancelled", label: "Cancelled" },
     { key: "failed", label: "Failed" },
@@ -21,6 +22,7 @@ const filters: { key: QueueFilter; label: string }[] = [
 const statRows: { key: QueueFilter; label: string; valueClass: string }[] = [
     { key: "all", label: "Total", valueClass: "text-[#aaaaaa]" },
     { key: "active", label: "Active", valueClass: "text-[#e8a838]" },
+    { key: "processing", label: "Processing", valueClass: "text-[#a78bfa]" },
     { key: "completed", label: "Completed", valueClass: "text-[#4a9e4a]" },
     { key: "cancelled", label: "Cancelled", valueClass: "text-[var(--text-muted)]" },
     { key: "failed", label: "Failed", valueClass: "text-[#e85858]" },

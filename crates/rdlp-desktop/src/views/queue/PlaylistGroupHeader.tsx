@@ -4,7 +4,7 @@
 import { useMemo } from "react";
 import { ChevronDown, ChevronRight, XCircle } from "lucide-react";
 import { cancelDownload } from "@/api/downloads";
-import { tallyByStatus } from "@/lib/jobStatus";
+import { isInFlight, isTerminal, tallyByStatus } from "@/lib/jobStatus";
 import type { DownloadJob } from "@/types";
 
 interface PlaylistGroupHeaderProps {
@@ -29,12 +29,12 @@ export function PlaylistGroupHeader({
         return { ...tally, total, progressFraction };
     }, [jobs]);
 
-    const hasActive = stats.running > 0 || stats.pending > 0;
+    const hasActive = stats.running > 0 || stats.pending > 0 || stats.processing > 0;
 
     async function handleCancelAll() {
-        const activeJobs = jobs.filter((j) => j.status === "running" || j.status === "pending");
+        const activeJobs = jobs.filter((j) => !isTerminal(j.status));
         for (const job of activeJobs) {
-            if (job.status === "running") {
+            if (isInFlight(job.status)) {
                 void cancelDownload(job.id);
             }
         }
@@ -87,11 +87,12 @@ export function PlaylistGroupHeader({
             </div>
 
             {/* Active episode indicator */}
-            {stats.running > 0 && (() => {
-                const activeJob = jobs.find((j) => j.status === "running");
-                return activeJob?.statusMessage ? (
+            {(stats.running > 0 || stats.processing > 0) && (() => {
+                const activeJob = jobs.find((j) => isInFlight(j.status));
+                const label = activeJob?.statusMessage ?? activeJob?.stage;
+                return label ? (
                     <p className="text-[10px] text-[#aaaaaa] truncate" aria-live="polite">
-                        {activeJob.statusMessage}
+                        {label}
                     </p>
                 ) : null;
             })()}
@@ -100,6 +101,9 @@ export function PlaylistGroupHeader({
             <div className="flex items-center gap-2 text-[10px]">
                 {stats.running > 0 && (
                     <span className="text-[#4a9eff]">{stats.running} downloading</span>
+                )}
+                {stats.processing > 0 && (
+                    <span className="text-[#a78bfa]">{stats.processing} processing</span>
                 )}
                 {stats.completed > 0 && (
                     <span className="text-[#22C55E]">{stats.completed} completed</span>

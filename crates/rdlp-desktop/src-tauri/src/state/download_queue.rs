@@ -19,6 +19,8 @@ pub enum JobStatus {
     Pending,
     /// Actively downloading.
     Running,
+    /// Download finished; post-processing (recode/remux/embed) in progress.
+    Processing,
     /// Download finished successfully.
     Completed,
     /// Download failed with an error.
@@ -48,6 +50,8 @@ pub struct DownloadJob {
     pub(crate) speed: Option<String>,
     /// Estimated time remaining (e.g. `"00:42"`).
     pub(crate) eta: Option<String>,
+    /// Active post-processing stage name (e.g. "Recode"); `None` outside post-processing.
+    pub(crate) stage: Option<String>,
     /// Error message if the job failed.
     pub(crate) error: Option<String>,
     /// Whether a failed job can be retried.
@@ -62,6 +66,22 @@ pub struct DownloadJob {
     pub(crate) options: Option<SavedDownloadOptions>,
     /// Playlist membership — `None` for standalone downloads.
     pub(crate) playlist: Option<PlaylistContext>,
+}
+
+impl DownloadJob {
+    /// Mark the job as entering a post-processing stage (download finished,
+    /// `FFmpeg` work in progress). Sets status to [`JobStatus::Processing`].
+    pub(crate) fn begin_postprocessing(&mut self, stage: String) {
+        self.status = JobStatus::Processing;
+        self.stage = Some(stage);
+    }
+
+    /// Update post-processing progress for the current stage.
+    pub(crate) fn set_postprocess_progress(&mut self, stage: String, fraction: f64) {
+        self.status = JobStatus::Processing;
+        self.stage = Some(stage);
+        self.progress = Some(fraction);
+    }
 }
 
 /// A serializable snapshot of the options used when a download was started.
@@ -134,6 +154,7 @@ impl DownloadQueue {
             progress: None,
             speed: None,
             eta: None,
+            stage: None,
             error: None,
             retryable: false,
             started_at: None,
@@ -408,6 +429,124 @@ mod tests {
         let mut queue = DownloadQueue::new();
         let cancel_fn: Box<dyn Fn() + Send + Sync> = Box::new(|| {});
         assert!(!queue.start_job("nonexistent", cancel_fn, 0));
+    }
+
+    fn running_job(q: &mut DownloadQueue) -> &mut DownloadJob {
+        q.add_job("j", "https://example.com/v", None, None);
+        let job = q.get_job_mut("j").expect("job exists");
+        job.status = JobStatus::Running;
+        job
+    }
+
+    #[test]
+    fn begin_postprocessing_flips_to_processing_and_records_stage() {
+        let mut q = DownloadQueue::new();
+        let job = running_job(&mut q);
+        job.begin_postprocessing("Recode".to_owned());
+        assert_eq!(job.status, JobStatus::Processing);
+        assert_eq!(job.stage.as_deref(), Some("Recode"));
+    }
+
+    #[test]
+    fn set_postprocess_progress_sets_status_stage_progress() {
+        let mut q = DownloadQueue::new();
+        let job = running_job(&mut q);
+        job.set_postprocess_progress("Recode".to_owned(), 0.5);
+        assert_eq!(job.status, JobStatus::Processing);
+        assert_eq!(job.stage.as_deref(), Some("Recode"));
+        assert_eq!(job.progress, Some(0.5));
+    }
+
+    #[test]
+    fn postprocess_progress_resets_per_stage() {
+        let mut q = DownloadQueue::new();
+        let job = running_job(&mut q);
+        job.set_postprocess_progress("Recode".to_owned(), 0.9);
+        job.set_postprocess_progress("EmbedThumbnail".to_owned(), 0.1);
+        assert_eq!(job.stage.as_deref(), Some("EmbedThumbnail"));
+        assert_eq!(job.progress, Some(0.1));
+    }
+
+    #[test]
+    fn begin_postprocessing_is_idempotent() {
+        let mut q = DownloadQueue::new();
+        let job = running_job(&mut q);
+        job.begin_postprocessing("Recode".to_owned());
+        job.begin_postprocessing("Recode".to_owned());
+        assert_eq!(job.status, JobStatus::Processing);
+    }
+
+    #[test]
+    fn fresh_running_job_is_not_processing() {
+        let mut q = DownloadQueue::new();
+        let job = running_job(&mut q);
+        assert_eq!(job.status, JobStatus::Running);
+        assert_eq!(job.stage, None);
+    }
+
+    /// Documents the field shape the event-loop `Completed` arm produces
+    /// (that arm lives in a spawn closure and isn't unit-testable here).
+    #[test]
+    fn completed_job_shape_has_no_stage() {
+        let mut q = DownloadQueue::new();
+        let job = running_job(&mut q);
+        job.set_postprocess_progress("Recode".to_owned(), 0.4);
+        job.status = JobStatus::Completed;
+        job.stage = None;
+        job.progress = Some(1.0);
+        assert_eq!(job.status, JobStatus::Completed);
+        assert_eq!(job.stage, None);
+    }
+
+    #[test]
+    fn processing_serializes_lowercase() {
+        assert_eq!(
+            serde_json::to_value(JobStatus::Processing).unwrap(),
+            serde_json::json!("processing")
+        );
+    }
+
+    #[test]
+    fn all_statuses_serialize_to_expected_strings() {
+        for (variant, expected) in [
+            (JobStatus::Pending, "pending"),
+            (JobStatus::Running, "running"),
+            (JobStatus::Processing, "processing"),
+            (JobStatus::Completed, "completed"),
+            (JobStatus::Failed, "failed"),
+            (JobStatus::Cancelled, "cancelled"),
+        ] {
+            assert_eq!(
+                serde_json::to_value(variant).unwrap(),
+                serde_json::json!(expected)
+            );
+        }
+    }
+
+    #[test]
+    fn download_job_serializes_stage_field() {
+        let mut q = DownloadQueue::new();
+        let job = running_job(&mut q);
+        job.begin_postprocessing("Recode".to_owned());
+        let v = serde_json::to_value(&*job).unwrap();
+        assert_eq!(v["stage"], serde_json::json!("Recode"));
+
+        q.add_job("k", "https://example.com/w", None, None);
+        let other = q.get_job("k").unwrap();
+        let v2 = serde_json::to_value(other).unwrap();
+        assert_eq!(v2["stage"], serde_json::json!(null));
+    }
+
+    #[test]
+    fn clear_completed_does_not_remove_processing_job() {
+        let mut q = DownloadQueue::new();
+        q.add_job("j", "https://example.com/v", None, None);
+        q.get_job_mut("j")
+            .unwrap()
+            .begin_postprocessing("Recode".to_owned());
+        let removed = q.clear_completed();
+        assert_eq!(removed, 0);
+        assert!(q.get_job("j").is_some());
     }
 
     #[test]

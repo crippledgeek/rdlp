@@ -9,17 +9,18 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { Download } from "lucide-react";
 import { downloadsQueryOptions } from "@/api/downloads";
 import { queueFilterStore } from "@/stores/queueFilterStore";
-import { jobMatchesFilter, isDoneNotFailed, type QueueFilter } from "@/lib/jobStatus";
+import { jobMatchesFilter, isDoneNotFailed, isTerminal, type QueueFilter } from "@/lib/jobStatus";
 import { PlaylistGroupHeader } from "./PlaylistGroupHeader";
 import { JobCard } from "./JobCard";
 import type { DownloadJob, QueueItem } from "@/types";
 
 const STATUS_ORDER: Record<string, number> = {
     running: 0,
-    pending: 1,
-    failed: 2,
-    completed: 3,
-    cancelled: 4,
+    processing: 1,
+    pending: 2,
+    failed: 3,
+    completed: 4,
+    cancelled: 5,
 };
 
 /** Height constants for estimateSize callback. */
@@ -62,10 +63,10 @@ function buildFlatItems(
         }
     }
 
-    // Sort groups: active-first (has running/pending), then by most recent started_at
+    // Sort groups: active-first (has ongoing: pending/running/processing), then by most recent started_at
     const sortedGroups = [...playlistGroups.entries()].sort(([, aJobs], [, bJobs]) => {
-        const aHasActive = aJobs.some((j) => j.status === "running" || j.status === "pending");
-        const bHasActive = bJobs.some((j) => j.status === "running" || j.status === "pending");
+        const aHasActive = aJobs.some((j) => !isTerminal(j.status));
+        const bHasActive = bJobs.some((j) => !isTerminal(j.status));
         if (aHasActive !== bHasActive) return aHasActive ? -1 : 1;
 
         const aLatest = Math.max(...aJobs.map((j) => j.started_at ?? 0));
@@ -75,8 +76,8 @@ function buildFlatItems(
 
     // Sort standalone by status priority, then by started_at
     const sortedStandalone = [...standaloneJobs].sort((a, b) => {
-        const aOrder = STATUS_ORDER[a.status] ?? 5;
-        const bOrder = STATUS_ORDER[b.status] ?? 5;
+        const aOrder = STATUS_ORDER[a.status] ?? 6;
+        const bOrder = STATUS_ORDER[b.status] ?? 6;
         if (aOrder !== bOrder) return aOrder - bOrder;
         return (b.started_at ?? 0) - (a.started_at ?? 0);
     });

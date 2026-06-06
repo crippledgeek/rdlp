@@ -2,6 +2,7 @@
 // Click switches to Queue view and selects the job.
 
 import { setView, setSelectedJob } from "@/stores/uiStore";
+import { isInFlight } from "@/lib/jobStatus";
 import { cn, displayTitle, progressPercent } from "@/lib/utils";
 import type { DownloadJob } from "@/types";
 
@@ -13,7 +14,7 @@ interface JobMiniCardProps {
 export function JobMiniCard({ job, className }: JobMiniCardProps) {
     const progress = job.progress ?? 0;
     const title = displayTitle(job.title);
-    const isRunning = job.status === "running";
+    const inFlight = isInFlight(job.status);
     const isPending = job.status === "pending";
 
     function handleClick() {
@@ -31,14 +32,14 @@ export function JobMiniCard({ job, className }: JobMiniCardProps) {
         >
             <div className="flex items-center justify-between gap-2 mb-1">
                 <span className="text-[11px] text-[#eeeeee] truncate flex-1 leading-tight">{title}</span>
-                {isRunning && (
+                {inFlight && (
                     <span className="text-[10px] text-[#aaaaaa] shrink-0 font-mono">{progressPercent(job.progress)}%</span>
                 )}
                 {isPending && (
                     <span className="text-[10px] text-[var(--text-muted)] shrink-0">Queued</span>
                 )}
             </div>
-            {isRunning && (
+            {inFlight && (
                 <div className="h-[2px] rounded-full bg-[#1a1a2e] overflow-hidden">
                     <div
                         className="h-full bg-[#4a9eff] transition-[width] duration-300 rounded-full"

@@ -24,17 +24,18 @@ export function cancelledJobPatch(): Partial<DownloadJob> {
 }
 
 /** Categorizable buckets used by the Queue filter tabs + STATS panel. */
-export type QueueBucket = "active" | "completed" | "cancelled" | "failed";
+export type QueueBucket = "active" | "processing" | "completed" | "cancelled" | "failed";
 
 /** Filter keys = the buckets plus the catch-all. Canonical definition. */
 export type QueueFilter = "all" | QueueBucket;
 
 /**
  * Single source of truth: which `JobStatus` values fall into each bucket.
- * The five statuses are partitioned across the four buckets with no overlap.
+ * The six statuses are partitioned across the five buckets with no overlap.
  */
 const BUCKET_STATUSES: Record<QueueBucket, readonly JobStatus[]> = {
     active: ["running", "pending"],
+    processing: ["processing"],
     completed: ["completed"],
     cancelled: ["cancelled"],
     failed: ["failed"],
@@ -80,6 +81,7 @@ export function countByBucket(jobs: DownloadJob[]): Record<QueueFilter, number> 
     const counts: Record<QueueFilter, number> = {
         all: jobs.length,
         active: 0,
+        processing: 0,
         completed: 0,
         cancelled: 0,
         failed: 0,
@@ -88,15 +90,21 @@ export function countByBucket(jobs: DownloadJob[]): Record<QueueFilter, number> 
     return counts;
 }
 
-/** Per-status tally across all five `JobStatus` values, derived from the job list. */
+/** Per-status tally across all six `JobStatus` values, derived from the job list. */
 export function tallyByStatus(jobs: DownloadJob[]): Record<JobStatus, number> {
     const tally: Record<JobStatus, number> = {
         pending: 0,
         running: 0,
+        processing: 0,
         completed: 0,
         failed: 0,
         cancelled: 0,
     };
     for (const job of jobs) tally[job.status]++;
     return tally;
+}
+
+/** In-flight: actively downloading OR post-processing — shows progress, is cancellable. */
+export function isInFlight(status: JobStatus): boolean {
+    return status === "running" || status === "processing";
 }

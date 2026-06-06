@@ -24,7 +24,7 @@ function makeJob(overrides: Partial<DownloadJob> = {}): DownloadJob {
         id: "job-1", url: "https://example.com/video", title: "Done Video",
         status: "completed", progress: 1, speed: null, eta: null, error: null,
         retryable: false, started_at: null, completed_at: 1_700_000_000,
-        output_path: "/tmp/v.mp4", options: null, playlist: null, statusMessage: null,
+        output_path: "/tmp/v.mp4", options: null, playlist: null, statusMessage: null, stage: null,
         ...overrides,
     };
 }
