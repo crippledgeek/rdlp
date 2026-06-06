@@ -4,6 +4,7 @@
 import { useMemo } from "react";
 import { ChevronDown, ChevronRight, XCircle } from "lucide-react";
 import { cancelDownload } from "@/api/downloads";
+import { tallyByStatus } from "@/lib/jobStatus";
 import type { DownloadJob } from "@/types";
 
 interface PlaylistGroupHeaderProps {
@@ -22,36 +23,10 @@ export function PlaylistGroupHeader({
     onToggleCollapse,
 }: PlaylistGroupHeaderProps) {
     const stats = useMemo(() => {
-        let completed = 0;
-        let running = 0;
-        let pending = 0;
-        let failed = 0;
-        let cancelled = 0;
-
-        for (const job of jobs) {
-            switch (job.status) {
-                case "completed":
-                    completed++;
-                    break;
-                case "running":
-                    running++;
-                    break;
-                case "pending":
-                    pending++;
-                    break;
-                case "failed":
-                    failed++;
-                    break;
-                case "cancelled":
-                    cancelled++;
-                    break;
-            }
-        }
-
+        const tally = tallyByStatus(jobs);
         const total = jobs.length;
-        const progressFraction = total > 0 ? completed / total : 0;
-
-        return { completed, running, pending, failed, cancelled, total, progressFraction };
+        const progressFraction = total > 0 ? tally.completed / total : 0;
+        return { ...tally, total, progressFraction };
     }, [jobs]);
 
     const hasActive = stats.running > 0 || stats.pending > 0;
