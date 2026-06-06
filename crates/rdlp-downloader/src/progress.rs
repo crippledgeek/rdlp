@@ -6,10 +6,6 @@
 //!
 //! # Lint allowances
 //!
-//! - `clippy::branches_sharing_code`: the two branches of the `if elapsed > …`
-//!   block return the same `smooth_speed` value, but each branch has different
-//!   side effects (`prev_bytes`/`prev_time` mutations). Extracting the
-//!   shared return would obscure the intent.
 //! - `clippy::redundant_clone`: `Arc` clones inside closures are required
 //!   for multi-producer progress callbacks.
 //! - `clippy::needless_pass_by_value`: `new()` and related constructors use
@@ -18,7 +14,6 @@
 //!   than `map_or` for the HLS/HTTP progress branch.
 
 #![allow(
-    clippy::branches_sharing_code,
     clippy::redundant_clone,
     clippy::needless_pass_by_value,
     clippy::option_if_let_else
@@ -315,34 +310,19 @@ pub fn spawn_progress_reporter(
 ) -> ProgressGuard {
     let task = callback.map(|cb| {
         tokio::spawn(async move {
-            // EWMA speed state: per-tick delta smoothed with alpha=0.3.
-            // Matches wget/curl responsiveness without a ring buffer.
-            const EWMA_ALPHA: f64 = 0.3;
-            let mut prev_bytes: u64 = config.resume_from;
-            let mut prev_time: Instant = config.start_time;
-            let mut smooth_speed: f64 = 0.0;
+            // Shared canonical rate meter (#355): sliding window + EWMA over the
+            // cumulative byte counter. Seed at the resume offset so the first
+            // window spans real progress.
+            let mut speed_meter = SpeedMeter::new();
+            speed_meter.update(config.resume_from, config.start_time);
 
             loop {
                 tokio::time::sleep(config.update_interval).await;
 
                 let bytes = metrics.downloaded.load(Ordering::Relaxed);
                 let now = Instant::now();
-                let delta_bytes = bytes.saturating_sub(prev_bytes);
-                let delta_secs = now.duration_since(prev_time).as_secs_f64();
-
-                let speed = if delta_secs > 0.01 {
-                    let instant_speed = delta_bytes as f64 / delta_secs;
-                    smooth_speed = if smooth_speed == 0.0 {
-                        instant_speed
-                    } else {
-                        EWMA_ALPHA.mul_add(instant_speed, (1.0 - EWMA_ALPHA) * smooth_speed)
-                    };
-                    prev_bytes = bytes;
-                    prev_time = now;
-                    smooth_speed
-                } else {
-                    smooth_speed
-                };
+                speed_meter.update(bytes, now);
+                let speed = speed_meter.bytes_per_sec().unwrap_or(0.0);
 
                 let progress_info = if let (Some(segments_counter), Some(duration_counter)) =
                     (&metrics.segments_completed, &metrics.duration_completed)
@@ -534,6 +514,23 @@ mod speed_meter_tests {
         assert_eq!(m.bytes_per_sec(), None);
         m.update(MIB, t0);
         assert_eq!(m.bytes_per_sec(), None, "one sample is not enough to rate");
+    }
+
+    #[test]
+    fn seed_then_first_tick_rates_from_resume_offset() {
+        // spawn_progress_reporter seeds the meter at the resume offset, then the
+        // first tick must compute Δ from that offset — not from zero. If it
+        // rated from zero this would read ~1010 MiB/s instead of ~10 MiB/s.
+        let mut m = SpeedMeter::new();
+        let t0 = Instant::now();
+        m.update(100 * MIB, t0); // resume seed
+        m.update(101 * MIB, t0 + Duration::from_millis(100)); // +1 MiB in 100ms
+        let bps = m.bytes_per_sec().expect("rate after seed + one tick");
+        let expected = 10.0 * MIB as f64; // 1 MiB / 0.1 s
+        assert!(
+            (bps - expected).abs() < 0.01 * expected,
+            "rated from resume offset expected ~{expected} B/s, got {bps} B/s"
+        );
     }
 
     #[test]
