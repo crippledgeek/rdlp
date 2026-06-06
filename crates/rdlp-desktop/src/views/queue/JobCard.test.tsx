@@ -1,9 +1,12 @@
 // Tests for views/queue/JobCard — display-layer progress rendering.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, fireEvent } from "@testing-library/react";
 import { render } from "@/test/test-utils";
 import { JobCard } from "./JobCard";
+import { setSelectedJob } from "@/stores/uiStore";
+import { cancelDownload, removeJob, startDownload } from "@/api/downloads";
+import { invokeTyped } from "@/api/invokeClient";
 import type { DownloadJob } from "@/types";
 
 // Stub Tauri stores and IPC — JobCard reads uiStore + calls Tauri commands.
@@ -73,5 +76,204 @@ describe("JobCard — progress display", () => {
     it("renders 1.0 progress as 100%", () => {
         render(<JobCard job={makeJob({ status: "running", progress: 1.0 })} />);
         expect(screen.getByText("100%")).toBeInTheDocument();
+    });
+
+    it("renders the title when present", () => {
+        render(<JobCard job={makeJob({ title: "My Video" })} />);
+        expect(screen.getByText("My Video")).toBeInTheDocument();
+    });
+
+    it("renders 'Unknown' for a null title (not the URL)", () => {
+        render(<JobCard job={makeJob({ title: null, url: "https://x.example/y" })} />);
+        expect(screen.getByText("Unknown")).toBeInTheDocument();
+        expect(screen.queryByText("https://x.example/y")).not.toBeInTheDocument();
+    });
+
+    it("renders 'Unknown' for an empty-string title", () => {
+        render(<JobCard job={makeJob({ title: "" })} />);
+        expect(screen.getByText("Unknown")).toBeInTheDocument();
+    });
+
+    it("renders 'Unknown' for a whitespace-only title", () => {
+        render(<JobCard job={makeJob({ title: "   " })} />);
+        expect(screen.getByText("Unknown")).toBeInTheDocument();
+    });
+
+    it("compact mode renders 'Ep N — Unknown' for a null title", () => {
+        const job = makeJob({
+            title: null,
+            playlist: { playlistId: "p", playlistTitle: "P", playlistIndex: 2, playlistCount: 5 },
+        });
+        render(<JobCard job={job} compact />);
+        expect(screen.getByText("Ep 2 — Unknown")).toBeInTheDocument();
+    });
+
+    it("shows a 'retry may not help' hint on a non-retryable failure", () => {
+        render(<JobCard job={makeJob({ status: "failed", error: "403 Forbidden", retryable: false })} />);
+        expect(screen.getByText("403 Forbidden")).toBeInTheDocument();
+        expect(screen.getByText(/retry may not help/)).toBeInTheDocument();
+    });
+
+    it("omits the hint when the failure is retryable", () => {
+        render(<JobCard job={makeJob({ status: "failed", error: "503 Service Unavailable", retryable: true })} />);
+        expect(screen.getByText("503 Service Unavailable")).toBeInTheDocument();
+        expect(screen.queryByText(/retry may not help/)).not.toBeInTheDocument();
+    });
+
+    it("does not show the hint on a non-failed job", () => {
+        render(<JobCard job={makeJob({ status: "running", retryable: false })} />);
+        expect(screen.queryByText(/retry may not help/)).not.toBeInTheDocument();
+    });
+
+    it("does not show the hint on a completed job", () => {
+        render(<JobCard job={makeJob({ status: "completed", output_path: "/tmp/v.mp4" })} />);
+        expect(screen.queryByText(/retry may not help/)).not.toBeInTheDocument();
+    });
+
+    it("renders no hint when failed with no error message", () => {
+        render(<JobCard job={makeJob({ status: "failed", error: null, retryable: false })} />);
+        expect(screen.queryByText(/retry may not help/)).not.toBeInTheDocument();
+    });
+
+    it("shows the status badge label for the job status", () => {
+        render(<JobCard job={makeJob({ status: "failed", error: "x" })} />);
+        expect(screen.getByText("Failed")).toBeInTheDocument();
+    });
+
+    it("compact playlist mode renders an 'Ep N — title' label", () => {
+        const job = makeJob({
+            title: "Episode One",
+            playlist: { playlistId: "p", playlistTitle: "P", playlistIndex: 3, playlistCount: 10 },
+        });
+        render(<JobCard job={job} compact />);
+        expect(screen.getByText("Ep 3 — Episode One")).toBeInTheDocument();
+    });
+
+    it("Cancel (running) calls cancelDownload with the id", () => {
+        render(<JobCard job={makeJob({ status: "running" })} />);
+        fireEvent.click(screen.getByLabelText("Cancel download"));
+        expect(vi.mocked(cancelDownload)).toHaveBeenCalledWith("job-1");
+    });
+
+    it("Retry shows on failed+options even when NOT retryable, and calls startDownload", () => {
+        const job = makeJob({ status: "failed", retryable: false, url: "u", title: "t",
+            options: {} as unknown as DownloadJob["options"] });
+        render(<JobCard job={job} />);
+        fireEvent.click(screen.getByLabelText("Retry download"));
+        expect(vi.mocked(startDownload)).toHaveBeenCalledWith("u", job.options, "t");
+    });
+
+    it("Retry is hidden on a failed job with no options", () => {
+        render(<JobCard job={makeJob({ status: "failed", options: null })} />);
+        expect(screen.queryByLabelText("Retry download")).not.toBeInTheDocument();
+    });
+
+    it("Reveal (completed+output_path) calls reveal_in_folder", () => {
+        render(<JobCard job={makeJob({ status: "completed", output_path: "/tmp/v.mp4" })} />);
+        fireEvent.click(screen.getByLabelText("Reveal in folder"));
+        expect(vi.mocked(invokeTyped)).toHaveBeenCalledWith("reveal_in_folder", { path: "/tmp/v.mp4" });
+    });
+
+    it("Reveal is hidden when completed with no output_path", () => {
+        render(<JobCard job={makeJob({ status: "completed", output_path: null })} />);
+        expect(screen.queryByLabelText("Reveal in folder")).not.toBeInTheDocument();
+    });
+
+    it("card click selects the job", () => {
+        const { container } = render(<JobCard job={makeJob({ title: "Pick Me", status: "running" })} />);
+        fireEvent.click(container.firstChild as HTMLElement);
+        expect(vi.mocked(setSelectedJob)).toHaveBeenCalledWith("job-1");
+    });
+
+    it("a button click does not also select the job", () => {
+        render(<JobCard job={makeJob({ title: "Pick Me", status: "running" })} />);
+        fireEvent.click(screen.getByLabelText("Cancel download"));
+        expect(vi.mocked(setSelectedJob)).not.toHaveBeenCalled();
+    });
+
+    it.each(["completed", "failed", "cancelled", "pending"] as const)(
+        "Cancel is hidden when status is %s",
+        (status) => {
+            render(<JobCard job={makeJob({ status, output_path: "/t.mp4", error: "e" })} />);
+            expect(screen.queryByLabelText("Cancel download")).not.toBeInTheDocument();
+        },
+    );
+
+    it.each(["running", "completed", "cancelled", "pending"] as const)(
+        "Retry is hidden when status is %s",
+        (status) => {
+            render(<JobCard job={makeJob({ status, options: {} as unknown as DownloadJob["options"], output_path: "/t.mp4" })} />);
+            expect(screen.queryByLabelText("Retry download")).not.toBeInTheDocument();
+        },
+    );
+
+    it.each(["running", "failed"] as const)(
+        "Reveal is hidden when status is %s",
+        (status) => {
+            render(<JobCard job={makeJob({ status, output_path: "/t.mp4", error: "e" })} />);
+            expect(screen.queryByLabelText("Reveal in folder")).not.toBeInTheDocument();
+        },
+    );
+
+    it.each(["completed", "failed", "cancelled"] as const)(
+        "Remove is shown when status is %s",
+        (status) => {
+            render(<JobCard job={makeJob({ status, output_path: "/t.mp4", error: "e" })} />);
+            expect(screen.getByLabelText("Remove job")).toBeInTheDocument();
+        },
+    );
+
+    it("Remove (terminal) calls removeJob", () => {
+        render(<JobCard job={makeJob({ status: "cancelled" })} />);
+        fireEvent.click(screen.getByLabelText("Remove job"));
+        expect(vi.mocked(removeJob)).toHaveBeenCalledWith("job-1");
+    });
+
+    it.each(["running", "pending"] as const)(
+        "Remove is hidden when status is %s",
+        (status) => {
+            render(<JobCard job={makeJob({ status })} />);
+            expect(screen.queryByLabelText("Remove job")).not.toBeInTheDocument();
+        },
+    );
+
+    it("shows the output-path text for completed (non-compact)", () => {
+        render(<JobCard job={makeJob({ status: "completed", output_path: "/tmp/v.mp4" })} />);
+        expect(screen.getByText("/tmp/v.mp4")).toBeInTheDocument();
+    });
+
+    it("hides the output-path text in compact mode", () => {
+        render(<JobCard job={makeJob({ status: "completed", output_path: "/tmp/v.mp4" })} compact />);
+        expect(screen.queryByText("/tmp/v.mp4")).not.toBeInTheDocument();
+    });
+
+    it("shows the progress percent while running", () => {
+        render(<JobCard job={makeJob({ status: "running", progress: 0.42 })} />);
+        expect(screen.getByText("42%")).toBeInTheDocument();
+    });
+
+    it.each(["completed", "failed", "cancelled", "pending"] as const)(
+        "hides the progress percent when status is %s",
+        (status) => {
+            render(<JobCard job={makeJob({ status, progress: 0.42, output_path: "/t.mp4", error: "e" })} />);
+            expect(screen.queryByText("42%")).not.toBeInTheDocument();
+        },
+    );
+
+    it("shows speed and ETA when running and present", () => {
+        render(<JobCard job={makeJob({ status: "running", progress: 0.5, speed: "4.2 MB/s", eta: "00:30" })} />);
+        expect(screen.getByText("4.2 MB/s")).toBeInTheDocument();
+        expect(screen.getByText("ETA 00:30")).toBeInTheDocument();
+    });
+
+    it("omits speed and ETA when null", () => {
+        render(<JobCard job={makeJob({ status: "running", progress: 0.5, speed: null, eta: null })} />);
+        expect(screen.queryByText(/MB\/s/)).not.toBeInTheDocument();
+        expect(screen.queryByText(/^ETA /)).not.toBeInTheDocument();
+    });
+
+    it("shows statusMessage when running and present", () => {
+        render(<JobCard job={makeJob({ status: "running", progress: 0.5, statusMessage: "Video — 50%" })} />);
+        expect(screen.getByText("Video — 50%")).toBeInTheDocument();
     });
 });

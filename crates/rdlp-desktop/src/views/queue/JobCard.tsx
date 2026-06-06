@@ -8,7 +8,7 @@ import { uiStore, setSelectedJob } from "@/stores/uiStore";
 import { cancelDownload, removeJob, startDownload } from "@/api/downloads";
 import { StatusBadge } from "@/components/StatusBadge";
 import { invokeTyped } from "@/api/invokeClient";
-import { cn, progressPercent } from "@/lib/utils";
+import { cn, displayTitle, progressPercent } from "@/lib/utils";
 import type { DownloadJob } from "@/types";
 
 interface JobCardProps {
@@ -18,8 +18,7 @@ interface JobCardProps {
 }
 
 export function JobCard({ job, compact = false }: JobCardProps) {
-    const selectedJobId = useStore(uiStore, (s) => s.selectedJobId);
-    const isSelected = selectedJobId === job.id;
+    const isSelected = useStore(uiStore, (s) => s.selectedJobId === job.id);
     const isRunning = job.status === "running";
     const isFailed = job.status === "failed";
     const isCompleted = job.status === "completed";
@@ -46,8 +45,8 @@ export function JobCard({ job, compact = false }: JobCardProps) {
 
     // Episode label for compact mode (e.g. "Ep 3 — Episode Title")
     const compactTitle = compact && job.playlist
-        ? `Ep ${job.playlist.playlistIndex} — ${job.title ?? "Untitled"}`
-        : (job.title ?? job.url);
+        ? `Ep ${job.playlist.playlistIndex} — ${displayTitle(job.title)}`
+        : displayTitle(job.title);
 
     return (
         <div
@@ -98,7 +97,12 @@ export function JobCard({ job, compact = false }: JobCardProps) {
 
                 {/* Error message */}
                 {isFailed && job.error && (
-                    <p className="text-[11px] text-[#e85858] truncate">{job.error}</p>
+                    <>
+                        <p className="text-[11px] text-[#e85858] truncate">{job.error}</p>
+                        {!job.retryable && (
+                            <p className="text-[10px] text-[var(--text-muted)]">· retry may not help</p>
+                        )}
+                    </>
                 )}
 
                 {/* Output path for completed (hidden in compact mode) */}
