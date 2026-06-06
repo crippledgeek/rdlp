@@ -26,7 +26,7 @@ function makeJob(status: JobStatus, overrides: Partial<DownloadJob> = {}): Downl
         output_path: null,
         options: null,
         playlist: null,
-        statusMessage: null,
+        currentUnit: null,
         stage: null,
         ...overrides,
     };

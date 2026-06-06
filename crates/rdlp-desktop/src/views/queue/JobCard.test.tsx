@@ -43,7 +43,7 @@ function makeJob(overrides: Partial<DownloadJob> = {}): DownloadJob {
         output_path: null,
         options: null,
         playlist: null,
-        statusMessage: null,
+        currentUnit: null,
         stage: null,
         ...overrides,
     };
@@ -314,8 +314,8 @@ describe("JobCard — progress display", () => {
         expect(screen.queryByText(/^ETA /)).not.toBeInTheDocument();
     });
 
-    it("shows statusMessage when running and present", () => {
-        render(<JobCard job={makeJob({ status: "running", progress: 0.5, statusMessage: "Video — 50%" })} />);
+    it("shows the derived sub-label for a merge unit when running", () => {
+        render(<JobCard job={makeJob({ status: "running", progress: 0.5, currentUnit: { index: 1, total: 2, title: "Video" } })} />);
         expect(screen.getByText("Video — 50%")).toBeInTheDocument();
     });
 });

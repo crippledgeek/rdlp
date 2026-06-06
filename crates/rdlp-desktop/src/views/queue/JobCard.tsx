@@ -8,7 +8,7 @@ import { Button as AriaButton } from "react-aria-components";
 import { uiStore, setSelectedJob } from "@/stores/uiStore";
 import { cancelDownload, removeJob, startDownload } from "@/api/downloads";
 import { StatusBadge } from "@/components/StatusBadge";
-import { isTerminal as isTerminalStatus, isInFlight } from "@/lib/jobStatus";
+import { isTerminal as isTerminalStatus, isInFlight, jobSubLabel } from "@/lib/jobStatus";
 import { invokeTyped } from "@/api/invokeClient";
 import { cn, displayTitle, progressPercent } from "@/lib/utils";
 import type { DownloadJob } from "@/types";
@@ -26,7 +26,7 @@ export function JobCard({ job, compact = false }: JobCardProps) {
     const isTerminal = isTerminalStatus(job.status);
     const progress = job.progress ?? 0;
     const inFlight = isInFlight(job.status);
-    const subLabel = job.status === "processing" ? job.stage : job.statusMessage;
+    const subLabel = jobSubLabel(job);
 
     async function handleCancel() {
         await cancelDownload(job.id);

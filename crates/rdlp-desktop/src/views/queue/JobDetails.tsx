@@ -7,7 +7,7 @@ import { FolderOpen, RotateCcw, X } from "lucide-react";
 import { uiStore, setSelectedJob } from "@/stores/uiStore";
 import { downloadsQueryOptions, cancelDownload, removeJob, startDownload } from "@/api/downloads";
 import { StatusBadge } from "@/components/StatusBadge";
-import { isTerminal as isTerminalStatus, isInFlight } from "@/lib/jobStatus";
+import { isTerminal as isTerminalStatus, isInFlight, jobSubLabel } from "@/lib/jobStatus";
 import { invokeTyped } from "@/api/invokeClient";
 import { cn, progressPercent } from "@/lib/utils";
 
@@ -34,6 +34,7 @@ export function JobDetails() {
     const isCompleted = job.status === "completed";
     const inFlight = isInFlight(job.status);
     const isTerminal = isTerminalStatus(job.status);
+    const subLabel = jobSubLabel(job);
 
     const handleCancel = () => { cancelDownload(job.id).catch(console.error); };
     const handleRemove = () => {
@@ -78,8 +79,8 @@ export function JobDetails() {
                             style={{ width: `${(job.progress ?? 0) * 100}%` }}
                         />
                     </div>
-                    {job.statusMessage && (
-                        <p className="text-[10px] text-[#4a9eff] mt-1 truncate">{job.statusMessage}</p>
+                    {subLabel && (
+                        <p className="text-[10px] text-[#4a9eff] mt-1 truncate">{subLabel}</p>
                     )}
                 </div>
             )}

@@ -15,13 +15,11 @@ import type {
     DownloadOptions,
     DownloadProgressPayload,
     FormatListResponse,
-    FormatSelectedPayload,
     PostProcessProgressPayload,
     SearchFilter,
     SearchFilterDescriptor,
     SearchPageResponse,
     SearchSiteInfo,
-    UnitCompletedPayload,
     UnitStartedPayload,
 } from "../types";
 
@@ -146,15 +144,6 @@ export function onDownloadLog(
     );
 }
 
-/** Subscribe to format-selected events. Returns an unlisten function. */
-export function onFormatSelected(
-    callback: (payload: FormatSelectedPayload) => void,
-): Promise<UnlistenFn> {
-    return listen<FormatSelectedPayload>("format-selected", (event) =>
-        callback(event.payload),
-    );
-}
-
 /** Subscribe to post-processing progress events. Returns an unlisten function. */
 export function onPostProcessProgress(
     callback: (payload: PostProcessProgressPayload) => void,
@@ -169,13 +158,6 @@ export function onUnitStarted(
     handler: (payload: UnitStartedPayload) => void,
 ): Promise<UnlistenFn> {
     return listen<UnitStartedPayload>("unit-started", (e) => handler(e.payload));
-}
-
-/** Subscribe to unit-completed events (playlist episode or merge stream done). Returns an unlisten function. */
-export function onUnitCompleted(
-    handler: (payload: UnitCompletedPayload) => void,
-): Promise<UnlistenFn> {
-    return listen<UnitCompletedPayload>("unit-completed", (e) => handler(e.payload));
 }
 
 /** Validate a format expression and return matching format IDs. */

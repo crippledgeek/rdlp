@@ -24,7 +24,7 @@ function makeJob(overrides: Partial<DownloadJob> = {}): DownloadJob {
         output_path: null,
         options: null,
         playlist: null,
-        statusMessage: null,
+        currentUnit: null,
         stage: null,
         ...overrides,
     };
@@ -44,8 +44,7 @@ describe("cancelDownload", () => {
             progress: 0.47,
             speed: "4.2 MB/s",
             eta: "0:12",
-            statusMessage: "Video — 47%",
-            currentUnit: { unitIndex: 1, unitTotal: 2, unitTitle: "Video" },
+            currentUnit: { index: 1, total: 2, title: "Video" },
         });
         queryClient.setQueryData<DownloadJob[]>(queryKeys.downloads.list(), [job]);
         const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
@@ -54,11 +53,42 @@ describe("cancelDownload", () => {
 
         const jobs = queryClient.getQueryData<DownloadJob[]>(queryKeys.downloads.list())!;
         expect(jobs[0]!.status).toBe("cancelled");
-        expect(jobs[0]!.statusMessage).toBeNull();
         expect(jobs[0]!.currentUnit).toBeNull();
         expect(jobs[0]!.speed).toBeNull();
         expect(jobs[0]!.eta).toBeNull();
         expect(jobs[0]!.progress).toBeNull();
         expect(invalidateSpy).not.toHaveBeenCalled();
+    });
+});
+
+describe("cancelDownload — optimistic guard (#368)", () => {
+    it("optimistically flips to cancelled on success", async () => {
+        const key = queryKeys.downloads.list();
+        queryClient.setQueryData(key, [makeJob({ id: "a", status: "running" })]);
+        invokeMock.mockResolvedValueOnce(undefined);
+        await cancelDownload("a");
+        expect(queryClient.getQueryData<DownloadJob[]>(key)![0]!.status).toBe("cancelled");
+    });
+    it("flips optimistically BEFORE the IPC resolves", async () => {
+        const key = queryKeys.downloads.list();
+        queryClient.setQueryData(key, [makeJob({ id: "a", status: "running" })]);
+        // Hold the IPC open so we can observe the in-flight optimistic state.
+        let release!: () => void;
+        invokeMock.mockReturnValueOnce(new Promise<void>((res) => (release = res)));
+        const p = cancelDownload("a");
+        // The documented pattern guards via cancelQueries() then writes the optimistic
+        // flip — all before the cancel_download IPC resolves. Drain pending microtasks
+        // (cancelQueries settles) without releasing the held IPC, then assert the flip.
+        await new Promise((r) => setTimeout(r, 0));
+        expect(queryClient.getQueryData<DownloadJob[]>(key)![0]!.status).toBe("cancelled");
+        release();
+        await p;
+    });
+    it("rolls back when the IPC rejects", async () => {
+        const key = queryKeys.downloads.list();
+        queryClient.setQueryData(key, [makeJob({ id: "a", status: "running" })]);
+        invokeMock.mockRejectedValueOnce(new Error("boom"));
+        await expect(cancelDownload("a")).rejects.toThrow("boom");
+        expect(queryClient.getQueryData<DownloadJob[]>(key)![0]!.status).toBe("running"); // rolled back
     });
 });

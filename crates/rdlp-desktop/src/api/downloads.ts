@@ -32,22 +32,21 @@ export async function startDownload(
     return jobId;
 }
 
-/** Cancel a running download. */
+/** Cancel a running download. Optimistically flips to cancelled; rolls back on IPC failure. */
 export async function cancelDownload(jobId: string): Promise<void> {
-    await invokeTyped<void>("cancel_download", { jobId });
-    // Optimistic terminal flip. The backend sets JobStatus::Cancelled
-    // asynchronously and confirms via the "download-cancelled" event
-    // (registerDownloadEvents). We must NOT invalidateQueries here: a
-    // refetch would race the async cancel and read stale "running".
-    queryClient.setQueryData<DownloadJob[]>(
-        queryKeys.downloads.list(),
-        (old) =>
-            old?.map((job) =>
-                job.id === jobId
-                    ? { ...job, ...cancelledJobPatch() }
-                    : job,
-            ),
+    const key = queryKeys.downloads.list();
+    // Guard the optimistic write against an in-flight refetch (TanStack optimistic-updates pattern).
+    await queryClient.cancelQueries({ queryKey: key });
+    const previous = queryClient.getQueryData<DownloadJob[]>(key);
+    queryClient.setQueryData<DownloadJob[]>(key, (old) =>
+        old?.map((job) => (job.id === jobId ? { ...job, ...cancelledJobPatch() } : job)),
     );
+    try {
+        await invokeTyped<void>("cancel_download", { jobId });
+    } catch (e) {
+        if (previous) queryClient.setQueryData(key, previous); // rollback
+        throw e;
+    }
 }
 
 /** Remove a completed/failed/cancelled job from the queue. */
