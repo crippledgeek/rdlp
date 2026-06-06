@@ -76,8 +76,8 @@ function buildFlatItems(
 
     // Sort standalone by status priority, then by started_at
     const sortedStandalone = [...standaloneJobs].sort((a, b) => {
-        const aOrder = STATUS_ORDER[a.status] ?? 5;
-        const bOrder = STATUS_ORDER[b.status] ?? 5;
+        const aOrder = STATUS_ORDER[a.status] ?? 6;
+        const bOrder = STATUS_ORDER[b.status] ?? 6;
         if (aOrder !== bOrder) return aOrder - bOrder;
         return (b.started_at ?? 0) - (a.started_at ?? 0);
     });
