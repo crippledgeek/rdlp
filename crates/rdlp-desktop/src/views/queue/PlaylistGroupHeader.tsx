@@ -87,11 +87,12 @@ export function PlaylistGroupHeader({
             </div>
 
             {/* Active episode indicator */}
-            {stats.running > 0 && (() => {
-                const activeJob = jobs.find((j) => j.status === "running");
-                return activeJob?.statusMessage ? (
+            {(stats.running > 0 || stats.processing > 0) && (() => {
+                const activeJob = jobs.find((j) => isInFlight(j.status));
+                const label = activeJob?.statusMessage ?? activeJob?.stage;
+                return label ? (
                     <p className="text-[10px] text-[#aaaaaa] truncate" aria-live="polite">
-                        {activeJob.statusMessage}
+                        {label}
                     </p>
                 ) : null;
             })()}

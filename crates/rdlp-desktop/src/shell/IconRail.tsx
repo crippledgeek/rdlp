@@ -7,6 +7,7 @@ import { useStore } from "@tanstack/react-store";
 import { useQuery } from "@tanstack/react-query";
 import { uiStore, setView } from "@/stores/uiStore";
 import { downloadsQueryOptions } from "@/api/downloads";
+import { isTerminal } from "@/lib/jobStatus";
 import { cn } from "@/lib/utils";
 import type { AppView } from "@/types";
 import { TooltipTrigger } from "react-aria-components";
@@ -24,9 +25,7 @@ export function IconRail() {
     const activeView = useStore(uiStore, (s) => s.activeView);
     const { data: jobs = [] } = useQuery(downloadsQueryOptions());
 
-    const activeCount = jobs.filter(
-        (j) => j.status === "running" || j.status === "pending",
-    ).length;
+    const activeCount = jobs.filter((j) => !isTerminal(j.status)).length;
 
     return (
         <div

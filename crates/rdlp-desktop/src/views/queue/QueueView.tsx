@@ -9,7 +9,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { Download } from "lucide-react";
 import { downloadsQueryOptions } from "@/api/downloads";
 import { queueFilterStore } from "@/stores/queueFilterStore";
-import { jobMatchesFilter, isDoneNotFailed, type QueueFilter } from "@/lib/jobStatus";
+import { jobMatchesFilter, isDoneNotFailed, isTerminal, type QueueFilter } from "@/lib/jobStatus";
 import { PlaylistGroupHeader } from "./PlaylistGroupHeader";
 import { JobCard } from "./JobCard";
 import type { DownloadJob, QueueItem } from "@/types";
@@ -63,10 +63,10 @@ function buildFlatItems(
         }
     }
 
-    // Sort groups: active-first (has running/pending), then by most recent started_at
+    // Sort groups: active-first (has ongoing: pending/running/processing), then by most recent started_at
     const sortedGroups = [...playlistGroups.entries()].sort(([, aJobs], [, bJobs]) => {
-        const aHasActive = aJobs.some((j) => j.status === "running" || j.status === "pending");
-        const bHasActive = bJobs.some((j) => j.status === "running" || j.status === "pending");
+        const aHasActive = aJobs.some((j) => !isTerminal(j.status));
+        const bHasActive = bJobs.some((j) => !isTerminal(j.status));
         if (aHasActive !== bHasActive) return aHasActive ? -1 : 1;
 
         const aLatest = Math.max(...aJobs.map((j) => j.started_at ?? 0));
