@@ -1,7 +1,7 @@
 // @vitest-environment node
 // Tests for registerDownloadEvents — verifying cache mutations per event type.
 
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import { mockEmit, clearEventListeners } from "@/test/tauri-mock";
 import { queryKeys } from "../query/queryKeys";
@@ -34,6 +34,8 @@ describe("registerDownloadEvents", () => {
     let cleanup: () => void;
 
     beforeEach(() => {
+        vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => { cb(0); return 1; });
+        vi.stubGlobal("cancelAnimationFrame", () => {});
         qc = new QueryClient({
             defaultOptions: { queries: { retry: false, staleTime: Infinity } },
         });
@@ -44,6 +46,30 @@ describe("registerDownloadEvents", () => {
         cleanup();
         clearEventListeners();
         qc.clear();
+        vi.unstubAllGlobals();
+    });
+
+    it("transitions a running job to cancelled on download-cancelled", async () => {
+        const job = makeJob({
+            id: "j1",
+            status: "running",
+            statusMessage: "Video — 47%",
+            progress: 0.47,
+            speed: "4.2 MB/s",
+            eta: "0:12",
+            currentUnit: { unitTitle: "Video", unitIndex: 1, unitTotal: 2 },
+        });
+        qc.setQueryData<DownloadJob[]>(queryKeys.downloads.list(), [job]);
+
+        await mockEmit("download-cancelled", { jobId: "j1" });
+
+        const jobs = qc.getQueryData<DownloadJob[]>(queryKeys.downloads.list())!;
+        expect(jobs[0]!.status).toBe("cancelled");
+        expect(jobs[0]!.statusMessage).toBeNull();
+        expect(jobs[0]!.currentUnit).toBeNull();
+        expect(jobs[0]!.speed).toBeNull();
+        expect(jobs[0]!.eta).toBeNull();
+        expect(jobs[0]!.progress).toBeNull();
     });
 
     it("appends a log message to logMessages on download-log event", async () => {
@@ -126,5 +152,15 @@ describe("registerDownloadEvents", () => {
 
         const jobs = qc.getQueryData<DownloadJob[]>(queryKeys.downloads.list())!;
         expect(jobs[0]!.logMessages).toEqual(["Previous message", "New message"]);
+    });
+
+    it("stores download-progress as a 0-1 fraction (not 0-100)", async () => {
+        const job = makeJob({ id: "j1", status: "running" });
+        qc.setQueryData<DownloadJob[]>(queryKeys.downloads.list(), [job]);
+
+        await mockEmit("download-progress", { jobId: "j1", progress: 0.47, speed: "5 MB/s", eta: "01:00" });
+
+        const jobs = qc.getQueryData<DownloadJob[]>(queryKeys.downloads.list())!;
+        expect(jobs[0]!.progress).toBeCloseTo(0.47, 5);
     });
 });

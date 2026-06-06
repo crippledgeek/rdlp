@@ -7,6 +7,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
     AppSettings,
+    DownloadCancelledPayload,
     DownloadCompletePayload,
     DownloadErrorPayload,
     DownloadJob,
@@ -123,6 +124,15 @@ export function onDownloadError(
     callback: (payload: DownloadErrorPayload) => void,
 ): Promise<UnlistenFn> {
     return listen<DownloadErrorPayload>("download-error", (event) =>
+        callback(event.payload),
+    );
+}
+
+/** Subscribe to download cancellation events. Returns an unlisten function. */
+export function onDownloadCancelled(
+    callback: (payload: DownloadCancelledPayload) => void,
+): Promise<UnlistenFn> {
+    return listen<DownloadCancelledPayload>("download-cancelled", (event) =>
         callback(event.payload),
     );
 }

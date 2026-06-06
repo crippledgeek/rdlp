@@ -53,6 +53,14 @@ pub struct DownloadErrorPayload {
     pub(crate) retryable: bool,
 }
 
+/// Download cancellation payload emitted as `"download-cancelled"`.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadCancelledPayload {
+    /// The UUID of the download job.
+    pub(crate) job_id: String,
+}
+
 /// Log severity level for download events.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -343,7 +351,16 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
             }
         }
 
-        // Remaining unhandled events (SubtitlesFound, SubtitlesMissing, Cancelled, Started, Retrying from playlist)
+        Event::Cancelled { .. } => {
+            let payload = DownloadCancelledPayload {
+                job_id: job_id.to_owned(),
+            };
+            if let Err(e) = app.emit("download-cancelled", &payload) {
+                debug!("Failed to emit download-cancelled for job {job_id}: {e}");
+            }
+        }
+
+        // Remaining unhandled events (SubtitlesFound, SubtitlesMissing, Started, Retrying from playlist)
         _ => {}
     }
 }
@@ -451,5 +468,15 @@ mod tests {
         assert_eq!(json["jobId"], "abc-123");
         assert_eq!(json["stage"], "remux");
         assert_eq!(json["progress"], 0.45);
+    }
+
+    #[test]
+    fn test_cancelled_payload_serializes_camel_case() {
+        let payload = DownloadCancelledPayload {
+            job_id: "abc-123".to_owned(),
+        };
+        let v = serde_json::to_value(&payload).expect("serialization should succeed");
+        assert_eq!(v["jobId"], "abc-123");
+        assert!(v.get("job_id").is_none(), "must be camelCase on the wire");
     }
 }

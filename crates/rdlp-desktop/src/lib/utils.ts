@@ -69,3 +69,8 @@ export function displayTitle(title: string | null | undefined): string {
     const trimmed = title.trim();
     return trimmed.length === 0 ? TITLE_PLACEHOLDER : trimmed;
 }
+
+/** Convert a 0–1 progress fraction to a rounded whole-percent number. */
+export function progressPercent(fraction: number | null | undefined): number {
+    return Math.round((fraction ?? 0) * 100);
+}

@@ -327,6 +327,11 @@ export interface DownloadErrorPayload {
     retryable: boolean;
 }
 
+/** Download cancellation payload emitted as "download-cancelled". */
+export interface DownloadCancelledPayload {
+    jobId: string;
+}
+
 /** Format-selected payload emitted as "format-selected". */
 export interface FormatSelectedPayload {
     jobId: string;

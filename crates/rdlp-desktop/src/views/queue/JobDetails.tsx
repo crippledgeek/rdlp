@@ -8,7 +8,7 @@ import { uiStore, setSelectedJob } from "@/stores/uiStore";
 import { downloadsQueryOptions, cancelDownload, removeJob, startDownload } from "@/api/downloads";
 import { StatusBadge } from "@/components/StatusBadge";
 import { invokeTyped } from "@/api/invokeClient";
-import { cn } from "@/lib/utils";
+import { cn, progressPercent } from "@/lib/utils";
 
 function formatDate(ts: number | null): string {
     if (!ts) return "—";
@@ -65,7 +65,7 @@ export function JobDetails() {
             {isRunning && (
                 <div>
                     <div className="flex items-center justify-between text-[10px] text-[var(--text-muted)] mb-1">
-                        <span className="font-mono text-[#aaaaaa]">{Math.round(job.progress ?? 0)}%</span>
+                        <span className="font-mono text-[#aaaaaa]">{progressPercent(job.progress)}%</span>
                         <div className="flex items-center gap-2">
                             {job.speed && <span>{job.speed}</span>}
                             {job.eta && <span>ETA {job.eta}</span>}
@@ -74,7 +74,7 @@ export function JobDetails() {
                     <div className="h-[3px] rounded-full bg-[#1a1a2e] overflow-hidden">
                         <div
                             className="h-full bg-[#4a9eff] transition-[width] duration-300 rounded-full"
-                            style={{ width: `${job.progress ?? 0}%` }}
+                            style={{ width: `${(job.progress ?? 0) * 100}%` }}
                         />
                     </div>
                     {job.statusMessage && (

@@ -11,6 +11,7 @@ import { uiStore, toggleBottomDrawer, setSelectedJob, setView } from "@/stores/u
 import { downloadsQueryOptions } from "@/api/downloads";
 import { LogViewer, appendLog } from "@/components/LogViewer";
 import { StatusBadge } from "@/components/StatusBadge";
+import { progressPercent } from "@/lib/utils";
 import type { DownloadJob } from "@/types";
 
 // Re-export appendLog so event registration can use it
@@ -46,7 +47,7 @@ function JobsPanel({ jobs }: JobsPanelProps) {
                     <StatusBadge status={job.status} className="shrink-0" />
                     {(job.status === "running" || job.status === "pending") && job.progress !== null && (
                         <span className="text-[10px] text-[var(--text-muted)] font-mono shrink-0">
-                            {Math.round(job.progress)}%
+                            {progressPercent(job.progress)}%
                         </span>
                     )}
                 </Button>
@@ -109,7 +110,7 @@ export function BottomDrawer() {
                             </span>
                             {activeJob.progress !== null && (
                                 <span className="text-[10px] text-[#aaaaaa] font-mono shrink-0">
-                                    {Math.round(activeJob.progress)}%
+                                    {progressPercent(activeJob.progress)}%
                                 </span>
                             )}
                             {activeJob.speed && (
