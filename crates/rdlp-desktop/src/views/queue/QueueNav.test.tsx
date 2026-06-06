@@ -23,7 +23,7 @@ function makeJob(status: JobStatus, id: string): DownloadJob {
         output_path: null,
         options: null,
         playlist: null,
-        statusMessage: null,
+        currentUnit: null,
         stage: null,
     };
 }

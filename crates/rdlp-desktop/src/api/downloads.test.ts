@@ -24,7 +24,7 @@ function makeJob(overrides: Partial<DownloadJob> = {}): DownloadJob {
         output_path: null,
         options: null,
         playlist: null,
-        statusMessage: null,
+        currentUnit: null,
         stage: null,
         ...overrides,
     };
@@ -44,8 +44,7 @@ describe("cancelDownload", () => {
             progress: 0.47,
             speed: "4.2 MB/s",
             eta: "0:12",
-            statusMessage: "Video — 47%",
-            currentUnit: { unitIndex: 1, unitTotal: 2, unitTitle: "Video" },
+            currentUnit: { index: 1, total: 2, title: "Video" },
         });
         queryClient.setQueryData<DownloadJob[]>(queryKeys.downloads.list(), [job]);
         const invalidateSpy = vi.spyOn(queryClient, "invalidateQueries");
@@ -54,7 +53,6 @@ describe("cancelDownload", () => {
 
         const jobs = queryClient.getQueryData<DownloadJob[]>(queryKeys.downloads.list())!;
         expect(jobs[0]!.status).toBe("cancelled");
-        expect(jobs[0]!.statusMessage).toBeNull();
         expect(jobs[0]!.currentUnit).toBeNull();
         expect(jobs[0]!.speed).toBeNull();
         expect(jobs[0]!.eta).toBeNull();

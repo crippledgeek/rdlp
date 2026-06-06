@@ -24,7 +24,7 @@ function makeJob(overrides: Partial<DownloadJob> = {}): DownloadJob {
         output_path: null,
         options: null,
         playlist: null,
-        statusMessage: null,
+        currentUnit: null,
         stage: null,
         ...overrides,
     };
@@ -54,11 +54,10 @@ describe("registerDownloadEvents", () => {
         const job = makeJob({
             id: "j1",
             status: "running",
-            statusMessage: "Video — 47%",
             progress: 0.47,
             speed: "4.2 MB/s",
             eta: "0:12",
-            currentUnit: { unitTitle: "Video", unitIndex: 1, unitTotal: 2 },
+            currentUnit: { index: 1, total: 2, title: "Video" },
         });
         qc.setQueryData<DownloadJob[]>(queryKeys.downloads.list(), [job]);
 
@@ -66,7 +65,6 @@ describe("registerDownloadEvents", () => {
 
         const jobs = qc.getQueryData<DownloadJob[]>(queryKeys.downloads.list())!;
         expect(jobs[0]!.status).toBe("cancelled");
-        expect(jobs[0]!.statusMessage).toBeNull();
         expect(jobs[0]!.currentUnit).toBeNull();
         expect(jobs[0]!.speed).toBeNull();
         expect(jobs[0]!.eta).toBeNull();
@@ -109,20 +107,6 @@ describe("registerDownloadEvents", () => {
 
         const jobs = qc.getQueryData<DownloadJob[]>(queryKeys.downloads.list())!;
         expect(jobs[0]!.logMessages).toEqual(["First", "Second", "Third"]);
-    });
-
-    it("also updates statusMessage on download-log event", async () => {
-        const job = makeJob({ id: "job-42" });
-        qc.setQueryData<DownloadJob[]>(queryKeys.downloads.list(), [job]);
-
-        await mockEmit("download-log", {
-            jobId: "job-42",
-            level: "info",
-            message: "Merging streams",
-        });
-
-        const jobs = qc.getQueryData<DownloadJob[]>(queryKeys.downloads.list())!;
-        expect(jobs[0]!.statusMessage).toBe("Merging streams");
     });
 
     it("does not affect other jobs when a log event arrives", async () => {

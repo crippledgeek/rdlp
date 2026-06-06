@@ -210,6 +210,13 @@ export type JobStatus =
     | "failed"
     | "cancelled";
 
+/** Active unit info owned by Rust, serialized under the `currentUnit` wire key. */
+export interface CurrentUnit {
+    index: number;
+    total: number;
+    title: string;
+}
+
 /** Serializable metadata for a single download job (snake_case — default serde). */
 export interface DownloadJob {
     id: string;
@@ -228,20 +235,12 @@ export interface DownloadJob {
     options: DownloadOptions | null;
     /** Playlist membership — null for standalone downloads. Omitted in legacy fixtures. */
     playlist?: PlaylistContext | null;
-    /** Latest log message from the download-log event (frontend-only, not from Rust). */
-    statusMessage: string | null;
     /** Current post-processing stage label (e.g. "Merging", "Transcoding"); null outside processing. */
     stage: string | null;
     /** Accumulated log messages from download-log events (frontend-only, not from Rust). */
     logMessages?: string[];
-    /** Current unit info set by unit-started (frontend-only, not from Rust). */
-    currentUnit?: {
-        unitIndex: number;
-        unitTotal: number;
-        unitTitle: string;
-    } | null;
-    /** Number of completed units tracked by unit-completed events (frontend-only). */
-    completedUnits?: number;
+    /** Current unit info, owned by Rust (`currentUnit` wire key). Null when no unit is active. */
+    currentUnit: CurrentUnit | null;
 }
 
 /**

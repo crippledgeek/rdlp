@@ -4,7 +4,7 @@
 import { useMemo } from "react";
 import { ChevronDown, ChevronRight, XCircle } from "lucide-react";
 import { cancelDownload } from "@/api/downloads";
-import { isInFlight, isTerminal, tallyByStatus } from "@/lib/jobStatus";
+import { isInFlight, isTerminal, jobSubLabel, tallyByStatus } from "@/lib/jobStatus";
 import type { DownloadJob } from "@/types";
 
 interface PlaylistGroupHeaderProps {
@@ -89,7 +89,7 @@ export function PlaylistGroupHeader({
             {/* Active episode indicator */}
             {(stats.running > 0 || stats.processing > 0) && (() => {
                 const activeJob = jobs.find((j) => isInFlight(j.status));
-                const label = activeJob?.statusMessage ?? activeJob?.stage;
+                const label = activeJob ? jobSubLabel(activeJob) : null;
                 return label ? (
                     <p className="text-[10px] text-[#aaaaaa] truncate" aria-live="polite">
                         {label}

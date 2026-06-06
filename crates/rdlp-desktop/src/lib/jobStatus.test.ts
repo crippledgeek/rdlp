@@ -7,6 +7,7 @@ import {
     jobMatchesFilter,
     countByBucket,
     tallyByStatus,
+    jobSubLabel,
 } from "./jobStatus";
 import type { JobStatus, DownloadJob } from "../types";
 
@@ -14,7 +15,6 @@ describe("cancelledJobPatch", () => {
     it("sets cancelled status and clears all transient progress fields", () => {
         expect(cancelledJobPatch()).toEqual({
             status: "cancelled",
-            statusMessage: null,
             currentUnit: null,
             speed: null,
             eta: null,
@@ -23,8 +23,8 @@ describe("cancelledJobPatch", () => {
     });
 });
 
-function makeJob(status: JobStatus, id = "j"): DownloadJob {
-    return {
+function makeJob(status: JobStatus, id = "j", overrides: Partial<DownloadJob> = {}): DownloadJob {
+    const base: DownloadJob = {
         id,
         url: "https://example.com/v",
         title: null,
@@ -39,12 +39,34 @@ function makeJob(status: JobStatus, id = "j"): DownloadJob {
         output_path: null,
         options: null,
         playlist: null,
-        statusMessage: null,
+        currentUnit: null,
         stage: null,
     };
+    return { ...base, status, id, ...overrides };
 }
 
 const ALL_STATUSES: JobStatus[] = ["pending", "running", "processing", "completed", "failed", "cancelled"];
+
+describe("jobSubLabel", () => {
+    it("returns the stage while processing", () => {
+        expect(jobSubLabel(makeJob("processing", "a", { stage: "Recode" }))).toBe("Recode");
+    });
+    it("formats a merge sub-unit with percent", () => {
+        expect(jobSubLabel(makeJob("running", "a", { currentUnit: { index: 1, total: 2, title: "Video" }, progress: 0.67 }))).toBe("Video — 67%");
+    });
+    it("formats a playlist episode", () => {
+        expect(jobSubLabel(makeJob("running", "a", { currentUnit: { index: 3, total: 12, title: "Ep title" } }))).toBe("Ep 3/12 — Ep title");
+    });
+    it("returns null with no stage and no unit", () => {
+        expect(jobSubLabel(makeJob("running", "a"))).toBeNull();
+    });
+    it("treats total:2 with a non-Video/Audio title as playlist", () => {
+        expect(jobSubLabel(makeJob("running", "a", { currentUnit: { index: 1, total: 2, title: "Bonus" } }))).toBe("Ep 1/2 — Bonus");
+    });
+    it("prefers stage over currentUnit while processing", () => {
+        expect(jobSubLabel(makeJob("processing", "a", { stage: "Merge", currentUnit: { index: 1, total: 2, title: "Video" } }))).toBe("Merge");
+    });
+});
 
 describe("isTerminal", () => {
     it("is true for completed, cancelled, failed", () => {

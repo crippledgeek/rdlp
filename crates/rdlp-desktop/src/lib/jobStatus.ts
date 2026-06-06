@@ -15,12 +15,23 @@ import type { DownloadJob, JobStatus } from "../types";
 export function cancelledJobPatch(): Partial<DownloadJob> {
     return {
         status: "cancelled",
-        statusMessage: null,
         currentUnit: null,
         speed: null,
         eta: null,
         progress: null,
     };
+}
+
+/** The per-job sub-label, derived during render from canonical fields. Null = no sub-label. */
+export function jobSubLabel(job: DownloadJob): string | null {
+    if (job.status === "processing") return job.stage;
+    const u = job.currentUnit;
+    if (!u) return null;
+    const pct = Math.round((job.progress ?? 0) * 100);
+    if (u.total === 2 && (u.title === "Video" || u.title === "Audio")) {
+        return `${u.title} — ${pct}%`;
+    }
+    return `Ep ${u.index}/${u.total} — ${u.title}`;
 }
 
 /** Categorizable buckets used by the Queue filter tabs + STATS panel. */
