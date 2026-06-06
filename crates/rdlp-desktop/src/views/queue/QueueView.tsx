@@ -16,10 +16,11 @@ import type { DownloadJob, QueueItem } from "@/types";
 
 const STATUS_ORDER: Record<string, number> = {
     running: 0,
-    pending: 1,
-    failed: 2,
-    completed: 3,
-    cancelled: 4,
+    processing: 1,
+    pending: 2,
+    failed: 3,
+    completed: 4,
+    cancelled: 5,
 };
 
 /** Height constants for estimateSize callback. */

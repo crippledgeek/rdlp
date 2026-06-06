@@ -319,3 +319,24 @@ describe("JobCard — progress display", () => {
         expect(screen.getByText("Video — 50%")).toBeInTheDocument();
     });
 });
+
+describe("JobCard — processing (#336)", () => {
+    it("shows the progress bar and Cancel for a processing job", () => {
+        render(<JobCard job={makeJob({ status: "processing", progress: 0.3, stage: "Recode" })} />);
+        expect(screen.getByLabelText("Cancel download")).toBeInTheDocument();
+        expect(screen.getByText("30%")).toBeInTheDocument();
+    });
+    it("shows the stage as the sub-label while processing", () => {
+        render(<JobCard job={makeJob({ status: "processing", progress: 0.3, stage: "Recode" })} />);
+        expect(screen.getByText("Recode")).toBeInTheDocument();
+    });
+    it("a completed job shows no Cancel button", () => {
+        render(<JobCard job={makeJob({ status: "completed", progress: 1 })} />);
+        expect(screen.queryByLabelText("Cancel download")).not.toBeInTheDocument();
+    });
+    it("a running job still shows progress + Cancel", () => {
+        render(<JobCard job={makeJob({ status: "running", progress: 0.5 })} />);
+        expect(screen.getByLabelText("Cancel download")).toBeInTheDocument();
+        expect(screen.getByText("50%")).toBeInTheDocument();
+    });
+});

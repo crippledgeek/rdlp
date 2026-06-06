@@ -8,7 +8,7 @@ import { Button as AriaButton } from "react-aria-components";
 import { uiStore, setSelectedJob } from "@/stores/uiStore";
 import { cancelDownload, removeJob, startDownload } from "@/api/downloads";
 import { StatusBadge } from "@/components/StatusBadge";
-import { isTerminal as isTerminalStatus } from "@/lib/jobStatus";
+import { isTerminal as isTerminalStatus, isInFlight } from "@/lib/jobStatus";
 import { invokeTyped } from "@/api/invokeClient";
 import { cn, displayTitle, progressPercent } from "@/lib/utils";
 import type { DownloadJob } from "@/types";
@@ -21,11 +21,12 @@ interface JobCardProps {
 
 export function JobCard({ job, compact = false }: JobCardProps) {
     const isSelected = useStore(uiStore, (s) => s.selectedJobId === job.id);
-    const isRunning = job.status === "running";
     const isFailed = job.status === "failed";
     const isCompleted = job.status === "completed";
     const isTerminal = isTerminalStatus(job.status);
     const progress = job.progress ?? 0;
+    const inFlight = isInFlight(job.status);
+    const subLabel = job.status === "processing" ? job.stage : job.statusMessage;
 
     async function handleCancel() {
         await cancelDownload(job.id);
@@ -87,7 +88,7 @@ export function JobCard({ job, compact = false }: JobCardProps) {
                 </div>
 
                 {/* Progress bar */}
-                {isRunning && (
+                {inFlight && (
                     <div>
                         <div className="h-[3px] rounded-full bg-[#1a1a2e] overflow-hidden mb-1">
                             <div
@@ -99,8 +100,8 @@ export function JobCard({ job, compact = false }: JobCardProps) {
                             <span className="text-[#aaaaaa]">{progressPercent(job.progress)}%</span>
                             {job.speed && <span>{job.speed}</span>}
                             {job.eta && <span>ETA {job.eta}</span>}
-                            {job.statusMessage && (
-                                <span className="text-[#4a9eff] truncate">{job.statusMessage}</span>
+                            {subLabel && (
+                                <span className="text-[#4a9eff] truncate">{subLabel}</span>
                             )}
                         </div>
                     </div>
@@ -124,7 +125,7 @@ export function JobCard({ job, compact = false }: JobCardProps) {
 
             {/* Action buttons */}
             <div className="relative z-20 flex items-center gap-1 shrink-0">
-                {isRunning && (
+                {inFlight && (
                     <button
                         onClick={(e) => { e.stopPropagation(); void handleCancel(); }}
                         aria-label="Cancel download"
