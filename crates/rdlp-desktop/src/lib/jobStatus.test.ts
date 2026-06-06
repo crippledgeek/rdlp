@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
     cancelledJobPatch,
     isTerminal,
+    isDoneNotFailed,
     jobMatchesFilter,
     countByBucket,
     tallyByStatus,
@@ -54,6 +55,20 @@ describe("isTerminal", () => {
     });
     it("is false for pending", () => {
         expect(isTerminal("pending")).toBe(false);
+    });
+});
+
+describe("isDoneNotFailed", () => {
+    it("is true for completed and cancelled", () => {
+        expect(isDoneNotFailed("completed")).toBe(true);
+        expect(isDoneNotFailed("cancelled")).toBe(true);
+    });
+    it("is false for failed (keeps the group expanded)", () => {
+        expect(isDoneNotFailed("failed")).toBe(false);
+    });
+    it("is false for running and pending", () => {
+        expect(isDoneNotFailed("running")).toBe(false);
+        expect(isDoneNotFailed("pending")).toBe(false);
     });
 });
 

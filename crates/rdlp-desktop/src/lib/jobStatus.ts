@@ -51,6 +51,15 @@ export function isTerminal(status: JobStatus): boolean {
     return TERMINAL_STATUSES.includes(status);
 }
 
+/**
+ * True when a job finished without failing — completed or cancelled.
+ * Used for playlist auto-collapse: a group collapses once every item is
+ * done-or-cancelled, but a failed item keeps it expanded for attention.
+ */
+export function isDoneNotFailed(status: JobStatus): boolean {
+    return isTerminal(status) && status !== "failed";
+}
+
 /** Does a job's status match the given filter key? `"all"` matches every status. */
 export function jobMatchesFilter(status: JobStatus, filter: QueueFilter): boolean {
     if (filter === "all") return true;
