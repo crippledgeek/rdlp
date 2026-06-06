@@ -4,6 +4,7 @@ import { queryOptions } from "@tanstack/react-query";
 import { invokeTyped } from "./invokeClient";
 import { queryKeys } from "../query/queryKeys";
 import { queryClient } from "../query/queryClient";
+import { cancelledJobPatch } from "../lib/jobStatus";
 import type { DownloadJob, DownloadOptions, PlaylistContext } from "../types";
 
 /** Fetch the current download queue. */
@@ -43,7 +44,7 @@ export async function cancelDownload(jobId: string): Promise<void> {
         (old) =>
             old?.map((job) =>
                 job.id === jobId
-                    ? { ...job, status: "cancelled", statusMessage: null, currentUnit: null, speed: null, eta: null, progress: null }
+                    ? { ...job, ...cancelledJobPatch() }
                     : job,
             ),
     );

@@ -21,6 +21,7 @@ import {
 } from "../lib/tauri";
 import { queryKeys } from "../query/queryKeys";
 import { appendLog } from "../components/LogViewer";
+import { cancelledJobPatch } from "../lib/jobStatus";
 import type { DownloadJob } from "../types";
 
 interface ProgressEntry {
@@ -150,15 +151,7 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
                 (old) =>
                     old?.map((job) =>
                         job.id === p.jobId
-                            ? {
-                                  ...job,
-                                  status: "cancelled" as const,
-                                  statusMessage: null,
-                                  currentUnit: null,
-                                  speed: null,
-                                  eta: null,
-                                  progress: null,
-                              }
+                            ? { ...job, ...cancelledJobPatch() }
                             : job,
                     ),
             );
