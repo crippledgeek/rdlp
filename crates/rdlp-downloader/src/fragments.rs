@@ -478,5 +478,7 @@ async fn fetch_with_optional_range(
         })
 }
 
+pub(crate) mod state;
+
 #[cfg(test)]
 mod tests;
