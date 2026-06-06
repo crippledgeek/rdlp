@@ -193,6 +193,7 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
                         job.id === p.jobId
                             ? {
                                   ...job,
+                                  // Live-push mirror of the Rust-owned `current_unit`; the queue refetch reconciles to Rust's value.
                                   currentUnit: {
                                       index: p.unitIndex,
                                       total: p.unitTotal,
