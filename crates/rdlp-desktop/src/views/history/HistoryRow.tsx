@@ -2,6 +2,7 @@
 
 import { useStore } from "@tanstack/react-store";
 import { FolderOpen, RotateCcw } from "lucide-react";
+import { Button as AriaButton } from "react-aria-components";
 import { uiStore, setSelectedJob, setView } from "@/stores/uiStore";
 import { startDownload } from "@/api/downloads";
 import { StatusBadge } from "@/components/StatusBadge";
@@ -46,16 +47,22 @@ export function HistoryRow({ job }: HistoryRowProps) {
 
     return (
         <div
-            onClick={() => setSelectedJob(job.id)}
             className={cn(
-                "flex items-center gap-3 p-3 rounded-[6px] cursor-pointer transition-colors border",
+                "relative flex items-center gap-3 p-3 rounded-[6px] transition-colors border",
                 isSelected
                     ? "bg-[#0f1a2e] border-[#2a3a5a]"
                     : "bg-[var(--surface-elevated)] border-[#1a1a2e] hover:border-[#2a2a3e]",
             )}
         >
+            <AriaButton
+                onPress={() => setSelectedJob(job.id)}
+                aria-label={`Select: ${job.title ?? job.url}`}
+                aria-pressed={isSelected}
+                className="absolute inset-0 z-0 rounded-[6px] cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-[#4a9eff] focus-visible:ring-inset"
+            />
+
             {/* Thumbnail */}
-            <div className="w-[56px] h-[36px] shrink-0 rounded-[3px] overflow-hidden bg-[#0e0e1e]">
+            <div className="relative z-10 pointer-events-none w-[56px] h-[36px] shrink-0 rounded-[3px] overflow-hidden bg-[#0e0e1e]">
                 <Thumbnail
                     src={null}
                     alt={job.title ?? ""}
@@ -64,7 +71,7 @@ export function HistoryRow({ job }: HistoryRowProps) {
             </div>
 
             {/* Content */}
-            <div className="flex-1 min-w-0">
+            <div className="relative z-10 pointer-events-none flex-1 min-w-0">
                 <p className="text-[13px] font-medium text-[#eeeeee] truncate leading-snug">
                     {job.title ?? job.url}
                 </p>
@@ -83,7 +90,7 @@ export function HistoryRow({ job }: HistoryRowProps) {
             </div>
 
             {/* Status + actions */}
-            <div className="flex items-center gap-1.5 shrink-0">
+            <div className="relative z-20 flex items-center gap-1.5 shrink-0">
                 <StatusBadge status={job.status} />
                 {job.output_path && (
                     <button
