@@ -1,8 +1,9 @@
 // TanStack Store for queue filter state.
 
 import { Store } from "@tanstack/store";
+import type { QueueFilter } from "@/lib/jobStatus";
 
-export type QueueFilter = "all" | "active" | "completed" | "failed";
+export type { QueueFilter };
 
 export interface QueueFilterState {
     filter: QueueFilter;
