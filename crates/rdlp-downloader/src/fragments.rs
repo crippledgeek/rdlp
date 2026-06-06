@@ -23,7 +23,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, ControllerMode};
 use crate::http::HttpDownloader;
-use crate::progress::SpeedTracker;
+use crate::progress::SpeedMeter;
 use rdlp_security;
 
 /// Compute the progress fraction for a fragment download.
@@ -129,10 +129,9 @@ pub async fn download_pre_resolved_fragments(
 
     const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
     let mut last_emit = Instant::now();
-    let mut last_observed_at = Instant::now();
     let mut frags_done: u64 = 0;
     let total_frags = fragments.len() as u64;
-    let mut speed = SpeedTracker::new();
+    let mut speed = SpeedMeter::new();
 
     // Pre-loop cancellation check.
     if cancel.is_some_and(CancellationToken::is_cancelled) {
@@ -293,11 +292,11 @@ pub async fn download_pre_resolved_fragments(
         // the connection count. Mirrors dash/download.rs:426.
         controller.report_segment_complete(bytes.len() as u64, fetch_elapsed, seg_dur);
 
-        // Update progress accounting.
+        // Update progress accounting from the cumulative byte total. Feeding the
+        // running total (not per-fragment deltas) to a windowed meter is what
+        // prevents the parallel-yield speed spike (#355).
         let now = Instant::now();
-        let elapsed_observe = now.duration_since(last_observed_at);
-        speed.observe(bytes.len() as u64, elapsed_observe);
-        last_observed_at = now;
+        speed.update(total_bytes, now);
         frags_done += 1;
 
         // Emit progress (100ms throttle OR fragment-N boundary).
@@ -315,7 +314,9 @@ pub async fn download_pre_resolved_fragments(
                 ),
                 segments_downloaded: Some(frags_done),
                 total_segments: Some(total_frags),
-                speed: speed.bytes_per_sec(),
+                // `None` while cold-starting (< 2 samples) or stalled collapses to
+                // 0 B/s for the f64 field — matches the pre-SpeedMeter behaviour.
+                speed: speed.bytes_per_sec().unwrap_or(0.0),
                 eta: speed.eta(expected_total.map(|t| t.saturating_sub(total_bytes))),
                 duration_downloaded: None,
                 total_duration: None,

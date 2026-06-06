@@ -28,6 +28,7 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use wreq::header::{HeaderMap, HeaderName, HeaderValue};
 
 use crate::chunking::ChunkSizeStrategy;
+use crate::progress::SpeedMeter;
 use config::{DownloaderConfig, PROGRESS_UPDATE_INTERVAL};
 use rdlp_ratelimit::RateLimiter;
 
@@ -460,6 +461,8 @@ impl HttpDownloader {
         let mut last_update = Instant::now();
         let update_interval = PROGRESS_UPDATE_INTERVAL;
         let read_timeout = self.config.read_timeout;
+        let mut speed_meter = SpeedMeter::new();
+        speed_meter.update(downloaded, start_time);
 
         loop {
             let next = match next_with_cancel_and_timeout(
@@ -496,12 +499,8 @@ impl HttpDownloader {
             if let Some(ref callback) = progress {
                 let now = Instant::now();
                 if now.duration_since(last_update) >= update_interval {
-                    let elapsed = now.duration_since(start_time).as_secs_f64();
-                    let speed = if elapsed > 0.0 {
-                        downloaded as f64 / elapsed
-                    } else {
-                        0.0
-                    };
+                    speed_meter.update(downloaded, now);
+                    let speed = speed_meter.bytes_per_sec().unwrap_or(0.0);
 
                     let progress_info = DownloadProgress::new(downloaded, total_size, speed);
                     callback.on_progress(&progress_info);
