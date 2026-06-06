@@ -91,6 +91,104 @@ impl SpeedTracker {
     }
 }
 
+/// Sliding-window duration for the raw rate.
+/// Source: yt-dlp `ProgressCalculator.SAMPLING_WINDOW` (`yt_dlp/utils/progress.py`).
+#[allow(dead_code)] // used in Task 2 when SpeedMeter replaces SpeedTracker callers
+const SPEED_WINDOW_SECS: f64 = 3.0;
+/// Minimum seconds between accepted samples; debounces bursty parallel-yield
+/// observations so one fragment is never divided by a microsecond gap.
+/// Source: yt-dlp `ProgressCalculator.SAMPLING_RATE`.
+#[allow(dead_code)]
+const SPEED_SAMPLE_GATE_SECS: f64 = 0.05;
+/// EWMA weight on the newest raw window rate; the prior smoothed value keeps
+/// `1 - weight`. Source: yt-dlp `SmoothValue(smoothing=0.7)` -> `1 - 0.7 = 0.3`.
+#[allow(dead_code)]
+const SPEED_EWMA_NEW_WEIGHT: f64 = 0.3;
+
+/// Sliding-window + EWMA download-rate meter (yt-dlp hybrid model).
+///
+/// Fed `(cumulative_bytes, now)` on a cadence (timer tick or per-fragment), it
+/// reports a smoothed bytes/sec readout immune to bursty parallel fragment
+/// completion: the rate is always `Δcumulative / Δwall-clock` over a multi-second
+/// window, never one fragment's size over the inter-yield gap. Returns `None`
+/// while cold-starting (`< 2` samples) or stalled (window emptied).
+#[derive(Debug, Default)]
+pub(crate) struct SpeedMeter {
+    window: std::collections::VecDeque<(Instant, u64)>,
+    smoothed: Option<f64>,
+    last_sample: Option<Instant>,
+}
+
+#[allow(dead_code)] // callers wired in Task 2; silences new/update/bytes_per_sec/eta
+impl SpeedMeter {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record the cumulative byte total observed at `now`. `now` is injected
+    /// (no `Instant::now()` here) so callers control the clock and tests are
+    /// deterministic.
+    pub(crate) fn update(&mut self, cumulative_bytes: u64, now: Instant) {
+        if let Some(last) = self.last_sample
+            && now.duration_since(last).as_secs_f64() < SPEED_SAMPLE_GATE_SECS
+        {
+            return;
+        }
+        self.last_sample = Some(now);
+        self.window.push_back((now, cumulative_bytes));
+
+        let window = Duration::from_secs_f64(SPEED_WINDOW_SECS);
+        while let Some(&(t, _)) = self.window.front() {
+            if now.duration_since(t) > window {
+                self.window.pop_front();
+            } else {
+                break;
+            }
+        }
+
+        if self.window.len() < 2 {
+            self.smoothed = None;
+            return;
+        }
+        let Some(&(t0, b0)) = self.window.front() else {
+            return;
+        };
+        let Some(&(_, b_last)) = self.window.back() else {
+            return;
+        };
+        let elapsed = now.duration_since(t0).as_secs_f64();
+        if elapsed <= 0.0 {
+            return;
+        }
+        // Numerator and denominator both come from the window so the rate stays
+        // consistent regardless of how `update` is reordered in future.
+        #[allow(clippy::cast_precision_loss)]
+        let raw = b_last.saturating_sub(b0) as f64 / elapsed;
+        self.smoothed = Some(match self.smoothed {
+            None => raw,
+            Some(prev) => SPEED_EWMA_NEW_WEIGHT.mul_add(raw, (1.0 - SPEED_EWMA_NEW_WEIGHT) * prev),
+        });
+    }
+
+    /// Smoothed bytes/sec, or `None` when cold-starting or stalled.
+    /// `const fn` is required by the crate's `clippy::missing_const_for_fn` lint.
+    pub(crate) const fn bytes_per_sec(&self) -> Option<f64> {
+        self.smoothed
+    }
+
+    /// Projected ETA given known `remaining_bytes`; `None` if remaining is
+    /// unknown or speed is unknown/zero.
+    pub(crate) fn eta(&self, remaining_bytes: Option<u64>) -> Option<Duration> {
+        let r = remaining_bytes?;
+        let speed = self.smoothed?;
+        if speed <= 0.0 {
+            return None;
+        }
+        #[allow(clippy::cast_precision_loss)]
+        Some(Duration::from_secs_f64(r as f64 / speed))
+    }
+}
+
 /// RAII guard for progress reporter tasks.
 ///
 /// Ensures the progress reporter task is aborted when the guard goes out of scope,
@@ -418,5 +516,140 @@ mod speed_tracker_tests {
         let mut st = SpeedTracker::new();
         st.observe(1_000, Duration::from_secs(1));
         assert!(st.eta(None).is_none());
+    }
+}
+
+#[cfg(test)]
+mod speed_meter_tests {
+    use super::SpeedMeter;
+    use std::time::{Duration, Instant};
+
+    const MIB: u64 = 1024 * 1024;
+
+    #[test]
+    fn cold_start_returns_none_with_fewer_than_two_samples() {
+        let mut m = SpeedMeter::new();
+        let t0 = Instant::now();
+        assert_eq!(m.bytes_per_sec(), None);
+        m.update(MIB, t0);
+        assert_eq!(m.bytes_per_sec(), None, "one sample is not enough to rate");
+    }
+
+    #[test]
+    fn regression_355_microsecond_burst_is_gated_to_none_not_a_spike() {
+        let mut m = SpeedMeter::new();
+        let t0 = Instant::now();
+        let mut cum = 0u64;
+        for i in 0..8u32 {
+            cum += 5 * MIB;
+            m.update(cum, t0 + Duration::from_micros(u64::from(i)));
+        }
+        assert_eq!(
+            m.bytes_per_sec(),
+            None,
+            "microsecond burst must not yield a rate"
+        );
+    }
+
+    #[test]
+    fn regression_355_realistic_burst_reports_true_aggregate_not_spike() {
+        let mut m = SpeedMeter::new();
+        let t0 = Instant::now();
+        m.update(0, t0);
+        m.update(20 * MIB, t0 + Duration::from_millis(100));
+        m.update(40 * MIB, t0 + Duration::from_millis(200));
+        let bps = m.bytes_per_sec().expect("rate after two in-window samples");
+        let expected = 200.0 * MIB as f64;
+        assert!(
+            (bps - expected).abs() < 0.10 * expected,
+            "expected ~200 MiB/s, got {bps} B/s"
+        );
+        assert!(
+            bps < 1024.0 * MIB as f64,
+            "must never reach GB/s spike: {bps} B/s"
+        );
+    }
+
+    #[test]
+    fn steady_rate_is_reported_after_window_fills() {
+        let mut m = SpeedMeter::new();
+        let t0 = Instant::now();
+        for i in 0..=40u64 {
+            m.update(i * MIB, t0 + Duration::from_millis(i * 100)); // 10 MiB/s
+        }
+        let bps = m
+            .bytes_per_sec()
+            .expect("rate available after window fills");
+        let expected = 10.0 * MIB as f64;
+        assert!(
+            (bps - expected).abs() < 0.05 * expected,
+            "got {bps} B/s, expected ~{expected}"
+        );
+    }
+
+    #[test]
+    fn sub_gate_samples_are_debounced() {
+        let mut m = SpeedMeter::new();
+        let t0 = Instant::now();
+        m.update(0, t0);
+        m.update(MIB, t0 + Duration::from_millis(10)); // <50ms: dropped
+        assert_eq!(m.bytes_per_sec(), None);
+    }
+
+    #[test]
+    fn stale_window_with_one_recent_sample_returns_none() {
+        let mut m = SpeedMeter::new();
+        let t0 = Instant::now();
+        m.update(MIB, t0);
+        m.update(2 * MIB, t0 + Duration::from_secs(5)); // 5s > 3s window
+        assert_eq!(m.bytes_per_sec(), None, "single in-window sample => None");
+    }
+
+    #[test]
+    fn ewma_smooths_a_step_change_rather_than_jumping() {
+        let mut m = SpeedMeter::new();
+        let t0 = Instant::now();
+        let mut cum = 0u64;
+        let mut t = 0u64;
+        for _ in 0..40 {
+            cum += MIB;
+            t += 100;
+            m.update(cum, t0 + Duration::from_millis(t)); // 10 MiB/s
+        }
+        let before = m.bytes_per_sec().expect("rate");
+        cum += 5 * MIB;
+        t += 100;
+        m.update(cum, t0 + Duration::from_millis(t)); // 50 MiB/s instantaneous
+        let after = m.bytes_per_sec().expect("rate");
+        assert!(after > before, "rate should rise toward the faster sample");
+        assert!(
+            after < 50.0 * MIB as f64,
+            "EWMA must not jump to instantaneous 50 MiB/s; got {after}"
+        );
+    }
+
+    #[test]
+    fn eta_uses_smoothed_speed() {
+        let mut m = SpeedMeter::new();
+        let t0 = Instant::now();
+        for i in 0..=40u64 {
+            m.update(i * (MIB / 10), t0 + Duration::from_millis(i * 100)); // ~1 MiB/s
+        }
+        let eta = m.eta(Some(10 * MIB)).expect("eta available");
+        assert!(
+            eta.as_secs_f64() > 5.0 && eta.as_secs_f64() < 20.0,
+            "eta {eta:?}"
+        );
+    }
+
+    #[test]
+    fn eta_none_when_speed_or_remaining_unknown() {
+        let mut m = SpeedMeter::new();
+        assert_eq!(m.eta(Some(MIB)), None, "no speed yet");
+        let t0 = Instant::now();
+        for i in 0..=40u64 {
+            m.update(i * MIB, t0 + Duration::from_millis(i * 100));
+        }
+        assert_eq!(m.eta(None), None, "unknown remaining");
     }
 }
