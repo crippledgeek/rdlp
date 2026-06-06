@@ -6,6 +6,7 @@ import { useStore } from "@tanstack/react-store";
 import { useQuery } from "@tanstack/react-query";
 import { Clock } from "lucide-react";
 import { downloadsQueryOptions } from "@/api/downloads";
+import { isTerminal } from "@/lib/jobStatus";
 import { historyFilterStore } from "@/stores/historyFilterStore";
 import { HistoryRow } from "./HistoryRow";
 import type { DownloadJob } from "@/types";
@@ -57,7 +58,7 @@ export function HistoryView() {
     const terminalJobs = useMemo(
         () =>
             jobs
-                .filter((j) => j.status === "completed" || j.status === "failed" || j.status === "cancelled")
+                .filter((j) => isTerminal(j.status))
                 .sort(
                     (a, b) =>
                         (b.completed_at ?? b.started_at ?? 0) -

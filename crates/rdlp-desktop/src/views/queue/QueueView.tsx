@@ -9,6 +9,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { Download } from "lucide-react";
 import { downloadsQueryOptions } from "@/api/downloads";
 import { queueFilterStore } from "@/stores/queueFilterStore";
+import { jobMatchesFilter, isDoneNotFailed, type QueueFilter } from "@/lib/jobStatus";
 import { PlaylistGroupHeader } from "./PlaylistGroupHeader";
 import { JobCard } from "./JobCard";
 import type { DownloadJob, QueueItem } from "@/types";
@@ -27,17 +28,8 @@ const COMPACT_JOB_HEIGHT = 72;
 const STANDALONE_JOB_HEIGHT = 90;
 const SHOW_MORE_HEIGHT = 32;
 
-function filterJobs(jobs: DownloadJob[], filter: string): DownloadJob[] {
-    switch (filter) {
-        case "active":
-            return jobs.filter((j) => j.status === "running" || j.status === "pending");
-        case "completed":
-            return jobs.filter((j) => j.status === "completed" || j.status === "cancelled");
-        case "failed":
-            return jobs.filter((j) => j.status === "failed");
-        default:
-            return jobs;
-    }
+function filterJobs(jobs: DownloadJob[], filter: QueueFilter): DownloadJob[] {
+    return jobs.filter((j) => jobMatchesFilter(j.status, filter));
 }
 
 /**
@@ -99,10 +91,8 @@ function buildFlatItems(
         );
 
         const playlistTitle = sorted[0]?.playlist?.playlistTitle ?? "Playlist";
-        const allCompleted = sorted.every(
-            (j) => j.status === "completed" || j.status === "cancelled",
-        );
-        const collapsed = collapsedMap.get(playlistId) ?? allCompleted;
+        const allDone = sorted.every((j) => isDoneNotFailed(j.status));
+        const collapsed = collapsedMap.get(playlistId) ?? allDone;
 
         items.push({
             type: "group-header",
