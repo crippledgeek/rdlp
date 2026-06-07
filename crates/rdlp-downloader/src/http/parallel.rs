@@ -164,7 +164,7 @@ impl HttpDownloader {
             .file_name()
             .ok_or_else(|| RdlpError::Download {
                 message: "Invalid output path: no filename".to_string(),
-                url: Some(url.to_string()),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
             })?
             .to_string_lossy()
             .into_owned();
@@ -254,7 +254,7 @@ impl HttpDownloader {
             .file_name()
             .ok_or_else(|| RdlpError::Download {
                 message: "Invalid output path: no filename".to_string(),
-                url: Some(url.to_string()),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
             })?
             .to_string_lossy()
             .into_owned();
@@ -424,13 +424,13 @@ impl HttpDownloader {
                                 () = token.cancelled() => return Err(RdlpError::Cancelled),
                                 p = sem.acquire_owned() => p.map_err(|_| RdlpError::Download {
                                     message: "Semaphore closed".to_string(),
-                                    url: Some(url.to_string()),
+                                    url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
                                 })?,
                             }
                         } else {
                             sem.acquire_owned().await.map_err(|_| RdlpError::Download {
                                 message: "Semaphore closed".to_string(),
-                                url: Some(url.to_string()),
+                                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
                             })?
                         };
                         let start_time = Instant::now();

@@ -280,7 +280,7 @@ impl HttpDownloader {
                     .await
                     .map_err(|e| RdlpError::Network {
                         message: format!("probe failed: {e}"),
-                        url: Some(url.clone()),
+                        url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
                     })
             }
         })
@@ -331,7 +331,7 @@ impl HttpDownloader {
                     .await
                     .map_err(|e| RdlpError::Network {
                         message: format!("Range request failed: {e}"),
-                        url: Some(url.clone()),
+                        url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
                     })?;
 
                 check_http_response(&response)?;
@@ -381,7 +381,7 @@ impl HttpDownloader {
                 Ok(Some(Err(e))) => {
                     return Err(RdlpError::Network {
                         message: format!("Failed to read chunk body from {url}: {e}"),
-                        url: Some(url.clone()),
+                        url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
                     });
                 }
                 Ok(None) => break,
@@ -436,7 +436,7 @@ impl HttpDownloader {
                 let response = client.get(&*url).headers(hdrs).send().await.map_err(|e| {
                     RdlpError::Network {
                         message: format!("GET request failed: {e}"),
-                        url: Some(url.to_string()),
+                        url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
                     }
                 })?;
 
@@ -485,7 +485,7 @@ impl HttpDownloader {
             let Some(chunk_result) = next else { break };
             let chunk = chunk_result.map_err(|e| RdlpError::Network {
                 message: format!("Failed to read response body from {url_string}: {e}"),
-                url: Some(url_string.to_string()),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url_string.as_ref())),
             })?;
 
             writer.write_all(&chunk).await.map_err(|e| {
@@ -565,7 +565,7 @@ where
     use futures::StreamExt;
     let timeout_err = || RdlpError::Network {
         message: format!("Read timed out (no data for {}s)", read_timeout.as_secs()),
-        url: Some(url.to_string()),
+        url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
     };
     match cancel {
         Some(token) => {
@@ -689,7 +689,7 @@ mod cancel_helper_tests {
                     message.to_lowercase().contains("timed out"),
                     "got: {message}"
                 );
-                assert_eq!(url.as_deref(), Some("http://test"));
+                assert_eq!(url.as_ref().map(rdlp_redact::RedactedUrlBuf::expose), Some("http://test"));
             }
             other => panic!("expected Network timeout, got {other:?}"),
         }

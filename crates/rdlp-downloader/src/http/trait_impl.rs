@@ -89,14 +89,14 @@ impl Downloader for HttpDownloader {
                     result = timed => {
                         result.map_err(|_| RdlpError::Download {
                             message: format!("Download timed out after {}s", timeout.as_secs()),
-                            url: Some(url.clone()),
+                            url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
                         })?
                     }
                 }
             }
             None => timed.await.map_err(|_| RdlpError::Download {
                 message: format!("Download timed out after {}s", timeout.as_secs()),
-                url: Some(url.clone()),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
             })?,
         }
     }
@@ -159,7 +159,7 @@ impl Downloader for HttpDownloader {
         .await
         .map_err(|_| RdlpError::Download {
             message: format!("Download timed out after {}s", timeout.as_secs()),
-            url: Some(url.to_string()),
+            url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
         })?
     }
 
@@ -237,7 +237,7 @@ impl HttpDownloader {
                     let response = client.get(&url).headers(hdrs).send().await.map_err(|e| {
                         RdlpError::Network {
                             message: format!("GET request failed: {e}"),
-                            url: Some(url.clone()),
+                            url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
                         }
                     })?;
 
@@ -285,7 +285,7 @@ impl HttpDownloader {
                     Some(Err(e)) => {
                         return Err(RdlpError::Network {
                             message: format!("Failed to read chunk: {e}"),
-                            url: Some(url_string.clone()),
+                            url: Some(rdlp_redact::RedactedUrlBuf::from(url_string.as_str())),
                         });
                     }
                     Some(Ok(chunk)) => {
@@ -347,7 +347,7 @@ impl HttpDownloader {
         .await
         .map_err(|_| RdlpError::Download {
             message: format!("Download timed out after {}s", timeout.as_secs()),
-            url: Some(url.to_string()),
+            url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
         })?
     }
 
@@ -389,11 +389,11 @@ impl HttpDownloader {
                         .header("Range", format!("bytes={resume_from}-"))
                         .send()
                         .await
-                        .map_err(|e| RdlpError::Network { message: format!("Resume request failed: {e}"), url: Some(url.to_string()) })?;
+                        .map_err(|e| RdlpError::Network { message: format!("Resume request failed: {e}"), url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())) })?;
 
                     if response.status().as_u16() != 206 {
                         return Err(RdlpError::Download {
-                            url: Some(url.to_string()),
+                            url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
                             message: format!(
                                 "Server does not support resume (expected HTTP 206, got {}). \
                                  Cannot continue download without overwriting existing data. \
@@ -495,7 +495,7 @@ impl HttpDownloader {
 
                 let Some(chunk_result) = next else { break };
                 let chunk = chunk_result
-                    .map_err(|e| RdlpError::Network { message: format!("Failed to read resume response body from {url_string}: {e}"), url: Some(url_string.to_string()) })?;
+                    .map_err(|e| RdlpError::Network { message: format!("Failed to read resume response body from {url_string}: {e}"), url: Some(rdlp_redact::RedactedUrlBuf::from(url_string.as_ref())) })?;
 
                 writer.write_all(&chunk).await.map_err(|e| RdlpError::Io(
                     std::io::Error::new(e.kind(), format!("failed to write to resumed file '{}': {e}", path.display()))
@@ -535,7 +535,7 @@ impl HttpDownloader {
         .await
         .map_err(|_| RdlpError::Download {
             message: format!("Download timed out after {}s", timeout.as_secs()),
-            url: Some(url.to_string()),
+            url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
         })?
     }
 }
