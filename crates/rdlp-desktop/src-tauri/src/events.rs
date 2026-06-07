@@ -31,6 +31,12 @@ pub struct DownloadProgressPayload {
     pub(crate) total_bytes: Option<u64>,
     /// `true` when `total_bytes` is an extrapolated estimate (segmented download).
     pub(crate) is_estimated: bool,
+    /// Fragments completed so far (segmented HLS/DASH downloads); `None` for
+    /// progressive HTTP. Drives the desktop `frag N/M` secondary counter.
+    pub(crate) segments_downloaded: Option<u64>,
+    /// Total fragment count (segmented HLS/DASH downloads); `None` for
+    /// progressive HTTP.
+    pub(crate) total_segments: Option<u64>,
 }
 
 /// Download completion payload emitted as `"download-complete"`.
@@ -159,6 +165,8 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
                 downloaded_bytes: progress.bytes_downloaded,
                 total_bytes: progress.total_bytes,
                 is_estimated: progress.is_estimated,
+                segments_downloaded: progress.segments_downloaded,
+                total_segments: progress.total_segments,
             };
 
             if let Err(e) = app.emit("download-progress", &payload) {
@@ -365,7 +373,9 @@ mod tests {
             eta: Some("01:30".to_owned()),
             downloaded_bytes: 1024,
             total_bytes: Some(2048),
-            is_estimated: false,
+            is_estimated: true,
+            segments_downloaded: Some(12),
+            total_segments: Some(40),
         };
         let json = serde_json::to_value(&payload).expect("serialization should succeed");
         assert_eq!(json["jobId"], "abc-123");
@@ -374,6 +384,12 @@ mod tests {
         assert_eq!(json["eta"], "01:30");
         assert_eq!(json["downloadedBytes"], 1024);
         assert_eq!(json["totalBytes"], 2048);
+        assert_eq!(json["isEstimated"], true);
+        assert_eq!(
+            json["segmentsDownloaded"], 12,
+            "frag-done counter on the wire"
+        );
+        assert_eq!(json["totalSegments"], 40, "frag-total counter on the wire");
     }
 
     #[test]

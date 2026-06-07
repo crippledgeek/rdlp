@@ -320,6 +320,69 @@ describe("JobCard — progress display", () => {
     });
 });
 
+describe("JobCard — segmented estimate + frag counter (#381)", () => {
+    it("renders a ~-prefixed estimated total size with an accessible label", () => {
+        render(
+            <JobCard
+                job={makeJob({
+                    status: "running",
+                    progress: 0.5,
+                    isEstimated: true,
+                    totalBytes: 1_288_490_188, // ~1.2 GB
+                })}
+            />,
+        );
+        // Visible tilde + formatted size; the tilde is aria-hidden and paired
+        // with an sr-only "approximately" so screen readers don't say "tilde".
+        expect(screen.getByText("1.2 GB")).toBeInTheDocument();
+        expect(screen.getByText("~")).toHaveAttribute("aria-hidden", "true");
+        expect(screen.getByText(/approximately/i)).toBeInTheDocument();
+    });
+
+    it("does NOT render the ~ estimate marker for an exact download", () => {
+        render(
+            <JobCard
+                job={makeJob({
+                    status: "running",
+                    progress: 0.5,
+                    isEstimated: false,
+                    totalBytes: 1_288_490_188,
+                })}
+            />,
+        );
+        expect(screen.queryByText("~")).not.toBeInTheDocument();
+        expect(screen.queryByText(/approximately/i)).not.toBeInTheDocument();
+    });
+
+    it("renders the frag N/M counter when segment counts are present", () => {
+        render(
+            <JobCard
+                job={makeJob({
+                    status: "running",
+                    progress: 0.3,
+                    segmentsDownloaded: 12,
+                    totalSegments: 40,
+                })}
+            />,
+        );
+        expect(screen.getByText("frag 12/40")).toBeInTheDocument();
+    });
+
+    it("omits the frag counter when segment counts are absent (progressive HTTP)", () => {
+        render(
+            <JobCard
+                job={makeJob({
+                    status: "running",
+                    progress: 0.3,
+                    segmentsDownloaded: null,
+                    totalSegments: null,
+                })}
+            />,
+        );
+        expect(screen.queryByText(/^frag /)).not.toBeInTheDocument();
+    });
+});
+
 describe("JobCard — processing (#336)", () => {
     it("shows the progress bar, decimal percent, and Cancel for a processing job", () => {
         render(<JobCard job={makeJob({ status: "processing", progress: 0.3, stage: "Recode" })} />);

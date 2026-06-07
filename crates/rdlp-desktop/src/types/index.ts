@@ -241,6 +241,16 @@ export interface DownloadJob {
     logMessages?: string[];
     /** Current unit info, owned by Rust (`currentUnit` wire key). Null when no unit is active. */
     currentUnit: CurrentUnit | null;
+    /** Live progress fields merged client-side from `download-progress` events
+     *  (camelCase wire keys), not part of the Rust DownloadJob serialization.
+     *  Undefined until the first progress event lands for the job. */
+    totalBytes?: number | null;
+    /** True when `totalBytes` is an extrapolated estimate (segmented download). */
+    isEstimated?: boolean;
+    /** Fragments completed so far (segmented HLS/DASH); null/undefined otherwise. */
+    segmentsDownloaded?: number | null;
+    /** Total fragment count (segmented HLS/DASH); null/undefined otherwise. */
+    totalSegments?: number | null;
 }
 
 /**
@@ -315,9 +325,14 @@ export interface DownloadProgressPayload {
     downloadedBytes: number;
     totalBytes: number | null;
     /** True when totalBytes is an extrapolated estimate (segmented download).
-     *  Carry-only for now: not yet consumed by the UI (no total-size display);
-     *  ETA itself renders via the existing eta plumbing. */
+     *  Rendered as a `~`-prefixed total size in the desktop progress UI. */
     isEstimated: boolean;
+    /** Fragments completed so far (segmented HLS/DASH); null for progressive HTTP.
+     *  u64 on the wire; JS `number` is safe for fragment counts (always well
+     *  under Number.MAX_SAFE_INTEGER — real streams have thousands, not 2^53). */
+    segmentsDownloaded: number | null;
+    /** Total fragment count (segmented HLS/DASH); null for progressive HTTP. */
+    totalSegments: number | null;
 }
 
 /** Download completion payload emitted as "download-complete". */
