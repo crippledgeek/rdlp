@@ -321,14 +321,38 @@ describe("JobCard — progress display", () => {
 });
 
 describe("JobCard — processing (#336)", () => {
-    it("shows the progress bar and Cancel for a processing job", () => {
+    it("shows the progress bar, decimal percent, and Cancel for a processing job", () => {
         render(<JobCard job={makeJob({ status: "processing", progress: 0.3, stage: "Recode" })} />);
         expect(screen.getByLabelText("Cancel download")).toBeInTheDocument();
-        expect(screen.getByText("30%")).toBeInTheDocument();
+        expect(screen.getByText("30.0%")).toBeInTheDocument();
     });
-    it("shows the stage as the sub-label while processing", () => {
-        render(<JobCard job={makeJob({ status: "processing", progress: 0.3, stage: "Recode" })} />);
-        expect(screen.getByText("Recode")).toBeInTheDocument();
+    it("shows the stage with decimal percent as the sub-label while processing", () => {
+        render(<JobCard job={makeJob({ status: "processing", progress: 0.004, stage: "Recode" })} />);
+        expect(screen.getByText("Recode — 0.4%")).toBeInTheDocument();
+    });
+    it("shows the ETA in the sub-label while processing once available", () => {
+        render(
+            <JobCard
+                job={makeJob({ status: "processing", progress: 0.004, stage: "Recode", eta: "02:30" })}
+            />,
+        );
+        expect(screen.getByText("Recode — 0.4% · 02:30")).toBeInTheDocument();
+    });
+    it("shows the ETA only in the sub-label (no separate ETA chip) while processing", () => {
+        render(
+            <JobCard
+                job={makeJob({ status: "processing", progress: 0.004, stage: "Recode", eta: "02:30" })}
+            />,
+        );
+        // The dedicated "ETA <value>" footer chip is suppressed for processing jobs.
+        expect(screen.queryByText(/^ETA /)).not.toBeInTheDocument();
+        // The ETA value still appears, but only embedded in the sub-label.
+        expect(screen.getByText("Recode — 0.4% · 02:30")).toBeInTheDocument();
+        expect(screen.getAllByText(/02:30/)).toHaveLength(1);
+    });
+    it("a running job still shows the dedicated 'ETA <value>' chip (guard against over-suppression)", () => {
+        render(<JobCard job={makeJob({ status: "running", progress: 0.5, eta: "00:30" })} />);
+        expect(screen.getByText("ETA 00:30")).toBeInTheDocument();
     });
     it("a completed job shows no Cancel button", () => {
         render(<JobCard job={makeJob({ status: "completed", progress: 1 })} />);

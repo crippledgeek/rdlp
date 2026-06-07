@@ -48,6 +48,13 @@ describe("BottomDrawer — processing job surfaces as active (#336)", () => {
         expect(status).not.toHaveTextContent("Ready");
     });
 
+    it("renders a sub-1% processing percent with one decimal (#338), not '0%'", () => {
+        renderDrawer([makeJob("processing", { title: "Recoding Video", progress: 0.004 })]);
+        const status = screen.getByTestId("drawer-status");
+        expect(status).toHaveTextContent("0.4%");
+        expect(status).not.toHaveTextContent("0%");
+    });
+
     it("falls back to the 'Ready' state when no job is in flight", () => {
         renderDrawer([makeJob("completed", { title: "Done Video" })]);
         const status = screen.getByTestId("drawer-status");

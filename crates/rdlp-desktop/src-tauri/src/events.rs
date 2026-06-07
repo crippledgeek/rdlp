@@ -86,6 +86,8 @@ pub struct PostProcessProgressPayload {
     pub(crate) stage: String,
     /// Progress as a fraction in `[0.0, 1.0]`.
     pub(crate) progress: f64,
+    /// Formatted ETA string (e.g. `"02:30"`), once past warm-up.
+    pub(crate) eta: Option<String>,
 }
 
 /// Payload for "unit-started" Tauri event.
@@ -214,12 +216,16 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
         }
 
         Event::PostProcessProgress {
-            stage, progress, ..
+            stage,
+            progress,
+            eta,
+            ..
         } => {
             let payload = PostProcessProgressPayload {
                 job_id: job_id.to_owned(),
                 stage: stage.clone(),
                 progress: f64::from(progress.fraction()),
+                eta: eta.as_ref().map(format_eta),
             };
             if let Err(e) = app.emit("postprocess-progress", &payload) {
                 debug!("Failed to emit postprocess-progress for job {job_id}: {e}");
@@ -409,11 +415,13 @@ mod tests {
             job_id: "abc-123".to_owned(),
             stage: "remux".to_owned(),
             progress: 0.45,
+            eta: Some("02:30".to_owned()),
         };
         let json = serde_json::to_value(&payload).expect("serialization should succeed");
         assert_eq!(json["jobId"], "abc-123");
         assert_eq!(json["stage"], "remux");
         assert_eq!(json["progress"], 0.45);
+        assert_eq!(json["eta"], "02:30");
     }
 
     #[test]

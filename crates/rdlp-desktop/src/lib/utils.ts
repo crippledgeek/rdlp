@@ -74,3 +74,18 @@ export function displayTitle(title: string | null | undefined): string {
 export function progressPercent(fraction: number | null | undefined): number {
     return Math.round((fraction ?? 0) * 100);
 }
+
+/**
+ * Format a 0–1 progress fraction as a percent string. In-flight post-processing
+ * (e.g. a slow recode) is shown with one decimal so movement below 1% is legible;
+ * all other states use a whole percent to avoid display churn.
+ */
+export function progressPercentLabel(
+    fraction: number | null | undefined,
+    isProcessing: boolean,
+): string {
+    if (isProcessing) {
+        return ((fraction ?? 0) * 100).toFixed(1);
+    }
+    return String(progressPercent(fraction));
+}

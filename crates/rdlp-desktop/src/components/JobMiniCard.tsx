@@ -3,7 +3,7 @@
 
 import { setView, setSelectedJob } from "@/stores/uiStore";
 import { isInFlight } from "@/lib/jobStatus";
-import { cn, displayTitle, progressPercent } from "@/lib/utils";
+import { cn, displayTitle, progressPercentLabel } from "@/lib/utils";
 import type { DownloadJob } from "@/types";
 
 interface JobMiniCardProps {
@@ -33,7 +33,7 @@ export function JobMiniCard({ job, className }: JobMiniCardProps) {
             <div className="flex items-center justify-between gap-2 mb-1">
                 <span className="text-[11px] text-[#eeeeee] truncate flex-1 leading-tight">{title}</span>
                 {inFlight && (
-                    <span className="text-[10px] text-[#aaaaaa] shrink-0 font-mono">{progressPercent(job.progress)}%</span>
+                    <span className="text-[10px] text-[#aaaaaa] shrink-0 font-mono">{progressPercentLabel(job.progress, job.status === "processing")}%</span>
                 )}
                 {isPending && (
                     <span className="text-[10px] text-[var(--text-muted)] shrink-0">Queued</span>

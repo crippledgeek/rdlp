@@ -9,7 +9,7 @@ import { downloadsQueryOptions, cancelDownload, removeJob, startDownload } from 
 import { StatusBadge } from "@/components/StatusBadge";
 import { isTerminal as isTerminalStatus, isInFlight, jobSubLabel } from "@/lib/jobStatus";
 import { invokeTyped } from "@/api/invokeClient";
-import { cn, progressPercent } from "@/lib/utils";
+import { cn, progressPercentLabel } from "@/lib/utils";
 
 function formatDate(ts: number | null): string {
     if (!ts) return "—";
@@ -67,10 +67,12 @@ export function JobDetails() {
             {inFlight && (
                 <div>
                     <div className="flex items-center justify-between text-[10px] text-[var(--text-muted)] mb-1">
-                        <span className="font-mono text-[#aaaaaa]">{progressPercent(job.progress)}%</span>
+                        <span className="font-mono text-[#aaaaaa]">
+                            {progressPercentLabel(job.progress, job.status === "processing")}%
+                        </span>
                         <div className="flex items-center gap-2">
                             {job.speed && <span>{job.speed}</span>}
-                            {job.eta && <span>ETA {job.eta}</span>}
+                            {job.status !== "processing" && job.eta && <span>ETA {job.eta}</span>}
                         </div>
                     </div>
                     <div className="h-[3px] rounded-full bg-[#1a1a2e] overflow-hidden">

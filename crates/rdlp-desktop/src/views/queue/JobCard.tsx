@@ -10,7 +10,7 @@ import { cancelDownload, removeJob, startDownload } from "@/api/downloads";
 import { StatusBadge } from "@/components/StatusBadge";
 import { isTerminal as isTerminalStatus, isInFlight, jobSubLabel } from "@/lib/jobStatus";
 import { invokeTyped } from "@/api/invokeClient";
-import { cn, displayTitle, progressPercent } from "@/lib/utils";
+import { cn, displayTitle, progressPercentLabel } from "@/lib/utils";
 import type { DownloadJob } from "@/types";
 
 interface JobCardProps {
@@ -97,9 +97,11 @@ export function JobCard({ job, compact = false }: JobCardProps) {
                             />
                         </div>
                         <div className="flex items-center gap-3 text-[10px] text-[var(--text-muted)] font-mono">
-                            <span className="text-[#aaaaaa]">{progressPercent(job.progress)}%</span>
+                            <span className="text-[#aaaaaa]">
+                                {progressPercentLabel(job.progress, job.status === "processing")}%
+                            </span>
                             {job.speed && <span>{job.speed}</span>}
-                            {job.eta && <span>ETA {job.eta}</span>}
+                            {job.status !== "processing" && job.eta && <span>ETA {job.eta}</span>}
                             {subLabel && (
                                 <span className="text-[#4a9eff] truncate">{subLabel}</span>
                             )}

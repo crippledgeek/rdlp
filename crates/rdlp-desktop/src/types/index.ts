@@ -346,6 +346,7 @@ export interface PostProcessProgressPayload {
     jobId: string;
     stage: string;
     progress: number; // 0.0–1.0
+    eta: string | null;
 }
 
 /** Unit-started payload emitted as "unit-started" (playlist episode or merge stream start). */

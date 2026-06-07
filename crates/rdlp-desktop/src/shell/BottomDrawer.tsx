@@ -12,7 +12,7 @@ import { downloadsQueryOptions } from "@/api/downloads";
 import { isInFlight, isTerminal } from "@/lib/jobStatus";
 import { LogViewer, appendLog } from "@/components/LogViewer";
 import { StatusBadge } from "@/components/StatusBadge";
-import { progressPercent } from "@/lib/utils";
+import { progressPercentLabel } from "@/lib/utils";
 import type { DownloadJob } from "@/types";
 
 // Re-export appendLog so event registration can use it
@@ -48,7 +48,7 @@ function JobsPanel({ jobs }: JobsPanelProps) {
                     <StatusBadge status={job.status} className="shrink-0" />
                     {isInFlight(job.status) && job.progress !== null && (
                         <span className="text-[10px] text-[var(--text-muted)] font-mono shrink-0">
-                            {progressPercent(job.progress)}%
+                            {progressPercentLabel(job.progress, job.status === "processing")}%
                         </span>
                     )}
                 </Button>
@@ -111,7 +111,7 @@ export function BottomDrawer() {
                             </span>
                             {activeJob.progress !== null && (
                                 <span className="text-[10px] text-[#aaaaaa] font-mono shrink-0">
-                                    {progressPercent(activeJob.progress)}%
+                                    {progressPercentLabel(activeJob.progress, activeJob.status === "processing")}%
                                 </span>
                             )}
                             {activeJob.speed && (
