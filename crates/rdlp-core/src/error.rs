@@ -183,7 +183,7 @@ mod tests {
         assert!(err.to_string().contains("timeout"));
         if let RdlpError::Network { url, .. } = &err {
             assert_eq!(
-                url.as_ref().map(|u| u.expose()),
+                url.as_ref().map(rdlp_redact::RedactedUrlBuf::expose),
                 Some("https://example.com")
             );
         } else {
@@ -214,7 +214,7 @@ mod tests {
         assert!(err.to_string().contains("no formats"));
         if let RdlpError::Extraction { url, .. } = &err {
             assert_eq!(
-                url.as_ref().map(|u| u.expose()),
+                url.as_ref().map(rdlp_redact::RedactedUrlBuf::expose),
                 Some("https://example.com/video")
             );
         } else {
@@ -231,7 +231,7 @@ mod tests {
         assert!(err.to_string().contains("chunk failed"));
         if let RdlpError::Download { url, .. } = &err {
             assert_eq!(
-                url.as_ref().map(|u| u.expose()),
+                url.as_ref().map(rdlp_redact::RedactedUrlBuf::expose),
                 Some("https://cdn.example.com/seg1.ts")
             );
         } else {
