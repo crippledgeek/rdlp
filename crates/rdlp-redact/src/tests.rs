@@ -24,6 +24,18 @@ fn preserves_host_path_and_non_sensitive_params() {
 }
 
 #[test]
+fn redacts_bare_fragment_and_does_not_mangle_hyphenated_names() {
+    // Bare fragment (no leading ?/&) is redacted — parity with old sanitize_for_logging.
+    assert_eq!(redact_str("token=secret"), "token=***");
+    assert_eq!(redact_str("password=hunter2"), "password=***");
+    // Hyphenated AWS name must NOT be mangled by the generic signature= pattern.
+    assert_eq!(
+        redact_str("https://cdn/s.m4s?X-Amz-Signature=DEADBEEF"),
+        "https://cdn/s.m4s?X-Amz-Signature=***"
+    );
+}
+
+#[test]
 fn redacts_x_amz_signature_within_full_presigned_url() {
     let got = redact_str(
         "https://cdn/s.m4s?X-Amz-Algorithm=AWS4&X-Amz-Signature=DEADBEEF&X-Amz-Date=20260607",

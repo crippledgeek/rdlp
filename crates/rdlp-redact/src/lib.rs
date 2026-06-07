@@ -20,10 +20,12 @@ use regex::Regex;
 ///   `signature` / `sig` patterns.
 /// - Longer param names precede shorter to avoid substring shadowing
 ///   (`access_token` before `token`, `otp_code` before `otp`).
-/// - Generic query-parameter patterns use a `([?&])` capture group for the
+/// - Generic query-parameter patterns use a `(^|[?&])` capture group for the
 ///   boundary separator and re-emit it via `${1}` in the replacement, so that
 ///   the `?`/`&` is preserved but the pattern only matches at a real parameter
 ///   start (not as a suffix inside a longer key like `X-Amz-Signature`).
+///   The `^` alternative also matches bare credential fragments with no leading
+///   separator (e.g. `token=secret` as a standalone log string).
 /// - The userinfo (`//user:pass@host`) pattern is a standalone structural rule.
 #[allow(clippy::expect_used)]
 static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 22]> = LazyLock::new(|| {
@@ -42,79 +44,83 @@ static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 22]> = LazyLock::new(|| {
             "X-Amz-Credential=***",
         ),
         // ── Longer param names first (boundary-capturing group) ────────────────
-        // Pattern: `([?&])name=[^&\s]+`  →  replacement: `${1}name=***`
-        // The `([?&])` captures the separator and re-emits it so it is not consumed.
+        // Pattern: `(^|[?&])name=[^&\s]+`  →  replacement: `${1}name=***`
+        // The `(^|[?&])` captures the separator (or the empty start-of-string) and
+        // re-emits it via `${1}`, so that:
+        //   • bare fragments like `token=secret` (no leading `?`/`&`) are redacted, and
+        //   • hyphenated names like `X-Amz-Signature` are NOT matched by the generic
+        //     `signature=` pattern (the `-` before it is neither `^` nor `?`/`&`).
         (
-            Regex::new(r"(?i)([?&])access_token=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)(^|[?&])access_token=[^&\s]+").expect("valid regex"),
             "${1}access_token=***",
         ),
         (
-            Regex::new(r"(?i)([?&])client_secret=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)(^|[?&])client_secret=[^&\s]+").expect("valid regex"),
             "${1}client_secret=***",
         ),
         (
-            Regex::new(r"(?i)([?&])id_token=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)(^|[?&])id_token=[^&\s]+").expect("valid regex"),
             "${1}id_token=***",
         ),
         (
-            Regex::new(r"(?i)([?&])api_key=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)(^|[?&])api_key=[^&\s]+").expect("valid regex"),
             "${1}api_key=***",
         ),
         (
-            Regex::new(r"(?i)([?&])otp_code=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)(^|[?&])otp_code=[^&\s]+").expect("valid regex"),
             "${1}otp_code=***",
         ),
         (
-            Regex::new(r"(?i)([?&])authorization=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)(^|[?&])authorization=[^&\s]+").expect("valid regex"),
             "${1}authorization=***",
         ),
         // ── Generic shorter names (boundary-capturing group) ───────────────────
         (
-            Regex::new(r"(?i)([?&])token=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)(^|[?&])token=[^&\s]+").expect("valid regex"),
             "${1}token=***",
         ),
         (
-            Regex::new(r"(?i)([?&])key=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)(^|[?&])key=[^&\s]+").expect("valid regex"),
             "${1}key=***",
         ),
         (
-            Regex::new(r"(?i)([?&])password=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)(^|[?&])password=[^&\s]+").expect("valid regex"),
             "${1}password=***",
         ),
         (
-            Regex::new(r"(?i)([?&])secret=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)(^|[?&])secret=[^&\s]+").expect("valid regex"),
             "${1}secret=***",
         ),
         (
-            Regex::new(r"(?i)([?&])bearer=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)(^|[?&])bearer=[^&\s]+").expect("valid regex"),
             "${1}bearer=***",
         ),
         (
-            Regex::new(r"(?i)([?&])signature=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)(^|[?&])signature=[^&\s]+").expect("valid regex"),
             "${1}signature=***",
         ),
         (
-            Regex::new(r"(?i)([?&])sig=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)(^|[?&])sig=[^&\s]+").expect("valid regex"),
             "${1}sig=***",
         ),
         (
-            Regex::new(r"(?i)([?&])hmac=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)(^|[?&])hmac=[^&\s]+").expect("valid regex"),
             "${1}hmac=***",
         ),
         (
-            Regex::new(r"(?i)([?&])auth=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)(^|[?&])auth=[^&\s]+").expect("valid regex"),
             "${1}auth=***",
         ),
         (
-            Regex::new(r"(?i)([?&])session=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)(^|[?&])session=[^&\s]+").expect("valid regex"),
             "${1}session=***",
         ),
         (
-            Regex::new(r"(?i)([?&])code=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)(^|[?&])code=[^&\s]+").expect("valid regex"),
             "${1}code=***",
         ),
         (
-            Regex::new(r"(?i)([?&])otp=[^&\s]+").expect("valid regex"),
+            Regex::new(r"(?i)(^|[?&])otp=[^&\s]+").expect("valid regex"),
             "${1}otp=***",
         ),
         // ── Userinfo credentials in URL authority (`//user:pass@host`) ─────────
