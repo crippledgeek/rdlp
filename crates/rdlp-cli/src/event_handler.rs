@@ -157,9 +157,17 @@ impl CliEventHandler {
                 .expect("progress bar was just assigned")
         };
 
-        if progress.total_bytes.is_some() {
-            // HTTP: byte-based progress
+        if let Some(total) = progress.total_bytes {
+            // The estimated total refines as fragments complete — keep the bar
+            // length in sync, and surface the segment counter as secondary text.
+            pb.set_length(total);
             pb.set_position(progress.bytes_downloaded);
+            if progress.is_estimated
+                && let (Some(done), Some(segs_total)) =
+                    (progress.segments_downloaded, progress.total_segments)
+            {
+                pb.set_message(format!("frag {done}/{segs_total}"));
+            }
         } else if let Some(segs) = progress.segments_downloaded {
             // HLS: segment-based progress
             pb.set_position(segs);
@@ -180,14 +188,18 @@ impl CliEventHandler {
         // All three `expect` calls below are on static template string literals — infallible.
         #[allow(clippy::expect_used)]
         if let Some(total) = progress.total_bytes {
-            // HTTP download with known size
             let pb = self.multi_progress.add(ProgressBar::new(total));
+            let template = if progress.is_estimated {
+                // Estimated total (segmented download, no Content-Length): mark with ~,
+                // and reserve {msg} for the "frag N/M" secondary counter.
+                "{wide_bar:.cyan/blue} {bytes}/~{total_bytes} \
+                 ({bytes_per_sec}) [{elapsed_precise}] {msg}"
+            } else {
+                "{wide_bar:.cyan/blue} {bytes}/{total_bytes} \
+                 ({bytes_per_sec}) [{elapsed_precise}]"
+            };
             pb.set_style(
-                ProgressStyle::with_template(
-                    "{wide_bar:.cyan/blue} {bytes}/{total_bytes} \
-                     ({bytes_per_sec}) [{elapsed_precise}]",
-                )
-                .expect("static template string — infallible"),
+                ProgressStyle::with_template(template).expect("static template string — infallible"),
             );
             pb
         } else if let Some(total) = progress.total_segments {

@@ -75,6 +75,8 @@ fn default_args() -> Args {
         browser: None,
         trust_publisher: vec![],
         plugin: None,
+        download_timeout: None,
+        merge_timeout: None,
     }
 }
 
