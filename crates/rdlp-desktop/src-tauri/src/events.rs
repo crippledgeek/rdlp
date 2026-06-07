@@ -29,6 +29,8 @@ pub struct DownloadProgressPayload {
     pub(crate) downloaded_bytes: u64,
     /// Total expected bytes, if known.
     pub(crate) total_bytes: Option<u64>,
+    /// `true` when `total_bytes` is an extrapolated estimate (segmented download).
+    pub(crate) is_estimated: bool,
 }
 
 /// Download completion payload emitted as `"download-complete"`.
@@ -156,6 +158,7 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
                 eta: progress.eta.as_ref().map(format_eta),
                 downloaded_bytes: progress.bytes_downloaded,
                 total_bytes: progress.total_bytes,
+                is_estimated: progress.is_estimated,
             };
 
             if let Err(e) = app.emit("download-progress", &payload) {
@@ -362,6 +365,7 @@ mod tests {
             eta: Some("01:30".to_owned()),
             downloaded_bytes: 1024,
             total_bytes: Some(2048),
+            is_estimated: false,
         };
         let json = serde_json::to_value(&payload).expect("serialization should succeed");
         assert_eq!(json["jobId"], "abc-123");
