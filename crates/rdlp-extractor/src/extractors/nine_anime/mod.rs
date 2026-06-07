@@ -307,7 +307,10 @@ impl InfoExtractor for NineAnimeExtractor {
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
         // Extract IDs from URL
         let anime_id = patterns::extract_anime_id(url).ok_or_else(|| RdlpError::Extraction {
-            message: format!("Could not extract anime ID from URL: {url}"),
+            message: format!(
+                "Could not extract anime ID from URL: {}",
+                rdlp_redact::RedactedUrl::new(&url)
+            ),
             url: Some(url.to_string().into()),
         })?;
 

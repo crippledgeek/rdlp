@@ -48,7 +48,10 @@ use crate::base::common::BaseExtractor;
 /// - All episode resolution attempts fail (`RdlpError::Extraction`)
 pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<InfoDict>> {
     let anime_id = patterns::extract_anime_id(url).ok_or_else(|| RdlpError::Extraction {
-        message: format!("Could not extract anime ID from URL: {url}"),
+        message: format!(
+            "Could not extract anime ID from URL: {}",
+            rdlp_redact::RedactedUrl::new(&url)
+        ),
         url: Some(url.to_string().into()),
     })?;
 
@@ -173,7 +176,10 @@ pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<In
 
     if results.is_empty() {
         return Err(RdlpError::Extraction {
-            message: format!("Failed to extract any episodes from anime: {url}"),
+            message: format!(
+                "Failed to extract any episodes from anime: {}",
+                rdlp_redact::RedactedUrl::new(&url)
+            ),
             url: Some(url.to_string().into()),
         });
     }

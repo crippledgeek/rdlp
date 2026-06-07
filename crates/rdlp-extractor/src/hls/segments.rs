@@ -196,12 +196,18 @@ impl HlsSizeDetector {
             .map_err(|e| {
                 if e.is_timeout() {
                     RdlpError::Network {
-                        message: format!("Timeout for segment: {segment_url}"),
+                        message: format!(
+                            "Timeout for segment: {}",
+                            rdlp_redact::RedactedUrl::new(&segment_url)
+                        ),
                         url: Some(segment_url.to_string().into()),
                     }
                 } else if e.is_connect() {
                     RdlpError::Network {
-                        message: format!("Connection failed for segment: {segment_url}: {e}"),
+                        message: format!(
+                            "Connection failed for segment: {}: {e}",
+                            rdlp_redact::RedactedUrl::new(&segment_url)
+                        ),
                         url: Some(segment_url.to_string().into()),
                     }
                 } else {
@@ -239,7 +245,10 @@ impl HlsSizeDetector {
         }
 
         Err(RdlpError::Extraction {
-            message: format!("Could not detect segment size for: {segment_url}"),
+            message: format!(
+                "Could not detect segment size for: {}",
+                rdlp_redact::RedactedUrl::new(&segment_url)
+            ),
             url: Some(segment_url.to_string().into()),
         })
     }

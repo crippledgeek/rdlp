@@ -192,7 +192,10 @@ impl InfoExtractor for AbxxxExtractor {
 
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
         let video_id = patterns::extract_video_id(url).ok_or_else(|| RdlpError::Extraction {
-            message: format!("Could not extract video id from URL: {url}"),
+            message: format!(
+                "Could not extract video id from URL: {}",
+                rdlp_redact::RedactedUrl::new(&url)
+            ),
             url: Some(url.to_string().into()),
         })?;
         let slug = patterns::extract_slug(url);

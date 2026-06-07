@@ -29,7 +29,10 @@ impl XHamsterExtractor {
     ) -> Result<Vec<InfoDict>> {
         let (user_id, _is_user) =
             patterns::extract_user_info(url).ok_or_else(|| RdlpError::Extraction {
-                message: format!("Could not extract user ID: {url}"),
+                message: format!(
+                    "Could not extract user ID: {}",
+                    rdlp_redact::RedactedUrl::new(&url)
+                ),
                 url: Some(url.to_string().into()),
             })?;
 
@@ -102,7 +105,10 @@ impl XHamsterExtractor {
 
         if total == 0 {
             return Err(RdlpError::Extraction {
-                message: format!("No videos found on user page: {url}"),
+                message: format!(
+                    "No videos found on user page: {}",
+                    rdlp_redact::RedactedUrl::new(&url)
+                ),
                 url: Some(url.to_string().into()),
             });
         }
@@ -172,7 +178,10 @@ impl XHamsterExtractor {
 
         if results.is_empty() {
             return Err(RdlpError::Extraction {
-                message: format!("Failed to extract any videos from user page: {url}"),
+                message: format!(
+                    "Failed to extract any videos from user page: {}",
+                    rdlp_redact::RedactedUrl::new(&url)
+                ),
                 url: Some(url.to_string().into()),
             });
         }

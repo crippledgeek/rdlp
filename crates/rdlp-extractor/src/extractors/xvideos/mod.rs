@@ -106,7 +106,10 @@ impl XVideosExtractor {
 
         if formats.is_empty() {
             return Err(RdlpError::Extraction {
-                message: format!("No video formats found on page. URL: {url}"),
+                message: format!(
+                    "No video formats found on page. URL: {}",
+                    rdlp_redact::RedactedUrl::new(&url)
+                ),
                 url: Some(url.to_string().into()),
             });
         }
@@ -163,7 +166,10 @@ impl InfoExtractor for XVideosExtractor {
 
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
         let eid = patterns::extract_eid(url).ok_or_else(|| RdlpError::Extraction {
-            message: format!("Could not extract video EID from URL: {url}"),
+            message: format!(
+                "Could not extract video EID from URL: {}",
+                rdlp_redact::RedactedUrl::new(&url)
+            ),
             url: Some(url.to_string().into()),
         })?;
 
