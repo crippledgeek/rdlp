@@ -114,7 +114,10 @@ impl Orchestrator {
     ) -> Result<Option<DownloadOutcome>> {
         let is_hls = format.is_hls();
 
-        // HLS downloads use segment-based resume (tracked in .hls_state.json), not byte offsets
+        // HLS resume is fragment-based and fully downloader-internal: the fragment
+        // downloader persists/loads <output>.hls_state.json itself (see
+        // rdlp_downloader::fragments). The byte-offset `resume_from` is therefore
+        // unused for HLS — pass 0.
         let effective_resume = if is_hls { 0 } else { resume_from };
 
         let estimated_size = if is_hls {

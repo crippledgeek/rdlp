@@ -83,8 +83,7 @@ impl DashDownloadState {
     /// serialization error wrapped as `io::Error::other`.
     pub async fn save(&mut self, path: &Path) -> std::io::Result<()> {
         self.updated_at = now_secs();
-        let body = serde_json::to_string(self).map_err(std::io::Error::other)?;
-        fs::write(path, body).await
+        crate::atomic::atomic_write_json(path, self.clone()).await
     }
 
     /// Mark segment `idx` of representation `repr_id` as completed.
@@ -113,4 +112,30 @@ fn now_secs() -> u64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn save_then_load_matching_roundtrips_through_atomic_writer() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("v.dash_state.json");
+        let url = Url::parse("https://cdn.example.com/path/manifest.mpd").expect("url");
+        let mut state = DashDownloadState::new(&url, "v1".into(), Some("a1".into()));
+        state.record_segment("v1", 0);
+        state.record_segment("v1", 1);
+        state.init_video_done = true;
+        state.save(&path).await.expect("save");
+
+        let loaded = DashDownloadState::load_matching(&path, &url, "v1", Some("a1"))
+            .await
+            .expect("must load matching state");
+        assert_eq!(loaded.state_version, STATE_VERSION);
+        assert_eq!(loaded.video_repr_id, "v1");
+        assert!(loaded.init_video_done);
+        assert!(loaded.is_segment_done("v1", 0));
+        assert!(loaded.is_segment_done("v1", 1));
+    }
 }

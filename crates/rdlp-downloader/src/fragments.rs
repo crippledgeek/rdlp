@@ -11,14 +11,16 @@
 // workspace MSRV is 1.85.
 #![allow(clippy::duration_suboptimal_units)]
 
+use std::io::SeekFrom;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
 use futures::StreamExt as _;
+use log::warn;
 use rdlp_core::{DownloadProgress, DownloadStats, ProgressCallback, Result};
 use rdlp_types::{Fragment, Progress};
-use tokio::io::AsyncWriteExt as _;
+use tokio::io::{AsyncSeekExt as _, AsyncWriteExt as _};
 use tokio_util::sync::CancellationToken;
 
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, ControllerMode};
@@ -72,6 +74,18 @@ fn fragment_progress_fraction(
 /// price of parallelism — sequential mode (`concurrent_fragments = 1`)
 /// preserves the strict "at most 1 extra fragment after cancel" semantic.
 ///
+/// # Resume
+///
+/// Fragment-level resume is self-managed via a `<output>.hls_state.json`
+/// sidecar (see `HlsResumeState`). On entry the helper matches the
+/// sidecar against a path-only fingerprint of `fragments` + the fragment
+/// count; on a match (and when the existing partial is at least as long as the
+/// last confirmed byte boundary and the download is incomplete) it truncates
+/// any torn tail to that boundary, seeks, and skips the already-completed
+/// fragments. Otherwise it starts fresh. The sidecar is rewritten atomically
+/// after each fragment and removed on successful completion; it is left in
+/// place on cancel or error so a later run can resume.
+///
 /// # Same-origin header gate
 ///
 /// `Format.http_headers` (Referer, Cookie, Authorization, Origin) are forwarded
@@ -114,22 +128,64 @@ pub async fn download_pre_resolved_fragments(
         .and_then(|u| url::Url::parse(u).ok())
         .map(|u| u.origin());
 
+    // ---- Resume setup (issue #354) ----
+    let state_file = state_path(output);
+    let fingerprint = state::fragment_fingerprint(fragments);
+    let total = fragments.len() as u64;
+    let actual_len = tokio::fs::metadata(output).await.map_or(0, |m| m.len());
+    let loaded = state::HlsResumeState::load_matching(&state_file, fingerprint, total).await;
+    // Resume only when state matches, the partial is at least as long as the
+    // last confirmed boundary, and the download is not already complete.
+    let resume = loaded
+        .as_ref()
+        .is_some_and(|s| actual_len >= s.byte_len && s.fragments_done < total);
+    let mut hls_state = loaded
+        .filter(|_| resume)
+        .unwrap_or_else(|| state::HlsResumeState::new(fingerprint, total));
+    let skip = hls_state.fragments_done as usize;
+
     let mut out_file = tokio::fs::OpenOptions::new()
         .write(true)
         .create(true)
-        .truncate(true)
+        .truncate(false)
         .open(output)
         .await
         .map_err(|e| rdlp_core::RdlpError::Download {
             message: format!("create output: {e}"),
             url: Some(output.display().to_string()),
         })?;
+    if resume {
+        // Drop any torn tail past the last confirmed boundary, then append.
+        out_file
+            .set_len(hls_state.byte_len)
+            .await
+            .map_err(|e| rdlp_core::RdlpError::Download {
+                message: format!("truncate to resume boundary: {e}"),
+                url: Some(output.display().to_string()),
+            })?;
+        out_file
+            .seek(SeekFrom::Start(hls_state.byte_len))
+            .await
+            .map_err(|e| rdlp_core::RdlpError::Download {
+                message: format!("seek to resume boundary: {e}"),
+                url: Some(output.display().to_string()),
+            })?;
+    } else {
+        // Fresh start: equivalent to the previous unconditional truncate(true).
+        out_file
+            .set_len(0)
+            .await
+            .map_err(|e| rdlp_core::RdlpError::Download {
+                message: format!("truncate output: {e}"),
+                url: Some(output.display().to_string()),
+            })?;
+    }
 
-    let mut total_bytes: u64 = 0;
+    let mut total_bytes: u64 = hls_state.byte_len;
 
     const PROGRESS_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
     let mut last_emit = Instant::now();
-    let mut frags_done: u64 = 0;
+    let mut frags_done: u64 = hls_state.fragments_done;
     let total_frags = fragments.len() as u64;
     let mut speed = SpeedMeter::new();
 
@@ -203,7 +259,7 @@ pub async fn download_pre_resolved_fragments(
     // even though fetches overlap. Each task emits init-bytes (when needed)
     // immediately preceding fragment-bytes in a single Vec<u8>, so RFC 8216
     // §4.3.2.5 decode-ordering is preserved without a group-by-init pre-pass.
-    let stream = futures::stream::iter(tasks.into_iter().map(|(frag, needs_init)| {
+    let stream = futures::stream::iter(tasks.into_iter().skip(skip).map(|(frag, needs_init)| {
         let sem = Arc::clone(&sem);
         let base = base_url.map(str::to_string);
         let cancel = cancel.cloned();
@@ -299,6 +355,12 @@ pub async fn download_pre_resolved_fragments(
         speed.update(total_bytes, now);
         frags_done += 1;
 
+        hls_state.fragments_done = frags_done;
+        hls_state.byte_len = total_bytes;
+        if let Err(e) = hls_state.save(&state_file).await {
+            warn!("HLS resume state save failed (continuing): {e}");
+        }
+
         // Emit progress (100ms throttle OR fragment-N boundary).
         if let Some(cb) = progress
             && (now.duration_since(last_emit) >= PROGRESS_INTERVAL || frags_done == total_frags)
@@ -341,6 +403,9 @@ pub async fn download_pre_resolved_fragments(
             url: Some(output.display().to_string()),
         })?;
 
+    // Download completed — drop the resume sidecar.
+    let _ = tokio::fs::remove_file(&state_file).await;
+
     let elapsed = started.elapsed();
     #[allow(clippy::cast_precision_loss)]
     let avg = if elapsed.as_secs_f64() > 0.0 {
@@ -356,6 +421,15 @@ pub async fn download_pre_resolved_fragments(
         retries: 0,
         fragments: Some(fragments.len()),
     })
+}
+
+/// Sidecar path for HLS resume state: `<output>.hls_state.json`.
+/// Appends the suffix to the full filename so it never collides with the
+/// output's own extension.
+fn state_path(output: &Path) -> std::path::PathBuf {
+    let mut s = output.as_os_str().to_os_string();
+    s.push(".hls_state.json");
+    std::path::PathBuf::from(s)
 }
 
 /// Resolve a fragment URL against an optional base URL.
@@ -477,6 +551,8 @@ async fn fetch_with_optional_range(
             url: Some(url.to_string()),
         })
 }
+
+pub(crate) mod state;
 
 #[cfg(test)]
 mod tests;
