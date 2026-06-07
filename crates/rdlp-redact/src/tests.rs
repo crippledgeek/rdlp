@@ -53,3 +53,47 @@ fn redacts_x_amz_signature_within_full_presigned_url() {
         "non-secret SigV4 param kept: {got}"
     );
 }
+
+#[test]
+fn redacted_url_display_and_debug_redact_but_expose_is_raw() {
+    let raw = "https://cdn/s.m4s?X-Amz-Signature=DEADBEEF";
+    let r = RedactedUrl::new(raw);
+    assert_eq!(format!("{r}"), "https://cdn/s.m4s?X-Amz-Signature=***");
+    assert_eq!(format!("{r:?}"), "https://cdn/s.m4s?X-Amz-Signature=***");
+    assert_eq!(r.expose(), raw, "expose() returns the unredacted value");
+}
+
+#[test]
+fn redacted_url_buf_display_and_debug_redact_but_expose_is_raw() {
+    let raw = "https://cdn/s.m4s?token=SECRET".to_string();
+    let r = RedactedUrlBuf::from(raw.clone());
+    assert_eq!(format!("{r}"), "https://cdn/s.m4s?token=***");
+    assert_eq!(format!("{r:?}"), "https://cdn/s.m4s?token=***");
+    assert_eq!(r.expose(), raw);
+}
+
+#[test]
+fn redacted_url_new_accepts_str_and_string_refs_uniformly() {
+    // Footgun guard: log sites pass owned String (&String) and borrowed
+    // &String (e.g. a `for x in &Vec<String>` loop binding) — both must work
+    // without the caller juggling & vs no-&.
+    let owned: String = "u?key=K".to_string();
+    let borrowed: &String = &owned;
+    assert_eq!(format!("{}", RedactedUrl::new(&owned)), "u?key=***"); // &String
+    assert_eq!(format!("{}", RedactedUrl::new(borrowed)), "u?key=***"); // &String (already a ref)
+    assert_eq!(format!("{}", RedactedUrl::new(&borrowed)), "u?key=***"); // &&String
+    assert_eq!(format!("{}", RedactedUrl::new("u?key=K")), "u?key=***"); // &str literal
+}
+
+#[test]
+fn redacted_url_buf_from_str_and_new_redact() {
+    // From<&str> is the path RdlpError's constructors use (url: &str).
+    let a = RedactedUrlBuf::from("u?token=X");
+    assert_eq!(format!("{a}"), "u?token=***");
+    assert_eq!(a.expose(), "u?token=X");
+    // new(impl Into<String>) accepts &str and String alike.
+    let b = RedactedUrlBuf::new("u?sig=Y");
+    assert_eq!(format!("{b}"), "u?sig=***");
+    let c = RedactedUrlBuf::new("u?key=Z".to_string());
+    assert_eq!(format!("{c:?}"), "u?key=***");
+}
