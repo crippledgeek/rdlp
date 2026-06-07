@@ -599,3 +599,26 @@ fn network_options_none_preserves_base_timeouts() {
     assert_eq!(config.read_timeout, Some(99));
     assert_eq!(config.pool_idle_timeout, Some(99));
 }
+
+#[test]
+fn test_postprocess_recode_threads_and_preset_propagate() {
+    let mut config = Config::default();
+    let opts = PostProcessOptions {
+        recode_threads: Some(6),
+        recode_preset: Some("faster".to_string()),
+        ..PostProcessOptions::default()
+    };
+    opts.merge_into(&mut config);
+    assert_eq!(config.postprocess.recode_threads, Some(6));
+    assert_eq!(config.postprocess.recode_preset, Some("faster".to_string()));
+}
+
+#[test]
+fn test_postprocess_recode_threads_none_preserves_base() {
+    let mut config = Config::default();
+    config.postprocess.recode_threads = Some(4);
+    config.postprocess.recode_preset = Some("slow".to_string());
+    PostProcessOptions::default().merge_into(&mut config);
+    assert_eq!(config.postprocess.recode_threads, Some(4));
+    assert_eq!(config.postprocess.recode_preset, Some("slow".to_string()));
+}
