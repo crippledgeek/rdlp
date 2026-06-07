@@ -307,15 +307,19 @@ impl InfoExtractor for NineAnimeExtractor {
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
         // Extract IDs from URL
         let anime_id = patterns::extract_anime_id(url).ok_or_else(|| RdlpError::Extraction {
-            message: format!("Could not extract anime ID from URL: {url}"),
+            message: format!(
+                "Could not extract anime ID from URL: {}",
+                rdlp_redact::RedactedUrl::new(&url)
+            ),
             url: Some(url.to_string().into()),
         })?;
 
         let episode_id =
             patterns::extract_episode_id(url).ok_or_else(|| RdlpError::Extraction {
                 message: format!(
-                    "Could not extract episode ID from URL: {url}. \
-                 Use a URL with ?ep= parameter."
+                    "Could not extract episode ID from URL: {}. \
+                 Use a URL with ?ep= parameter.",
+                    rdlp_redact::RedactedUrl::new(url)
                 ),
                 url: Some(url.to_string().into()),
             })?;
@@ -390,8 +394,9 @@ impl InfoExtractor for NineAnimeExtractor {
         let episode_id =
             patterns::extract_episode_id(url).ok_or_else(|| RdlpError::Extraction {
                 message: format!(
-                    "Could not extract episode ID from URL: {url}. \
-                 Use a URL with ?ep= parameter."
+                    "Could not extract episode ID from URL: {}. \
+                 Use a URL with ?ep= parameter.",
+                    rdlp_redact::RedactedUrl::new(url)
                 ),
                 url: Some(url.to_string().into()),
             })?;

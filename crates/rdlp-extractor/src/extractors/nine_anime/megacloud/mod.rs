@@ -100,7 +100,10 @@ const KEYS_URL: &str = "https://raw.githubusercontent.com/yogesh-hacker/Megaclou
 /// - Both extraction strategies fail (`RdlpError::Extraction`)
 pub async fn extract_sources(embed_url: &str, ctx: &ExtractionContext) -> Result<MegacloudSources> {
     let source_id = extract_source_id(embed_url).ok_or_else(|| RdlpError::Extraction {
-        message: format!("Could not extract source ID from embed URL: {embed_url}"),
+        message: format!(
+            "Could not extract source ID from embed URL: {}",
+            rdlp_redact::RedactedUrl::new(&embed_url)
+        ),
         url: Some(embed_url.to_string().into()),
     })?;
     debug!(source_id:%; "Extracted Megacloud source ID");

@@ -367,7 +367,10 @@ async fn build_info(
         let dload = parse_dload_formats(page_url, html);
         if dload.is_empty() {
             return Err(RdlpError::Extraction {
-                message: format!("No formats found for EPorner video: {page_url}"),
+                message: format!(
+                    "No formats found for EPorner video: {}",
+                    rdlp_redact::RedactedUrl::new(&page_url)
+                ),
                 url: Some(page_url.to_string().into()),
             });
         }
@@ -423,7 +426,10 @@ impl InfoExtractor for EPornerExtractor {
             .and_then(|c| c.get(1))
             .map(|m| m.as_str().to_string())
             .ok_or_else(|| RdlpError::Extraction {
-                message: format!("EPorner: could not extract video id from URL: {url}"),
+                message: format!(
+                    "EPorner: could not extract video id from URL: {}",
+                    rdlp_redact::RedactedUrl::new(&url)
+                ),
                 url: Some(url.to_string().into()),
             })?;
 

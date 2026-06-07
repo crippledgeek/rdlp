@@ -245,7 +245,8 @@ fn try_direct_media(url: &str, pf: &PrefetchResponse) -> Result<Option<InfoDict>
             }
             Err(e) => {
                 log::warn!(
-                    "DASH expansion failed for {url}: {e}; falling back to legacy single-Format path"
+                    "DASH expansion failed for {}: {e}; falling back to legacy single-Format path",
+                    rdlp_redact::RedactedUrl::new(url)
                 );
                 let mut info = InfoDict::new(&video_id, &title, "Generic", url);
                 let format = Format::new("dash", url, "mpd", DownloadProtocol::HttpDashSegments);

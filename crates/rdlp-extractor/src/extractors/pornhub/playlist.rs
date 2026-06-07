@@ -48,7 +48,10 @@ pub async fn extract_playlist(
 ) -> Result<Vec<InfoDict>> {
     let playlist_id =
         super::patterns::extract_playlist_id(url).ok_or_else(|| RdlpError::Extraction {
-            message: format!("Could not extract playlist ID: {url}"),
+            message: format!(
+                "Could not extract playlist ID: {}",
+                rdlp_redact::RedactedUrl::new(&url)
+            ),
             url: Some(url.to_string().into()),
         })?;
 
@@ -97,7 +100,10 @@ pub async fn extract_playlist(
 
     if all_video_urls.is_empty() {
         return Err(RdlpError::Extraction {
-            message: format!("No videos found in playlist: {url}"),
+            message: format!(
+                "No videos found in playlist: {}",
+                rdlp_redact::RedactedUrl::new(&url)
+            ),
             url: Some(url.to_string().into()),
         });
     }
@@ -209,7 +215,10 @@ pub async fn extract_playlist(
 
     if results.is_empty() {
         return Err(RdlpError::Extraction {
-            message: format!("Failed to extract any videos from playlist: {url}"),
+            message: format!(
+                "Failed to extract any videos from playlist: {}",
+                rdlp_redact::RedactedUrl::new(&url)
+            ),
             url: Some(url.to_string().into()),
         });
     }

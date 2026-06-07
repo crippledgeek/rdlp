@@ -100,7 +100,10 @@ impl InfoExtractor for SpankBangExtractor {
 
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
         let video_id = patterns::extract_video_id(url).ok_or_else(|| RdlpError::Extraction {
-            message: format!("SpankBang: could not extract video ID from URL: {url}"),
+            message: format!(
+                "SpankBang: could not extract video ID from URL: {}",
+                rdlp_redact::RedactedUrl::new(&url)
+            ),
             url: Some(url.to_string().into()),
         })?;
 
@@ -148,7 +151,8 @@ impl InfoExtractor for SpankBangExtractor {
             let key = formats::parse_streamkey(&webpage).ok_or_else(|| RdlpError::Extraction {
                 message: format!(
                     "SpankBang: neither inline stream_data nor data-streamkey present \
-                     on page {url}"
+                     on page {}",
+                    rdlp_redact::RedactedUrl::new(url)
                 ),
                 url: Some(url.to_string().into()),
             })?;
@@ -161,7 +165,10 @@ impl InfoExtractor for SpankBangExtractor {
 
         if formats.is_empty() {
             return Err(RdlpError::Extraction {
-                message: format!("SpankBang: no playable formats found for {url}"),
+                message: format!(
+                    "SpankBang: no playable formats found for {}",
+                    rdlp_redact::RedactedUrl::new(&url)
+                ),
                 url: Some(url.to_string().into()),
             });
         }

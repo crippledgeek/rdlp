@@ -403,7 +403,10 @@ async fn fetch_formats_from_endpoint(
     BaseExtractor::log_if_verbose(
         ctx,
         "RedTube",
-        &format!("Fetching format JSON from: {absolute_url}"),
+        &format!(
+            "Fetching format JSON from: {}",
+            rdlp_redact::RedactedUrl::new(&absolute_url)
+        ),
     );
 
     // Fetch the JSON endpoint
@@ -411,9 +414,9 @@ async fn fetch_formats_from_endpoint(
         Ok(r) => r,
         Err(e) => {
             if e.is_timeout() {
-                debug!(url:? = absolute_url; "[RedTube] Request timed out");
+                debug!(url:? = rdlp_redact::RedactedUrl::new(&absolute_url); "[RedTube] Request timed out");
             } else if e.is_connect() {
-                debug!(url:? = absolute_url; "[RedTube] Connection failed: {e}");
+                debug!(url:? = rdlp_redact::RedactedUrl::new(&absolute_url); "[RedTube] Connection failed: {e}");
             } else {
                 debug!("[RedTube] Request failed: {e}");
             }
@@ -426,7 +429,11 @@ async fn fetch_formats_from_endpoint(
         BaseExtractor::log_if_verbose(
             ctx,
             "RedTube",
-            &format!("HTTP {} for URL: {}", response.status(), absolute_url),
+            &format!(
+                "HTTP {} for URL: {}",
+                response.status(),
+                rdlp_redact::RedactedUrl::new(&absolute_url)
+            ),
         );
         return None;
     }

@@ -26,7 +26,7 @@ impl HlsSizeDetector {
     /// * `Err(_)` - Network error, parse error, or master playlist detected
     pub(super) async fn parse_playlist(&self, m3u8_url: &str) -> Result<Vec<String>> {
         if self.verbose {
-            debug!(url:? = m3u8_url; "HLS fetching playlist");
+            debug!(url:? = rdlp_redact::RedactedUrl::new(m3u8_url); "HLS fetching playlist");
         }
 
         let playlist_text = self.fetch_playlist_text(m3u8_url).await?;
@@ -196,12 +196,18 @@ impl HlsSizeDetector {
             .map_err(|e| {
                 if e.is_timeout() {
                     RdlpError::Network {
-                        message: format!("Timeout for segment: {segment_url}"),
+                        message: format!(
+                            "Timeout for segment: {}",
+                            rdlp_redact::RedactedUrl::new(&segment_url)
+                        ),
                         url: Some(segment_url.to_string().into()),
                     }
                 } else if e.is_connect() {
                     RdlpError::Network {
-                        message: format!("Connection failed for segment: {segment_url}: {e}"),
+                        message: format!(
+                            "Connection failed for segment: {}: {e}",
+                            rdlp_redact::RedactedUrl::new(&segment_url)
+                        ),
                         url: Some(segment_url.to_string().into()),
                     }
                 } else {
@@ -218,7 +224,10 @@ impl HlsSizeDetector {
             // retry.
             return Err(RdlpError::Http {
                 status: range_response.status().as_u16(),
-                reason: format!("segment HEAD: {segment_url}"),
+                reason: format!(
+                    "segment HEAD: {}",
+                    rdlp_redact::RedactedUrl::new(&segment_url)
+                ),
             });
         }
 
@@ -239,7 +248,10 @@ impl HlsSizeDetector {
         }
 
         Err(RdlpError::Extraction {
-            message: format!("Could not detect segment size for: {segment_url}"),
+            message: format!(
+                "Could not detect segment size for: {}",
+                rdlp_redact::RedactedUrl::new(&segment_url)
+            ),
             url: Some(segment_url.to_string().into()),
         })
     }

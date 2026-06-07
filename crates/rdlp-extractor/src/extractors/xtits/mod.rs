@@ -190,7 +190,10 @@ impl InfoExtractor for XTitsExtractor {
         let webpage = BaseExtractor::fetch_webpage(url, ctx).await?;
 
         let video_id = patterns::extract_video_id(url).ok_or_else(|| RdlpError::Extraction {
-            message: format!("Could not extract video ID: {url}"),
+            message: format!(
+                "Could not extract video ID: {}",
+                rdlp_redact::RedactedUrl::new(&url)
+            ),
             url: Some(url.to_string().into()),
         })?;
 
@@ -201,7 +204,8 @@ impl InfoExtractor for XTitsExtractor {
             .map(|m| m.as_str().to_string())
             .ok_or_else(|| RdlpError::Extraction {
                 message: format!(
-                    "Could not find KVS flashvars on page. Video may be unavailable. URL: {url}"
+                    "Could not find KVS flashvars on page. Video may be unavailable. URL: {}",
+                    rdlp_redact::RedactedUrl::new(url)
                 ),
                 url: Some(url.to_string().into()),
             })?;
@@ -211,7 +215,10 @@ impl InfoExtractor for XTitsExtractor {
 
         if video_formats.is_empty() {
             return Err(RdlpError::Extraction {
-                message: format!("No video formats found in flashvars. URL: {url}"),
+                message: format!(
+                    "No video formats found in flashvars. URL: {}",
+                    rdlp_redact::RedactedUrl::new(&url)
+                ),
                 url: Some(url.to_string().into()),
             });
         }

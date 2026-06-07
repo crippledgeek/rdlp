@@ -108,7 +108,10 @@ pub async fn parse_moviefap_xml(
 
     if video_data.is_empty() {
         return Err(RdlpError::Extraction {
-            message: format!("No video sources found in MovieFap XML response from: {cdn_url}"),
+            message: format!(
+                "No video sources found in MovieFap XML response from: {}",
+                rdlp_redact::RedactedUrl::new(&cdn_url)
+            ),
             url: Some(cdn_url.to_string().into()),
         });
     }

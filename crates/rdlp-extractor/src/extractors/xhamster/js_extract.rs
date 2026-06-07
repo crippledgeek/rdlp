@@ -145,8 +145,9 @@ pub async fn fetch_player_js(
             }
             Ok(resp) => {
                 debug!(
-                    "[XHamster] Player JS fetch returned {}: {full_url}",
-                    resp.status()
+                    "[XHamster] Player JS fetch returned {}: {}",
+                    resp.status(),
+                    rdlp_redact::RedactedUrl::new(&full_url)
                 );
             }
             Err(e) => {

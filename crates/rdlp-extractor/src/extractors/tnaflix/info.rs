@@ -78,7 +78,10 @@ impl InfoExtractor for TNAFlixExtractor {
 
         // Get video ID using BaseExtractor
         let video_id = self.extract_id(url).ok_or_else(|| RdlpError::Extraction {
-            message: format!("Could not extract video ID from URL: {url}"),
+            message: format!(
+                "Could not extract video ID from URL: {}",
+                rdlp_redact::RedactedUrl::new(&url)
+            ),
             url: Some(url.to_string().into()),
         })?;
 
@@ -106,11 +109,18 @@ impl InfoExtractor for TNAFlixExtractor {
         let video_data = if is_moviefap {
             // MovieFap: fetch XML from cdn.php
             let cdn_url = cdn_url_opt.ok_or_else(|| RdlpError::Extraction {
-                message: format!("Could not find cdn.php URL in MovieFap page: {url}"),
+                message: format!(
+                    "Could not find cdn.php URL in MovieFap page: {}",
+                    rdlp_redact::RedactedUrl::new(&url)
+                ),
                 url: Some(url.to_string().into()),
             })?;
 
-            BaseExtractor::log_if_verbose(ctx, "MovieFap", &format!("cdn.php URL: {cdn_url}"));
+            BaseExtractor::log_if_verbose(
+                ctx,
+                "MovieFap",
+                &format!("cdn.php URL: {}", rdlp_redact::RedactedUrl::new(&cdn_url)),
+            );
 
             ajax::parse_moviefap_xml(&self.base, &cdn_url, url, ctx).await?
         } else {
@@ -136,7 +146,8 @@ impl InfoExtractor for TNAFlixExtractor {
             if video_data.is_empty() {
                 return Err(RdlpError::Extraction {
                     message: format!(
-                        "No video source tags found in HTML. Video may be unavailable. URL: {url}"
+                        "No video source tags found in HTML. Video may be unavailable. URL: {}",
+                        rdlp_redact::RedactedUrl::new(url)
                     ),
                     url: Some(url.to_string().into()),
                 });
@@ -150,7 +161,10 @@ impl InfoExtractor for TNAFlixExtractor {
 
         if formats.is_empty() {
             return Err(RdlpError::Extraction {
-                message: format!("No video formats found for URL: {url}"),
+                message: format!(
+                    "No video formats found for URL: {}",
+                    rdlp_redact::RedactedUrl::new(&url)
+                ),
                 url: Some(url.to_string().into()),
             });
         }
