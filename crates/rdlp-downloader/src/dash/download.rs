@@ -28,6 +28,7 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, ControllerMode};
+use crate::atomic::{SIDECAR_SAVE_FAILURE_THRESHOLD, SaveFailureTracker};
 use crate::dash::errors::DashError;
 use crate::dash::manifest;
 use crate::dash::segments::SegmentPlan;
@@ -350,6 +351,7 @@ async fn download_representation(
     fs::create_dir_all(parts_dir).await?;
 
     let mut total: u64 = 0;
+    let mut save_tracker = SaveFailureTracker::new(SIDECAR_SAVE_FAILURE_THRESHOLD);
 
     // ----- Init segment -----
     let init_part_path = parts_dir.join("init.m4s");
@@ -384,9 +386,11 @@ async fn download_representation(
                 } else {
                     s.init_audio_done = true;
                 }
-                if let Err(e) = s.save(state_path).await {
-                    warn!("DASH state save failed (init): {e}");
-                }
+                crate::atomic::note_sidecar_save(
+                    s.save(state_path).await,
+                    &mut save_tracker,
+                    "DASH",
+                );
             }
             debug!("DASH repr {repr_id}: init {len} bytes");
         }
@@ -494,9 +498,11 @@ async fn download_representation(
                 s.record_segment(repr_id, i as u64);
                 completed_since_save += 1;
                 if completed_since_save >= STATE_SAVE_BATCH {
-                    if let Err(e) = s.save(state_path).await {
-                        warn!("DASH state save failed (batch): {e}");
-                    }
+                    crate::atomic::note_sidecar_save(
+                        s.save(state_path).await,
+                        &mut save_tracker,
+                        "DASH",
+                    );
                     completed_since_save = 0;
                 }
             }
@@ -516,9 +522,7 @@ async fn download_representation(
     // whatever did complete before the failure).
     {
         let mut s = state_arc.lock().await;
-        if let Err(e) = s.save(state_path).await {
-            warn!("DASH state save failed (final): {e}");
-        }
+        crate::atomic::note_sidecar_save(s.save(state_path).await, &mut save_tracker, "DASH");
     }
     if let Some(e) = stream_err {
         return Err(e);

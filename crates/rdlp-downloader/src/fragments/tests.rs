@@ -1450,3 +1450,51 @@ async fn extra_tail_is_truncated_to_byte_len_on_resume() {
         "torn tail dropped; final byte-identical"
     );
 }
+
+#[tokio::test]
+async fn hls_completes_when_sidecar_save_always_fails() {
+    // Force EVERY sidecar save to fail by pre-creating the sidecar path as a
+    // directory: atomic_write_json's rename-onto-a-directory fails each time,
+    // while the separate output file writes normally. The download must still
+    // complete correctly (resume is best-effort; a save failure is non-fatal).
+    let mut server = mockito::Server::new_async().await;
+    let mut expected = Vec::new();
+    let mut frags = Vec::new();
+    for i in 0..4_u32 {
+        let body = vec![i as u8; 8];
+        expected.extend_from_slice(&body);
+        server
+            .mock("GET", format!("/seg-{i}.ts").as_str())
+            .with_body(body)
+            .create_async()
+            .await;
+        frags.push(frag(format!("{}/seg-{i}.ts", server.url())));
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = dir.path().join("video.ts");
+    // Use the production sidecar-path helper so this test can't silently pass
+    // for the wrong reason if the suffix scheme changes.
+    let sidecar = super::state_path(&output);
+    tokio::fs::create_dir(&sidecar)
+        .await
+        .expect("mkdir sidecar-as-dir");
+
+    let http = HttpDownloader::with_client(wreq::Client::new()).with_concurrent_fragments(1);
+    let stats =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, &output, None, None)
+            .await
+            .expect("download must complete despite every sidecar save failing");
+
+    assert_eq!(stats.bytes_downloaded, 32, "all 4×8 bytes downloaded");
+    let written = tokio::fs::read(&output).await.unwrap();
+    assert_eq!(written, expected, "output bytes correct under save failure");
+    // The sidecar path is still the directory we created — never overwritten,
+    // and remove_file on a directory is a no-op error swallowed by `let _`.
+    assert!(
+        tokio::fs::metadata(&sidecar)
+            .await
+            .expect("still exists")
+            .is_dir(),
+        "sidecar path remained a directory; no partial/torn sidecar written"
+    );
+}
