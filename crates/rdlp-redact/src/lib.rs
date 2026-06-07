@@ -227,5 +227,19 @@ impl fmt::Debug for RedactedUrlBuf {
     }
 }
 
+#[cfg(feature = "log-kv")]
+impl log::kv::ToValue for RedactedUrl<'_> {
+    fn to_value(&self) -> log::kv::Value<'_> {
+        log::kv::Value::from_display(self)
+    }
+}
+
+#[cfg(feature = "log-kv")]
+impl log::kv::ToValue for RedactedUrlBuf {
+    fn to_value(&self) -> log::kv::Value<'_> {
+        log::kv::Value::from_display(self)
+    }
+}
+
 #[cfg(test)]
 mod tests;

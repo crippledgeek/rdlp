@@ -97,3 +97,11 @@ fn redacted_url_buf_from_str_and_new_redact() {
     let c = RedactedUrlBuf::new("u?key=Z".to_string());
     assert_eq!(format!("{c:?}"), "u?key=***");
 }
+
+#[cfg(feature = "log-kv")]
+#[test]
+fn to_value_serializes_redacted_for_log_kv() {
+    use log::kv::ToValue as _;
+    let r = RedactedUrl::new("u?token=abc");
+    assert_eq!(r.to_value().to_string(), "u?token=***");
+}
