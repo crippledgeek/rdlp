@@ -26,7 +26,7 @@ impl HlsSizeDetector {
     /// * `Err(_)` - Network error, parse error, or master playlist detected
     pub(super) async fn parse_playlist(&self, m3u8_url: &str) -> Result<Vec<String>> {
         if self.verbose {
-            debug!(url:? = m3u8_url; "HLS fetching playlist");
+            debug!(url:? = rdlp_redact::RedactedUrl::new(m3u8_url); "HLS fetching playlist");
         }
 
         let playlist_text = self.fetch_playlist_text(m3u8_url).await?;

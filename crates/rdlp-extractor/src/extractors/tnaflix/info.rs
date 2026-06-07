@@ -116,7 +116,11 @@ impl InfoExtractor for TNAFlixExtractor {
                 url: Some(url.to_string().into()),
             })?;
 
-            BaseExtractor::log_if_verbose(ctx, "MovieFap", &format!("cdn.php URL: {cdn_url}"));
+            BaseExtractor::log_if_verbose(
+                ctx,
+                "MovieFap",
+                &format!("cdn.php URL: {}", rdlp_redact::RedactedUrl::new(&cdn_url)),
+            );
 
             ajax::parse_moviefap_xml(&self.base, &cdn_url, url, ctx).await?
         } else {

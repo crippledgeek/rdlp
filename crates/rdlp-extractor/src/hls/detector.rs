@@ -119,7 +119,7 @@ impl HlsSizeDetector {
         BaseExtractor::validate_url_security(m3u8_url)?;
 
         if self.verbose {
-            debug!(url:? = m3u8_url; "HLS counting segments");
+            debug!(url:? = rdlp_redact::RedactedUrl::new(m3u8_url); "HLS counting segments");
         }
 
         // Parse playlist to extract segment URLs
@@ -165,7 +165,7 @@ impl HlsSizeDetector {
         BaseExtractor::validate_url_security(m3u8_url)?;
 
         if self.verbose {
-            debug!(url:? = m3u8_url; "HLS detecting size");
+            debug!(url:? = rdlp_redact::RedactedUrl::new(m3u8_url); "HLS detecting size");
         }
 
         // Step 1: Parse playlist to extract segment URLs
@@ -270,7 +270,10 @@ impl HlsSizeDetector {
             // (404 / 410 / 403) to needlessly retry.
             return Err(RdlpError::Http {
                 status: response.status().as_u16(),
-                reason: format!("playlist fetch: {m3u8_url}"),
+                reason: format!(
+                    "playlist fetch: {}",
+                    rdlp_redact::RedactedUrl::new(m3u8_url)
+                ),
             });
         }
 

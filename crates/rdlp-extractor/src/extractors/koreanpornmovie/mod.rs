@@ -108,7 +108,13 @@ impl InfoExtractor for KoreanPornMovieExtractor {
 
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
         let slug = patterns::extract_slug(url).ok_or_else(|| {
-            RdlpError::extraction(format!("Could not extract slug from URL: {url}"), url)
+            RdlpError::extraction(
+                format!(
+                    "Could not extract slug from URL: {}",
+                    rdlp_redact::RedactedUrl::new(url)
+                ),
+                url,
+            )
         })?;
 
         debug!("[KoreanPornMovie] Extracting: {slug}");

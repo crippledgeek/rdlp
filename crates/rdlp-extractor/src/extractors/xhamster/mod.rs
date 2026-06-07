@@ -218,7 +218,7 @@ impl XHamsterExtractor {
             .captures(&webpage)
             .and_then(|caps| caps.get(1))
         {
-            debug!(video_url:? = video_url.as_str(); "[XHamster] Found video URL in embed page");
+            debug!(video_url:? = rdlp_redact::RedactedUrl::new(video_url.as_str()); "[XHamster] Found video URL in embed page");
             return self.extract_video(video_url.as_str(), ctx).await;
         }
 

@@ -193,7 +193,7 @@ impl HlsSizeDetector {
         validate_hls_url(m3u8_url)?;
 
         if self.verbose {
-            debug!(url:? = m3u8_url; "HLS detecting metadata");
+            debug!(url:? = rdlp_redact::RedactedUrl::new(m3u8_url); "HLS detecting metadata");
         }
 
         let playlist_text = match self.fetch_playlist_text(m3u8_url).await {
@@ -438,7 +438,7 @@ impl HlsSizeDetector {
         if self.verbose {
             debug!(
                 variants = variants.len(),
-                url:? = m3u8_url;
+                url:? = rdlp_redact::RedactedUrl::new(m3u8_url);
                 "HLS master playlist expanded into variants"
             );
         }

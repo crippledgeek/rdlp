@@ -49,7 +49,7 @@ impl XHamsterExtractor {
                 format!("{url}/{page}")
             };
 
-            debug!(page, url:? = page_url; "[XHamster] Fetching user page");
+            debug!(page, url:? = rdlp_redact::RedactedUrl::new(&page_url); "[XHamster] Fetching user page");
 
             let response = (|| async { ctx.http_client.get(&page_url).send().await })
                 .retry(
