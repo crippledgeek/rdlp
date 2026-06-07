@@ -74,6 +74,13 @@ impl HlsResumeState {
 
     /// Load iff present, parseable, and matching version + fingerprint + total.
     /// `None` ⇒ the caller starts fresh (fail-safe).
+    ///
+    /// Also rejects internally-inconsistent state: `fragments_done > 0` with
+    /// `byte_len == 0` is physically impossible from normal operation
+    /// (`byte_len` always advances with `fragments_done`). A corrupted/zeroed
+    /// sidecar in that shape would otherwise pass the gate, seek the output to
+    /// offset 0, and skip the already-done fragments — silently dropping their
+    /// bytes.
     #[must_use]
     pub async fn load_matching(
         path: &Path,
@@ -84,7 +91,8 @@ impl HlsResumeState {
         let s: Self = serde_json::from_str(&body).ok()?;
         (s.state_version == STATE_VERSION
             && s.fingerprint == fingerprint
-            && s.total_fragments == total_fragments)
+            && s.total_fragments == total_fragments
+            && !(s.fragments_done > 0 && s.byte_len == 0))
             .then_some(s)
     }
 
@@ -222,6 +230,23 @@ mod tests {
             HlsResumeState::load_matching(&path, 111, 10)
                 .await
                 .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn load_matching_none_on_inconsistent_done_without_bytes() {
+        // fragments_done > 0 with byte_len == 0 is physically impossible from
+        // normal operation; a corrupted sidecar like this must be rejected so
+        // resume can't seek to 0 and skip real fragments (silent corruption).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("out.hls_state.json");
+        let bogus = r#"{"state_version":1,"fingerprint":111,"total_fragments":10,"fragments_done":4,"byte_len":0,"updated_at":0}"#.to_string();
+        tokio::fs::write(&path, bogus).await.expect("write bogus");
+        assert!(
+            HlsResumeState::load_matching(&path, 111, 10)
+                .await
+                .is_none(),
+            "inconsistent done>0/byte_len==0 sidecar must be rejected"
         );
     }
 }
