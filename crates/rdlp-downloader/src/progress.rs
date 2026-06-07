@@ -104,18 +104,6 @@ impl SpeedMeter {
     pub(crate) const fn bytes_per_sec(&self) -> Option<f64> {
         self.smoothed
     }
-
-    /// Projected ETA given known `remaining_bytes`; `None` if remaining is
-    /// unknown or speed is unknown/zero.
-    pub(crate) fn eta(&self, remaining_bytes: Option<u64>) -> Option<Duration> {
-        let r = remaining_bytes?;
-        let speed = self.smoothed?;
-        if speed <= 0.0 {
-            return None;
-        }
-        #[allow(clippy::cast_precision_loss)]
-        Some(Duration::from_secs_f64(r as f64 / speed))
-    }
 }
 
 /// RAII guard for progress reporter tasks.
@@ -493,30 +481,5 @@ mod speed_meter_tests {
             after < 50.0 * MIB as f64,
             "EWMA must not jump to instantaneous 50 MiB/s; got {after}"
         );
-    }
-
-    #[test]
-    fn eta_uses_smoothed_speed() {
-        let mut m = SpeedMeter::new();
-        let t0 = Instant::now();
-        for i in 0..=40u64 {
-            m.update(i * (MIB / 10), t0 + Duration::from_millis(i * 100)); // ~1 MiB/s
-        }
-        let eta = m.eta(Some(10 * MIB)).expect("eta available");
-        assert!(
-            eta.as_secs_f64() > 5.0 && eta.as_secs_f64() < 20.0,
-            "eta {eta:?}"
-        );
-    }
-
-    #[test]
-    fn eta_none_when_speed_or_remaining_unknown() {
-        let mut m = SpeedMeter::new();
-        assert_eq!(m.eta(Some(MIB)), None, "no speed yet");
-        let t0 = Instant::now();
-        for i in 0..=40u64 {
-            m.update(i * MIB, t0 + Duration::from_millis(i * 100));
-        }
-        assert_eq!(m.eta(None), None, "unknown remaining");
     }
 }
