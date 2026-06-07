@@ -42,7 +42,10 @@ async fn fragments_none_returns_typed_download_error() {
         message.contains("expand_hls_in_place"),
         "error message must mention expand_hls_in_place; got: {message}"
     );
-    assert_eq!(url.as_ref().map(rdlp_redact::RedactedUrlBuf::expose), Some("https://example.com/v.m3u8"));
+    assert_eq!(
+        url.as_ref().map(rdlp_redact::RedactedUrlBuf::expose),
+        Some("https://example.com/v.m3u8")
+    );
     // Output file must NOT have been created — no playlist was fetched.
     assert!(!output.exists());
 }
