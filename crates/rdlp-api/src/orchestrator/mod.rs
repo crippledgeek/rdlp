@@ -4,6 +4,7 @@ mod archive;
 mod container_resolver;
 mod download;
 pub mod errors;
+mod eta;
 mod execution;
 mod extraction;
 mod interactive;

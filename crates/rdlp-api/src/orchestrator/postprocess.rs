@@ -6,6 +6,7 @@ use super::{Orchestrator, Result};
 use crate::events::Event;
 use crate::handle::DownloadId;
 use crate::orchestrator::errors::OrchestratorError;
+use crate::orchestrator::eta::EtaEstimator;
 use log::{debug, warn};
 use rdlp_core::{PostProcessCallback, PostProcessCallbackFactory};
 use rdlp_postprocess::pipeline::PipelineError;
@@ -22,14 +23,17 @@ struct PostProcessBridge {
     event_tx: mpsc::Sender<Event>,
     download_id: DownloadId,
     stage: String,
+    eta: EtaEstimator,
 }
 
 impl PostProcessCallback for PostProcessBridge {
     fn on_progress(&self, progress: Progress) {
+        let eta = self.eta.update(f64::from(progress.fraction()));
         let _ = self.event_tx.try_send(Event::PostProcessProgress {
             id: self.download_id,
             stage: self.stage.clone(),
             progress,
+            eta,
         });
     }
 
@@ -62,6 +66,7 @@ fn make_callback_factory(
             event_tx: event_tx.clone(),
             download_id,
             stage: stage_name.to_owned(),
+            eta: EtaEstimator::new(),
         })
     })
 }
