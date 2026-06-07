@@ -7,11 +7,12 @@
 //! async contexts; the file is tiny.
 
 use std::path::Path;
-use std::time::SystemTime;
 
 use rdlp_types::Fragment;
 use serde::{Deserialize, Serialize};
 use tokio::fs;
+
+use crate::atomic::now_secs;
 
 /// Current schema version. Bump on incompatible field changes.
 pub const STATE_VERSION: u32 = 1;
@@ -105,12 +106,6 @@ impl HlsResumeState {
         self.updated_at = now_secs();
         crate::atomic::atomic_write_json(path, self.clone()).await
     }
-}
-
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
 }
 
 #[cfg(test)]

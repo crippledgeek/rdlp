@@ -1,6 +1,9 @@
-//! Shared atomic JSON sidecar writer.
+//! Shared sidecar-save utilities: an atomic JSON writer, a monotonic-ish
+//! wall-clock helper, and a consecutive-save-failure tracker. Used by both the
+//! HLS (`fragments`) and DASH (`dash`) resume-state modules.
 
 use std::path::Path;
+use std::time::SystemTime;
 
 use serde::Serialize;
 
@@ -40,6 +43,15 @@ pub async fn atomic_write_json<T: Serialize + Send + 'static>(
     })
     .await
     .map_err(std::io::Error::other)?
+}
+
+/// Current Unix epoch seconds, or 0 if the system clock predates the epoch.
+/// Shared by the HLS and DASH resume-state modules for their `updated_at` stamp.
+#[must_use]
+pub(crate) fn now_secs() -> u64 {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 #[cfg(test)]
@@ -93,6 +105,17 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 1, "exactly one file (the destination) must remain");
+    }
+
+    #[cfg_attr(miri, ignore)]
+    #[test]
+    fn now_secs_is_after_2020() {
+        // 1_577_836_800 = 2020-01-01T00:00:00Z. A real clock is well past it;
+        // this guards against a regression that returns 0 on the happy path.
+        assert!(
+            now_secs() > 1_577_836_800,
+            "now_secs must reflect a real clock"
+        );
     }
 
     #[tokio::test]

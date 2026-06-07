@@ -8,11 +8,12 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 use tokio::fs;
 use url::Url;
+
+use crate::atomic::now_secs;
 
 /// Current schema version. Bump on incompatible field changes.
 pub const STATE_VERSION: u32 = 1;
@@ -106,12 +107,6 @@ impl DashDownloadState {
             .get(repr_id)
             .is_some_and(|v| v.binary_search(&idx).is_ok())
     }
-}
-
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .map_or(0, |d| d.as_secs())
 }
 
 #[cfg(test)]
