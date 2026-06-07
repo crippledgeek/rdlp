@@ -15,6 +15,7 @@ path = "src/main.rs"
 # CLI-side table rendering, the codec-listing helper from rdlp-ffmpeg,
 # and the rate-limit value parser.
 rdlp-api = { path = "../rdlp-api" }
+rdlp-redact = { workspace = true }
 rdlp-plugin = { path = "../rdlp-plugin" }
 rdlp-security = { path = "../rdlp-security" }
 rdlp-table = { path = "../rdlp-table" }

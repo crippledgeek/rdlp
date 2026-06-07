@@ -135,7 +135,10 @@ pub async fn fetch_player_js(
                         || body.contains("0x85ebca77")
                         || body.contains("charCodeAt")
                     {
-                        debug!("[XHamster] Found player JS with decrypt code: {full_url}");
+                        debug!(
+                            "[XHamster] Found player JS with decrypt code: {}",
+                            rdlp_redact::RedactedUrl::new(&full_url)
+                        );
                         return Some(body);
                     }
                 }

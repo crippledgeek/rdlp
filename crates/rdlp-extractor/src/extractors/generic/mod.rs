@@ -237,7 +237,10 @@ fn try_direct_media(url: &str, pf: &PrefetchResponse) -> Result<Option<InfoDict>
             }
             Err(crate::base::common::dash::DashExpandError::DynamicMpd) => {
                 // Live/dynamic manifest — not supported; let other strategies try.
-                log::warn!("DASH dynamic/live manifest at {url}; not yet supported");
+                log::warn!(
+                    "DASH dynamic/live manifest at {}; not yet supported",
+                    rdlp_redact::RedactedUrl::new(url)
+                );
                 return Ok(None);
             }
             Err(e) => {

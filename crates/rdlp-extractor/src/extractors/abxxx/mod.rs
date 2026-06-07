@@ -200,7 +200,10 @@ impl InfoExtractor for AbxxxExtractor {
         // 1) Fetch the playable URL via videofile.php (load-bearing).
         let api_url =
             kvs_api::videofile_endpoint(ABXXX_BASE_URL, &video_id, kvs_api::KVS_DEFAULT_LIFETIME);
-        debug!("ABXXX: fetching videofile.php endpoint: {api_url}");
+        debug!(
+            "ABXXX: fetching videofile.php endpoint: {}",
+            rdlp_redact::RedactedUrl::new(&api_url)
+        );
         let body = BaseExtractor::fetch_webpage_with_headers(
             &api_url,
             &[
@@ -249,7 +252,10 @@ impl InfoExtractor for AbxxxExtractor {
         let lookup = if let Some(lookup_url) =
             kvs_api::video_lookup_endpoint(ABXXX_BASE_URL, &video_id, kvs_api::KVS_DEFAULT_LIFETIME)
         {
-            debug!("ABXXX: fetching lookup endpoint: {lookup_url}");
+            debug!(
+                "ABXXX: fetching lookup endpoint: {}",
+                rdlp_redact::RedactedUrl::new(&lookup_url)
+            );
             match BaseExtractor::fetch_webpage_with_headers(
                 &lookup_url,
                 &[
@@ -276,7 +282,10 @@ impl InfoExtractor for AbxxxExtractor {
         // 3) Enrich format dimensions/filesize via slug-based search (best-effort).
         if let Some(slug_str) = slug.as_deref() {
             let search_url = slug_search_url(slug_str);
-            debug!("ABXXX: enriching formats via slug search: {search_url}");
+            debug!(
+                "ABXXX: enriching formats via slug search: {}",
+                rdlp_redact::RedactedUrl::new(&search_url)
+            );
             match BaseExtractor::fetch_webpage_with_headers(
                 &search_url,
                 &[

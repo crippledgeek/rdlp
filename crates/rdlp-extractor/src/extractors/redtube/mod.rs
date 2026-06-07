@@ -71,7 +71,10 @@ impl RedTubeExtractor {
     ) -> Result<formats::ApiVideoMetadata> {
         let api_url = patterns::build_api_video_url(video_id);
 
-        debug!("[RedTube] Fetching API video info: {api_url}");
+        debug!(
+            "[RedTube] Fetching API video info: {}",
+            rdlp_redact::RedactedUrl::new(&api_url)
+        );
 
         let response =
             ctx.http_client

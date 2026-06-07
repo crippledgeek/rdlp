@@ -72,7 +72,7 @@ impl Orchestrator {
     ///
     /// # Errors
     /// Returns an error if download fails
-    #[instrument(skip(self, downloader, format), fields(url = %format.url, output = %output_path.display()))]
+    #[instrument(skip(self, downloader, format), fields(url = %rdlp_redact::RedactedUrl::new(&format.url), output = %output_path.display()))]
     #[allow(clippy::used_underscore_binding)] // _expected_size is a reserved parameter slot
     pub(super) async fn execute_download(
         &self,

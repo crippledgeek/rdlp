@@ -334,7 +334,7 @@ async fn build_info(
     {
         if let Some(computed_hash) = calc_hash(&raw_hash) {
             let url = xhr_url(id, &computed_hash);
-            debug!("[eporner] XHR: {url}");
+            debug!("[eporner] XHR: {}", rdlp_redact::RedactedUrl::new(&url));
             match BaseExtractor::fetch_webpage(&url, ctx).await {
                 Ok(body) => match serde_json::from_str::<Value>(&body) {
                     Ok(json) => {

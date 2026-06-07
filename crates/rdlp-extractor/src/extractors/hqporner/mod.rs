@@ -292,7 +292,10 @@ impl InfoExtractor for HQPornerExtractor {
                 match self.extract(video_url, ctx).await {
                     Ok(info) => all_results.push(info),
                     Err(e) => {
-                        warn!("[HQPorner] Failed to extract {video_url}: {e}");
+                        warn!(
+                            "[HQPorner] Failed to extract {}: {e}",
+                            rdlp_redact::RedactedUrl::new(video_url)
+                        );
                     }
                 }
 
