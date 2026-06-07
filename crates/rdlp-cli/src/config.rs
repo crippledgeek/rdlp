@@ -212,6 +212,13 @@ pub fn merge_config(
         );
     }
 
+    if let Some(threads) = args.recode_threads {
+        config.postprocess.recode_threads = Some(threads);
+    }
+    if let Some(ref preset) = args.recode_preset {
+        config.postprocess.recode_preset = Some(preset.clone());
+    }
+
     // recode_audio: "copy", "auto", or an encoder name
     match args.recode_audio.as_str() {
         "copy" => config.postprocess.recode_audio = RecodeAudioMode::Copy,

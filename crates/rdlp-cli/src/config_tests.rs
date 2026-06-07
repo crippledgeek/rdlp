@@ -70,6 +70,8 @@ fn default_args() -> Args {
         list_encoders: false,
         recode_container: None,
         recode_audio: "copy".to_string(),
+        recode_threads: None,
+        recode_preset: None,
         fixup: "detect_or_warn".to_string(),
         match_filter: vec![],
         browser: None,
@@ -728,4 +730,22 @@ fn cli_pool_idle_timeout_above_max_is_rejected_by_validate() {
         msg.contains("pool_idle_timeout"),
         "rejection should cite pool_idle_timeout, got: {msg}"
     );
+}
+
+#[test]
+fn recode_threads_and_preset_flags_map_to_config() {
+    use clap::Parser;
+    let args = Args::try_parse_from([
+        "rdlp",
+        "--recode-video=mkv",
+        "--recode-threads",
+        "6",
+        "--recode-preset",
+        "faster",
+        "https://example.com/v",
+    ])
+    .expect("args parse");
+    let config = build_config(&args).expect("config builds");
+    assert_eq!(config.postprocess.recode_threads, Some(6));
+    assert_eq!(config.postprocess.recode_preset.as_deref(), Some("faster"));
 }
