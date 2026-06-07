@@ -5984,6 +5984,7 @@ dependencies = [
  "rdlp-plugin",
  "rdlp-postprocess",
  "rdlp-ratelimit",
+ "rdlp-redact",
  "rdlp-security",
  "rdlp-types",
  "serde",
@@ -6019,6 +6020,7 @@ dependencies = [
  "rdlp-plugin",
  "rdlp-plugin-manifest",
  "rdlp-ratelimit",
+ "rdlp-redact",
  "rdlp-security",
  "rdlp-table",
  "rdlp-types",
@@ -6064,6 +6066,7 @@ dependencies = [
  "backon",
  "dirs",
  "log",
+ "rdlp-redact",
  "rdlp-types",
  "regex",
  "serde",
@@ -6136,6 +6139,7 @@ dependencies = [
  "rdlp-ffmpeg",
  "rdlp-http",
  "rdlp-ratelimit",
+ "rdlp-redact",
  "rdlp-security",
  "rdlp-types",
  "serde",
@@ -6169,6 +6173,7 @@ dependencies = [
  "rdlp-crypto",
  "rdlp-http",
  "rdlp-jsinterp",
+ "rdlp-redact",
  "rdlp-security",
  "rdlp-types",
  "regex",
@@ -6248,6 +6253,7 @@ dependencies = [
  "rdlp-http",
  "rdlp-jsinterp",
  "rdlp-plugin-manifest",
+ "rdlp-redact",
  "rdlp-security",
  "rdlp-types",
  "regex",
@@ -6331,6 +6337,8 @@ version = "0.1.0"
 dependencies = [
  "log",
  "regex",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
