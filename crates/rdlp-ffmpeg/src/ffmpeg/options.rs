@@ -45,6 +45,9 @@ pub struct VideoConvertOptions {
     pub preset: Option<String>,
     /// Constant Rate Factor for quality-based encoding.
     pub crf: Option<u32>,
+    /// Resolved encoder thread count. `None` = let the encode layer resolve it
+    /// from `available_parallelism()`. Audio encoding is unaffected.
+    pub threads: Option<u32>,
     /// If true, copy audio stream without re-encoding.
     ///
     /// Takes precedence over `audio_codec`. When `audio_copy` is true and
@@ -58,6 +61,17 @@ pub struct VideoConvertOptions {
     /// When true, capture `FFmpeg` C-level log messages and forward them via
     /// the log callback. Enables verbose encoder output in the UI log viewer.
     pub verbose: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn video_convert_options_threads_defaults_none() {
+        let opts = VideoConvertOptions::default();
+        assert_eq!(opts.threads, None);
+    }
 }
 
 /// A chapter entry for metadata embedding.
