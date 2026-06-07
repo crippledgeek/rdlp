@@ -13,8 +13,6 @@ pub const AUTO_RECODE_THREADS_CAP: u32 = 8;
 /// Above this resolved thread count, encoders need per-encoder wide-parallelism
 /// params (libvvenc tiles/wavefront; libvpx/libaom row-mt) to actually use the
 /// extra threads. See `encoder_options::build_video_encoder_options`.
-// Not yet consumed outside this crate; wired in Task 5.
-#[allow(dead_code)]
 pub const WIDE_PARALLELISM_THRESHOLD: u32 = 8;
 
 /// Fallback when `available_parallelism()` errors (e.g. sandboxed/seccomp).
@@ -25,8 +23,6 @@ const PARALLELISM_FALLBACK: u32 = 4;
 /// - `Some(n)` -> `n.max(1)` (range already enforced by `Config::validate`).
 /// - `None` -> `min(available_parallelism(), AUTO_RECODE_THREADS_CAP)`,
 ///   falling back to `PARALLELISM_FALLBACK` if detection fails.
-// Not yet consumed outside this crate; wired in Task 5.
-#[allow(dead_code)]
 #[must_use]
 pub fn resolve_recode_threads(configured: Option<u32>) -> u32 {
     configured.map_or_else(
@@ -47,6 +43,7 @@ mod tests {
     #[test]
     fn explicit_value_passes_through() {
         assert_eq!(resolve_recode_threads(Some(3)), 3);
+        // explicit values bypass AUTO_RECODE_THREADS_CAP (already range-validated by Config::validate)
         assert_eq!(resolve_recode_threads(Some(16)), 16);
     }
 

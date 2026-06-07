@@ -8,6 +8,7 @@ mod audio_pipeline;
 mod audio_pipeline_direct;
 mod audio_recode_pipeline;
 mod cancel;
+pub mod encoder_options;
 pub mod mux_timing;
 #[cfg(test)]
 mod tests;
