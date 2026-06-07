@@ -1,3 +1,4 @@
+use rdlp_redact::RedactedUrlBuf;
 use thiserror::Error;
 
 /// Core error types for rdlp
@@ -9,7 +10,7 @@ pub enum RdlpError {
         /// Human-readable description of the error
         message: String,
         /// The URL that was being accessed, if applicable
-        url: Option<String>,
+        url: Option<RedactedUrlBuf>,
     },
 
     /// HTTP response error with status code
@@ -27,7 +28,7 @@ pub enum RdlpError {
         /// Human-readable description of the error
         message: String,
         /// The URL that was being extracted, if applicable
-        url: Option<String>,
+        url: Option<RedactedUrlBuf>,
     },
 
     /// No suitable extractor found for URL
@@ -44,7 +45,7 @@ pub enum RdlpError {
         /// Human-readable description of the error
         message: String,
         /// The URL that was being downloaded, if applicable
-        url: Option<String>,
+        url: Option<RedactedUrlBuf>,
     },
 
     /// Post-processing errors
@@ -109,7 +110,7 @@ impl RdlpError {
     pub fn extraction(message: impl Into<String>, url: &str) -> Self {
         Self::Extraction {
             message: message.into(),
-            url: Some(url.to_string()),
+            url: Some(RedactedUrlBuf::from(url)),
         }
     }
 
@@ -117,7 +118,7 @@ impl RdlpError {
     pub fn network(message: impl Into<String>, url: &str) -> Self {
         Self::Network {
             message: message.into(),
-            url: Some(url.to_string()),
+            url: Some(RedactedUrlBuf::from(url)),
         }
     }
 
@@ -127,7 +128,7 @@ impl RdlpError {
     pub fn download(message: impl Into<String>, url: &str) -> Self {
         Self::Download {
             message: message.into(),
-            url: Some(url.to_string()),
+            url: Some(RedactedUrlBuf::from(url)),
         }
     }
 }
@@ -177,11 +178,14 @@ mod tests {
     fn test_network_error_with_url() {
         let err = RdlpError::Network {
             message: "timeout".into(),
-            url: Some("https://example.com".into()),
+            url: Some(RedactedUrlBuf::from("https://example.com")),
         };
         assert!(err.to_string().contains("timeout"));
         if let RdlpError::Network { url, .. } = &err {
-            assert_eq!(url.as_deref(), Some("https://example.com"));
+            assert_eq!(
+                url.as_ref().map(|u| u.expose()),
+                Some("https://example.com")
+            );
         } else {
             panic!("wrong variant");
         }
@@ -205,11 +209,14 @@ mod tests {
     fn test_extraction_error_with_url() {
         let err = RdlpError::Extraction {
             message: "no formats".into(),
-            url: Some("https://example.com/video".into()),
+            url: Some(RedactedUrlBuf::from("https://example.com/video")),
         };
         assert!(err.to_string().contains("no formats"));
         if let RdlpError::Extraction { url, .. } = &err {
-            assert_eq!(url.as_deref(), Some("https://example.com/video"));
+            assert_eq!(
+                url.as_ref().map(|u| u.expose()),
+                Some("https://example.com/video")
+            );
         } else {
             panic!("wrong variant");
         }
@@ -219,14 +226,43 @@ mod tests {
     fn test_download_error_with_url() {
         let err = RdlpError::Download {
             message: "chunk failed".into(),
-            url: Some("https://cdn.example.com/seg1.ts".into()),
+            url: Some(RedactedUrlBuf::from("https://cdn.example.com/seg1.ts")),
         };
         assert!(err.to_string().contains("chunk failed"));
         if let RdlpError::Download { url, .. } = &err {
-            assert_eq!(url.as_deref(), Some("https://cdn.example.com/seg1.ts"));
+            assert_eq!(
+                url.as_ref().map(|u| u.expose()),
+                Some("https://cdn.example.com/seg1.ts")
+            );
         } else {
             panic!("wrong variant");
         }
+    }
+}
+
+#[cfg(test)]
+mod redact_tests {
+    use super::*;
+
+    #[test]
+    fn network_error_debug_redacts_url() {
+        let err = RdlpError::network("boom", "https://cdn/s.m4s?X-Amz-Signature=DEADBEEF");
+        let dbg = format!("{err:?}");
+        assert!(
+            !dbg.contains("DEADBEEF"),
+            "raw signature must not appear in Debug: {dbg}"
+        );
+        assert!(
+            dbg.contains("X-Amz-Signature=***"),
+            "redacted form expected: {dbg}"
+        );
+        // Display renders message only (unchanged) — must NOT leak the url at all.
+        let disp = format!("{err}");
+        assert_eq!(disp, "Network error: boom", "Display is message-only");
+        assert!(
+            !disp.contains("DEADBEEF") && !disp.contains("cdn"),
+            "url absent from Display: {disp}"
+        );
     }
 }
 
