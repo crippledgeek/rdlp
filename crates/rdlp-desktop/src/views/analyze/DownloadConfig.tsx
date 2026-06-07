@@ -53,7 +53,13 @@ const downloadConfigSchema = z.object({
     recodeContainerOverride: z.string(),
     videoEncoder: z.string(),
     recodeAudioMode: z.string(),
-    recodeThreads: z.string(),
+    // 1–64 mirrors rdlp_types MAX_RECODE_THREADS; blank = auto
+    recodeThreads: z
+        .string()
+        .refine(
+            (v) => v === "" || (/^\d+$/.test(v) && Number(v) >= 1 && Number(v) <= 64),
+            { message: "Enter 1–64 or leave blank for auto" },
+        ),
     recodePreset: z.string(),
     extractAudio: z.string(),
     embedThumbnail: z.boolean(),

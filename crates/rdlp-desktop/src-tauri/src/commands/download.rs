@@ -123,6 +123,11 @@ pub struct PlaylistContext {
     pub playlist_count: usize,
 }
 
+/// Max byte length for an operator-supplied recode preset name. Generous —
+/// the longest legitimate value (`wavefrontsynchro=1:tiles=2x2`, set internally)
+/// is ~30 bytes; this only guards against a pathological IPC payload.
+const MAX_RECODE_PRESET_LEN: usize = 64;
+
 /// Reject an out-of-range explicit recode thread count at the IPC boundary.
 ///
 /// `None` (auto) and `1..=MAX_RECODE_THREADS` are accepted. The desktop path
@@ -138,6 +143,16 @@ fn validate_recode_threads(threads: Option<u32>) -> Result<(), AppError> {
                 rdlp_types::config::MAX_RECODE_THREADS
             ),
         }),
+    }
+}
+
+fn validate_recode_preset(preset: Option<&str>) -> Result<(), AppError> {
+    match preset {
+        Some(p) if p.len() > MAX_RECODE_PRESET_LEN => Err(AppError::InvalidInput {
+            field: "recode_preset".to_owned(),
+            message: format!("preset name too long (max {MAX_RECODE_PRESET_LEN} bytes)"),
+        }),
+        _ => Ok(()),
     }
 }
 
@@ -210,6 +225,7 @@ pub async fn start_download(
     // Validate recode thread count at the IPC boundary (Config::validate is not
     // called on the desktop path, so this guard is the only enforcement point).
     validate_recode_threads(options.recode_threads)?;
+    validate_recode_preset(options.recode_preset.as_deref())?;
 
     // Save a serializable snapshot of the options for retry (before any partial moves).
     let saved_options = serde_json::to_value(&options)
@@ -543,6 +559,13 @@ mod tests {
         assert!(validate_recode_threads(Some(rdlp_types::config::MAX_RECODE_THREADS + 1)).is_err());
         assert!(validate_recode_threads(Some(8)).is_ok());
         assert!(validate_recode_threads(None).is_ok());
+    }
+
+    #[test]
+    fn rejects_overlong_recode_preset() {
+        assert!(validate_recode_preset(Some(&"x".repeat(65))).is_err());
+        assert!(validate_recode_preset(Some("faster")).is_ok());
+        assert!(validate_recode_preset(None).is_ok());
     }
 
     // ------------------------------------------------------------------ //
