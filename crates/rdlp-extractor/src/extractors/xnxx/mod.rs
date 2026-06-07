@@ -138,7 +138,8 @@ impl InfoExtractor for XNXXExtractor {
         if formats.is_empty() {
             return Err(RdlpError::Extraction {
                 message: format!(
-                    "xnxx: no video formats found (html5player calls missing). URL: {url}"
+                    "xnxx: no video formats found (html5player calls missing). URL: {}",
+                    rdlp_redact::RedactedUrl::new(url)
                 ),
                 url: Some(url.to_string().into()),
             });

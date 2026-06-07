@@ -265,7 +265,8 @@ impl InfoExtractor for RedTubeExtractor {
             return Err(RdlpError::Extraction {
                 message: format!(
                     "No video sources found in JavaScript or HTML. \
-                     Video may be unavailable. URL: {url}"
+                     Video may be unavailable. URL: {}",
+                    rdlp_redact::RedactedUrl::new(url)
                 ),
                 url: Some(url.to_string().into()),
             });

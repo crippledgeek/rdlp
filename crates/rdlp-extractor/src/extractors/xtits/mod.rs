@@ -204,7 +204,8 @@ impl InfoExtractor for XTitsExtractor {
             .map(|m| m.as_str().to_string())
             .ok_or_else(|| RdlpError::Extraction {
                 message: format!(
-                    "Could not find KVS flashvars on page. Video may be unavailable. URL: {url}"
+                    "Could not find KVS flashvars on page. Video may be unavailable. URL: {}",
+                    rdlp_redact::RedactedUrl::new(url)
                 ),
                 url: Some(url.to_string().into()),
             })?;

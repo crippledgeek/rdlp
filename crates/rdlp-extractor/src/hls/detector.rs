@@ -240,12 +240,18 @@ impl HlsSizeDetector {
         let response = request.send().await.map_err(|e| {
             if e.is_timeout() {
                 RdlpError::Network {
-                    message: format!("Timeout fetching playlist: {m3u8_url}"),
+                    message: format!(
+                        "Timeout fetching playlist: {}",
+                        rdlp_redact::RedactedUrl::new(m3u8_url)
+                    ),
                     url: Some(m3u8_url.to_string().into()),
                 }
             } else if e.is_connect() {
                 RdlpError::Network {
-                    message: format!("Connection failed for playlist: {m3u8_url}: {e}"),
+                    message: format!(
+                        "Connection failed for playlist: {}: {e}",
+                        rdlp_redact::RedactedUrl::new(m3u8_url)
+                    ),
                     url: Some(m3u8_url.to_string().into()),
                 }
             } else {

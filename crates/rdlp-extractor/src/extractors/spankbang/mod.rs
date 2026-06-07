@@ -151,7 +151,8 @@ impl InfoExtractor for SpankBangExtractor {
             let key = formats::parse_streamkey(&webpage).ok_or_else(|| RdlpError::Extraction {
                 message: format!(
                     "SpankBang: neither inline stream_data nor data-streamkey present \
-                     on page {url}"
+                     on page {}",
+                    rdlp_redact::RedactedUrl::new(url)
                 ),
                 url: Some(url.to_string().into()),
             })?;

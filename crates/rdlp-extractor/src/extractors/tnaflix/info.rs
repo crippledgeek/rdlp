@@ -142,7 +142,8 @@ impl InfoExtractor for TNAFlixExtractor {
             if video_data.is_empty() {
                 return Err(RdlpError::Extraction {
                     message: format!(
-                        "No video source tags found in HTML. Video may be unavailable. URL: {url}"
+                        "No video source tags found in HTML. Video may be unavailable. URL: {}",
+                        rdlp_redact::RedactedUrl::new(url)
                     ),
                     url: Some(url.to_string().into()),
                 });
