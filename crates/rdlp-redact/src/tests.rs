@@ -105,3 +105,14 @@ fn to_value_serializes_redacted_for_log_kv() {
     let r = RedactedUrl::new("u?token=abc");
     assert_eq!(r.to_value().to_string(), "u?token=***");
 }
+
+#[test]
+fn acceptance_328_presigned_and_oauth_code_redacted_host_preserved() {
+    let s = redact_str("https://cdn.example.com/seg.m4s?X-Amz-Signature=DEADBEEF");
+    assert_eq!(s, "https://cdn.example.com/seg.m4s?X-Amz-Signature=***");
+    let c = redact_str("https://idp/cb?code=AUTH123&state=xyz");
+    assert_eq!(
+        c, "https://idp/cb?code=***&state=xyz",
+        "code redacted, state (anti-CSRF) kept"
+    );
+}

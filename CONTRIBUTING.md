@@ -547,6 +547,23 @@ Constraints:
 
 Direct commits to `master` or `develop` are not permitted; every change goes through a task branch.
 
+### Logging URLs — always redact
+
+URLs can carry credentials (presigned CDN signatures, OAuth tokens). Never log a
+raw URL. Wrap it in `rdlp_redact::RedactedUrl::new(&url)` at the log site:
+
+- tracing field: `fields(url = %rdlp_redact::RedactedUrl::new(&url))`
+- log kv: `info!(url:% = rdlp_redact::RedactedUrl::new(&url); "msg")`
+- message: `info!("Downloading: {}", rdlp_redact::RedactedUrl::new(&url))`
+
+Never use the `:serde` log-kv modifier on a URL field (it bypasses Display
+redaction). `RdlpError.url` is `RedactedUrlBuf` — already Debug/Display-safe; use
+`.expose()` only when you need the raw value for HTTP I/O.
+
+Defense-in-depth (ops): configure a collector-side redaction rule (Vector VRL
+`redact()` or an OTel redaction processor) scoped to `url`/`proxy_url`/`source_url`
+field names as a fallback.
+
 ## Pull Request Checklist
 
 Before submitting your PR, ensure:
