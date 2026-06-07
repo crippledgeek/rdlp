@@ -199,7 +199,8 @@ impl CliEventHandler {
                  ({bytes_per_sec}) [{elapsed_precise}]"
             };
             pb.set_style(
-                ProgressStyle::with_template(template).expect("static template string — infallible"),
+                ProgressStyle::with_template(template)
+                    .expect("static template string — infallible"),
             );
             pb
         } else if let Some(total) = progress.total_segments {
