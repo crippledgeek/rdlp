@@ -224,7 +224,10 @@ impl HlsSizeDetector {
             // retry.
             return Err(RdlpError::Http {
                 status: range_response.status().as_u16(),
-                reason: format!("segment HEAD: {segment_url}"),
+                reason: format!(
+                    "segment HEAD: {}",
+                    rdlp_redact::RedactedUrl::new(&segment_url)
+                ),
             });
         }
 
