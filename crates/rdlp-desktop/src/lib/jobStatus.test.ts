@@ -48,8 +48,20 @@ function makeJob(status: JobStatus, id = "j", overrides: Partial<DownloadJob> = 
 const ALL_STATUSES: JobStatus[] = ["pending", "running", "processing", "completed", "failed", "cancelled"];
 
 describe("jobSubLabel", () => {
-    it("returns the stage while processing", () => {
-        expect(jobSubLabel(makeJob("processing", "a", { stage: "Recode" }))).toBe("Recode");
+    it("shows stage, decimal percent, and ETA while processing", () => {
+        expect(
+            jobSubLabel(makeJob("processing", "a", { stage: "Recode", progress: 0.004, eta: "02:30" })),
+        ).toBe("Recode — 0.4% · 02:30");
+    });
+    it("shows decimal percent without ETA before warm-up while processing", () => {
+        expect(
+            jobSubLabel(makeJob("processing", "a", { stage: "Recode", progress: 0.004, eta: null })),
+        ).toBe("Recode — 0.4%");
+    });
+    it("falls back to 'Processing' when stage is null (no literal 'null')", () => {
+        const label = jobSubLabel(makeJob("processing", "a", { stage: null, progress: 0.004, eta: null }));
+        expect(label).toBe("Processing — 0.4%");
+        expect(label).not.toContain("null");
     });
     it("formats a merge sub-unit with percent", () => {
         expect(jobSubLabel(makeJob("running", "a", { currentUnit: { index: 1, total: 2, title: "Video" }, progress: 0.67 }))).toBe("Video — 67%");
@@ -64,7 +76,15 @@ describe("jobSubLabel", () => {
         expect(jobSubLabel(makeJob("running", "a", { currentUnit: { index: 1, total: 2, title: "Bonus" } }))).toBe("Ep 1/2 — Bonus");
     });
     it("prefers stage over currentUnit while processing", () => {
-        expect(jobSubLabel(makeJob("processing", "a", { stage: "Merge", currentUnit: { index: 1, total: 2, title: "Video" } }))).toBe("Merge");
+        expect(
+            jobSubLabel(
+                makeJob("processing", "a", {
+                    stage: "Merge",
+                    progress: 0,
+                    currentUnit: { index: 1, total: 2, title: "Video" },
+                }),
+            ),
+        ).toBe("Merge — 0.0%");
     });
 });
 

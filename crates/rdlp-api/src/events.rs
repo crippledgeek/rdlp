@@ -8,6 +8,7 @@ use crate::errors::RdlpApiError;
 use crate::handle::DownloadId;
 use rdlp_core::DownloadProgress;
 use rdlp_types::{InfoDict, Progress};
+use std::time::Duration;
 
 /// A download lifecycle event.
 ///
@@ -66,6 +67,8 @@ pub enum Event {
         stage: String,
         /// Clamped progress fraction. Use [`Progress::percent`] at display sites.
         progress: Progress,
+        /// Smoothed estimated time remaining for this stage, once past warm-up.
+        eta: Option<Duration>,
     },
 
     /// Subtitles were found for the requested languages.
@@ -237,6 +240,7 @@ mod tests {
                 id,
                 stage: "remux".into(),
                 progress: Progress::new(0.45),
+                eta: None,
             },
             Event::SubtitlesFound {
                 id,

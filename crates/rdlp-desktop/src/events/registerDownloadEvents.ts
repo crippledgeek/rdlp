@@ -175,7 +175,7 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
                                   ...job,
                                   progress: p.progress,
                                   speed: null,
-                                  eta: null,
+                                  eta: p.eta,
                               }
                             : job,
                     ),

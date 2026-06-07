@@ -92,12 +92,17 @@ impl From<&Event> for EventDto {
             Event::PostProcessing { stage, .. } => ("post_processing", json!({ "stage": stage })),
 
             Event::PostProcessProgress {
-                stage, progress, ..
+                stage,
+                progress,
+                eta,
+                ..
             } => (
                 "postprocess_progress",
                 json!({
                     "stage": stage,
                     "progress": progress,
+                    // Whole seconds (floored) — matches the human-facing countdown display.
+                    "eta_seconds": eta.map(|d| d.as_secs()),
                 }),
             ),
 
@@ -249,6 +254,7 @@ mod tests {
             id,
             stage: "remux".into(),
             progress: rdlp_types::Progress::new(0.42),
+            eta: None,
         };
 
         let dto = EventDto::from(&event);
@@ -262,6 +268,10 @@ mod tests {
         assert!(
             (progress - 0.42).abs() < 1e-5,
             "expected 0.42 fraction, got {progress}"
+        );
+        assert!(
+            dto.payload["eta_seconds"].is_null(),
+            "eta_seconds must serialize to null when eta is None"
         );
     }
 

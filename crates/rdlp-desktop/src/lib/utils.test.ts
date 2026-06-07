@@ -2,7 +2,7 @@
 // Unit tests for lib/utils.ts — cn() and parseUploadTimestamp().
 
 import { describe, test, expect } from "vitest";
-import { cn, displayTitle, parseUploadTimestamp, progressPercent, TITLE_PLACEHOLDER } from "./utils";
+import { cn, displayTitle, parseUploadTimestamp, progressPercent, progressPercentLabel, TITLE_PLACEHOLDER } from "./utils";
 
 // ---------------------------------------------------------------------------
 // cn()
@@ -143,5 +143,25 @@ describe("progressPercent", () => {
     it("treats null/undefined as 0", () => {
         expect(progressPercent(null)).toBe(0);
         expect(progressPercent(undefined)).toBe(0);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// progressPercentLabel()
+// ---------------------------------------------------------------------------
+
+describe("progressPercentLabel", () => {
+    it("renders one decimal when processing so sub-1% movement is legible", () => {
+        expect(progressPercentLabel(0.004, true)).toBe("0.4");
+        expect(progressPercentLabel(0.3, true)).toBe("30.0");
+    });
+    it("renders a whole integer when NOT processing (no display churn)", () => {
+        expect(progressPercentLabel(0.004, false)).toBe("0");
+        expect(progressPercentLabel(0.47, false)).toBe("47");
+        expect(progressPercentLabel(1, false)).toBe("100");
+    });
+    it("treats null/undefined as 0 in both modes", () => {
+        expect(progressPercentLabel(null, true)).toBe("0.0");
+        expect(progressPercentLabel(undefined, false)).toBe("0");
     });
 });

@@ -24,7 +24,11 @@ export function cancelledJobPatch(): Partial<DownloadJob> {
 
 /** The per-job sub-label, derived during render from canonical fields. Null = no sub-label. */
 export function jobSubLabel(job: DownloadJob): string | null {
-    if (job.status === "processing") return job.stage;
+    if (job.status === "processing") {
+        const pct = ((job.progress ?? 0) * 100).toFixed(1);
+        const eta = job.eta ? ` · ${job.eta}` : "";
+        return `${job.stage ?? "Processing"} — ${pct}%${eta}`;
+    }
     const u = job.currentUnit;
     if (!u) return null;
     const pct = Math.round((job.progress ?? 0) * 100);
