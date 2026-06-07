@@ -303,6 +303,8 @@ export interface DownloadOptions {
     videoEncoder: string | null;
     recodeAudio: RecodeAudioMode | null;
     recodeContainer: string | null;
+    recodeThreads: number | null;
+    recodePreset: string | null;
     verbose: boolean | null;
 }
 

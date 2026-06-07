@@ -53,6 +53,8 @@ const downloadConfigSchema = z.object({
     recodeContainerOverride: z.string(),
     videoEncoder: z.string(),
     recodeAudioMode: z.string(),
+    recodeThreads: z.string(),
+    recodePreset: z.string(),
     extractAudio: z.string(),
     embedThumbnail: z.boolean(),
     embedSubtitles: z.boolean(),
@@ -83,6 +85,8 @@ export function DownloadConfig() {
             recodeContainerOverride: "",
             videoEncoder: "",
             recodeAudioMode: "copy",
+            recodeThreads: "",
+            recodePreset: "",
             extractAudio: "",
             embedThumbnail: settings?.embed_thumbnail ?? true,
             embedSubtitles: settings?.embed_subtitles ?? false,
@@ -123,6 +127,8 @@ export function DownloadConfig() {
                         : value.recodeAudioMode
                         ? { mode: "encoder" as const, name: value.recodeAudioMode }
                         : null,
+                    recodeThreads: value.recodeThreads ? Number(value.recodeThreads) : null,
+                    recodePreset: value.recodePreset || null,
                     normalizeAudio: value.normalizeAudio || null,
                     loudnorm: null,
                     loudnormPreset: null,
@@ -451,6 +457,44 @@ export function DownloadConfig() {
                                             </SelectListBox>
                                         </SelectPopover>
                                     </Select>
+                                </div>
+                            )}
+                        </form.Field>
+                    )}
+
+                    {/* Recode threads (visible when recode active, expert mode) */}
+                    {recodeActive && expertMode && (
+                        <form.Field name="recodeThreads">
+                            {(field) => (
+                                <div className="flex items-center justify-between pl-3">
+                                    <span className="text-[10px] text-[var(--text-muted)]">Threads</span>
+                                    <Input
+                                        type="text"
+                                        value={field.state.value}
+                                        onBlur={field.handleBlur}
+                                        onChange={(e) => field.handleChange(e.target.value)}
+                                        placeholder="auto"
+                                        className="h-5 w-[90px] px-1.5 py-0 rounded-[3px] bg-[var(--surface-elevated)] border border-[#2a2a3e] text-[10px] text-[var(--text-muted)] placeholder:text-[var(--text-muted)] outline-none focus:border-[#4a9eff]"
+                                    />
+                                </div>
+                            )}
+                        </form.Field>
+                    )}
+
+                    {/* Recode preset (visible when recode active, expert mode) */}
+                    {recodeActive && expertMode && (
+                        <form.Field name="recodePreset">
+                            {(field) => (
+                                <div className="flex items-center justify-between pl-3">
+                                    <span className="text-[10px] text-[var(--text-muted)]">Preset</span>
+                                    <Input
+                                        type="text"
+                                        value={field.state.value}
+                                        onBlur={field.handleBlur}
+                                        onChange={(e) => field.handleChange(e.target.value)}
+                                        placeholder="default"
+                                        className="h-5 w-[90px] px-1.5 py-0 rounded-[3px] bg-[var(--surface-elevated)] border border-[#2a2a3e] text-[10px] text-[var(--text-muted)] placeholder:text-[var(--text-muted)] outline-none focus:border-[#4a9eff]"
+                                    />
                                 </div>
                             )}
                         </form.Field>
