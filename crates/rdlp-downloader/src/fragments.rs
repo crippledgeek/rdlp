@@ -17,13 +17,13 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use futures::StreamExt as _;
-use log::warn;
 use rdlp_core::{DownloadProgress, DownloadStats, ProgressCallback, Result};
 use rdlp_types::{Fragment, Progress};
 use tokio::io::{AsyncSeekExt as _, AsyncWriteExt as _};
 use tokio_util::sync::CancellationToken;
 
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, ControllerMode};
+use crate::atomic::{SIDECAR_SAVE_FAILURE_THRESHOLD, SaveFailureTracker};
 use crate::http::HttpDownloader;
 use crate::progress::SpeedMeter;
 use rdlp_security;
@@ -188,6 +188,7 @@ pub async fn download_pre_resolved_fragments(
     let mut frags_done: u64 = hls_state.fragments_done;
     let total_frags = fragments.len() as u64;
     let mut speed = SpeedMeter::new();
+    let mut save_tracker = SaveFailureTracker::new(SIDECAR_SAVE_FAILURE_THRESHOLD);
 
     // Pre-loop cancellation check.
     if cancel.is_some_and(CancellationToken::is_cancelled) {
@@ -357,9 +358,11 @@ pub async fn download_pre_resolved_fragments(
 
         hls_state.fragments_done = frags_done;
         hls_state.byte_len = total_bytes;
-        if let Err(e) = hls_state.save(&state_file).await {
-            warn!("HLS resume state save failed (continuing): {e}");
-        }
+        crate::atomic::note_sidecar_save(
+            hls_state.save(&state_file).await,
+            &mut save_tracker,
+            "HLS",
+        );
 
         // Emit progress (100ms throttle OR fragment-N boundary).
         if let Some(cb) = progress
@@ -426,7 +429,7 @@ pub async fn download_pre_resolved_fragments(
 /// Sidecar path for HLS resume state: `<output>.hls_state.json`.
 /// Appends the suffix to the full filename so it never collides with the
 /// output's own extension.
-fn state_path(output: &Path) -> std::path::PathBuf {
+pub(crate) fn state_path(output: &Path) -> std::path::PathBuf {
     let mut s = output.as_os_str().to_os_string();
     s.push(".hls_state.json");
     std::path::PathBuf::from(s)
