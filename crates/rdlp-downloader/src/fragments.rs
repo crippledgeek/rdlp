@@ -28,6 +28,35 @@ use crate::http::HttpDownloader;
 use crate::progress::SpeedMeter;
 use rdlp_security;
 
+/// Extrapolate the total download size for a fragmented stream.
+///
+/// Prefers a real Content-Length (`expected_total`) when known. Otherwise,
+/// once at least one fragment has completed, estimates the total as
+/// `avg-bytes-per-frag × total_frags` (= `total_bytes × total_frags /
+/// frags_done`), matching yt-dlp's fragment-downloader byte extrapolation.
+///
+/// Returns `None` when the total is genuinely unknown: no `expected_total`
+/// and either zero fragments completed, or the multiplication would overflow
+/// `u64` (practically unreachable — petabyte-scale). Feeding `None` into
+/// `DownloadProgress::new` yields honest indeterminate progress, per the
+/// "None when the end is unknown" principle, rather than a saturated
+/// `u64::MAX / frags_done` near-0%/century-ETA estimate.
+fn extrapolate_total(
+    expected_total: Option<u64>,
+    total_bytes: u64,
+    total_frags: u64,
+    frags_done: u64,
+) -> Option<u64> {
+    expected_total.or_else(|| {
+        // checked_mul → None on overflow (vs saturating_mul's u64::MAX);
+        // .flatten() collapses the then()-wrapped Option<Option<u64>>.
+        // The frags_done > 0 guard makes the division panic-free.
+        (frags_done > 0)
+            .then(|| total_bytes.checked_mul(total_frags).map(|v| v / frags_done))
+            .flatten()
+    })
+}
+
 /// Fetch a pre-resolved list of fragment URLs and concatenate them into
 /// `output` in order.
 ///
@@ -353,9 +382,7 @@ pub async fn download_pre_resolved_fragments(
             // else estimate total = avg-bytes-per-frag × total_frags (available
             // once >= 1 fragment completed). Feeding this to `new` makes BOTH the
             // progress fraction and the ETA byte-based + self-correcting.
-            let est_total = expected_total.or_else(|| {
-                (frags_done > 0).then(|| total_bytes.saturating_mul(total_frags) / frags_done)
-            });
+            let est_total = extrapolate_total(expected_total, total_bytes, total_frags, frags_done);
             let mut info =
                 DownloadProgress::new(total_bytes, est_total, speed.bytes_per_sec().unwrap_or(0.0));
             info.segments_downloaded = Some(frags_done); // secondary "frag N/M" text

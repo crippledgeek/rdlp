@@ -1483,3 +1483,46 @@ async fn hls_completes_when_sidecar_save_always_fails() {
         "sidecar path remained a directory; no partial/torn sidecar written"
     );
 }
+
+// --- extrapolate_total: byte-extrapolated total estimate (issue #382) ---
+
+#[test]
+fn extrapolate_total_returns_expected_when_content_length_known() {
+    // A real Content-Length total bypasses the extrapolation entirely.
+    assert_eq!(
+        extrapolate_total(Some(1000), 250, 10, 1),
+        Some(1000),
+        "expected_total present: return it verbatim, ignore the estimate"
+    );
+}
+
+#[test]
+fn extrapolate_total_estimates_from_average_fragment_size() {
+    // 200 bytes over 2 of 8 fragments => avg 100/frag => 100 * 8 = 800.
+    assert_eq!(
+        extrapolate_total(None, 200, 8, 2),
+        Some(800),
+        "no expected_total: estimate = total_bytes * total_frags / frags_done"
+    );
+}
+
+#[test]
+fn extrapolate_total_none_when_no_fragments_done() {
+    // frags_done == 0: nothing to extrapolate from; honest indeterminate.
+    assert_eq!(
+        extrapolate_total(None, 0, 8, 0),
+        None,
+        "frags_done == 0: estimate is unknown, must be None (not a div-by-zero)"
+    );
+}
+
+#[test]
+fn extrapolate_total_none_on_multiplication_overflow() {
+    // total_bytes * total_frags overflows u64 => None (indeterminate),
+    // NOT a saturated u64::MAX/frags_done nonsensical near-0% estimate.
+    let est = extrapolate_total(None, u64::MAX / 2 + 1, 2, 1);
+    assert_eq!(
+        est, None,
+        "overflowing extrapolation must yield None, per the \"None when unknown\" principle"
+    );
+}
