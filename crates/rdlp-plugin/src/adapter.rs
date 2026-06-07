@@ -17,6 +17,7 @@
     clippy::needless_pass_by_value
 )]
 
+use rdlp_redact::RedactedUrlBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
@@ -238,7 +239,7 @@ impl InfoExtractor for PluginExtractor {
                     "plugin {} is disabled (3-strike trap rule)",
                     self.manifest.name
                 ),
-                url: Some(url.to_string()),
+                url: Some(RedactedUrlBuf::from(url)),
             });
         }
 
@@ -252,7 +253,7 @@ impl InfoExtractor for PluginExtractor {
         self.populate_capability_contexts(store.data_mut())
             .map_err(|e| RdlpError::Extraction {
                 message: format!("{e:#}"),
-                url: Some(url.to_string()),
+                url: Some(RedactedUrlBuf::from(url)),
             })?;
 
         // Wrap the call in a wall-clock timeout. Without it, a CPU-bound
@@ -344,7 +345,7 @@ impl PluginExtractor {
 fn plugin_error_to_rdlp(e: PluginError, url: &str) -> RdlpError {
     RdlpError::Extraction {
         message: format!("{e:#}"),
-        url: Some(url.to_string()),
+        url: Some(RedactedUrlBuf::from(url)),
     }
 }
 

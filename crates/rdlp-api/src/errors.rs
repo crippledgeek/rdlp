@@ -173,7 +173,7 @@ impl From<RdlpError> for RdlpApiError {
             },
             RdlpError::Extraction { message, url } => Self::ExtractError {
                 message,
-                source_url: url.unwrap_or_default(),
+                source_url: url.map(|u| u.to_string()).unwrap_or_default(),
             },
             RdlpError::NoExtractor(url) => Self::UnsupportedUrl { url },
             RdlpError::InvalidUrl(msg) | RdlpError::FormatSelection(msg) => {
@@ -519,6 +519,24 @@ mod tests {
                 assert!(message.contains("chunk failed"));
             }
             other => panic!("Expected NetworkError, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extraction_error_source_url_is_redacted() {
+        let err = RdlpError::extraction("nope", "https://x/v?token=SECRET");
+        let api: RdlpApiError = err.into();
+        if let RdlpApiError::ExtractError { source_url, .. } = api {
+            assert!(
+                !source_url.contains("SECRET"),
+                "raw token must not leak: {source_url}"
+            );
+            assert!(
+                source_url.contains("token=***"),
+                "redacted form: {source_url}"
+            );
+        } else {
+            panic!("expected ExtractError");
         }
     }
 

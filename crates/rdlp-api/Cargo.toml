@@ -21,6 +21,7 @@ rdlp-cookies = { path = "../rdlp-cookies" }
 rdlp-jsinterp = { path = "../rdlp-jsinterp" }
 rdlp-security = { path = "../rdlp-security" }
 rdlp-ratelimit = { path = "../rdlp-ratelimit" }
+rdlp-redact = { workspace = true, features = ["log-kv"] }
 rdlp-plugin = { path = "../rdlp-plugin" }
 
 dirs = { workspace = true }
