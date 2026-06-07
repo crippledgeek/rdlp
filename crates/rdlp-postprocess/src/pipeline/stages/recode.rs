@@ -26,6 +26,10 @@ pub(super) struct RecodeParams {
     pub encoder_override: Option<String>,
     pub audio_copy: bool,
     pub audio_codec: Option<String>,
+    /// Resolved-or-configured encoder thread count (None = auto at encode layer).
+    pub threads: Option<u32>,
+    /// Encoder preset override; None preserves the per-codec default preset.
+    pub preset_override: Option<String>,
 }
 
 /// Transcodes video to a different container/codec.
@@ -132,12 +136,14 @@ impl RecodeStage {
 
         if let Some(ref requested) = params.encoder_override {
             let encoder_name = video_codecs::resolve_encoder(requested)?;
-            let (preset, crf) = Self::default_preset_crf(encoder_name);
+            let (default_preset, crf) = Self::default_preset_crf(encoder_name);
+            let preset = params.preset_override.clone().or(default_preset);
             return Some(VideoConvertOptions {
                 remux_only: false,
                 video_codec: Some(encoder_name.to_string()),
                 preset,
                 crf,
+                threads: params.threads,
                 audio_copy: params.audio_copy,
                 audio_codec: params.audio_codec.clone(),
                 ..Default::default()
@@ -146,13 +152,15 @@ impl RecodeStage {
 
         let target_codec = Self::default_codec_for(params.target);
         let encoder = video_codecs::resolve_encoder(target_codec);
-        let (preset, crf) = Self::default_preset_crf_for_codec(target_codec);
+        let (default_preset, crf) = Self::default_preset_crf_for_codec(target_codec);
+        let preset = params.preset_override.clone().or(default_preset);
 
         Some(VideoConvertOptions {
             remux_only: false,
             video_codec: encoder.map(String::from),
             preset,
             crf,
+            threads: params.threads,
             audio_copy: params.audio_copy,
             audio_codec: params.audio_codec.clone(),
             ..Default::default()
@@ -308,6 +316,8 @@ impl PipelineStage for RecodeStage {
                 encoder_override: msg.config.video_encoder.clone(),
                 audio_copy,
                 audio_codec,
+                threads: msg.config.recode_threads,
+                preset_override: msg.config.recode_preset.clone(),
             },
             can_remux,
         ) else {
@@ -554,6 +564,8 @@ mod tests {
             encoder_override: None,
             audio_copy: true,
             audio_codec: None,
+            threads: None,
+            preset_override: None,
         };
         let opts = RecodeStage::build_convert_options(&params, true).unwrap();
         assert!(opts.remux_only);
@@ -595,6 +607,8 @@ mod tests {
             encoder_override: None,
             audio_copy: false,
             audio_codec: Some("libopus".to_string()),
+            threads: None,
+            preset_override: None,
         };
         let opts = RecodeStage::build_convert_options(&params, false).unwrap();
         assert!(!opts.audio_copy);
@@ -608,6 +622,8 @@ mod tests {
             encoder_override: None,
             audio_copy: true,
             audio_codec: None,
+            threads: None,
+            preset_override: None,
         };
         let opts = RecodeStage::build_convert_options(&params, true).unwrap();
         assert!(opts.remux_only);
@@ -621,6 +637,8 @@ mod tests {
             encoder_override: None,
             audio_copy: true,
             audio_codec: None,
+            threads: None,
+            preset_override: None,
         };
         let opts = RecodeStage::build_convert_options(&params, false).unwrap();
         assert!(!opts.remux_only);
@@ -638,6 +656,8 @@ mod tests {
             encoder_override: None,
             audio_copy: false,
             audio_codec: Some("libopus".to_string()),
+            threads: None,
+            preset_override: None,
         };
         let opts = RecodeStage::build_convert_options(&params, false).unwrap();
         assert!(!opts.audio_copy);
@@ -651,8 +671,40 @@ mod tests {
             encoder_override: Some("nonexistent_enc_xyz".to_string()),
             audio_copy: true,
             audio_codec: None,
+            threads: None,
+            preset_override: None,
         };
         let result = RecodeStage::build_convert_options(&params, false);
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn threads_and_preset_override_flow_into_options() {
+        let params = RecodeParams {
+            target: ContainerFormat::Mkv,
+            encoder_override: Some("libx265".to_string()),
+            audio_copy: true,
+            audio_codec: None,
+            threads: Some(6),
+            preset_override: Some("faster".to_string()),
+        };
+        let opts = RecodeStage::build_convert_options(&params, false).expect("encoder available");
+        assert_eq!(opts.threads, Some(6));
+        assert_eq!(opts.preset.as_deref(), Some("faster"));
+    }
+
+    #[test]
+    fn preset_none_keeps_per_codec_default() {
+        let params = RecodeParams {
+            target: ContainerFormat::Mp4,
+            encoder_override: Some("libx265".to_string()),
+            audio_copy: true,
+            audio_codec: None,
+            threads: None,
+            preset_override: None,
+        };
+        let opts = RecodeStage::build_convert_options(&params, false).expect("encoder available");
+        assert_eq!(opts.preset.as_deref(), Some("medium"));
+        assert_eq!(opts.threads, None);
     }
 }
