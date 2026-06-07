@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/rdlp-types",
+    "crates/rdlp-redact",
     "crates/rdlp-core",
     "crates/rdlp-api",
     "crates/rdlp-http",
@@ -22,6 +23,7 @@ members = [
 ]
 default-members = [
     "crates/rdlp-types",
+    "crates/rdlp-redact",
     "crates/rdlp-core",
     "crates/rdlp-api",
     "crates/rdlp-http",
@@ -48,6 +50,8 @@ authors = ["rdlp contributors"]
 license = "MIT OR Apache-2.0"
 
 [workspace.dependencies]
+rdlp-redact = { path = "crates/rdlp-redact" }
+
 # Async runtime
 tokio = { version = "1.49", features = ["macros", "rt-multi-thread", "fs", "process", "io-util", "io-std", "signal"] }
 tokio-util = { version = "0.7", features = ["rt"] }

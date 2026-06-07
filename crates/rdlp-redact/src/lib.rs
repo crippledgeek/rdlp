@@ -1,0 +1,225 @@
+//! Value-level URL credential redaction.
+//!
+//! Provides [`redact_str`] for stripping sensitive query-parameter values and
+//! userinfo credentials from URL strings before they reach log sinks, and the
+//! wrapper types [`RedactedUrl`] (borrowed) and [`RedactedUrlBuf`] (owned) whose
+//! [`Display`](std::fmt::Display) / [`Debug`](std::fmt::Debug) implementations
+//! automatically redact on format.
+
+use std::borrow::Cow;
+use std::fmt;
+use std::sync::LazyLock;
+
+use regex::Regex;
+
+/// Ordered set of `(pattern, replacement)` pairs applied left-to-right by [`redact_str`].
+///
+/// **Ordering rules:**
+/// - Exact case-sensitive AWS SigV4 patterns come first since they have
+///   upper-case letters that would be clobbered by the generic case-insensitive
+///   `signature` / `sig` patterns.
+/// - Longer param names precede shorter to avoid substring shadowing
+///   (`access_token` before `token`, `otp_code` before `otp`).
+/// - Generic query-parameter patterns use a `([?&])` capture group for the
+///   boundary separator and re-emit it via `${1}` in the replacement, so that
+///   the `?`/`&` is preserved but the pattern only matches at a real parameter
+///   start (not as a suffix inside a longer key like `X-Amz-Signature`).
+/// - The userinfo (`//user:pass@host`) pattern is a standalone structural rule.
+#[allow(clippy::expect_used)]
+static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 22]> = LazyLock::new(|| {
+    [
+        // ── AWS SigV4 exact-case — no boundary group needed (unique prefix) ────
+        (
+            Regex::new(r"X-Amz-Security-Token=[^&\s]+").expect("valid regex"),
+            "X-Amz-Security-Token=***",
+        ),
+        (
+            Regex::new(r"X-Amz-Signature=[^&\s]+").expect("valid regex"),
+            "X-Amz-Signature=***",
+        ),
+        (
+            Regex::new(r"X-Amz-Credential=[^&\s]+").expect("valid regex"),
+            "X-Amz-Credential=***",
+        ),
+        // ── Longer param names first (boundary-capturing group) ────────────────
+        // Pattern: `([?&])name=[^&\s]+`  →  replacement: `${1}name=***`
+        // The `([?&])` captures the separator and re-emits it so it is not consumed.
+        (
+            Regex::new(r"(?i)([?&])access_token=[^&\s]+").expect("valid regex"),
+            "${1}access_token=***",
+        ),
+        (
+            Regex::new(r"(?i)([?&])client_secret=[^&\s]+").expect("valid regex"),
+            "${1}client_secret=***",
+        ),
+        (
+            Regex::new(r"(?i)([?&])id_token=[^&\s]+").expect("valid regex"),
+            "${1}id_token=***",
+        ),
+        (
+            Regex::new(r"(?i)([?&])api_key=[^&\s]+").expect("valid regex"),
+            "${1}api_key=***",
+        ),
+        (
+            Regex::new(r"(?i)([?&])otp_code=[^&\s]+").expect("valid regex"),
+            "${1}otp_code=***",
+        ),
+        (
+            Regex::new(r"(?i)([?&])authorization=[^&\s]+").expect("valid regex"),
+            "${1}authorization=***",
+        ),
+        // ── Generic shorter names (boundary-capturing group) ───────────────────
+        (
+            Regex::new(r"(?i)([?&])token=[^&\s]+").expect("valid regex"),
+            "${1}token=***",
+        ),
+        (
+            Regex::new(r"(?i)([?&])key=[^&\s]+").expect("valid regex"),
+            "${1}key=***",
+        ),
+        (
+            Regex::new(r"(?i)([?&])password=[^&\s]+").expect("valid regex"),
+            "${1}password=***",
+        ),
+        (
+            Regex::new(r"(?i)([?&])secret=[^&\s]+").expect("valid regex"),
+            "${1}secret=***",
+        ),
+        (
+            Regex::new(r"(?i)([?&])bearer=[^&\s]+").expect("valid regex"),
+            "${1}bearer=***",
+        ),
+        (
+            Regex::new(r"(?i)([?&])signature=[^&\s]+").expect("valid regex"),
+            "${1}signature=***",
+        ),
+        (
+            Regex::new(r"(?i)([?&])sig=[^&\s]+").expect("valid regex"),
+            "${1}sig=***",
+        ),
+        (
+            Regex::new(r"(?i)([?&])hmac=[^&\s]+").expect("valid regex"),
+            "${1}hmac=***",
+        ),
+        (
+            Regex::new(r"(?i)([?&])auth=[^&\s]+").expect("valid regex"),
+            "${1}auth=***",
+        ),
+        (
+            Regex::new(r"(?i)([?&])session=[^&\s]+").expect("valid regex"),
+            "${1}session=***",
+        ),
+        (
+            Regex::new(r"(?i)([?&])code=[^&\s]+").expect("valid regex"),
+            "${1}code=***",
+        ),
+        (
+            Regex::new(r"(?i)([?&])otp=[^&\s]+").expect("valid regex"),
+            "${1}otp=***",
+        ),
+        // ── Userinfo credentials in URL authority (`//user:pass@host`) ─────────
+        (Regex::new(r"//[^@\s/]+@").expect("valid regex"), "//*:*@"),
+    ]
+});
+
+/// Redact credential-bearing query parameters and userinfo from a URL string.
+///
+/// Applies all patterns in [`SANITIZE_PATTERNS`] in order. Non-sensitive
+/// parameters (e.g. `range`, `quality`, `X-Amz-Date`) are left untouched.
+///
+/// # Examples
+///
+/// ```
+/// use rdlp_redact::redact_str;
+/// assert_eq!(redact_str("https://a:b@host/p?token=secret"), "https://*:*@host/p?token=***");
+/// ```
+#[must_use]
+pub fn redact_str(s: &str) -> String {
+    let mut result = Cow::Borrowed(s);
+    for (re, replacement) in SANITIZE_PATTERNS.iter() {
+        if let Cow::Owned(replaced) = re.replace_all(&result, *replacement) {
+            result = Cow::Owned(replaced);
+        }
+    }
+    result.into_owned()
+}
+
+/// Borrowed wrapper around a URL string whose [`Display`](fmt::Display) and
+/// [`Debug`](fmt::Debug) automatically redact credentials.
+///
+/// Use this when you have a `&str` or `&String` that you want to log safely
+/// without allocating unless formatting actually occurs.
+#[derive(Clone, Copy)]
+pub struct RedactedUrl<'a>(&'a str);
+
+impl<'a> RedactedUrl<'a> {
+    /// Wrap a URL string slice.
+    #[must_use]
+    pub fn new<S: AsRef<str> + ?Sized>(url: &'a S) -> Self {
+        Self(url.as_ref())
+    }
+
+    /// Return the original, unredacted URL.
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        self.0
+    }
+}
+
+impl fmt::Display for RedactedUrl<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&redact_str(self.0))
+    }
+}
+
+impl fmt::Debug for RedactedUrl<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
+/// Owned wrapper around a URL string whose [`Display`](fmt::Display) and
+/// [`Debug`](fmt::Debug) automatically redact credentials.
+#[derive(Clone, PartialEq, Eq)]
+pub struct RedactedUrlBuf(String);
+
+impl RedactedUrlBuf {
+    /// Wrap an owned URL string.
+    #[must_use]
+    pub fn new(url: impl Into<String>) -> Self {
+        Self(url.into())
+    }
+
+    /// Return the original, unredacted URL.
+    #[must_use]
+    pub fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl From<String> for RedactedUrlBuf {
+    fn from(s: String) -> Self {
+        Self(s)
+    }
+}
+
+impl From<&str> for RedactedUrlBuf {
+    fn from(s: &str) -> Self {
+        Self(s.to_owned())
+    }
+}
+
+impl fmt::Display for RedactedUrlBuf {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&redact_str(&self.0))
+    }
+}
+
+impl fmt::Debug for RedactedUrlBuf {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
+#[cfg(test)]
+mod tests;
