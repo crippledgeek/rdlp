@@ -49,10 +49,7 @@
 #![warn(missing_docs)]
 #![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 
-use regex::Regex;
-use std::borrow::Cow;
 use std::net::IpAddr;
-use std::sync::LazyLock;
 use thiserror::Error;
 
 // ============================================================================
@@ -428,81 +425,6 @@ pub fn extract_url_path(url: &str) -> String {
 // Sanitization for Safe Logging
 // ============================================================================
 
-/// Pre-compiled regex patterns for sensitive parameter redaction.
-///
-/// Covers common URL-bound credentials: query-param tokens/keys/passwords,
-/// CDN signing parameters (`sig`, `hmac`, `X-Amz-Signature`), and the
-/// `user:pass@` URL authority form. Matching is case-insensitive on the
-/// parameter name so `?Token=` / `?ACCESS_TOKEN=` are also redacted.
-#[allow(clippy::expect_used)] // LazyLock<Regex>: 16 hardcoded literals; panic = programming error caught at first use
-static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 16]> = LazyLock::new(|| {
-    [
-        (
-            Regex::new(r"(?i)token=[^&\s]+").expect("valid regex"),
-            "token=***",
-        ),
-        (
-            Regex::new(r"(?i)key=[^&\s]+").expect("valid regex"),
-            "key=***",
-        ),
-        (
-            Regex::new(r"(?i)password=[^&\s]+").expect("valid regex"),
-            "password=***",
-        ),
-        (
-            Regex::new(r"(?i)secret=[^&\s]+").expect("valid regex"),
-            "secret=***",
-        ),
-        (
-            Regex::new(r"(?i)api_key=[^&\s]+").expect("valid regex"),
-            "api_key=***",
-        ),
-        (
-            Regex::new(r"(?i)access_token=[^&\s]+").expect("valid regex"),
-            "access_token=***",
-        ),
-        (
-            Regex::new(r"(?i)bearer=[^&\s]+").expect("valid regex"),
-            "bearer=***",
-        ),
-        (
-            Regex::new(r"(?i)sig=[^&\s]+").expect("valid regex"),
-            "sig=***",
-        ),
-        (
-            Regex::new(r"(?i)signature=[^&\s]+").expect("valid regex"),
-            "signature=***",
-        ),
-        (
-            Regex::new(r"(?i)hmac=[^&\s]+").expect("valid regex"),
-            "hmac=***",
-        ),
-        (
-            Regex::new(r"X-Amz-Signature=[^&\s]+").expect("valid regex"),
-            "X-Amz-Signature=***",
-        ),
-        (
-            Regex::new(r"X-Amz-Credential=[^&\s]+").expect("valid regex"),
-            "X-Amz-Credential=***",
-        ),
-        // Strip user:pass@ from proxy/URL authority (e.g. http://user:pass@host:port)
-        (Regex::new(r"//[^@\s/]+@").expect("valid regex"), "//*:*@"),
-        // Additional auth-related query parameters (L1).
-        (
-            Regex::new(r"(?i)auth=[^&\s]+").expect("valid regex"),
-            "auth=***",
-        ),
-        (
-            Regex::new(r"(?i)authorization=[^&\s]+").expect("valid regex"),
-            "authorization=***",
-        ),
-        (
-            Regex::new(r"(?i)session=[^&\s]+").expect("valid regex"),
-            "session=***",
-        ),
-    ]
-});
-
 /// Sanitize a string for safe logging by redacting sensitive data
 ///
 /// This function uses pattern matching to redact common sensitive parameters:
@@ -533,14 +455,7 @@ static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 16]> = LazyLock::new(|| {
 /// ```
 #[must_use]
 pub fn sanitize_for_logging(s: &str) -> String {
-    let mut result = Cow::Borrowed(s);
-    for (re, replacement) in SANITIZE_PATTERNS.iter() {
-        match re.replace_all(&result, *replacement) {
-            Cow::Borrowed(_) => {} // No match — keep existing result
-            Cow::Owned(replaced) => result = Cow::Owned(replaced),
-        }
-    }
-    result.into_owned()
+    rdlp_redact::redact_str(s)
 }
 
 #[cfg(test)]
