@@ -1198,3 +1198,255 @@ fn fragment_progress_fraction_none_when_nothing_known() {
     // No byte total and zero segments → no fraction to report.
     assert!(fragment_progress_fraction(None, 0, 0, 0).is_none());
 }
+
+// ---- HLS resume tests (issue #354) ----
+
+use super::state::{HlsResumeState, fragment_fingerprint};
+
+/// Deterministic N fragments where body[i] = i (mod 256), each served by a
+/// fresh mock on `server`. Returns (frags, expected full concatenation).
+/// Distinct from `build_ordered_frags` only in that the caller controls the
+/// path stem so two servers can serve byte-identical bodies for resume tests.
+async fn seeded_frags(server: &mut mockito::Server, n: usize) -> (Vec<Fragment>, Vec<u8>) {
+    let mut expected = Vec::with_capacity(n);
+    let mut frags = Vec::with_capacity(n);
+    for i in 0..n {
+        let body = vec![(i % 256) as u8];
+        expected.push(body[0]);
+        server
+            .mock("GET", format!("/seg-{i}.ts").as_str())
+            .with_body(body)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        frags.push(frag(format!("{}/seg-{i}.ts", server.url())));
+    }
+    (frags, expected)
+}
+
+#[tokio::test]
+async fn full_download_removes_sidecar() {
+    let mut server = mockito::Server::new_async().await;
+    let (frags, expected) = seeded_frags(&mut server, 5).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = dir.path().join("video.ts");
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    download_pre_resolved_fragments(&http, &frags, None, None, None, &output, None, None)
+        .await
+        .expect("full download ok");
+    let written = tokio::fs::read(&output).await.unwrap();
+    assert_eq!(written, expected);
+    let sidecar = output.with_extension("ts.hls_state.json");
+    assert!(
+        !sidecar.exists(),
+        "sidecar must be removed on successful completion"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancel_writes_sidecar_with_progress() {
+    // Sequential (concurrency=1) so the cancel lands deterministically between
+    // fragments. A blackhole at index 2 hangs; cancel fires after f0+f1 land.
+    let mut server = mockito::Server::new_async().await;
+    for i in 0..2_u32 {
+        server
+            .mock("GET", format!("/seg-{i}.ts").as_str())
+            .with_body(vec![i as u8; 10])
+            .create_async()
+            .await;
+    }
+    let port = spawn_blackhole().await;
+    let mut frags: Vec<Fragment> = (0..2)
+        .map(|i| frag(format!("{}/seg-{i}.ts", server.url())))
+        .collect();
+    frags.push(frag(format!("http://127.0.0.1:{port}/seg-2.ts")));
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = dir.path().join("video.ts");
+    let token = tokio_util::sync::CancellationToken::new();
+    let token_clone = token.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        token_clone.cancel();
+    });
+    let http = HttpDownloader::with_client(wreq::Client::new()).with_concurrent_fragments(1);
+    let res = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        download_pre_resolved_fragments(
+            &http,
+            &frags,
+            None,
+            None,
+            None,
+            &output,
+            None,
+            Some(&token),
+        ),
+    )
+    .await
+    .expect("test timeout");
+    assert!(matches!(res, Err(rdlp_core::RdlpError::Cancelled)));
+
+    let partial_len = tokio::fs::metadata(&output)
+        .await
+        .expect("partial exists")
+        .len();
+    assert!(partial_len > 0, "partial must be present");
+    let sidecar = output.with_extension("ts.hls_state.json");
+    assert!(
+        sidecar.exists(),
+        "sidecar must persist on cancel for resume"
+    );
+
+    let fp = fragment_fingerprint(&frags);
+    let total = frags.len() as u64;
+    let st = HlsResumeState::load_matching(&sidecar, fp, total)
+        .await
+        .expect("sidecar must match the same fragment list");
+    assert!(st.fragments_done >= 1, "at least one fragment recorded");
+    assert_eq!(
+        st.byte_len, partial_len,
+        "byte_len tracks the flushed partial"
+    );
+}
+
+#[tokio::test]
+async fn resume_is_byte_identical_and_skips_done_fragments() {
+    // Reference: uninterrupted full download.
+    let mut ref_server = mockito::Server::new_async().await;
+    let (ref_frags, expected) = seeded_frags(&mut ref_server, 6).await;
+    let refdir = tempfile::tempdir().expect("tempdir");
+    let refout = refdir.path().join("ref.ts");
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    download_pre_resolved_fragments(&http, &ref_frags, None, None, None, &refout, None, None)
+        .await
+        .expect("reference ok");
+    let reference = tokio::fs::read(&refout).await.unwrap();
+    assert_eq!(reference, expected);
+
+    // Craft a partial of the first 3 fragments + a matching sidecar.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = dir.path().join("video.ts");
+    let done = 3usize;
+    tokio::fs::write(&output, &reference[..done]).await.unwrap();
+
+    // Resume server: paths identical (so the path-only fingerprint matches),
+    // but the already-done fragments are 501 — if resume re-fetches them the
+    // download errors, proving they were skipped. Remaining fragments serve
+    // their real bodies.
+    let mut server = mockito::Server::new_async().await;
+    for i in 0..done {
+        server
+            .mock("GET", format!("/seg-{i}.ts").as_str())
+            .with_status(501)
+            .create_async()
+            .await;
+    }
+    for i in done..6 {
+        server
+            .mock("GET", format!("/seg-{i}.ts").as_str())
+            .with_body(vec![(i % 256) as u8])
+            .expect(1)
+            .create_async()
+            .await;
+    }
+    let frags: Vec<Fragment> = (0..6)
+        .map(|i| frag(format!("{}/seg-{i}.ts", server.url())))
+        .collect();
+
+    let sidecar = output.with_extension("ts.hls_state.json");
+    let mut st = HlsResumeState::new(fragment_fingerprint(&frags), 6);
+    st.fragments_done = done as u64;
+    st.byte_len = done as u64; // 1 byte per fragment
+    st.save(&sidecar).await.expect("seed sidecar");
+
+    download_pre_resolved_fragments(&http, &frags, None, None, None, &output, None, None)
+        .await
+        .expect("resume must succeed without hitting the 501 done-fragments");
+
+    let written = tokio::fs::read(&output).await.unwrap();
+    assert_eq!(written, reference, "resumed output must be byte-identical");
+    assert!(!sidecar.exists(), "sidecar removed after completion");
+}
+
+#[tokio::test]
+async fn fingerprint_mismatch_restarts_from_zero() {
+    let mut server = mockito::Server::new_async().await;
+    let (frags, expected) = seeded_frags(&mut server, 4).await;
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = dir.path().join("video.ts");
+
+    // Seed a stale partial + sidecar whose fingerprint does NOT match `frags`.
+    tokio::fs::write(&output, b"STALEDATA").await.unwrap();
+    let sidecar = output.with_extension("ts.hls_state.json");
+    let mut st = HlsResumeState::new(0x1234_5678, 4); // wrong fingerprint
+    st.fragments_done = 2;
+    st.byte_len = 9; // matches "STALEDATA"
+    st.save(&sidecar).await.expect("seed sidecar");
+
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    download_pre_resolved_fragments(&http, &frags, None, None, None, &output, None, None)
+        .await
+        .expect("mismatch restarts cleanly");
+    let written = tokio::fs::read(&output).await.unwrap();
+    assert_eq!(
+        written, expected,
+        "stale partial discarded; fresh full download"
+    );
+    assert!(!sidecar.exists());
+}
+
+#[tokio::test]
+async fn extra_tail_is_truncated_to_byte_len_on_resume() {
+    // Reference full download.
+    let mut ref_server = mockito::Server::new_async().await;
+    let (ref_frags, _expected) = seeded_frags(&mut ref_server, 5).await;
+    let refdir = tempfile::tempdir().expect("tempdir");
+    let refout = refdir.path().join("ref.ts");
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    download_pre_resolved_fragments(&http, &ref_frags, None, None, None, &refout, None, None)
+        .await
+        .expect("reference ok");
+    let reference = tokio::fs::read(&refout).await.unwrap();
+
+    // Partial = first 2 fragments + a torn extra byte; sidecar says byte_len=2.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = dir.path().join("video.ts");
+    let mut partial = reference[..2].to_vec();
+    partial.push(0xFF); // torn tail beyond the confirmed boundary
+    tokio::fs::write(&output, &partial).await.unwrap();
+
+    let mut server = mockito::Server::new_async().await;
+    for i in 0..2 {
+        server
+            .mock("GET", format!("/seg-{i}.ts").as_str())
+            .with_status(501)
+            .create_async()
+            .await;
+    }
+    for i in 2..5 {
+        server
+            .mock("GET", format!("/seg-{i}.ts").as_str())
+            .with_body(vec![(i % 256) as u8])
+            .expect(1)
+            .create_async()
+            .await;
+    }
+    let frags: Vec<Fragment> = (0..5)
+        .map(|i| frag(format!("{}/seg-{i}.ts", server.url())))
+        .collect();
+    let sidecar = output.with_extension("ts.hls_state.json");
+    let mut st = HlsResumeState::new(fragment_fingerprint(&frags), 5);
+    st.fragments_done = 2;
+    st.byte_len = 2; // confirmed boundary BEFORE the torn 0xFF byte
+    st.save(&sidecar).await.expect("seed sidecar");
+
+    download_pre_resolved_fragments(&http, &frags, None, None, None, &output, None, None)
+        .await
+        .expect("resume truncates torn tail then completes");
+    let written = tokio::fs::read(&output).await.unwrap();
+    assert_eq!(
+        written, reference,
+        "torn tail dropped; final byte-identical"
+    );
+}

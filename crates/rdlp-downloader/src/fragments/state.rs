@@ -6,10 +6,6 @@
 //! are async (`tokio::fs`) because the workspace bans blocking `std::fs` in
 //! async contexts; the file is tiny.
 
-// Callers land in Task 4 (resume integration in fragments.rs); this attribute
-// is removed there. Until then the pub items are reachable only from tests.
-#![allow(dead_code)]
-
 use std::path::Path;
 use std::time::SystemTime;
 
