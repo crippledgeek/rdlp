@@ -212,6 +212,11 @@ pub struct DownloadProgress {
 
     /// Total stream duration in seconds (for HLS with duration tracking)
     pub total_duration: Option<f64>,
+
+    /// `true` when `total_bytes` is an extrapolated estimate (segmented download
+    /// with no Content-Length), not an authoritative total. Display layers may
+    /// prefix the total with "~". `false` for exact/byte-known downloads.
+    pub is_estimated: bool,
 }
 
 impl DownloadProgress {
@@ -247,6 +252,7 @@ impl DownloadProgress {
             total_segments: None,
             duration_downloaded: None,
             total_duration: None,
+            is_estimated: false,
         }
     }
 
@@ -294,6 +300,7 @@ impl DownloadProgress {
             total_segments: Some(total_segments),
             duration_downloaded: None,
             total_duration: None,
+            is_estimated: false,
         }
     }
 
@@ -352,6 +359,7 @@ impl DownloadProgress {
             total_segments: Some(total_segments),
             duration_downloaded: Some(duration_downloaded),
             total_duration: Some(total_duration),
+            is_estimated: false,
         }
     }
 
@@ -528,6 +536,22 @@ mod tests {
         assert_eq!(progress.progress.map(|p| p.percent()), Some(50.0));
         assert!(progress.eta.is_some());
         assert_eq!(progress.eta.unwrap().as_secs(), 5);
+    }
+
+    #[test]
+    fn new_constructors_default_is_estimated_false() {
+        assert!(
+            !DownloadProgress::new(10, Some(100), 50.0).is_estimated,
+            "new: exact total_bytes is not an estimate"
+        );
+        assert!(
+            !DownloadProgress::new_with_segments(10, 50.0, 1, 4).is_estimated,
+            "new_with_segments: no total_bytes, vacuously not estimated"
+        );
+        assert!(
+            !DownloadProgress::new_with_duration(10, 50.0, 1, 4, 2.0, 8.0).is_estimated,
+            "new_with_duration: no total_bytes, vacuously not estimated"
+        );
     }
 
     #[tokio::test]

@@ -86,6 +86,8 @@ impl From<&Event> for EventDto {
                     "percentage": progress.progress.map(rdlp_types::Progress::percent),
                     "segments_downloaded": progress.segments_downloaded,
                     "total_segments": progress.total_segments,
+                    "eta_seconds": progress.eta.map(|d| d.as_secs()),
+                    "total_bytes_estimated": progress.is_estimated,
                 }),
             ),
 
@@ -273,6 +275,27 @@ mod tests {
             dto.payload["eta_seconds"].is_null(),
             "eta_seconds must serialize to null when eta is None"
         );
+    }
+
+    #[test]
+    fn progress_event_emits_eta_seconds_and_estimated_flag() {
+        // Known total + fast speed → eta Some(10s); not estimated.
+        let known = Event::Progress {
+            id: DownloadId::next(),
+            progress: rdlp_core::DownloadProgress::new(0, Some(10_000), 1000.0),
+        };
+        let dto = EventDto::from(&known);
+        assert_eq!(dto.payload["eta_seconds"].as_u64(), Some(10)); // 10000/1000 = 10s
+        assert_eq!(dto.payload["total_bytes_estimated"].as_bool(), Some(false));
+
+        // No total → eta null.
+        let unknown = Event::Progress {
+            id: DownloadId::next(),
+            progress: rdlp_core::DownloadProgress::new(50, None, 1000.0),
+        };
+        let dto = EventDto::from(&unknown);
+        assert!(dto.payload["eta_seconds"].is_null());
+        assert_eq!(dto.payload["total_bytes_estimated"].as_bool(), Some(false));
     }
 
     #[test]

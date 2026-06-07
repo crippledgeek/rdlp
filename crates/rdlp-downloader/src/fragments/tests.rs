@@ -182,6 +182,10 @@ async fn fragment_progress_final_boundary_emit_covers_all_frags() {
     assert_eq!(last.segments_downloaded, Some(2));
     assert_eq!(last.total_segments, Some(2));
     assert_eq!(last.bytes_downloaded, 300);
+    assert!(
+        !last.is_estimated,
+        "explicit Content-Length is authoritative, not estimated"
+    );
 }
 
 #[tokio::test]
@@ -203,14 +207,20 @@ async fn fragment_progress_none_callback_runs_to_completion() {
 }
 
 #[tokio::test]
-async fn fragment_progress_expected_total_none_uses_segment_fraction() {
+async fn fragment_no_byte_total_uses_byte_extrapolation() {
+    // HLS with no Content-Length: progress + total must now be byte-extrapolated
+    // (total_bytes Some, is_estimated true).
     let mut server = mockito::Server::new_async().await;
-    let _f1 = server
-        .mock("GET", "/f1")
-        .with_body(vec![0u8; 100])
-        .create_async()
-        .await;
-    let frags = vec![frag(format!("{}/f1", server.url()))];
+    for i in 0..4_u32 {
+        server
+            .mock("GET", format!("/f{i}").as_str())
+            .with_body(vec![0u8; 100])
+            .create_async()
+            .await;
+    }
+    let frags: Vec<Fragment> = (0..4)
+        .map(|i| frag(format!("{}/f{i}", server.url())))
+        .collect();
     let cb = CaptureCallback::new();
     let tmp = tempfile::NamedTempFile::new().expect("tmp");
     let http = HttpDownloader::with_client(wreq::Client::new());
@@ -218,7 +228,7 @@ async fn fragment_progress_expected_total_none_uses_segment_fraction() {
         &http,
         &frags,
         None,
-        None,
+        None, /* expected_total */
         Some(&cb),
         tmp.path(),
         None,
@@ -227,23 +237,27 @@ async fn fragment_progress_expected_total_none_uses_segment_fraction() {
     .await
     .expect("ok");
     let evs = cb.events();
-    assert!(!evs.is_empty());
-    // No byte total is known (HLS), so `total_bytes` stays None — but `progress`
-    // is now the SEGMENT fraction so progress bars animate instead of jumping
-    // 0->100 at completion.
-    assert!(
-        evs.iter().all(|e| e.total_bytes.is_none()),
-        "byte total must remain unknown when expected_total is None"
-    );
-    assert!(
-        evs.iter().all(|e| e.progress.is_some()),
-        "progress must be the segment-based fraction, not None"
-    );
     let last = evs.last().expect("at least one event");
-    assert_eq!(last.segments_downloaded, Some(1));
-    assert_eq!(last.total_segments, Some(1));
-    let frac = last.progress.expect("final progress some").fraction();
-    assert!((frac - 1.0).abs() < 1e-6, "final event = 1/1 segments");
+    // Byte-extrapolation: a total is now known (estimated) — was None pre-change.
+    assert!(
+        last.total_bytes.is_some(),
+        "estimated total must be reported"
+    );
+    assert!(last.is_estimated, "no-Content-Length total is an estimate");
+    // NOTE: eta is intentionally NOT asserted here — SpeedMeter's 50ms sample
+    // gate yields speed 0 for instant mock downloads, so new()'s `speed > 1.0`
+    // eta gate produces None in-test. Byte-extrapolation eta is unit-covered by
+    // downloader.rs's `new()` eta test (real speed → Some). The byte-extrapolation
+    // *behavior* is guarded below by total_bytes.is_some() + is_estimated.
+    // Final fragment: frags_done == total_frags → est_total == total_bytes → 100%.
+    let frac = last.progress.expect("progress some").fraction();
+    assert!(
+        (frac - 1.0).abs() < 1e-6,
+        "final progress is 1/1; got {frac}"
+    );
+    // Segment counts survive as secondary info.
+    assert_eq!(last.segments_downloaded, Some(4));
+    assert_eq!(last.total_segments, Some(4));
 }
 
 #[tokio::test]
@@ -1168,35 +1182,6 @@ async fn cross_origin_fragment_url_does_not_forward_seed_headers() {
     )
     .await
     .expect("cross-origin fragment must not receive Referer");
-}
-
-// ── Progress fraction: byte-based when total known, segment-based otherwise ──
-//
-// HLS pre-resolved-fragment downloads pass `expected_total = None` (segment-
-// based progress), so the byte fraction is unavailable. Without a segment
-// fallback the emitted `progress` is `None` and UIs that read it (the desktop
-// bar, `events.rs`) sit at 0 then jump to 100. These guard the fallback.
-
-#[test]
-fn fragment_progress_fraction_prefers_byte_total() {
-    // Byte total known → byte-based fraction (progressive / sized HLS).
-    let p = fragment_progress_fraction(Some(1000), 500, 1, 4).expect("some");
-    assert!((p.fraction() - 0.5).abs() < 1e-6, "byte fraction 500/1000");
-}
-
-#[test]
-fn fragment_progress_fraction_falls_back_to_segments() {
-    // Byte total unknown (HLS) → segment-based fraction (the 0->100 jump fix).
-    let mid = fragment_progress_fraction(None, 0, 1, 4).expect("some");
-    assert!((mid.fraction() - 0.25).abs() < 1e-6, "segment fraction 1/4");
-    let done = fragment_progress_fraction(None, 12_345, 4, 4).expect("some");
-    assert!((done.fraction() - 1.0).abs() < 1e-6, "segment fraction 4/4");
-}
-
-#[test]
-fn fragment_progress_fraction_none_when_nothing_known() {
-    // No byte total and zero segments → no fraction to report.
-    assert!(fragment_progress_fraction(None, 0, 0, 0).is_none());
 }
 
 // ---- HLS resume tests (issue #354) ----

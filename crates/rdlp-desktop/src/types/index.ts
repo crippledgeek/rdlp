@@ -314,6 +314,10 @@ export interface DownloadProgressPayload {
     eta: string | null;
     downloadedBytes: number;
     totalBytes: number | null;
+    /** True when totalBytes is an extrapolated estimate (segmented download).
+     *  Carry-only for now: not yet consumed by the UI (no total-size display);
+     *  ETA itself renders via the existing eta plumbing. */
+    isEstimated: boolean;
 }
 
 /** Download completion payload emitted as "download-complete". */

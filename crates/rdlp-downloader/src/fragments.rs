@@ -18,7 +18,7 @@ use std::time::Instant;
 
 use futures::StreamExt as _;
 use rdlp_core::{DownloadProgress, DownloadStats, ProgressCallback, Result};
-use rdlp_types::{Fragment, Progress};
+use rdlp_types::Fragment;
 use tokio::io::{AsyncSeekExt as _, AsyncWriteExt as _};
 use tokio_util::sync::CancellationToken;
 
@@ -27,25 +27,6 @@ use crate::atomic::{SIDECAR_SAVE_FAILURE_THRESHOLD, SaveFailureTracker};
 use crate::http::HttpDownloader;
 use crate::progress::SpeedMeter;
 use rdlp_security;
-
-/// Compute the progress fraction for a fragment download.
-///
-/// Byte-based when the total byte size is known (`expected_total`), otherwise
-/// **segment-based** (`frags_done / total_frags`). HLS pre-resolved-fragment
-/// downloads pass `expected_total = None` — without the segment fallback the
-/// emitted `progress` would be `None`, leaving UIs that read it (the desktop
-/// progress bar, `events.rs`) stuck at 0 until completion, then jumping to 100.
-/// Returns `None` only when neither a byte total nor any segments are known.
-fn fragment_progress_fraction(
-    expected_total: Option<u64>,
-    total_bytes: u64,
-    frags_done: u64,
-    total_frags: u64,
-) -> Option<Progress> {
-    expected_total
-        .map(|t| Progress::from_ratio(total_bytes, t))
-        .or_else(|| (total_frags > 0).then(|| Progress::from_ratio(frags_done, total_frags)))
-}
 
 /// Fetch a pre-resolved list of fragment URLs and concatenate them into
 /// `output` in order.
@@ -368,24 +349,19 @@ pub async fn download_pre_resolved_fragments(
         if let Some(cb) = progress
             && (now.duration_since(last_emit) >= PROGRESS_INTERVAL || frags_done == total_frags)
         {
-            cb.on_progress(&DownloadProgress {
-                bytes_downloaded: total_bytes,
-                total_bytes: expected_total,
-                progress: fragment_progress_fraction(
-                    expected_total,
-                    total_bytes,
-                    frags_done,
-                    total_frags,
-                ),
-                segments_downloaded: Some(frags_done),
-                total_segments: Some(total_frags),
-                // `None` while cold-starting (< 2 samples) or stalled collapses to
-                // 0 B/s for the f64 field — matches the pre-SpeedMeter behaviour.
-                speed: speed.bytes_per_sec().unwrap_or(0.0),
-                eta: speed.eta(expected_total.map(|t| t.saturating_sub(total_bytes))),
-                duration_downloaded: None,
-                total_duration: None,
+            // Byte-extrapolation (yt-dlp): prefer a real Content-Length total;
+            // else estimate total = avg-bytes-per-frag × total_frags (available
+            // once >= 1 fragment completed). Feeding this to `new` makes BOTH the
+            // progress fraction and the ETA byte-based + self-correcting.
+            let est_total = expected_total.or_else(|| {
+                (frags_done > 0).then(|| total_bytes.saturating_mul(total_frags) / frags_done)
             });
+            let mut info =
+                DownloadProgress::new(total_bytes, est_total, speed.bytes_per_sec().unwrap_or(0.0));
+            info.segments_downloaded = Some(frags_done); // secondary "frag N/M" text
+            info.total_segments = Some(total_frags);
+            info.is_estimated = expected_total.is_none() && est_total.is_some();
+            cb.on_progress(&info);
             last_emit = now;
         }
 
