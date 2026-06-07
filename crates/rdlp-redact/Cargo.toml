@@ -1,0 +1,15 @@
+[package]
+name = "rdlp-redact"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+regex = { workspace = true }
+log = { workspace = true, optional = true }
+
+[dev-dependencies]
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[features]
+log-kv = ["dep:log"]

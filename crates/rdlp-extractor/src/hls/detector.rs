@@ -241,17 +241,17 @@ impl HlsSizeDetector {
             if e.is_timeout() {
                 RdlpError::Network {
                     message: format!("Timeout fetching playlist: {m3u8_url}"),
-                    url: Some(m3u8_url.to_string()),
+                    url: Some(m3u8_url.to_string().into()),
                 }
             } else if e.is_connect() {
                 RdlpError::Network {
                     message: format!("Connection failed for playlist: {m3u8_url}: {e}"),
-                    url: Some(m3u8_url.to_string()),
+                    url: Some(m3u8_url.to_string().into()),
                 }
             } else {
                 RdlpError::Network {
                     message: format!("Failed to fetch playlist: {e}"),
-                    url: Some(m3u8_url.to_string()),
+                    url: Some(m3u8_url.to_string().into()),
                 }
             }
         })?;
@@ -270,7 +270,7 @@ impl HlsSizeDetector {
 
         response.text().await.map_err(|e| RdlpError::Network {
             message: format!("Failed to read playlist response: {e}"),
-            url: Some(m3u8_url.to_string()),
+            url: Some(m3u8_url.to_string().into()),
         })
     }
 
@@ -287,12 +287,12 @@ impl HlsSizeDetector {
                     message: format!(
                         "Server returned invalid M3U8 (likely expired token or CDN error): {preview}"
                     ),
-                    url: Some(media_url.to_string()),
+                    url: Some(media_url.to_string().into()),
                 }
             } else {
                 RdlpError::Extraction {
                     message: format!("M3U8 parse error: {e:?}"),
-                    url: Some(media_url.to_string()),
+                    url: Some(media_url.to_string().into()),
                 }
             }
         })?;

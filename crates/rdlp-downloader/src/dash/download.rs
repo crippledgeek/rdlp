@@ -63,7 +63,7 @@ pub async fn run(
 ) -> Result<DownloadStats> {
     let mpd_url_parsed = Url::parse(mpd_url).map_err(|e| RdlpError::Extraction {
         message: format!("invalid MPD URL: {e}"),
-        url: Some(mpd_url.to_string()),
+        url: Some(rdlp_redact::RedactedUrlBuf::from(mpd_url)),
     })?;
 
     // Fetch MPD body.
@@ -79,7 +79,7 @@ pub async fn run(
         .await
         .map_err(|e| RdlpError::Network {
             message: format!("MPD fetch failed: {e}"),
-            url: Some(mpd_url.to_string()),
+            url: Some(rdlp_redact::RedactedUrlBuf::from(mpd_url)),
         })?;
     if !response.status().is_success() {
         return Err(RdlpError::Http {
@@ -89,7 +89,7 @@ pub async fn run(
     }
     let body = response.text().await.map_err(|e| RdlpError::Network {
         message: format!("MPD read error: {e}"),
-        url: Some(mpd_url.to_string()),
+        url: Some(rdlp_redact::RedactedUrlBuf::from(mpd_url)),
     })?;
 
     let parsed = manifest::parse_mpd(&body, &mpd_url_parsed).map_err(RdlpError::from)?;
@@ -146,7 +146,7 @@ pub async fn run(
     if video_seg_urls.is_empty() {
         return Err(RdlpError::Download {
             message: "DASH: no video segments resolved".into(),
-            url: Some(mpd_url.to_string()),
+            url: Some(rdlp_redact::RedactedUrlBuf::from(mpd_url)),
         });
     }
     let video_bytes = download_representation(
@@ -180,7 +180,7 @@ pub async fn run(
         if audio_seg_urls.is_empty() {
             return Err(RdlpError::Download {
                 message: "DASH: no audio segments resolved".into(),
-                url: Some(mpd_url.to_string()),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(mpd_url)),
             });
         }
         download_representation(
@@ -681,7 +681,7 @@ async fn download_one(
                 .await
                 .map_err(|e| RdlpError::Network {
                     message: format!("DASH segment fetch failed: {e}"),
-                    url: Some(url_str.clone()),
+                    url: Some(rdlp_redact::RedactedUrlBuf::from(url_str.as_str())),
                 })?;
             if !resp.status().is_success() {
                 return Err(RdlpError::Http {
@@ -691,7 +691,7 @@ async fn download_one(
             }
             let bytes = resp.bytes().await.map_err(|e| RdlpError::Network {
                 message: format!("DASH segment read error: {e}"),
-                url: Some(url_str.clone()),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url_str.as_str())),
             })?;
             Ok(bytes.to_vec())
         }

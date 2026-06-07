@@ -9,6 +9,7 @@ license.workspace = true
 rdlp-core = { path = "../rdlp-core" }
 rdlp-types = { path = "../rdlp-types" }
 rdlp-security = { path = "../rdlp-security" }
+rdlp-redact = { workspace = true }
 rdlp-crypto = { path = "../rdlp-crypto" }
 rdlp-jsinterp = { path = "../rdlp-jsinterp" }
 rdlp-http = { path = "../rdlp-http" }

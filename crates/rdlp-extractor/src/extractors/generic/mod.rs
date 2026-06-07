@@ -81,7 +81,7 @@ impl InfoExtractor for GenericExtractor {
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
         let parsed_url = Url::parse(url).map_err(|e| rdlp_core::RdlpError::Extraction {
             message: format!("Invalid URL: {e}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         })?;
 
         let domain = parsed_url.host_str().unwrap_or("unknown");
@@ -167,7 +167,7 @@ impl InfoExtractor for GenericExtractor {
                 message: "No media found on page. If this site uses JavaScript rendering, \
                           a dedicated extractor may be needed."
                     .to_string(),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             });
         }
 
@@ -237,7 +237,10 @@ fn try_direct_media(url: &str, pf: &PrefetchResponse) -> Result<Option<InfoDict>
             }
             Err(crate::base::common::dash::DashExpandError::DynamicMpd) => {
                 // Live/dynamic manifest — not supported; let other strategies try.
-                log::warn!("DASH dynamic/live manifest at {url}; not yet supported");
+                log::warn!(
+                    "DASH dynamic/live manifest at {}; not yet supported",
+                    rdlp_redact::RedactedUrl::new(url)
+                );
                 return Ok(None);
             }
             Err(e) => {

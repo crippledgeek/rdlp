@@ -76,7 +76,7 @@ pub(crate) async fn resolve_formats(
         return Err(RdlpError::Extraction {
             message: "mydaddy.cc embed blocked — Referer header may not have been accepted"
                 .to_string(),
-            url: Some(full_url),
+            url: Some(full_url.into()),
         });
     }
 
@@ -122,14 +122,14 @@ async fn fetch_embed(url: &str, ctx: &ExtractionContext) -> Result<String> {
         .await
         .map_err(|e| RdlpError::Network {
             message: format!("Failed to fetch mydaddy.cc embed: {e}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         })?;
 
     rdlp_core::check_http_response(&response)?;
 
     response.text().await.map_err(|e| RdlpError::Network {
         message: format!("Failed to read mydaddy.cc response: {e}"),
-        url: Some(url.to_string()),
+        url: Some(url.to_string().into()),
     })
 }
 

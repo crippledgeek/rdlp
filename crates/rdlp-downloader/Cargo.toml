@@ -30,12 +30,14 @@ serde_json = { workspace = true }
 chrono = { version = "0.4", features = ["serde"] }
 dash-mpd = { workspace = true }
 rdlp-ffmpeg = { path = "../rdlp-ffmpeg" }
+rdlp-redact = { workspace = true }
 tempfile = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
 mockito = { workspace = true }
 proptest = "1.4"
+rdlp-redact = { workspace = true }
 
 [lints.rust]
 missing_docs = "warn"

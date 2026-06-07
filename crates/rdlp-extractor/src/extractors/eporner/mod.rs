@@ -334,7 +334,7 @@ async fn build_info(
     {
         if let Some(computed_hash) = calc_hash(&raw_hash) {
             let url = xhr_url(id, &computed_hash);
-            debug!("[eporner] XHR: {url}");
+            debug!("[eporner] XHR: {}", rdlp_redact::RedactedUrl::new(&url));
             match BaseExtractor::fetch_webpage(&url, ctx).await {
                 Ok(body) => match serde_json::from_str::<Value>(&body) {
                     Ok(json) => {
@@ -368,7 +368,7 @@ async fn build_info(
         if dload.is_empty() {
             return Err(RdlpError::Extraction {
                 message: format!("No formats found for EPorner video: {page_url}"),
-                url: Some(page_url.to_string()),
+                url: Some(page_url.to_string().into()),
             });
         }
         dload
@@ -424,7 +424,7 @@ impl InfoExtractor for EPornerExtractor {
             .map(|m| m.as_str().to_string())
             .ok_or_else(|| RdlpError::Extraction {
                 message: format!("EPorner: could not extract video id from URL: {url}"),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             })?;
 
         let html =
@@ -432,14 +432,14 @@ impl InfoExtractor for EPornerExtractor {
                 .await
                 .map_err(|e| RdlpError::Extraction {
                     message: format!("EPorner: page fetch failed: {e:#}"),
-                    url: Some(url.to_string()),
+                    url: Some(url.to_string().into()),
                 })?;
 
         build_info(&id, url, &html, ctx).await.map_err(|e| match e {
             RdlpError::Extraction { .. } | RdlpError::Network { .. } | RdlpError::Http { .. } => e,
             other => RdlpError::Extraction {
                 message: format!("{other:#}"),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             },
         })
     }

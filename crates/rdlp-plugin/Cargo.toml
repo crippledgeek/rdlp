@@ -50,6 +50,7 @@ url = { workspace = true }
 percent-encoding = "2"
 html-escape = "0.2.13"
 rdlp-extractor = { version = "0.1.0", path = "../rdlp-extractor" }
+rdlp-redact = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

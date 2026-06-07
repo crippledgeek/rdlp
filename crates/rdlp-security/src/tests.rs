@@ -289,3 +289,11 @@ fn sanitize_redacts_new_patterns_case_insensitive() {
         "SESSION= (uppercase) not redacted"
     );
 }
+
+#[test]
+fn sanitize_for_logging_redacts_new_328_patterns_via_delegate() {
+    assert_eq!(
+        sanitize_for_logging("https://cdn/s?X-Amz-Security-Token=STS&code=AUTH"),
+        "https://cdn/s?X-Amz-Security-Token=***&code=***"
+    );
+}

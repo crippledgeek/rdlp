@@ -308,7 +308,7 @@ impl InfoExtractor for NineAnimeExtractor {
         // Extract IDs from URL
         let anime_id = patterns::extract_anime_id(url).ok_or_else(|| RdlpError::Extraction {
             message: format!("Could not extract anime ID from URL: {url}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         })?;
 
         let episode_id =
@@ -317,7 +317,7 @@ impl InfoExtractor for NineAnimeExtractor {
                     "Could not extract episode ID from URL: {url}. \
                  Use a URL with ?ep= parameter."
                 ),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             })?;
 
         let slug = patterns::extract_slug(url).unwrap_or_default();
@@ -393,7 +393,7 @@ impl InfoExtractor for NineAnimeExtractor {
                     "Could not extract episode ID from URL: {url}. \
                  Use a URL with ?ep= parameter."
                 ),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             })?;
 
         debug!(episode_id:%; "Lazily resolving 9anime episode formats");

@@ -9,6 +9,7 @@ use super::{
 };
 use log::{debug, info, warn};
 use rdlp_core::{DownloadStats, RdlpError};
+use rdlp_redact::RedactedUrlBuf;
 use rdlp_security::validate_url_security;
 use rdlp_types::{DownloadProtocol, Format, Fragment};
 use std::path::Path;
@@ -58,7 +59,7 @@ fn validate_fragment_url_one(url: &str, kind: &str) -> Result<()> {
     validate_url_security(url).map_err(|e| {
         OrchestratorError::DownloadFailed(RdlpError::Network {
             message: format!("Security validation failed for {kind}: {e}"),
-            url: Some(url.to_string()),
+            url: Some(RedactedUrlBuf::from(url)),
         })
     })
 }
@@ -137,7 +138,7 @@ impl Orchestrator {
         validate_url_security(&format.url).map_err(|e| {
             OrchestratorError::DownloadFailed(RdlpError::Network {
                 message: format!("Security validation failed for format URL: {e}"),
-                url: Some(format.url.clone()),
+                url: Some(RedactedUrlBuf::from(format.url.as_str())),
             })
         })?;
 
@@ -176,7 +177,7 @@ impl Orchestrator {
                     warn!(fallback = i; "Skipping fallback URL that failed security validation: {e}");
                     last_err = Some(OrchestratorError::DownloadFailed(RdlpError::Network {
                         message: format!("Security validation failed for fallback URL: {e}"),
-                        url: Some(download_url.to_string()),
+                        url: Some(RedactedUrlBuf::from(*download_url)),
                     }));
                     continue;
                 }
@@ -241,7 +242,7 @@ impl Orchestrator {
                         message: format!(
                             "HLS fallback playlist could not be re-expanded: {safe_url}"
                         ),
-                        url: Some((*download_url).to_string()),
+                        url: Some(RedactedUrlBuf::from(*download_url)),
                     }));
                     continue;
                 }
@@ -362,7 +363,7 @@ impl Orchestrator {
         validate_url_security(&format.url).map_err(|e| {
             OrchestratorError::DownloadFailed(RdlpError::Network {
                 message: format!("Security validation failed for format URL: {e}"),
-                url: Some(format.url.clone()),
+                url: Some(RedactedUrlBuf::from(format.url.as_str())),
             })
         })?;
 
@@ -409,7 +410,7 @@ impl Orchestrator {
                         "CDN token expired {}s ago — re-run the command to get a fresh URL",
                         now - expires
                     ),
-                    url: Some(url.to_string()),
+                    url: Some(RedactedUrlBuf::from(url)),
                 }));
             } else if expires - now < 60 {
                 warn!("CDN token expires in less than 60 seconds — download may fail");

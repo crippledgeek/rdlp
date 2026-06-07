@@ -154,11 +154,12 @@ impl RdlpApiError {
 impl From<RdlpError> for RdlpApiError {
     /// Convert an internal [`RdlpError`] to a stable API error.
     ///
-    /// **Note:** `RdlpError` variants do not carry the source URL, so
-    /// `ExtractError::source_url` is left empty in this blanket conversion.
-    /// Call sites that have the URL available should use
-    /// `RdlpApiError::ExtractError { message, source_url }` directly instead
-    /// of relying on this `From` impl.
+    /// **Note:** For [`RdlpError::Extraction`], the source URL IS propagated
+    /// into [`RdlpApiError::ExtractError::source_url`] via the redacted
+    /// [`rdlp_redact::RedactedUrlBuf`] Display (credentials stripped). For
+    /// [`RdlpError::Network`] and [`RdlpError::Download`], the URL is not
+    /// surfaced in the API error — call sites that need it should construct
+    /// `RdlpApiError::NetworkError` directly.
     fn from(err: RdlpError) -> Self {
         match err {
             RdlpError::Network { message, .. } | RdlpError::Download { message, .. } => {
@@ -173,7 +174,7 @@ impl From<RdlpError> for RdlpApiError {
             },
             RdlpError::Extraction { message, url } => Self::ExtractError {
                 message,
-                source_url: url.unwrap_or_default(),
+                source_url: url.map(|u| u.to_string()).unwrap_or_default(),
             },
             RdlpError::NoExtractor(url) => Self::UnsupportedUrl { url },
             RdlpError::InvalidUrl(msg) | RdlpError::FormatSelection(msg) => {
@@ -519,6 +520,24 @@ mod tests {
                 assert!(message.contains("chunk failed"));
             }
             other => panic!("Expected NetworkError, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extraction_error_source_url_is_redacted() {
+        let err = RdlpError::extraction("nope", "https://x/v?token=SECRET");
+        let api: RdlpApiError = err.into();
+        if let RdlpApiError::ExtractError { source_url, .. } = api {
+            assert!(
+                !source_url.contains("SECRET"),
+                "raw token must not leak: {source_url}"
+            );
+            assert!(
+                source_url.contains("token=***"),
+                "redacted form: {source_url}"
+            );
+        } else {
+            panic!("expected ExtractError");
         }
     }
 

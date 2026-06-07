@@ -162,7 +162,9 @@ pub async fn download_pre_resolved_fragments(
         .await
         .map_err(|e| rdlp_core::RdlpError::Download {
             message: format!("create output: {e}"),
-            url: Some(output.display().to_string()),
+            url: Some(rdlp_redact::RedactedUrlBuf::from(
+                output.display().to_string(),
+            )),
         })?;
     if resume {
         // Drop any torn tail past the last confirmed boundary, then append.
@@ -171,14 +173,18 @@ pub async fn download_pre_resolved_fragments(
             .await
             .map_err(|e| rdlp_core::RdlpError::Download {
                 message: format!("truncate to resume boundary: {e}"),
-                url: Some(output.display().to_string()),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(
+                    output.display().to_string(),
+                )),
             })?;
         out_file
             .seek(SeekFrom::Start(hls_state.byte_len))
             .await
             .map_err(|e| rdlp_core::RdlpError::Download {
                 message: format!("seek to resume boundary: {e}"),
-                url: Some(output.display().to_string()),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(
+                    output.display().to_string(),
+                )),
             })?;
     } else {
         // Fresh start: equivalent to the previous unconditional truncate(true).
@@ -187,7 +193,9 @@ pub async fn download_pre_resolved_fragments(
             .await
             .map_err(|e| rdlp_core::RdlpError::Download {
                 message: format!("truncate output: {e}"),
-                url: Some(output.display().to_string()),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(
+                    output.display().to_string(),
+                )),
             })?;
     }
 
@@ -349,7 +357,9 @@ pub async fn download_pre_resolved_fragments(
             out_file.flush().await.ok();
             return Err(rdlp_core::RdlpError::Download {
                 message: format!("write fragment: {e}"),
-                url: Some(output.display().to_string()),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(
+                    output.display().to_string(),
+                )),
             });
         }
 
@@ -406,7 +416,9 @@ pub async fn download_pre_resolved_fragments(
         .await
         .map_err(|e| rdlp_core::RdlpError::Download {
             message: format!("flush output: {e}"),
-            url: Some(output.display().to_string()),
+            url: Some(rdlp_redact::RedactedUrlBuf::from(
+                output.display().to_string(),
+            )),
         })?;
 
     // Download completed — drop the resume sidecar.
@@ -449,14 +461,14 @@ pub(crate) fn resolve_fragment_url(fragment_url: &str, base_url: Option<&str>) -
             let base_parsed =
                 url::Url::parse(base).map_err(|e| rdlp_core::RdlpError::Download {
                     message: format!("invalid fragment_base_url: {e}"),
-                    url: Some(base.to_string()),
+                    url: Some(rdlp_redact::RedactedUrlBuf::from(base)),
                 })?;
             let resolved =
                 base_parsed
                     .join(fragment_url)
                     .map_err(|e| rdlp_core::RdlpError::Download {
                         message: format!("resolve fragment url: {e}"),
-                        url: Some(fragment_url.to_string()),
+                        url: Some(rdlp_redact::RedactedUrlBuf::from(fragment_url)),
                     })?;
             Ok(resolved.to_string())
         }
@@ -529,7 +541,7 @@ async fn fetch_with_optional_range(
             "Range",
             HeaderValue::from_str(&value).map_err(|e| rdlp_core::RdlpError::Download {
                 message: format!("fetch {safe_url}: {e}"),
-                url: Some(url.to_string()),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
             })?,
         );
     }
@@ -539,7 +551,7 @@ async fn fetch_with_optional_range(
         .await
         .map_err(|e| rdlp_core::RdlpError::Network {
             message: format!("fetch {safe_url}: {e}"),
-            url: Some(url.to_string()),
+            url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
         })?;
 
     if !resp.status().is_success() {
@@ -554,7 +566,7 @@ async fn fetch_with_optional_range(
         .map(|b| b.to_vec())
         .map_err(|e| rdlp_core::RdlpError::Network {
             message: format!("read {safe_url}: {e}"),
-            url: Some(url.to_string()),
+            url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
         })
 }
 

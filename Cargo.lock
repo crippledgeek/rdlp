@@ -6326,11 +6326,19 @@ dependencies = [
 ]
 
 [[package]]
-name = "rdlp-security"
+name = "rdlp-redact"
 version = "0.1.0"
 dependencies = [
  "log",
  "regex",
+]
+
+[[package]]
+name = "rdlp-security"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "rdlp-redact",
  "thiserror 2.0.18",
  "url",
 ]

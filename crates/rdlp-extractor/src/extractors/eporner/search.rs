@@ -270,7 +270,7 @@ impl SearchExtractor for EPornerExtractor {
                 .await
                 .map_err(|e| RdlpError::Network {
                     message: format!("eporner search: fetch failed: {e:#}"),
-                    url: Some(url.clone()),
+                    url: Some(url.clone().into()),
                 })?;
         let results = parse_results(&html);
         // Detect if a next page exists by checking for a page+2 link in pagination

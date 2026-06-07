@@ -103,7 +103,7 @@ async fn fetch_capped_text(response: wreq::Response, url: &str) -> Result<String
     while let Some(chunk) = stream.next().await {
         let bytes = chunk.map_err(|e| RdlpError::Network {
             message: format!("Failed to read response body: {e}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         })?;
         let chunk_ref: &[u8] = bytes.as_ref();
         if buf.len().saturating_add(chunk_ref.len()) > MAX_WEBPAGE_BYTES {
@@ -111,14 +111,14 @@ async fn fetch_capped_text(response: wreq::Response, url: &str) -> Result<String
                 message: format!(
                     "Response body exceeds {MAX_WEBPAGE_BYTES}-byte cap (host integrity guard)"
                 ),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             });
         }
         buf.extend_from_slice(chunk_ref);
     }
     String::from_utf8(buf).map_err(|e| RdlpError::Network {
         message: format!("Response body is not valid UTF-8: {e}"),
-        url: Some(url.to_string()),
+        url: Some(url.to_string().into()),
     })
 }
 
@@ -159,7 +159,7 @@ impl BaseExtractor {
         if url.len() > MAX_URL_LENGTH {
             return Err(RdlpError::Extraction {
                 message: format!("URL too long: {} bytes (max: {MAX_URL_LENGTH})", url.len()),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             });
         }
 
@@ -170,7 +170,7 @@ impl BaseExtractor {
             .await
             .map_err(|e| RdlpError::Network {
                 message: format!("Failed to fetch webpage: {e}"),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             })?;
 
         check_http_response(&response)?;
@@ -212,7 +212,7 @@ impl BaseExtractor {
         if url.len() > MAX_URL_LENGTH {
             return Err(RdlpError::Extraction {
                 message: format!("URL too long: {} bytes (max: {MAX_URL_LENGTH})", url.len()),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             });
         }
 
@@ -224,7 +224,7 @@ impl BaseExtractor {
 
         let response = request.send().await.map_err(|e| RdlpError::Network {
             message: format!("Failed to fetch webpage: {e}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         })?;
 
         check_http_response(&response)?;
@@ -268,7 +268,7 @@ impl BaseExtractor {
     pub(crate) fn validate_url_security(url: &str) -> Result<()> {
         rdlp_security::validate_url_security(url).map_err(|e| RdlpError::Extraction {
             message: e.to_string(),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         })
     }
 

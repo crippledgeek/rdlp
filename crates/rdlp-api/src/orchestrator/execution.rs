@@ -72,7 +72,7 @@ impl Orchestrator {
     ///
     /// # Errors
     /// Returns an error if download fails
-    #[instrument(skip(self, downloader, format), fields(url = %format.url, output = %output_path.display()))]
+    #[instrument(skip(self, downloader, format), fields(url = %rdlp_redact::RedactedUrl::new(&format.url), output = %output_path.display()))]
     #[allow(clippy::used_underscore_binding)] // _expected_size is a reserved parameter slot
     pub(super) async fn execute_download(
         &self,
@@ -165,7 +165,7 @@ impl Orchestrator {
     /// # Errors
     /// Returns an error if the download fails or the downloader does not
     /// support writer-based output.
-    #[instrument(skip(self, downloader, writer), fields(url = %url))]
+    #[instrument(skip(self, downloader, writer), fields(url = %rdlp_redact::RedactedUrl::new(url)))]
     pub(super) async fn execute_download_to_writer(
         &self,
         downloader: &Arc<dyn Downloader>,

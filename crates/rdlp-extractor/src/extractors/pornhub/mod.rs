@@ -107,14 +107,14 @@ impl PornHubExtractor {
             .await
             .map_err(|e| RdlpError::Network {
                 message: format!("Failed to fetch PornHub search API: {e}"),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             })?;
 
         rdlp_core::check_http_response(&response)?;
 
         let body = response.text().await.map_err(|e| RdlpError::Network {
             message: format!("Failed to read PornHub API response: {e}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         })?;
 
         search::parse_api_search_results(&body)
@@ -140,14 +140,14 @@ impl PornHubExtractor {
             .await
             .map_err(|e| RdlpError::Network {
                 message: format!("Failed to fetch PornHub HTML search page: {e}"),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             })?;
 
         rdlp_core::check_http_response(&response)?;
 
         let body = response.text().await.map_err(|e| RdlpError::Network {
             message: format!("Failed to read PornHub HTML search response: {e}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         })?;
 
         search_html::parse_html_search_results(&body)
@@ -304,14 +304,14 @@ impl InfoExtractor for PornHubExtractor {
         if let Some(error_msg) = utils::detect_video_unavailable(&webpage) {
             return Err(RdlpError::Extraction {
                 message: error_msg,
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             });
         }
 
         // Get video ID
         let video_id = patterns::extract_video_id(url).ok_or_else(|| RdlpError::Extraction {
             message: format!("Could not extract video ID: {url}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         })?;
 
         // Parse HTML and extract all metadata before async operations
@@ -349,7 +349,7 @@ impl InfoExtractor for PornHubExtractor {
         if formats.is_empty() {
             return Err(RdlpError::Extraction {
                 message: format!("No video formats found for URL: {url}"),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             });
         }
 

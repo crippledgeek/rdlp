@@ -6,6 +6,7 @@
 use indicatif::{MultiProgress, ProgressBar, ProgressStyle};
 use rdlp_api::DownloadProgress;
 use rdlp_api::Event;
+use rdlp_redact::RedactedUrl;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -43,7 +44,7 @@ impl CliEventHandler {
         match event {
             Event::Started { url, .. } => {
                 if !self.quiet {
-                    info!("Downloading: {url}");
+                    info!("Downloading: {}", RedactedUrl::new(url));
                 }
             }
             Event::MetadataReady { info, .. } => {
@@ -124,7 +125,7 @@ impl CliEventHandler {
             } => {
                 self.finish_progress();
                 if !self.quiet {
-                    info!("[{}/{}] {url}", index + 1, total);
+                    info!("[{}/{}] {}", index + 1, total, RedactedUrl::new(url));
                 }
             }
             Event::Retrying {

@@ -176,7 +176,7 @@ impl Downloader for HlsDownloader {
                      expand_hls_in_place. Format: {}",
                     format.format_id
                 ),
-                url: Some(format.url.clone()),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(format.url.as_str())),
             });
         };
 
@@ -207,7 +207,7 @@ impl Downloader for HlsDownloader {
             message: "internal error: HlsDownloader::download_to_file called directly — \
                       use download_format with pre-resolved fragments (expand_hls_in_place)"
                 .to_string(),
-            url: Some(url.to_string()),
+            url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
         })
     }
 }

@@ -5,7 +5,7 @@ edition = "2024"
 license.workspace = true
 
 [dependencies]
-regex = "1.11"
+rdlp-redact = { workspace = true }
 url = "2.5"
 thiserror = "2.0"
 log = { workspace = true }

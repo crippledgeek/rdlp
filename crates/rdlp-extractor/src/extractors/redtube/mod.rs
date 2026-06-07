@@ -71,7 +71,10 @@ impl RedTubeExtractor {
     ) -> Result<formats::ApiVideoMetadata> {
         let api_url = patterns::build_api_video_url(video_id);
 
-        debug!("[RedTube] Fetching API video info: {api_url}");
+        debug!(
+            "[RedTube] Fetching API video info: {}",
+            rdlp_redact::RedactedUrl::new(&api_url)
+        );
 
         let response =
             ctx.http_client
@@ -80,14 +83,14 @@ impl RedTubeExtractor {
                 .await
                 .map_err(|e| RdlpError::Network {
                     message: format!("Failed to fetch RedTube video API: {e}"),
-                    url: Some(api_url.clone()),
+                    url: Some(api_url.clone().into()),
                 })?;
 
         rdlp_core::check_http_response(&response)?;
 
         let body = response.text().await.map_err(|e| RdlpError::Network {
             message: format!("Failed to read RedTube video API response: {e}"),
-            url: Some(api_url),
+            url: Some(api_url.into()),
         })?;
 
         BaseExtractor::log_content_if_verbose(ctx, "RedTube", "API video response", &body, 500);
@@ -225,7 +228,7 @@ impl InfoExtractor for RedTubeExtractor {
         // Get video ID using BaseExtractor
         let video_id = self.extract_id(url).ok_or_else(|| RdlpError::Extraction {
             message: format!("Could not extract video ID from URL: {url}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         })?;
 
         // Try API first for metadata
@@ -261,7 +264,7 @@ impl InfoExtractor for RedTubeExtractor {
                     "No video sources found in JavaScript or HTML. \
                      Video may be unavailable. URL: {url}"
                 ),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             });
         }
 
@@ -409,14 +412,14 @@ impl RedTubeExtractor {
             .await
             .map_err(|e| RdlpError::Network {
                 message: format!("Failed to fetch search API: {e}"),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             })?;
 
         rdlp_core::check_http_response(&response)?;
 
         let body = response.text().await.map_err(|e| RdlpError::Network {
             message: format!("Failed to read search API response: {e}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         })?;
 
         search::parse_api_search_results(&body)

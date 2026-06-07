@@ -116,7 +116,7 @@ impl InfoExtractor for XNXXExtractor {
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
         let video_id = patterns::extract_video_id(url).ok_or_else(|| RdlpError::Extraction {
             message: format!("xnxx: could not extract video ID from URL: {url}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         })?;
 
         debug!("[xnxx] Fetching video page for id={video_id}");
@@ -137,7 +137,7 @@ impl InfoExtractor for XNXXExtractor {
                 message: format!(
                     "xnxx: no video formats found (html5player calls missing). URL: {url}"
                 ),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             });
         }
 

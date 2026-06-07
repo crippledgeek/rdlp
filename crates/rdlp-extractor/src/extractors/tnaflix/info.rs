@@ -79,7 +79,7 @@ impl InfoExtractor for TNAFlixExtractor {
         // Get video ID using BaseExtractor
         let video_id = self.extract_id(url).ok_or_else(|| RdlpError::Extraction {
             message: format!("Could not extract video ID from URL: {url}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         })?;
 
         // Check if this is MovieFap (uses different video loading mechanism)
@@ -107,7 +107,7 @@ impl InfoExtractor for TNAFlixExtractor {
             // MovieFap: fetch XML from cdn.php
             let cdn_url = cdn_url_opt.ok_or_else(|| RdlpError::Extraction {
                 message: format!("Could not find cdn.php URL in MovieFap page: {url}"),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             })?;
 
             BaseExtractor::log_if_verbose(ctx, "MovieFap", &format!("cdn.php URL: {cdn_url}"));
@@ -138,7 +138,7 @@ impl InfoExtractor for TNAFlixExtractor {
                     message: format!(
                         "No video source tags found in HTML. Video may be unavailable. URL: {url}"
                     ),
-                    url: Some(url.to_string()),
+                    url: Some(url.to_string().into()),
                 });
             }
 
@@ -151,7 +151,7 @@ impl InfoExtractor for TNAFlixExtractor {
         if formats.is_empty() {
             return Err(RdlpError::Extraction {
                 message: format!("No video formats found for URL: {url}"),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             });
         }
 
