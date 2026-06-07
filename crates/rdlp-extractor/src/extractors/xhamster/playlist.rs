@@ -30,7 +30,7 @@ impl XHamsterExtractor {
         let (user_id, _is_user) =
             patterns::extract_user_info(url).ok_or_else(|| RdlpError::Extraction {
                 message: format!("Could not extract user ID: {url}"),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             })?;
 
         info!(user_id:?; "[XHamster] Extracting user playlist");
@@ -58,14 +58,14 @@ impl XHamsterExtractor {
                 .await
                 .map_err(|e| RdlpError::Network {
                     message: format!("Failed to fetch user page {page}: {e}"),
-                    url: Some(page_url.clone()),
+                    url: Some(page_url.clone().into()),
                 })?;
 
             check_http_response(&response)?;
 
             let webpage = response.text().await.map_err(|e| RdlpError::Network {
                 message: format!("Failed to read user page {page}: {e}"),
-                url: Some(page_url.clone()),
+                url: Some(page_url.clone().into()),
             })?;
 
             // Extract video URLs from the page
@@ -103,14 +103,14 @@ impl XHamsterExtractor {
         if total == 0 {
             return Err(RdlpError::Extraction {
                 message: format!("No videos found on user page: {url}"),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             });
         }
 
         if total > MAX_PLAYLIST_SIZE {
             return Err(RdlpError::Extraction {
                 message: format!("Playlist too large: {total} videos (max: {MAX_PLAYLIST_SIZE})"),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             });
         }
 
@@ -173,7 +173,7 @@ impl XHamsterExtractor {
         if results.is_empty() {
             return Err(RdlpError::Extraction {
                 message: format!("Failed to extract any videos from user page: {url}"),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             });
         }
 

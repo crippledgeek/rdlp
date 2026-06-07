@@ -49,7 +49,7 @@ pub async fn extract_playlist(
     let playlist_id =
         super::patterns::extract_playlist_id(url).ok_or_else(|| RdlpError::Extraction {
             message: format!("Could not extract playlist ID: {url}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         })?;
 
     let host = extract_host(url);
@@ -67,14 +67,14 @@ pub async fn extract_playlist(
         .await
         .map_err(|e| RdlpError::Network {
             message: format!("Failed to fetch playlist: {e}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         })?;
 
     check_http_response(&response)?;
 
     let webpage = response.text().await.map_err(|e| RdlpError::Network {
         message: format!("Failed to read response: {e}"),
-        url: Some(url.to_string()),
+        url: Some(url.to_string().into()),
     })?;
 
     // Extract metadata
@@ -98,7 +98,7 @@ pub async fn extract_playlist(
     if all_video_urls.is_empty() {
         return Err(RdlpError::Extraction {
             message: format!("No videos found in playlist: {url}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         });
     }
 
@@ -138,7 +138,7 @@ pub async fn extract_playlist(
     if total > MAX_PLAYLIST_SIZE {
         return Err(RdlpError::Extraction {
             message: format!("Playlist too large: {total} videos (max: {MAX_PLAYLIST_SIZE})"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         });
     }
 
@@ -210,7 +210,7 @@ pub async fn extract_playlist(
     if results.is_empty() {
         return Err(RdlpError::Extraction {
             message: format!("Failed to extract any videos from playlist: {url}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         });
     }
 
@@ -338,14 +338,14 @@ async fn download_page(
         .await
         .map_err(|e| RdlpError::Network {
             message: format!("Failed to fetch page {page_num}: {e}"),
-            url: Some(url.clone()),
+            url: Some(url.clone().into()),
         })?;
 
     check_http_response(&response)?;
 
     response.text().await.map_err(|e| RdlpError::Network {
         message: format!("Failed to read page {page_num}: {e}"),
-        url: Some(url),
+        url: Some(url.into()),
     })
 }
 

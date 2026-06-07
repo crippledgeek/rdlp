@@ -49,7 +49,7 @@ use crate::base::common::BaseExtractor;
 pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<InfoDict>> {
     let anime_id = patterns::extract_anime_id(url).ok_or_else(|| RdlpError::Extraction {
         message: format!("Could not extract anime ID from URL: {url}"),
-        url: Some(url.to_string()),
+        url: Some(url.to_string().into()),
     })?;
 
     let slug = patterns::extract_slug(url).unwrap_or_default();
@@ -72,7 +72,7 @@ pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<In
     if episodes.is_empty() {
         return Err(RdlpError::Extraction {
             message: format!("No episodes found for anime ID {anime_id}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         });
     }
 
@@ -83,7 +83,7 @@ pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<In
     if total > MAX_PLAYLIST_SIZE {
         return Err(RdlpError::Extraction {
             message: format!("Playlist too large: {total} episodes (max: {MAX_PLAYLIST_SIZE})"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         });
     }
 
@@ -174,7 +174,7 @@ pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<In
     if results.is_empty() {
         return Err(RdlpError::Extraction {
             message: format!("Failed to extract any episodes from anime: {url}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         });
     }
 

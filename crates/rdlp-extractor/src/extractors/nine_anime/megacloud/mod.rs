@@ -101,7 +101,7 @@ const KEYS_URL: &str = "https://raw.githubusercontent.com/yogesh-hacker/Megaclou
 pub async fn extract_sources(embed_url: &str, ctx: &ExtractionContext) -> Result<MegacloudSources> {
     let source_id = extract_source_id(embed_url).ok_or_else(|| RdlpError::Extraction {
         message: format!("Could not extract source ID from embed URL: {embed_url}"),
-        url: Some(embed_url.to_string()),
+        url: Some(embed_url.to_string().into()),
     })?;
     debug!(source_id:%; "Extracted Megacloud source ID");
 
@@ -131,7 +131,7 @@ pub async fn extract_sources(embed_url: &str, ctx: &ExtractionContext) -> Result
 
     Err(RdlpError::Extraction {
         message: "All Megacloud extraction strategies failed".to_string(),
-        url: Some(embed_url.to_string()),
+        url: Some(embed_url.to_string().into()),
     })
 }
 
@@ -181,30 +181,30 @@ async fn fetch_megacloud_key(ctx: &ExtractionContext) -> Result<String> {
         .await
         .map_err(|e| RdlpError::Network {
             message: format!("Failed to fetch megacloud keys: {e}"),
-            url: Some(KEYS_URL.to_string()),
+            url: Some(KEYS_URL.to_string().into()),
         })?;
 
     let json: serde_json::Value = response.json().await.map_err(|e| RdlpError::Extraction {
         message: format!("Failed to parse megacloud keys: {e}"),
-        url: Some(KEYS_URL.to_string()),
+        url: Some(KEYS_URL.to_string().into()),
     })?;
 
     let key = json["mega"].as_str().ok_or_else(|| RdlpError::Extraction {
         message: "No 'mega' field in megacloud keys response".to_string(),
-        url: Some(KEYS_URL.to_string()),
+        url: Some(KEYS_URL.to_string().into()),
     })?;
 
     // Validate key: non-empty, ASCII-only printable characters, reasonable length
     if key.is_empty() {
         return Err(RdlpError::Extraction {
             message: "Megacloud key is empty".to_string(),
-            url: Some(KEYS_URL.to_string()),
+            url: Some(KEYS_URL.to_string().into()),
         });
     }
     if !key.bytes().all(|b| (0x20..=0x7E).contains(&b)) {
         return Err(RdlpError::Extraction {
             message: "Megacloud key contains non-ASCII or non-printable characters".to_string(),
-            url: Some(KEYS_URL.to_string()),
+            url: Some(KEYS_URL.to_string().into()),
         });
     }
     if key.len() > 512 {
@@ -213,7 +213,7 @@ async fn fetch_megacloud_key(ctx: &ExtractionContext) -> Result<String> {
                 "Megacloud key length {} exceeds maximum of 512 bytes",
                 key.len()
             ),
-            url: Some(KEYS_URL.to_string()),
+            url: Some(KEYS_URL.to_string().into()),
         });
     }
 
@@ -239,13 +239,13 @@ async fn fetch_get_sources(
         .await
         .map_err(|e| RdlpError::Network {
             message: format!("Failed to fetch getSources: {e}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         })?;
 
     let status = response.status();
     let body = response.text().await.map_err(|e| RdlpError::Network {
         message: format!("Failed to read getSources body: {e}"),
-        url: Some(url.to_string()),
+        url: Some(url.to_string().into()),
     })?;
 
     if !status.is_success() {
@@ -254,7 +254,7 @@ async fn fetch_get_sources(
                 "getSources returned HTTP {status}: {}",
                 &body[..body.len().min(200)]
             ),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         });
     }
 
@@ -265,7 +265,7 @@ async fn fetch_get_sources(
             "Failed to parse getSources JSON: {e}. Body: {}",
             &body[..body.len().min(200)]
         ),
-        url: Some(url.to_string()),
+        url: Some(url.to_string().into()),
     })
 }
 

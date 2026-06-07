@@ -43,12 +43,12 @@ impl HlsSizeDetector {
                     message: format!(
                         "Server returned invalid M3U8 (likely expired token or CDN error): {preview}"
                     ),
-                    url: Some(m3u8_url.to_string()),
+                    url: Some(m3u8_url.to_string().into()),
                 }
             } else {
                 RdlpError::Extraction {
                     message: format!("M3U8 parse error: {e:?}"),
-                    url: Some(m3u8_url.to_string()),
+                    url: Some(m3u8_url.to_string().into()),
                 }
             }
         })?;
@@ -58,7 +58,7 @@ impl HlsSizeDetector {
             m3u8_rs::Playlist::MediaPlaylist(media) => {
                 let base_url = url::Url::parse(m3u8_url).map_err(|e| RdlpError::Extraction {
                     message: format!("Invalid base URL: {e}"),
-                    url: Some(m3u8_url.to_string()),
+                    url: Some(m3u8_url.to_string().into()),
                 })?;
 
                 let segments: Vec<String> = media
@@ -80,7 +80,7 @@ impl HlsSizeDetector {
                             "Playlist has too many segments: {} (max: {MAX_SEGMENTS})",
                             segments.len()
                         ),
-                        url: Some(m3u8_url.to_string()),
+                        url: Some(m3u8_url.to_string().into()),
                     });
                 }
 
@@ -101,7 +101,7 @@ impl HlsSizeDetector {
                 if master.variants.is_empty() {
                     return Err(RdlpError::Extraction {
                         message: "Master playlist has no variants".to_string(),
-                        url: Some(m3u8_url.to_string()),
+                        url: Some(m3u8_url.to_string().into()),
                     });
                 }
 
@@ -131,14 +131,14 @@ impl HlsSizeDetector {
                 // Resolve relative URL for media playlist
                 let base_url = url::Url::parse(m3u8_url).map_err(|e| RdlpError::Extraction {
                     message: format!("Invalid base URL: {e}"),
-                    url: Some(m3u8_url.to_string()),
+                    url: Some(m3u8_url.to_string().into()),
                 })?;
 
                 let media_playlist_url = base_url
                     .join(media_playlist_uri)
                     .map_err(|e| RdlpError::Extraction {
                         message: format!("Failed to join media playlist URL: {e}"),
-                        url: Some(m3u8_url.to_string()),
+                        url: Some(m3u8_url.to_string().into()),
                     })?
                     .to_string();
 
@@ -197,17 +197,17 @@ impl HlsSizeDetector {
                 if e.is_timeout() {
                     RdlpError::Network {
                         message: format!("Timeout for segment: {segment_url}"),
-                        url: Some(segment_url.to_string()),
+                        url: Some(segment_url.to_string().into()),
                     }
                 } else if e.is_connect() {
                     RdlpError::Network {
                         message: format!("Connection failed for segment: {segment_url}: {e}"),
-                        url: Some(segment_url.to_string()),
+                        url: Some(segment_url.to_string().into()),
                     }
                 } else {
                     RdlpError::Network {
                         message: format!("Failed to fetch segment: {e}"),
-                        url: Some(segment_url.to_string()),
+                        url: Some(segment_url.to_string().into()),
                     }
                 }
             })?;
@@ -240,7 +240,7 @@ impl HlsSizeDetector {
 
         Err(RdlpError::Extraction {
             message: format!("Could not detect segment size for: {segment_url}"),
-            url: Some(segment_url.to_string()),
+            url: Some(segment_url.to_string().into()),
         })
     }
 

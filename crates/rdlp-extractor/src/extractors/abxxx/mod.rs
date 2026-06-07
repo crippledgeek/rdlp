@@ -193,7 +193,7 @@ impl InfoExtractor for AbxxxExtractor {
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
         let video_id = patterns::extract_video_id(url).ok_or_else(|| RdlpError::Extraction {
             message: format!("Could not extract video id from URL: {url}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         })?;
         let slug = patterns::extract_slug(url);
 
@@ -214,11 +214,11 @@ impl InfoExtractor for AbxxxExtractor {
 
         let parsed: Value = serde_json::from_str(&body).map_err(|e| RdlpError::Extraction {
             message: format!("videofile.php returned non-JSON body ({e}): {body}"),
-            url: Some(api_url.clone()),
+            url: Some(api_url.clone().into()),
         })?;
         let entries = parsed.as_array().ok_or_else(|| RdlpError::Extraction {
             message: format!("videofile.php payload is not a JSON array: {parsed}"),
-            url: Some(api_url.clone()),
+            url: Some(api_url.clone().into()),
         })?;
 
         let mut formats = Vec::with_capacity(entries.len());
@@ -241,7 +241,7 @@ impl InfoExtractor for AbxxxExtractor {
         if formats.is_empty() {
             return Err(RdlpError::Extraction {
                 message: format!("No usable formats decoded from videofile.php for {video_id}"),
-                url: Some(api_url),
+                url: Some(api_url.into()),
             });
         }
 

@@ -262,13 +262,13 @@ impl HlsSizeDetector {
                 // Resolve and fetch the media playlist for segment info
                 let base_url = url::Url::parse(m3u8_url).map_err(|e| RdlpError::Extraction {
                     message: format!("Invalid base URL: {e}"),
-                    url: Some(m3u8_url.to_string()),
+                    url: Some(m3u8_url.to_string().into()),
                 })?;
                 let media_url = base_url
                     .join(&variant.uri)
                     .map_err(|e| RdlpError::Extraction {
                         message: format!("Failed to join media playlist URL: {e}"),
-                        url: Some(m3u8_url.to_string()),
+                        url: Some(m3u8_url.to_string().into()),
                     })?
                     .to_string();
 
@@ -398,7 +398,7 @@ impl HlsSizeDetector {
 
         let base_url = url::Url::parse(m3u8_url).map_err(|e| RdlpError::Extraction {
             message: format!("Invalid base URL: {e}"),
-            url: Some(m3u8_url.to_string()),
+            url: Some(m3u8_url.to_string().into()),
         })?;
 
         let mut variants = expand_master_variants(&master, &base_url);
@@ -421,7 +421,7 @@ impl HlsSizeDetector {
             .join(&best_variant.uri)
             .map_err(|e| RdlpError::Extraction {
                 message: format!("Failed to join media URL: {e}"),
-                url: Some(m3u8_url.to_string()),
+                url: Some(m3u8_url.to_string().into()),
             })?
             .to_string();
 

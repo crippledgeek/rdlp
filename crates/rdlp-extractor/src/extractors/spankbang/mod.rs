@@ -60,7 +60,7 @@ impl SpankBangExtractor {
             .await
             .map_err(|e| RdlpError::Network {
                 message: format!("SpankBang formats API request failed: {e:#}"),
-                url: Some(FORMATS_API_URL.to_string()),
+                url: Some(FORMATS_API_URL.to_string().into()),
             })?;
 
         let status = resp.status();
@@ -75,7 +75,7 @@ impl SpankBangExtractor {
             .await
             .map_err(|e| RdlpError::Extraction {
                 message: format!("SpankBang formats API JSON parse failed: {e:#}"),
-                url: Some(FORMATS_API_URL.to_string()),
+                url: Some(FORMATS_API_URL.to_string().into()),
             })
     }
 }
@@ -101,7 +101,7 @@ impl InfoExtractor for SpankBangExtractor {
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> Result<InfoDict> {
         let video_id = patterns::extract_video_id(url).ok_or_else(|| RdlpError::Extraction {
             message: format!("SpankBang: could not extract video ID from URL: {url}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         })?;
 
         // Playlist URLs match VIDEO_URL but require a different fetch path
@@ -110,7 +110,7 @@ impl InfoExtractor for SpankBangExtractor {
         if url.contains("/playlist/") {
             return Err(RdlpError::Extraction {
                 message: "SpankBang playlist extraction is not yet implemented".to_string(),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             });
         }
 
@@ -126,7 +126,7 @@ impl InfoExtractor for SpankBangExtractor {
         if metadata::is_removed(&webpage) {
             return Err(RdlpError::Extraction {
                 message: format!("SpankBang: video {video_id} is not available"),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             });
         }
 
@@ -150,7 +150,7 @@ impl InfoExtractor for SpankBangExtractor {
                     "SpankBang: neither inline stream_data nor data-streamkey present \
                      on page {url}"
                 ),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             })?;
             let data = Self::fetch_formats_api(ctx, &key, &canonical).await?;
             formats = formats::build_formats(&data);
@@ -162,7 +162,7 @@ impl InfoExtractor for SpankBangExtractor {
         if formats.is_empty() {
             return Err(RdlpError::Extraction {
                 message: format!("SpankBang: no playable formats found for {url}"),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             });
         }
 

@@ -79,7 +79,7 @@ impl XHamsterExtractor {
         // Extract video ID and display ID
         let video_id = patterns::extract_video_id(&url).ok_or_else(|| RdlpError::Extraction {
             message: format!("Could not extract video ID: {url}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         })?;
         let display_id = patterns::extract_display_id(&url);
 
@@ -90,7 +90,7 @@ impl XHamsterExtractor {
         if let Some(error_msg) = utils::detect_video_unavailable(&webpage) {
             return Err(RdlpError::Extraction {
                 message: error_msg,
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             });
         }
 
@@ -164,7 +164,7 @@ impl XHamsterExtractor {
         if formats.is_empty() {
             return Err(RdlpError::Extraction {
                 message: format!("No video formats found for URL: {url}"),
-                url: Some(url.to_string()),
+                url: Some(url.to_string().into()),
             });
         }
 
@@ -235,7 +235,7 @@ impl XHamsterExtractor {
 
         Err(RdlpError::Extraction {
             message: format!("Could not extract video URL from embed page: {url}"),
-            url: Some(url.to_string()),
+            url: Some(url.to_string().into()),
         })
     }
 
