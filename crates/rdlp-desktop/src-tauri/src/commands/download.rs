@@ -96,6 +96,12 @@ pub struct DownloadOptions {
     /// `None` = use default (Copy).
     #[serde(default)]
     pub recode_audio: Option<RecodeAudioMode>,
+    /// Encoder threads for video recode (1-64). `None` = auto.
+    #[serde(default)]
+    pub recode_threads: Option<u32>,
+    /// Encoder preset override for video recode. `None` = per-codec default.
+    #[serde(default)]
+    pub recode_preset: Option<String>,
     /// Enable verbose `FFmpeg` log capture for this download.
     /// `None` = use settings default.
     #[serde(default)]
@@ -115,6 +121,24 @@ pub struct PlaylistContext {
     pub playlist_index: usize,
     /// Total number of episodes in the playlist.
     pub playlist_count: usize,
+}
+
+/// Reject an out-of-range explicit recode thread count at the IPC boundary.
+///
+/// `None` (auto) and `1..=MAX_RECODE_THREADS` are accepted. The desktop path
+/// does not run `Config::validate()`, so this is the boundary guard.
+fn validate_recode_threads(threads: Option<u32>) -> Result<(), AppError> {
+    match threads {
+        None => Ok(()),
+        Some(t) if (1..=rdlp_types::config::MAX_RECODE_THREADS).contains(&t) => Ok(()),
+        Some(t) => Err(AppError::InvalidInput {
+            field: "recode_threads".to_owned(),
+            message: format!(
+                "recode_threads must be 1..={} (got {t})",
+                rdlp_types::config::MAX_RECODE_THREADS
+            ),
+        }),
+    }
 }
 
 /// Start a new download for the given URL.
@@ -182,6 +206,10 @@ pub async fn start_download(
             message: e.to_string(),
         })?;
     }
+
+    // Validate recode thread count at the IPC boundary (Config::validate is not
+    // called on the desktop path, so this guard is the only enforcement point).
+    validate_recode_threads(options.recode_threads)?;
 
     // Save a serializable snapshot of the options for retry (before any partial moves).
     let saved_options = serde_json::to_value(&options)
@@ -266,6 +294,8 @@ pub async fn start_download(
             video_encoder: options.video_encoder,
             recode_container: options.recode_container,
             recode_audio: options.recode_audio,
+            recode_threads: options.recode_threads,
+            recode_preset: options.recode_preset,
             embed_thumbnail: Some(options.embed_thumbnail),
             embed_metadata: Some(settings.embed_metadata),
             write_thumbnail: write_thumbnail_resolved.then_some(true),
@@ -497,8 +527,22 @@ mod tests {
             video_encoder: None,
             recode_container: None,
             recode_audio: None,
+            recode_threads: None,
+            recode_preset: None,
             verbose: None,
         }
+    }
+
+    // ------------------------------------------------------------------ //
+    // Recode thread validation
+    // ------------------------------------------------------------------ //
+
+    #[test]
+    fn rejects_out_of_range_recode_threads() {
+        assert!(validate_recode_threads(Some(0)).is_err());
+        assert!(validate_recode_threads(Some(rdlp_types::config::MAX_RECODE_THREADS + 1)).is_err());
+        assert!(validate_recode_threads(Some(8)).is_ok());
+        assert!(validate_recode_threads(None).is_ok());
     }
 
     // ------------------------------------------------------------------ //
