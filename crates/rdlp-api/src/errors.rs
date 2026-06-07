@@ -154,11 +154,12 @@ impl RdlpApiError {
 impl From<RdlpError> for RdlpApiError {
     /// Convert an internal [`RdlpError`] to a stable API error.
     ///
-    /// **Note:** `RdlpError` variants do not carry the source URL, so
-    /// `ExtractError::source_url` is left empty in this blanket conversion.
-    /// Call sites that have the URL available should use
-    /// `RdlpApiError::ExtractError { message, source_url }` directly instead
-    /// of relying on this `From` impl.
+    /// **Note:** For [`RdlpError::Extraction`], the source URL IS propagated
+    /// into [`RdlpApiError::ExtractError::source_url`] via the redacted
+    /// [`rdlp_redact::RedactedUrlBuf`] Display (credentials stripped). For
+    /// [`RdlpError::Network`] and [`RdlpError::Download`], the URL is not
+    /// surfaced in the API error — call sites that need it should construct
+    /// `RdlpApiError::NetworkError` directly.
     fn from(err: RdlpError) -> Self {
         match err {
             RdlpError::Network { message, .. } | RdlpError::Download { message, .. } => {

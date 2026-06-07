@@ -380,7 +380,10 @@ impl HttpDownloader {
                 }
                 Ok(Some(Err(e))) => {
                     return Err(RdlpError::Network {
-                        message: format!("Failed to read chunk body from {url}: {e}"),
+                        message: format!(
+                            "Failed to read chunk body from {}: {e}",
+                            rdlp_redact::RedactedUrl::new(url.as_str())
+                        ),
                         url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
                     });
                 }
@@ -484,7 +487,10 @@ impl HttpDownloader {
 
             let Some(chunk_result) = next else { break };
             let chunk = chunk_result.map_err(|e| RdlpError::Network {
-                message: format!("Failed to read response body from {url_string}: {e}"),
+                message: format!(
+                    "Failed to read response body from {}: {e}",
+                    rdlp_redact::RedactedUrl::new(url_string.as_ref())
+                ),
                 url: Some(rdlp_redact::RedactedUrlBuf::from(url_string.as_ref())),
             })?;
 
@@ -689,7 +695,10 @@ mod cancel_helper_tests {
                     message.to_lowercase().contains("timed out"),
                     "got: {message}"
                 );
-                assert_eq!(url.as_ref().map(rdlp_redact::RedactedUrlBuf::expose), Some("http://test"));
+                assert_eq!(
+                    url.as_ref().map(rdlp_redact::RedactedUrlBuf::expose),
+                    Some("http://test")
+                );
             }
             other => panic!("expected Network timeout, got {other:?}"),
         }

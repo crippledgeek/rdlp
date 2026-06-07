@@ -495,7 +495,7 @@ impl HttpDownloader {
 
                 let Some(chunk_result) = next else { break };
                 let chunk = chunk_result
-                    .map_err(|e| RdlpError::Network { message: format!("Failed to read resume response body from {url_string}: {e}"), url: Some(rdlp_redact::RedactedUrlBuf::from(url_string.as_ref())) })?;
+                    .map_err(|e| RdlpError::Network { message: format!("Failed to read resume response body from {}: {e}", rdlp_redact::RedactedUrl::new(url_string.as_ref())), url: Some(rdlp_redact::RedactedUrlBuf::from(url_string.as_ref())) })?;
 
                 writer.write_all(&chunk).await.map_err(|e| RdlpError::Io(
                     std::io::Error::new(e.kind(), format!("failed to write to resumed file '{}': {e}", path.display()))

@@ -165,7 +165,7 @@ impl Orchestrator {
     /// # Errors
     /// Returns an error if the download fails or the downloader does not
     /// support writer-based output.
-    #[instrument(skip(self, downloader, writer), fields(url = %url))]
+    #[instrument(skip(self, downloader, writer), fields(url = %rdlp_redact::RedactedUrl::new(url)))]
     pub(super) async fn execute_download_to_writer(
         &self,
         downloader: &Arc<dyn Downloader>,

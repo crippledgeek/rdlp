@@ -264,6 +264,27 @@ mod redact_tests {
             "url absent from Display: {disp}"
         );
     }
+
+    #[test]
+    fn network_error_message_should_be_built_with_redaction() {
+        // Guards the #328 seam: a message built from a presigned URL must redact it.
+        // Construct the error the way the downloader does (message via RedactedUrl inline).
+        let raw = "https://cdn/s.m4s?X-Amz-Signature=DEADBEEF";
+        let safe = rdlp_redact::redact_str(raw);
+        let err = RdlpError::Network {
+            message: format!("Failed to read chunk body from {safe}: timeout"),
+            url: Some(rdlp_redact::RedactedUrlBuf::from(raw)),
+        };
+        let rendered = format!("{err}"); // Display = "Network error: {message}"
+        assert!(
+            !rendered.contains("DEADBEEF"),
+            "raw signature must not appear in message: {rendered}"
+        );
+        assert!(
+            rendered.contains("X-Amz-Signature=***"),
+            "redacted form expected in message: {rendered}"
+        );
+    }
 }
 
 #[cfg(test)]
