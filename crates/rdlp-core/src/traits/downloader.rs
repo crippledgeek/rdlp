@@ -256,54 +256,6 @@ impl DownloadProgress {
         }
     }
 
-    /// Create a new segment-based progress update (for HLS downloads)
-    #[must_use]
-    pub fn new_with_segments(
-        bytes_downloaded: u64,
-        speed: f64,
-        segments_downloaded: u64,
-        total_segments: u64,
-    ) -> Self {
-        let progress = if total_segments > 0 {
-            Some(Progress::from_ratio(segments_downloaded, total_segments))
-        } else {
-            None
-        };
-
-        let eta = if speed > 1.0 && total_segments > 0 {
-            let remaining_segments = total_segments.saturating_sub(segments_downloaded);
-            // Default 2MB estimate when no segments have completed yet.
-            // checked_div + unwrap_or matches clippy::manual_checked_ops (Rust 1.95+).
-            let avg_segment_size = bytes_downloaded
-                .checked_div(segments_downloaded)
-                .unwrap_or(2 * 1024 * 1024);
-            let remaining_bytes = remaining_segments * avg_segment_size;
-            // ETA estimation: precision loss is acceptable for display.
-            #[allow(clippy::cast_precision_loss)]
-            let secs = remaining_bytes as f64 / speed;
-            if secs <= 86_400.0 {
-                Some(Duration::from_secs_f64(secs))
-            } else {
-                None
-            }
-        } else {
-            None
-        };
-
-        Self {
-            bytes_downloaded,
-            total_bytes: None, // Unknown for HLS
-            speed,
-            eta,
-            progress,
-            segments_downloaded: Some(segments_downloaded),
-            total_segments: Some(total_segments),
-            duration_downloaded: None,
-            total_duration: None,
-            is_estimated: false,
-        }
-    }
-
     /// Create a new duration-based progress update (for HLS with duration tracking)
     ///
     /// Uses stream duration for more accurate progress/ETA than segment count,
@@ -543,10 +495,6 @@ mod tests {
         assert!(
             !DownloadProgress::new(10, Some(100), 50.0).is_estimated,
             "new: exact total_bytes is not an estimate"
-        );
-        assert!(
-            !DownloadProgress::new_with_segments(10, 50.0, 1, 4).is_estimated,
-            "new_with_segments: no total_bytes, vacuously not estimated"
         );
         assert!(
             !DownloadProgress::new_with_duration(10, 50.0, 1, 4, 2.0, 8.0).is_estimated,
