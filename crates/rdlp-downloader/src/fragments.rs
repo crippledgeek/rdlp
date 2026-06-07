@@ -385,6 +385,7 @@ pub async fn download_pre_resolved_fragments(
                 eta: speed.eta(expected_total.map(|t| t.saturating_sub(total_bytes))),
                 duration_downloaded: None,
                 total_duration: None,
+                is_estimated: false,
             });
             last_emit = now;
         }
