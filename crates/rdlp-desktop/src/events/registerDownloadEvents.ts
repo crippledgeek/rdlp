@@ -26,6 +26,10 @@ interface ProgressEntry {
     progress: number;
     speed: string | null;
     eta: string | null;
+    totalBytes: number | null;
+    isEstimated: boolean;
+    segmentsDownloaded: number | null;
+    totalSegments: number | null;
 }
 
 /**
@@ -77,6 +81,10 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
                 progress: p.progress,
                 speed: p.speed,
                 eta: p.eta,
+                totalBytes: p.totalBytes,
+                isEstimated: p.isEstimated,
+                segmentsDownloaded: p.segmentsDownloaded,
+                totalSegments: p.totalSegments,
             });
             scheduleFlush();
         }),

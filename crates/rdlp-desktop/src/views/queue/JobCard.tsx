@@ -11,6 +11,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { isTerminal as isTerminalStatus, isInFlight, jobSubLabel } from "@/lib/jobStatus";
 import { invokeTyped } from "@/api/invokeClient";
 import { cn, displayTitle, progressPercentLabel } from "@/lib/utils";
+import { formatSize } from "@/components/utils/formatUtils";
 import type { DownloadJob } from "@/types";
 
 interface JobCardProps {
@@ -102,6 +103,21 @@ export function JobCard({ job, compact = false }: JobCardProps) {
                             </span>
                             {job.speed && <span>{job.speed}</span>}
                             {job.status !== "processing" && job.eta && <span>ETA {job.eta}</span>}
+                            {/* Estimated total size (segmented download, no Content-Length).
+                                The "~" is hidden from the a11y tree and paired with an
+                                sr-only "approximately" so screen readers don't say "tilde"
+                                (aria-label on a static span is ignored by JAWS/NVDA). */}
+                            {job.isEstimated && job.totalBytes != null && (
+                                <span>
+                                    <span aria-hidden="true">~</span>
+                                    <span className="sr-only">approximately </span>
+                                    {formatSize(job.totalBytes)}
+                                </span>
+                            )}
+                            {/* Fragment counter for segmented HLS/DASH (CLI parity). */}
+                            {job.segmentsDownloaded != null && job.totalSegments != null && (
+                                <span>frag {job.segmentsDownloaded}/{job.totalSegments}</span>
+                            )}
                             {subLabel && (
                                 <span className="text-[#4a9eff] truncate">{subLabel}</span>
                             )}
