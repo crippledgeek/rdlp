@@ -19,7 +19,7 @@ import {
 } from "../lib/tauri";
 import { queryKeys } from "../query/queryKeys";
 import { appendLog } from "../components/LogViewer";
-import { cancelledJobPatch } from "../lib/jobStatus";
+import { cancelledJobPatch, postProcessingJobPatch } from "../lib/jobStatus";
 import type { DownloadJob } from "../types";
 
 interface ProgressEntry {
@@ -181,9 +181,7 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
                         job.id === p.jobId
                             ? {
                                   ...job,
-                                  progress: p.progress,
-                                  speed: null,
-                                  eta: p.eta,
+                                  ...postProcessingJobPatch(p.stage, p.progress, p.eta),
                               }
                             : job,
                     ),

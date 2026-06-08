@@ -148,4 +148,33 @@ describe("registerDownloadEvents", () => {
         const jobs = qc.getQueryData<DownloadJob[]>(queryKeys.downloads.list())!;
         expect(jobs[0]!.progress).toBeCloseTo(0.47, 5);
     });
+
+    it("flips a running job to processing with its stage on postprocess-progress", async () => {
+        // Regression guard: post-processing (recode/remux) must move the job into
+        // the non-terminal `processing` bucket with a stage label. Before the fix
+        // the reducer touched only progress/eta, so the badge stayed "Downloading"
+        // (running) through the whole recode.
+        const job = makeJob({
+            id: "j1",
+            status: "running",
+            progress: 0.99,
+            speed: "5 MB/s",
+            eta: "00:01",
+        });
+        qc.setQueryData<DownloadJob[]>(queryKeys.downloads.list(), [job]);
+
+        await mockEmit("postprocess-progress", {
+            jobId: "j1",
+            stage: "Recode",
+            progress: 0.02,
+            eta: "01:30",
+        });
+
+        const jobs = qc.getQueryData<DownloadJob[]>(queryKeys.downloads.list())!;
+        expect(jobs[0]!.status).toBe("processing");
+        expect(jobs[0]!.stage).toBe("Recode");
+        expect(jobs[0]!.progress).toBeCloseTo(0.02, 5);
+        expect(jobs[0]!.eta).toBe("01:30");
+        expect(jobs[0]!.speed).toBeNull();
+    });
 });
