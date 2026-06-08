@@ -266,13 +266,15 @@ impl FFmpegRunner {
             video_encoder.set_bit_rate(0);
         }
 
-        // Open encoder with preset/CRF options
+        // Build encoder options (preset/crf/threads/wide-parallelism) via the
+        // pure helper so the full matrix is unit-tested. Always sets explicit
+        // threads — libvvenc at thread_count=0 runs main-thread-only.
         let mut enc_opts = ffmpeg_the_third::Dictionary::new();
-        if let Some(ref preset) = opts.preset {
-            enc_opts.set("preset", preset);
-        }
-        if let Some(crf) = opts.crf {
-            enc_opts.set("crf", &crf.to_string());
+        for (key, value) in crate::ffmpeg::transcode::encoder_options::build_video_encoder_options(
+            opts,
+            video_codec_name,
+        ) {
+            enc_opts.set(key, &value);
         }
         let video_encoder = video_encoder
             .open_as_with(video_enc_codec, enc_opts)

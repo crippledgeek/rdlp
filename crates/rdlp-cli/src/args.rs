@@ -211,6 +211,15 @@ pub struct Args {
     #[arg(long, value_name = "MODE", default_value = "copy")]
     pub recode_audio: String,
 
+    /// Encoder threads for video recode (1-64). Omit for auto (min(cores, 8)).
+    #[arg(long, value_name = "N")]
+    pub recode_threads: Option<u32>,
+
+    /// Encoder preset override for video recode (e.g. `faster`, `medium`, `slow`).
+    /// Omit to use the per-codec default. `libvvenc`: try `faster` for speed.
+    #[arg(long, value_name = "PRESET")]
+    pub recode_preset: Option<String>,
+
     /// Remux to container for better seeking - no re-encoding
     /// Use --remux for interactive, --remux=mp4 for direct
     #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true)]

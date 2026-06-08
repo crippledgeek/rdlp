@@ -116,6 +116,8 @@ export function EpisodeList({ episodes, playlistUrl, playlistTitle }: EpisodeLis
             videoEncoder: null,
             recodeAudio: null,
             recodeContainer: null,
+            recodeThreads: null,
+            recodePreset: null,
             verbose: null,
         };
 

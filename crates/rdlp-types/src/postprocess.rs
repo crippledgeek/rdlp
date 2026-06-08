@@ -73,6 +73,16 @@ pub struct PostProcess {
     pub recode_audio: RecodeAudioMode,
     /// Override the output container for recode (independent of `recode_video`).
     pub recode_container: Option<ContainerFormat>,
+    /// Encoder thread count for video recode. `None` = auto-detect at startup
+    /// (`min(available_parallelism(), 8)`). `Some(n)` sets an explicit count.
+    /// Validated post-load by `Config::validate()`: must be 1..=64 when set
+    /// (the 64 ceiling bounds peak encoder RAM: threads × frame buffers).
+    /// Audio stages are unaffected — audio encoders are single-threaded.
+    pub recode_threads: Option<u32>,
+    /// Encoder preset override for video recode (e.g. `"faster"`, `"medium"`).
+    /// `None` = use `RecodeStage`'s per-codec default preset. When `Some`, this
+    /// value replaces that default and is passed verbatim to the encoder.
+    pub recode_preset: Option<String>,
     /// Policy for automatic fixup of downloaded files.
     pub fixup: FixupPolicy,
 }
@@ -108,6 +118,8 @@ impl Default for PostProcess {
             video_encoder: None,
             recode_audio: RecodeAudioMode::default(),
             recode_container: None,
+            recode_threads: None,
+            recode_preset: None,
             fixup: FixupPolicy::default(),
         }
     }
@@ -151,5 +163,12 @@ mod tests {
         let parsed: PostProcess = serde_json::from_str("{}").unwrap();
         assert!(parsed.embed_thumbnail);
         assert_eq!(parsed.fixup, FixupPolicy::DetectOrWarn);
+    }
+
+    #[test]
+    fn recode_threads_and_preset_default_to_none() {
+        let pp = PostProcess::default();
+        assert_eq!(pp.recode_threads, None);
+        assert_eq!(pp.recode_preset, None);
     }
 }

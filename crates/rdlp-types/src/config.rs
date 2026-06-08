@@ -9,6 +9,14 @@ use crate::browser_type::BrowserType;
 use crate::postprocess::PostProcess;
 use crate::subtitle_format::SubtitleFormat;
 
+/// Hard ceiling for an explicit [`PostProcess::recode_threads`] value.
+///
+/// Mirrors `concurrent_fragments`' 64 cap: bounds peak encoder memory, which
+/// scales with thread count (each frame thread allocates reconstruction
+/// buffers ≈ one uncompressed frame). The *auto* default is far lower; this is
+/// only the ceiling for explicit overrides.
+pub const MAX_RECODE_THREADS: u32 = 64;
+
 /// Errors from configuration validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigValidationError {
@@ -482,6 +490,15 @@ impl Config {
             return Err(ConfigValidationError::OutOfRange {
                 field: "concurrent_fragments",
                 reason: "must be 1..=64 (caps peak transient memory under parallel fragment fetch)",
+            });
+        }
+        if let Some(threads) = self.postprocess.recode_threads
+            && !(1..=MAX_RECODE_THREADS).contains(&threads)
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "recode_threads",
+                reason: "must be 1..=64 (bounds peak encoder RAM; 0 is invalid — \
+                         leave unset for auto-detect)",
             });
         }
         if self.buffer_size == 0 {

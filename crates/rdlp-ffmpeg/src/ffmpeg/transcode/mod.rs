@@ -8,9 +8,11 @@ mod audio_pipeline;
 mod audio_pipeline_direct;
 mod audio_recode_pipeline;
 mod cancel;
+pub mod encoder_options;
 pub mod mux_timing;
 #[cfg(test)]
 mod tests;
+pub mod thread_resolve;
 mod video_convert;
 mod video_pipeline;
 mod video_transcode_context;

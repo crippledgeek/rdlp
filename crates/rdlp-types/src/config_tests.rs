@@ -647,3 +647,38 @@ fn test_validate_parallel_threshold_none_is_valid() {
         "None must be valid (uses downloader default)"
     );
 }
+
+#[test]
+fn validate_rejects_zero_recode_threads() {
+    let mut cfg = Config::default();
+    cfg.postprocess.recode_threads = Some(0);
+    assert!(matches!(
+        cfg.validate().unwrap_err(),
+        ConfigValidationError::OutOfRange {
+            field: "recode_threads",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn validate_rejects_recode_threads_above_cap() {
+    let mut cfg = Config::default();
+    cfg.postprocess.recode_threads = Some(MAX_RECODE_THREADS + 1);
+    assert!(matches!(
+        cfg.validate().unwrap_err(),
+        ConfigValidationError::OutOfRange {
+            field: "recode_threads",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn validate_accepts_recode_threads_in_range() {
+    let mut cfg = Config::default();
+    for threads in [1, 8, MAX_RECODE_THREADS] {
+        cfg.postprocess.recode_threads = Some(threads);
+        assert!(cfg.validate().is_ok(), "threads={threads} must be valid");
+    }
+}

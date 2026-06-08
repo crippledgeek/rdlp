@@ -213,6 +213,10 @@ pub struct PostProcessOptions {
     /// Audio handling during video recode.
     /// `None` preserves base config (defaults to Copy).
     pub recode_audio: Option<rdlp_types::RecodeAudioMode>,
+    /// Encoder thread count for video recode. `None` = auto (min(cores, 8)).
+    pub recode_threads: Option<u32>,
+    /// Encoder preset override for video recode. `None` = per-codec default.
+    pub recode_preset: Option<String>,
 }
 
 /// Network, retry, and cookie options.
