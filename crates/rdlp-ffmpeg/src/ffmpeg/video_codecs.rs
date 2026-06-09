@@ -22,6 +22,9 @@ pub struct VideoEncoderInfo {
     pub encoder_name: String,
     /// Human-readable display name (e.g., "x264 (H.264)")
     pub display_name: String,
+    /// Speed-control knobs this encoder exposes (preset / deadline+cpu-used /
+    /// `speed_level`). Empty when the encoder has no panel-controllable knob.
+    pub speed_controls: Vec<SpeedKnob>,
 }
 
 /// Information about a video codec and its available encoders.
@@ -51,8 +54,6 @@ pub enum KnobField {
 }
 
 /// Static-table form of a knob (lives next to `CODEC_PREFERENCES`).
-// Unused until Task 4 wires it into VideoEncoderInfo.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum KnobKindDef {
     Choice {
@@ -66,8 +67,6 @@ pub(crate) enum KnobKindDef {
     },
 }
 
-// Unused until Task 4 wires it into VideoEncoderInfo.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SpeedKnobDef {
     pub field: KnobField,
@@ -76,8 +75,6 @@ pub(crate) struct SpeedKnobDef {
 }
 
 /// Serde/IPC form of a knob (materialized into [`VideoEncoderInfo`]).
-// Unused until Task 4 wires it into VideoEncoderInfo.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum SpeedKnob {
@@ -108,8 +105,6 @@ pub enum SpeedKnob {
 }
 
 impl SpeedKnob {
-    // Unused until Task 4 wires it into VideoEncoderInfo materialization.
-    #[allow(dead_code)]
     pub(crate) fn from_def(d: &SpeedKnobDef) -> Self {
         match d.kind {
             KnobKindDef::Choice { choices, default } => Self::Choice {
@@ -130,9 +125,6 @@ impl SpeedKnob {
 }
 
 // --- Per-encoder knob tables (verified against FFmpeg 8.0.1-mediaforge, 2026-06-09) ---
-// These constants are referenced only by speed_controls_def(), which is itself
-// unused until Task 4. The allows are removed once the wiring lands.
-#[allow(dead_code)]
 const PRESETS_X26X: &[&str] = &[
     "ultrafast",
     "superfast",
@@ -145,14 +137,10 @@ const PRESETS_X26X: &[&str] = &[
     "veryslow",
     "placebo",
 ];
-#[allow(dead_code)]
 const PRESETS_VVENC: &[&str] = &["faster", "fast", "medium", "slow", "slower"];
-#[allow(dead_code)]
 const PRESETS_XEVE: &[&str] = &["default", "fast", "medium", "slow", "placebo"];
-#[allow(dead_code)]
 const DEADLINE_VALUES: &[&str] = &["best", "good", "realtime"];
 
-#[allow(dead_code)]
 const KNOBS_X264: &[SpeedKnobDef] = &[SpeedKnobDef {
     field: KnobField::Preset,
     label: "Preset",
@@ -161,9 +149,7 @@ const KNOBS_X264: &[SpeedKnobDef] = &[SpeedKnobDef {
         default: "medium",
     },
 }];
-#[allow(dead_code)]
 const KNOBS_X265: &[SpeedKnobDef] = KNOBS_X264; // identical preset vocabulary
-#[allow(dead_code)]
 const KNOBS_VVENC: &[SpeedKnobDef] = &[SpeedKnobDef {
     field: KnobField::Preset,
     label: "Preset",
@@ -172,7 +158,6 @@ const KNOBS_VVENC: &[SpeedKnobDef] = &[SpeedKnobDef {
         default: "medium",
     },
 }];
-#[allow(dead_code)]
 const KNOBS_XEVE: &[SpeedKnobDef] = &[SpeedKnobDef {
     field: KnobField::Preset,
     label: "Preset",
@@ -181,7 +166,6 @@ const KNOBS_XEVE: &[SpeedKnobDef] = &[SpeedKnobDef {
         default: "medium",
     },
 }];
-#[allow(dead_code)]
 const KNOBS_SVTAV1: &[SpeedKnobDef] = &[SpeedKnobDef {
     field: KnobField::Preset,
     label: "Preset",
@@ -189,9 +173,8 @@ const KNOBS_SVTAV1: &[SpeedKnobDef] = &[SpeedKnobDef {
         min: -2,
         max: 13,
         default: -2,
-    },
+    }, // -2 = SVT-AV1 "auto" sentinel (encoder picks preset)
 }];
-#[allow(dead_code)]
 const KNOBS_VP9: &[SpeedKnobDef] = &[
     SpeedKnobDef {
         field: KnobField::Deadline,
@@ -211,7 +194,6 @@ const KNOBS_VP9: &[SpeedKnobDef] = &[
         },
     },
 ];
-#[allow(dead_code)]
 const KNOBS_VP8: &[SpeedKnobDef] = &[
     SpeedKnobDef {
         field: KnobField::Deadline,
@@ -231,7 +213,6 @@ const KNOBS_VP8: &[SpeedKnobDef] = &[
         },
     },
 ];
-#[allow(dead_code)]
 const KNOBS_XAVS2: &[SpeedKnobDef] = &[SpeedKnobDef {
     field: KnobField::SpeedLevel,
     label: "Speed level",
@@ -244,8 +225,6 @@ const KNOBS_XAVS2: &[SpeedKnobDef] = &[SpeedKnobDef {
 
 /// Speed-control descriptor for an encoder. Empty slice = encoder exposes no
 /// panel-controllable speed knob (or is not modeled yet, e.g. unlinked encoders).
-// Unused until Task 4 wires it into VideoEncoderInfo.
-#[allow(dead_code)]
 #[must_use]
 pub(crate) fn speed_controls_def(encoder: &str) -> &'static [SpeedKnobDef] {
     match encoder {
@@ -491,6 +470,10 @@ pub fn available_encoders_for_codec(codec: &str) -> Vec<VideoEncoderInfo> {
                 .map(|(enc, display)| VideoEncoderInfo {
                     encoder_name: (*enc).to_string(),
                     display_name: (*display).to_string(),
+                    speed_controls: speed_controls_def(enc)
+                        .iter()
+                        .map(SpeedKnob::from_def)
+                        .collect(),
                 })
                 .collect()
         })
@@ -517,6 +500,10 @@ pub fn list_available_codecs() -> Vec<VideoCodecInfo> {
                 .map(|(enc, display)| VideoEncoderInfo {
                     encoder_name: (*enc).to_string(),
                     display_name: (*display).to_string(),
+                    speed_controls: speed_controls_def(enc)
+                        .iter()
+                        .map(SpeedKnob::from_def)
+                        .collect(),
                 })
                 .collect();
 
@@ -653,5 +640,36 @@ mod tests {
     fn unlinked_or_unknown_encoder_has_no_knobs() {
         assert!(speed_controls_def("libkvazaar").is_empty());
         assert!(speed_controls_def("nonsense").is_empty());
+    }
+
+    #[test]
+    fn x264_and_x265_share_preset_vocabulary() {
+        let names = |k: &[SpeedKnobDef]| {
+            k.iter()
+                .find_map(|d| match d.kind {
+                    KnobKindDef::Choice { choices, .. } => Some(choices),
+                    KnobKindDef::Int { .. } => None,
+                })
+                .unwrap()
+        };
+        assert_eq!(
+            names(speed_controls_def("libx264")),
+            names(speed_controls_def("libx265"))
+        );
+    }
+
+    #[test]
+    fn list_available_codecs_carries_speed_controls() {
+        super::super::ensure_init().ok();
+        for c in list_available_codecs() {
+            for e in &c.encoders {
+                if e.encoder_name == "libvvenc" {
+                    assert!(
+                        !e.speed_controls.is_empty(),
+                        "libvvenc must expose a preset knob"
+                    );
+                }
+            }
+        }
     }
 }
