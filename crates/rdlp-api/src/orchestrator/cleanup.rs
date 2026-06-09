@@ -17,9 +17,6 @@ use super::session_state::{self, SessionState};
 /// source download files. Every delete is `exists()`-guarded and best-effort —
 /// failures are logged, never propagated, so cleanup cannot turn a cancel into
 /// a failure.
-// Wired into the PP-cancel arm in Task 4 (#404). `expect` (not `allow`) so the
-// lint self-clears — it becomes an error the moment the caller is added.
-#[cfg_attr(not(test), expect(dead_code))]
 pub(super) async fn cleanup_cancelled_artifacts(
     output_dir: &Path,
     output_to_stdout: bool,

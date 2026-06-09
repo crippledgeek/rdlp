@@ -448,23 +448,44 @@ impl DownloadPhase {
                     }
                 };
 
-                // Download thumbnail for embedding or standalone use
-                if orchestrator.config.postprocess.embed_thumbnail
+                // Download thumbnail for embedding or standalone use. Capture the
+                // written path so a PP-cancel can delete it (#404).
+                let thumbnail_path = if orchestrator.config.postprocess.embed_thumbnail
                     || orchestrator.config.postprocess.write_thumbnail
                 {
-                    orchestrator.download_thumbnail(&info, &output_path).await;
-                }
+                    orchestrator.download_thumbnail(&info, &output_path).await
+                } else {
+                    None
+                };
 
                 // Download subtitles (interactive selection or config-based)
                 orchestrator
                     .download_subtitles(&info, &output_path, &subtitle_selection)
                     .await?;
 
-                // Run post-processing (FFmpegMerger at priority 100 will
-                // merge when it detects 2 files with requested_formats set)
-                let final_files = orchestrator
-                    .run_postprocessing(&info, download_files, is_hls)
-                    .await?;
+                // Run post-processing. On a user cancel, clean the
+                // orchestrator-owned sidecars (thumbnail + session state; the
+                // source is already reclaimed by FileTracker::Drop) BEFORE
+                // re-returning UserCancelled so the client's terminal_event()
+                // still surfaces it as Event::Cancelled (PR #399). (#404)
+                let final_files = match orchestrator
+                    .run_postprocessing(&info, download_files.clone(), is_hls)
+                    .await
+                {
+                    Ok(files) => files,
+                    Err(e @ OrchestratorError::UserCancelled) => {
+                        super::cleanup::cleanup_cancelled_artifacts(
+                            &orchestrator.config.output_directory,
+                            orchestrator.config.output_to_stdout,
+                            &info.title,
+                            &download_files,
+                            thumbnail_path.as_deref(),
+                        )
+                        .await;
+                        return Err(e);
+                    }
+                    Err(e) => return Err(e),
+                };
                 let final_path = final_files.into_iter().next().unwrap_or(output_path);
 
                 // Verify the output file actually exists
