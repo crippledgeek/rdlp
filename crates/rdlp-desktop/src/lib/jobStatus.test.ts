@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
     cancelledJobPatch,
+    postProcessingJobPatch,
     isTerminal,
     isDoneNotFailed,
     isInFlight,
@@ -19,6 +20,32 @@ describe("cancelledJobPatch", () => {
             speed: null,
             eta: null,
             progress: null,
+        });
+    });
+});
+
+describe("postProcessingJobPatch", () => {
+    // Regression guard: during recode/remux the job MUST flip to the
+    // "processing" bucket with its stage label — the postprocess-progress
+    // reducer previously updated only progress/eta, leaving the badge stuck on
+    // "Downloading" through the entire post-processing phase.
+    it("flips status to processing and mirrors stage/progress/eta, clearing speed", () => {
+        expect(postProcessingJobPatch("Recode", 0.42, "01:30")).toEqual({
+            status: "processing",
+            stage: "Recode",
+            progress: 0.42,
+            eta: "01:30",
+            speed: null,
+        });
+    });
+
+    it("passes through a null eta (pre-warm-up tick)", () => {
+        expect(postProcessingJobPatch("Merging", 0, null)).toEqual({
+            status: "processing",
+            stage: "Merging",
+            progress: 0,
+            eta: null,
+            speed: null,
         });
     });
 });

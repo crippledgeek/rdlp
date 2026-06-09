@@ -22,6 +22,31 @@ export function cancelledJobPatch(): Partial<DownloadJob> {
     };
 }
 
+/**
+ * The field patch applied on each post-processing progress tick: flips the job
+ * into the non-terminal `processing` state and mirrors the live stage/progress/
+ * eta. `speed` is cleared — post-processing has no transfer rate.
+ *
+ * Live-push mirror of the Rust-owned status (Rust's event loop sets
+ * `JobStatus::Processing` via `begin_postprocessing`); without this flip the
+ * `postprocess-progress` reducer left `status` at the download-phase `running`,
+ * so the badge stayed "Downloading" through the entire recode/remux. Spread over
+ * the existing job: `{ ...job, ...postProcessingJobPatch(stage, progress, eta) }`.
+ */
+export function postProcessingJobPatch(
+    stage: string,
+    progress: number,
+    eta: string | null,
+): Partial<DownloadJob> {
+    return {
+        status: "processing",
+        stage,
+        progress,
+        eta,
+        speed: null,
+    };
+}
+
 /** The per-job sub-label, derived during render from canonical fields. Null = no sub-label. */
 export function jobSubLabel(job: DownloadJob): string | null {
     if (job.status === "processing") {

@@ -72,6 +72,26 @@ pub(crate) const fn request_needs_dedicated_client(net: &crate::request::Network
         || net.cookies_file.is_some()
 }
 
+/// Map a terminal download error to the event that should be emitted for it.
+///
+/// A user cancellation MUST surface as [`Event::Cancelled`] — never
+/// [`Event::Failed`] — so the UI buckets a deliberate cancel as cancelled
+/// rather than a failure. This matters most for cancels during post-processing
+/// (e.g. aborting a slow recode): the pipeline returns
+/// [`RdlpApiError::UserCancelled`] up the SAME error path as a genuine failure,
+/// so without this branch a cancelled recode lands in the "Failed" bucket.
+/// Every other error is a real failure.
+fn terminal_event(id: DownloadId, error: &RdlpApiError) -> Event {
+    if matches!(error, RdlpApiError::UserCancelled) {
+        Event::Cancelled { id }
+    } else {
+        Event::Failed {
+            id,
+            error: error.clone(),
+        }
+    }
+}
+
 /// Primary entry point for the rdlp download engine.
 ///
 /// Created via [`RdlpClient::builder()`] or [`RdlpClient::new()`].
@@ -291,14 +311,10 @@ impl RdlpClient {
                             last_err = Some(api_err);
                             continue;
                         }
-                        // Final failure — emit and return
+                        // Final failure — emit and return (cancellation
+                        // surfaces as Event::Cancelled, not Event::Failed).
                         // intentional: receiver may have disconnected
-                        let _ = tx
-                            .send(Event::Failed {
-                                id,
-                                error: api_err.clone(),
-                            })
-                            .await;
+                        let _ = tx.send(terminal_event(id, &api_err)).await;
                         return Err(api_err);
                     }
                 }
@@ -310,12 +326,7 @@ impl RdlpClient {
                 status: None,
             });
             // intentional: receiver may have disconnected
-            let _ = tx
-                .send(Event::Failed {
-                    id,
-                    error: err.clone(),
-                })
-                .await;
+            let _ = tx.send(terminal_event(id, &err)).await;
             Err(err)
         });
 
@@ -680,12 +691,8 @@ impl RdlpClient {
                 Err(e) => {
                     let err = RdlpApiError::from(e);
                     // intentional: receiver may have disconnected
-                    let _ = tx
-                        .send(Event::Failed {
-                            id,
-                            error: err.clone(),
-                        })
-                        .await;
+                    // (cancellation surfaces as Event::Cancelled, not Failed).
+                    let _ = tx.send(terminal_event(id, &err)).await;
                     Err(err)
                 }
             }
@@ -932,5 +939,67 @@ mod shared_client_tests {
         let mut req = DownloadRequest::new("https://example.com/a");
         req.network.proxy = Some("http://p:3128".into());
         assert!(client.shared_http_for(&req).is_none());
+    }
+}
+
+#[cfg(test)]
+mod terminal_event_tests {
+    use super::*;
+
+    /// A user cancellation during ANY phase (including post-processing/recode)
+    /// MUST surface as [`Event::Cancelled`], never [`Event::Failed`] — otherwise
+    /// the UI buckets a deliberate cancel as a failure. Regression guard for the
+    /// recode-cancel → "Failed" bug.
+    #[test]
+    fn user_cancelled_maps_to_cancelled_event() {
+        let id = DownloadId::next();
+        let event = terminal_event(id, &RdlpApiError::UserCancelled);
+        assert!(
+            matches!(event, Event::Cancelled { id: eid } if eid == id),
+            "UserCancelled must map to Event::Cancelled, got {event:?}",
+        );
+    }
+
+    /// Every non-cancel terminal error stays a genuine [`Event::Failed`].
+    #[test]
+    fn non_cancel_errors_map_to_failed_event() {
+        let id = DownloadId::next();
+        let cases = [
+            RdlpApiError::NetworkError {
+                message: "boom".into(),
+                status: Some(503),
+            },
+            RdlpApiError::IoError {
+                message: "disk full".into(),
+            },
+            RdlpApiError::FfmpegError {
+                message: "encoder error".into(),
+            },
+        ];
+        for err in cases {
+            let event = terminal_event(id, &err);
+            assert!(
+                matches!(event, Event::Failed { .. }),
+                "non-cancel error {err:?} must map to Event::Failed, got {event:?}",
+            );
+        }
+    }
+
+    /// The Failed event preserves the originating error verbatim (the patch must
+    /// not drop the error detail when routing through the helper).
+    #[test]
+    fn failed_event_preserves_error() {
+        let id = DownloadId::next();
+        let err = RdlpApiError::NetworkError {
+            message: "stale cdn".into(),
+            status: Some(403),
+        };
+        match terminal_event(id, &err) {
+            Event::Failed {
+                error: RdlpApiError::NetworkError { status, .. },
+                ..
+            } => assert_eq!(status, Some(403)),
+            other => panic!("expected Event::Failed(NetworkError), got {other:?}"),
+        }
     }
 }
