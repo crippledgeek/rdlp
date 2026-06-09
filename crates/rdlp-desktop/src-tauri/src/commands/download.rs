@@ -102,6 +102,15 @@ pub struct DownloadOptions {
     /// Encoder preset override for video recode. `None` = per-codec default.
     #[serde(default)]
     pub recode_preset: Option<String>,
+    /// `VPx` deadline mode (`good`, `best`, `realtime`). `None` = encoder default.
+    #[serde(default)]
+    pub recode_deadline: Option<rdlp_types::VpxDeadline>,
+    /// `VPx` / AV1 cpu-used knob (-16..=16 depending on encoder). `None` = encoder default.
+    #[serde(default)]
+    pub recode_cpu_used: Option<i32>,
+    /// HEVC / VVC speed-level knob (encoder-specific range). `None` = encoder default.
+    #[serde(default)]
+    pub recode_speed_level: Option<u32>,
     /// Enable verbose `FFmpeg` log capture for this download.
     /// `None` = use settings default.
     #[serde(default)]
@@ -226,6 +235,21 @@ pub async fn start_download(
     // called on the desktop path, so this guard is the only enforcement point).
     validate_recode_threads(options.recode_threads)?;
     validate_recode_preset(options.recode_preset.as_deref())?;
+    rdlp_ffmpeg::validate_speed_controls(
+        rdlp_ffmpeg::resolve_recode_encoder(
+            options.video_encoder.as_deref(),
+            options.recode_video.map(|c| c.as_ext()),
+            options.recode_container.map(|c| c.as_ext()),
+        ),
+        options.recode_preset.as_deref(),
+        options.recode_deadline.map(rdlp_types::VpxDeadline::as_str),
+        options.recode_cpu_used,
+        options.recode_speed_level,
+    )
+    .map_err(|e| AppError::InvalidInput {
+        field: "recode_speed_control".to_owned(),
+        message: e.to_string(),
+    })?;
 
     // Save a serializable snapshot of the options for retry (before any partial moves).
     let saved_options = serde_json::to_value(&options)
@@ -312,6 +336,9 @@ pub async fn start_download(
             recode_audio: options.recode_audio,
             recode_threads: options.recode_threads,
             recode_preset: options.recode_preset,
+            recode_deadline: options.recode_deadline,
+            recode_cpu_used: options.recode_cpu_used,
+            recode_speed_level: options.recode_speed_level,
             embed_thumbnail: Some(options.embed_thumbnail),
             embed_metadata: Some(settings.embed_metadata),
             write_thumbnail: write_thumbnail_resolved.then_some(true),
@@ -545,6 +572,9 @@ mod tests {
             recode_audio: None,
             recode_threads: None,
             recode_preset: None,
+            recode_deadline: None,
+            recode_cpu_used: None,
+            recode_speed_level: None,
             verbose: None,
         }
     }
@@ -566,6 +596,14 @@ mod tests {
         assert!(validate_recode_preset(Some(&"x".repeat(65))).is_err());
         assert!(validate_recode_preset(Some("faster")).is_ok());
         assert!(validate_recode_preset(None).is_ok());
+    }
+
+    #[test]
+    fn rejects_inapplicable_speed_control() {
+        // deadline on an H.264 encoder must be rejected by the boundary validator.
+        let err =
+            rdlp_ffmpeg::validate_speed_controls(Some("libx264"), None, Some("good"), None, None);
+        assert!(err.is_err());
     }
 
     // ------------------------------------------------------------------ //
