@@ -614,6 +614,39 @@ fn test_postprocess_recode_threads_and_preset_propagate() {
 }
 
 #[test]
+fn test_postprocess_speed_controls_propagate() {
+    let mut config = Config::default();
+    let opts = PostProcessOptions {
+        recode_deadline: Some(rdlp_types::VpxDeadline::Good),
+        recode_cpu_used: Some(-4),
+        recode_speed_level: Some(3),
+        ..PostProcessOptions::default()
+    };
+    opts.merge_into(&mut config);
+    assert_eq!(
+        config.postprocess.recode_deadline,
+        Some(rdlp_types::VpxDeadline::Good)
+    );
+    assert_eq!(config.postprocess.recode_cpu_used, Some(-4));
+    assert_eq!(config.postprocess.recode_speed_level, Some(3));
+}
+
+#[test]
+fn test_postprocess_speed_controls_none_preserves_base() {
+    let mut config = Config::default();
+    config.postprocess.recode_deadline = Some(rdlp_types::VpxDeadline::Best);
+    config.postprocess.recode_cpu_used = Some(2);
+    config.postprocess.recode_speed_level = Some(5);
+    PostProcessOptions::default().merge_into(&mut config);
+    assert_eq!(
+        config.postprocess.recode_deadline,
+        Some(rdlp_types::VpxDeadline::Best)
+    );
+    assert_eq!(config.postprocess.recode_cpu_used, Some(2));
+    assert_eq!(config.postprocess.recode_speed_level, Some(5));
+}
+
+#[test]
 fn test_postprocess_recode_threads_none_preserves_base() {
     let mut config = Config::default();
     config.postprocess.recode_threads = Some(4);

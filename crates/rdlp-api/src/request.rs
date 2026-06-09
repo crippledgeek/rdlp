@@ -217,6 +217,12 @@ pub struct PostProcessOptions {
     pub recode_threads: Option<u32>,
     /// Encoder preset override for video recode. `None` = per-codec default.
     pub recode_preset: Option<String>,
+    /// VPX/VP9 deadline (quality–speed tradeoff). `None` preserves base config.
+    pub recode_deadline: Option<rdlp_types::VpxDeadline>,
+    /// VPX/VP9 cpu-used (-8..=8 for VP9). `None` preserves base config.
+    pub recode_cpu_used: Option<i32>,
+    /// Generic speed-level for encoders that expose it (e.g. SVT-AV1 preset). `None` preserves base config.
+    pub recode_speed_level: Option<u32>,
 }
 
 /// Network, retry, and cookie options.
