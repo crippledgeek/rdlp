@@ -7,9 +7,14 @@ use thiserror::Error;
 
 use super::video_codecs::{KnobField, KnobKindDef, resolve_encoder, speed_controls_def};
 
-/// Container-name -> default codec, mirroring `RecodeStage::default_codec_for`
-/// (`recode.rs:86`). Kept in sync by `resolver_matches_recode_stage_defaults`.
-fn default_codec_for_container(container: &str) -> &'static str {
+/// Return the default video codec to encode toward for a given container
+/// extension (e.g. `"webm"` → `"vp9"`, `"mp4"` → `"h264"`).
+///
+/// This is the **single source of truth** for the container → codec mapping.
+/// Both the speed-control validator and `RecodeStage` delegate here so they
+/// can never resolve differently.
+#[must_use]
+pub fn default_codec_for_container(container: &str) -> &'static str {
     match container.to_ascii_lowercase().as_str() {
         "webm" | "ivf" => "vp9",
         "ogg" => "theora",

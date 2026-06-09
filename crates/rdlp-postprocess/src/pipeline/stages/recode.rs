@@ -30,6 +30,12 @@ pub(super) struct RecodeParams {
     pub threads: Option<u32>,
     /// Encoder preset override; None preserves the per-codec default preset.
     pub preset_override: Option<String>,
+    /// VPX/AV1 deadline knob (e.g. `"good"`, `"best"`, `"realtime"`).
+    pub deadline: Option<String>,
+    /// VPX/AV1 cpu-used knob.
+    pub cpu_used: Option<i32>,
+    /// VVC/x265/SVT-AV1 speed-level knob.
+    pub speed_level: Option<u32>,
 }
 
 /// Transcodes video to a different container/codec.
@@ -82,14 +88,10 @@ impl RecodeStage {
     }
 
     /// Pick the default video codec to encode toward when no explicit
-    /// encoder override is given.
-    const fn default_codec_for(target: ContainerFormat) -> &'static str {
-        match target {
-            ContainerFormat::WebM | ContainerFormat::Ivf => "vp9",
-            ContainerFormat::Ogg => "theora",
-            ContainerFormat::Mpg | ContainerFormat::Vob => "mpeg2",
-            _ => "h264",
-        }
+    /// encoder override is given. Delegates to the single source in `rdlp-ffmpeg`
+    /// so the recode pipeline and `validate_speed_controls` never resolve differently.
+    fn default_codec_for(target: ContainerFormat) -> &'static str {
+        rdlp_ffmpeg::default_codec_for_container(target.as_ext())
     }
 
     /// Default `(preset, crf)` for a known target codec. Returns `(None, None)`
@@ -144,6 +146,9 @@ impl RecodeStage {
                 preset,
                 crf,
                 threads: params.threads,
+                deadline: params.deadline.clone(),
+                cpu_used: params.cpu_used,
+                speed_level: params.speed_level,
                 audio_copy: params.audio_copy,
                 audio_codec: params.audio_codec.clone(),
                 ..Default::default()
@@ -161,6 +166,9 @@ impl RecodeStage {
             preset,
             crf,
             threads: params.threads,
+            deadline: params.deadline.clone(),
+            cpu_used: params.cpu_used,
+            speed_level: params.speed_level,
             audio_copy: params.audio_copy,
             audio_codec: params.audio_codec.clone(),
             ..Default::default()
@@ -318,6 +326,9 @@ impl PipelineStage for RecodeStage {
                 audio_codec,
                 threads: msg.config.recode_threads,
                 preset_override: msg.config.recode_preset.clone(),
+                deadline: msg.config.recode_deadline.map(|d| d.as_str().to_string()),
+                cpu_used: msg.config.recode_cpu_used,
+                speed_level: msg.config.recode_speed_level,
             },
             can_remux,
         ) else {
@@ -566,6 +577,9 @@ mod tests {
             audio_codec: None,
             threads: None,
             preset_override: None,
+            deadline: None,
+            cpu_used: None,
+            speed_level: None,
         };
         let opts = RecodeStage::build_convert_options(&params, true).unwrap();
         assert!(opts.remux_only);
@@ -609,6 +623,9 @@ mod tests {
             audio_codec: Some("libopus".to_string()),
             threads: None,
             preset_override: None,
+            deadline: None,
+            cpu_used: None,
+            speed_level: None,
         };
         let opts = RecodeStage::build_convert_options(&params, false).unwrap();
         assert!(!opts.audio_copy);
@@ -624,6 +641,9 @@ mod tests {
             audio_codec: None,
             threads: None,
             preset_override: None,
+            deadline: None,
+            cpu_used: None,
+            speed_level: None,
         };
         let opts = RecodeStage::build_convert_options(&params, true).unwrap();
         assert!(opts.remux_only);
@@ -639,6 +659,9 @@ mod tests {
             audio_codec: None,
             threads: None,
             preset_override: None,
+            deadline: None,
+            cpu_used: None,
+            speed_level: None,
         };
         let opts = RecodeStage::build_convert_options(&params, false).unwrap();
         assert!(!opts.remux_only);
@@ -658,6 +681,9 @@ mod tests {
             audio_codec: Some("libopus".to_string()),
             threads: None,
             preset_override: None,
+            deadline: None,
+            cpu_used: None,
+            speed_level: None,
         };
         let opts = RecodeStage::build_convert_options(&params, false).unwrap();
         assert!(!opts.audio_copy);
@@ -673,6 +699,9 @@ mod tests {
             audio_codec: None,
             threads: None,
             preset_override: None,
+            deadline: None,
+            cpu_used: None,
+            speed_level: None,
         };
         let result = RecodeStage::build_convert_options(&params, false);
         assert!(result.is_none());
@@ -687,6 +716,9 @@ mod tests {
             audio_codec: None,
             threads: Some(6),
             preset_override: Some("faster".to_string()),
+            deadline: None,
+            cpu_used: None,
+            speed_level: None,
         };
         let opts = RecodeStage::build_convert_options(&params, false).expect("encoder available");
         assert_eq!(opts.threads, Some(6));
@@ -702,9 +734,33 @@ mod tests {
             audio_codec: None,
             threads: None,
             preset_override: None,
+            deadline: None,
+            cpu_used: None,
+            speed_level: None,
         };
         let opts = RecodeStage::build_convert_options(&params, false).expect("encoder available");
         assert_eq!(opts.preset.as_deref(), Some("medium"));
         assert_eq!(opts.threads, None);
+    }
+
+    #[test]
+    fn deadline_and_cpu_used_thread_into_convert_options() {
+        // deadline/cpu-used aren't meaningful for libx264, but build_convert_options
+        // threads them regardless — that's what this test verifies.
+        let params = RecodeParams {
+            target: ContainerFormat::Mp4,
+            encoder_override: Some("libx264".to_string()),
+            audio_copy: true,
+            audio_codec: None,
+            threads: None,
+            preset_override: None,
+            deadline: Some("good".to_string()),
+            cpu_used: Some(2),
+            speed_level: None,
+        };
+        let opts = RecodeStage::build_convert_options(&params, false).expect("libx264 available");
+        assert_eq!(opts.deadline.as_deref(), Some("good"));
+        assert_eq!(opts.cpu_used, Some(2));
+        assert_eq!(opts.speed_level, None);
     }
 }

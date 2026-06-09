@@ -59,7 +59,9 @@ pub(crate) mod salvage;
 pub mod speed_controls;
 mod thumbnail;
 mod transcode;
-pub use speed_controls::{SpeedControlError, resolve_recode_encoder, validate_speed_controls};
+pub use speed_controls::{
+    SpeedControlError, default_codec_for_container, resolve_recode_encoder, validate_speed_controls,
+};
 pub mod video_codecs;
 
 use std::path::Path;
