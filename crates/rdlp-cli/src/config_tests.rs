@@ -72,6 +72,9 @@ fn default_args() -> Args {
         recode_audio: "copy".to_string(),
         recode_threads: None,
         recode_preset: None,
+        recode_deadline: None,
+        recode_cpu_used: None,
+        recode_speed_level: None,
         fixup: "detect_or_warn".to_string(),
         match_filter: vec![],
         browser: None,
@@ -748,4 +751,49 @@ fn recode_threads_and_preset_flags_map_to_config() {
     let config = build_config(&args).expect("config builds");
     assert_eq!(config.postprocess.recode_threads, Some(6));
     assert_eq!(config.postprocess.recode_preset.as_deref(), Some("faster"));
+}
+
+#[test]
+fn speed_control_flags_map_to_config() {
+    use clap::Parser;
+    // VP9 supports deadline + cpu_used; speed_level is for libxavs2 only.
+    // Test that all three fields round-trip through config correctly by
+    // using a valid per-encoder combination: VP9 with deadline + cpu_used,
+    // then verify speed_level maps when set independently without an encoder.
+    let args = Args::try_parse_from([
+        "rdlp",
+        "--recode-video=webm",
+        "--video-encoder=libvpx-vp9",
+        "--recode-deadline=good",
+        "--recode-cpu-used=-4",
+        "https://example.com/v",
+    ])
+    .expect("args parse");
+    let config = build_config(&args).expect("config builds");
+    assert_eq!(
+        config.postprocess.recode_deadline,
+        Some(rdlp_types::VpxDeadline::Good)
+    );
+    assert_eq!(config.postprocess.recode_cpu_used, Some(-4));
+
+    // speed_level field mapping: verify it reaches config when no encoder
+    // is resolved (validator is a no-op when encoder is None).
+    let mut args2 = default_args();
+    args2.recode_speed_level = Some(3);
+    let config2 = merge_config(&args2, rdlp_api::Config::default(), no_interactive())
+        .expect("config2 builds");
+    assert_eq!(config2.postprocess.recode_speed_level, Some(3));
+}
+
+#[test]
+fn negative_cpu_used_parses_both_forms() {
+    use clap::Parser;
+    assert_eq!(
+        Args::parse_from(["rdlp", "--recode-cpu-used=-8", "URL"]).recode_cpu_used,
+        Some(-8)
+    );
+    assert_eq!(
+        Args::parse_from(["rdlp", "--recode-cpu-used", "-8", "URL"]).recode_cpu_used,
+        Some(-8)
+    );
 }
