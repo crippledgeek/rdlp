@@ -381,7 +381,10 @@ pub fn merge_config(
             config.postprocess.recode_container.map(|c| c.as_ext()),
         ),
         config.postprocess.recode_preset.as_deref(),
-        config.postprocess.recode_deadline.map(rdlp_types::VpxDeadline::as_str),
+        config
+            .postprocess
+            .recode_deadline
+            .map(rdlp_types::VpxDeadline::as_str),
         config.postprocess.recode_cpu_used,
         config.postprocess.recode_speed_level,
     )
