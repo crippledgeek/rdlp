@@ -35,6 +35,15 @@ pub fn build_video_encoder_options(
     if let Some(crf) = opts.crf {
         kv.push(("crf", crf.to_string()));
     }
+    if let Some(ref deadline) = opts.deadline {
+        kv.push(("deadline", deadline.clone()));
+    }
+    if let Some(cpu) = opts.cpu_used {
+        kv.push(("cpu-used", cpu.to_string()));
+    }
+    if let Some(sl) = opts.speed_level {
+        kv.push(("speed_level", sl.to_string()));
+    }
 
     let threads = resolve_recode_threads(opts.threads);
     kv.push(("threads", threads.to_string()));
@@ -131,5 +140,44 @@ mod tests {
     fn row_mt_absent_at_single_thread() {
         let kv = build_video_encoder_options(&opts_with(None, Some(30), Some(1)), "libvpx-vp9");
         assert!(!kv.iter().any(|(k, _)| *k == "row-mt"));
+    }
+
+    #[test]
+    fn vpx_knobs_pushed_when_present() {
+        let opts = VideoConvertOptions {
+            deadline: Some("good".to_string()),
+            cpu_used: Some(-4),
+            threads: Some(4),
+            ..Default::default()
+        };
+        let kv = build_video_encoder_options(&opts, "libvpx-vp9");
+        assert!(kv.iter().any(|(k, v)| *k == "deadline" && v == "good"));
+        assert!(kv.iter().any(|(k, v)| *k == "cpu-used" && v == "-4"));
+    }
+
+    #[test]
+    fn speed_level_pushed_when_present() {
+        let opts = VideoConvertOptions {
+            speed_level: Some(5),
+            threads: Some(2),
+            ..Default::default()
+        };
+        let kv = build_video_encoder_options(&opts, "libxavs2");
+        assert!(kv.iter().any(|(k, v)| *k == "speed_level" && v == "5"));
+    }
+
+    #[test]
+    fn vpx_knobs_absent_when_none() {
+        let kv = build_video_encoder_options(
+            &VideoConvertOptions {
+                threads: Some(2),
+                ..Default::default()
+            },
+            "libvpx-vp9",
+        );
+        assert!(
+            !kv.iter()
+                .any(|(k, _)| *k == "deadline" || *k == "cpu-used" || *k == "speed_level")
+        );
     }
 }

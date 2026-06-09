@@ -26,7 +26,17 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import type { DownloadOptions } from "@/types";
+import type { DownloadOptions, KnobField } from "@/types";
+import { KnobRow } from "./KnobRow";
+
+// Maps SpeedKnob field names to TanStack Form field names.
+// Typed as Record<KnobField, ...> so adding/removing a KnobField variant is a compile error.
+const FIELD_BY_KNOB: Record<KnobField, "recodePreset" | "recodeDeadline" | "recodeCpuUsed" | "recodeSpeedLevel"> = {
+    preset: "recodePreset",
+    deadline: "recodeDeadline",
+    cpuUsed: "recodeCpuUsed",
+    speedLevel: "recodeSpeedLevel",
+};
 
 const NONE_SENTINEL = "none";
 
@@ -61,6 +71,13 @@ const downloadConfigSchema = z.object({
             { message: "Enter 1–64 or leave blank for auto" },
         ),
     recodePreset: z.string(),
+    recodeDeadline: z.string(), // "" | "best" | "good" | "realtime"
+    recodeCpuUsed: z
+        .string()
+        .refine((v) => v === "" || /^-?\d+$/.test(v), { message: "Enter an integer or leave blank" }),
+    recodeSpeedLevel: z
+        .string()
+        .refine((v) => v === "" || /^\d+$/.test(v), { message: "Enter 0–9 or leave blank" }),
     extractAudio: z.string(),
     embedThumbnail: z.boolean(),
     embedSubtitles: z.boolean(),
@@ -93,6 +110,9 @@ export function DownloadConfig() {
             recodeAudioMode: "copy",
             recodeThreads: "",
             recodePreset: "",
+            recodeDeadline: "",
+            recodeCpuUsed: "",
+            recodeSpeedLevel: "",
             extractAudio: "",
             embedThumbnail: settings?.embed_thumbnail ?? true,
             embedSubtitles: settings?.embed_subtitles ?? false,
@@ -135,6 +155,9 @@ export function DownloadConfig() {
                         : null,
                     recodeThreads: value.recodeThreads ? Number(value.recodeThreads) : null,
                     recodePreset: value.recodePreset || null,
+                    recodeDeadline: value.recodeDeadline || null,
+                    recodeCpuUsed: value.recodeCpuUsed === "" ? null : Number(value.recodeCpuUsed),
+                    recodeSpeedLevel: value.recodeSpeedLevel === "" ? null : Number(value.recodeSpeedLevel),
                     normalizeAudio: value.normalizeAudio || null,
                     loudnorm: null,
                     loudnormPreset: null,
@@ -177,6 +200,16 @@ export function DownloadConfig() {
     const { data: audioCodecs = [] } = useQuery(
         audioCodecsQueryOptions(resolvedContainer || null, recodeActive && !!resolvedContainer),
     );
+
+    // Derive speed-control knobs for the selected encoder (expert mode only).
+    // Must come after videoCodecs is declared.
+    const selectedEncoderKnobs =
+        (expertMode &&
+            videoCodecs
+                .flatMap((c) => c.encoders)
+                .find((e) => e.encoderName === recodeCodec)
+                ?.speedControls) ||
+        [];
 
     if (!formatData || !analyzeUrl) return null;
 
@@ -366,6 +399,12 @@ export function DownloadConfig() {
                                     onSelectionChange={(key) => {
                                         const val = key === NONE_SENTINEL ? "" : String(key);
                                         field.handleChange(val);
+                                        // Reset all knob fields whenever the encoder changes —
+                                        // prior values may be invalid for the new encoder.
+                                        form.setFieldValue("recodePreset", "");
+                                        form.setFieldValue("recodeDeadline", "");
+                                        form.setFieldValue("recodeCpuUsed", "");
+                                        form.setFieldValue("recodeSpeedLevel", "");
                                         if (!val) {
                                             form.setFieldValue("videoEncoder", "");
                                             form.setFieldValue("recodeContainerOverride", "");
@@ -487,24 +526,21 @@ export function DownloadConfig() {
                         </form.Field>
                     )}
 
-                    {/* Recode preset (visible when recode active, expert mode) */}
-                    {recodeActive && expertMode && (
-                        <form.Field name="recodePreset">
-                            {(field) => (
-                                <div className="flex items-center justify-between pl-3">
-                                    <span className="text-[10px] text-[var(--text-muted)]">Preset</span>
-                                    <Input
-                                        type="text"
+                    {/* Encoder speed-control knobs (descriptor-driven, expert mode only) */}
+                    {recodeActive &&
+                        expertMode &&
+                        selectedEncoderKnobs.map((knob) => (
+                            <form.Field key={knob.field} name={FIELD_BY_KNOB[knob.field]}>
+                                {(field) => (
+                                    <KnobRow
+                                        knob={knob}
                                         value={field.state.value}
+                                        onChange={field.handleChange}
                                         onBlur={field.handleBlur}
-                                        onChange={(e) => field.handleChange(e.target.value)}
-                                        placeholder="default"
-                                        className="h-5 w-[90px] px-1.5 py-0 rounded-[3px] bg-[var(--surface-elevated)] border border-[#2a2a3e] text-[10px] text-[var(--text-muted)] placeholder:text-[var(--text-muted)] outline-none focus:border-[#4a9eff]"
                                     />
-                                </div>
-                            )}
-                        </form.Field>
-                    )}
+                                )}
+                            </form.Field>
+                        ))}
 
                     {/* Extract Audio */}
                     <form.Field name="extractAudio">

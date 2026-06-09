@@ -218,6 +218,15 @@ pub fn merge_config(
     if let Some(ref preset) = args.recode_preset {
         config.postprocess.recode_preset = Some(preset.clone());
     }
+    if let Some(ref deadline) = args.recode_deadline {
+        config.postprocess.recode_deadline = Some(
+            deadline
+                .parse::<rdlp_types::VpxDeadline>()
+                .map_err(|e| anyhow::anyhow!("invalid --recode-deadline: {e}"))?,
+        );
+    }
+    config.postprocess.recode_cpu_used = args.recode_cpu_used;
+    config.postprocess.recode_speed_level = args.recode_speed_level;
 
     // recode_audio: "copy", "auto", or an encoder name
     match args.recode_audio.as_str() {
@@ -363,6 +372,23 @@ pub fn merge_config(
     if config.postprocess.extract_audio && config.postprocess.audio_format.is_none() {
         config.postprocess.audio_format = Some(AudioFormat::Mp3);
     }
+
+    // Validate recode speed controls against the resolved encoder
+    rdlp_ffmpeg::validate_speed_controls(
+        rdlp_ffmpeg::resolve_recode_encoder(
+            config.postprocess.video_encoder.as_deref(),
+            config.postprocess.recode_video.map(|c| c.as_ext()),
+            config.postprocess.recode_container.map(|c| c.as_ext()),
+        ),
+        config.postprocess.recode_preset.as_deref(),
+        config
+            .postprocess
+            .recode_deadline
+            .map(rdlp_types::VpxDeadline::as_str),
+        config.postprocess.recode_cpu_used,
+        config.postprocess.recode_speed_level,
+    )
+    .map_err(|e| anyhow::anyhow!("invalid recode speed control: {e}"))?;
 
     // Validate final config
     config

@@ -53,6 +53,8 @@ pub use error::{CorruptionKind, PostProcessError, Result};
 pub use ffmpeg::{
     AudioCodecInfo, AudioEncoderInfo, AudioExtractOptions, AudioNormMode, ChapterEntry,
     FFmpegRunner, FfmpegLogBridge, LogForwarderGuard, LoudnormMeasurements, LoudnormPreset,
-    MediaInfo, NormalizeOptions, PeakAnalysis, RemuxOptions, StreamInfo, VideoCodecInfo,
-    VideoConvertOptions, VideoEncoderInfo, bridge_ffmpeg_logs, encoding_tool_tag, set_verbose,
+    MediaInfo, NormalizeOptions, PeakAnalysis, RemuxOptions, SpeedControlError, StreamInfo,
+    VideoCodecInfo, VideoConvertOptions, VideoEncoderInfo, bridge_ffmpeg_logs,
+    default_codec_for_container, encoding_tool_tag, resolve_recode_encoder, set_verbose,
+    validate_speed_controls,
 };

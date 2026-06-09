@@ -148,6 +148,15 @@ impl MergeOverrides for PostProcessOptions {
         if let Some(ref v) = self.recode_preset {
             config.postprocess.recode_preset = Some(v.clone());
         }
+        if let Some(v) = self.recode_deadline {
+            config.postprocess.recode_deadline = Some(v);
+        }
+        if let Some(v) = self.recode_cpu_used {
+            config.postprocess.recode_cpu_used = Some(v);
+        }
+        if let Some(v) = self.recode_speed_level {
+            config.postprocess.recode_speed_level = Some(v);
+        }
     }
 }
 

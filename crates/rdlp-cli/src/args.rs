@@ -220,6 +220,18 @@ pub struct Args {
     #[arg(long, value_name = "PRESET")]
     pub recode_preset: Option<String>,
 
+    /// libvpx deadline for VP8/VP9 recode: best | good | realtime.
+    #[arg(long, value_name = "MODE")]
+    pub recode_deadline: Option<String>,
+
+    /// libvpx cpu-used for VP8/VP9 recode (VP9: -8..8, VP8: -16..16).
+    #[arg(long, value_name = "N", allow_hyphen_values = true)]
+    pub recode_cpu_used: Option<i32>,
+
+    /// libxavs2 `speed_level` for AVS2 recode (0..9).
+    #[arg(long, value_name = "N")]
+    pub recode_speed_level: Option<u32>,
+
     /// Remux to container for better seeking - no re-encoding
     /// Use --remux for interactive, --remux=mp4 for direct
     #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true)]
