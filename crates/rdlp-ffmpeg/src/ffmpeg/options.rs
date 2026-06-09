@@ -48,6 +48,12 @@ pub struct VideoConvertOptions {
     /// Resolved encoder thread count. `None` = let the encode layer resolve it
     /// from `available_parallelism()`. Audio encoding is unaffected.
     pub threads: Option<u32>,
+    /// libvpx `-deadline` value (already a name string, e.g. "good").
+    pub deadline: Option<String>,
+    /// libvpx `-cpu-used`.
+    pub cpu_used: Option<i32>,
+    /// libxavs2 `-speed_level`.
+    pub speed_level: Option<u32>,
     /// If true, copy audio stream without re-encoding.
     ///
     /// Takes precedence over `audio_codec`. When `audio_copy` is true and
