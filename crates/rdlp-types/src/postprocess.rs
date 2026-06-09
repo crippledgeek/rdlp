@@ -8,6 +8,7 @@ use crate::audio_format::AudioFormat;
 use crate::container::ContainerFormat;
 use crate::fixup_policy::FixupPolicy;
 use crate::recode_audio_mode::RecodeAudioMode;
+use crate::vpx_deadline::VpxDeadline;
 
 /// Post-processing configuration controlling `FFmpeg` transforms and file handling.
 ///
@@ -83,6 +84,12 @@ pub struct PostProcess {
     /// `None` = use `RecodeStage`'s per-codec default preset. When `Some`, this
     /// value replaces that default and is passed verbatim to the encoder.
     pub recode_preset: Option<String>,
+    /// libvpx `-deadline` (VP8/VP9). `None` = encoder default (`good`).
+    pub recode_deadline: Option<VpxDeadline>,
+    /// libvpx `-cpu-used` (VP8: -16..=16, VP9: -8..=8). `None` = encoder default.
+    pub recode_cpu_used: Option<i32>,
+    /// libxavs2 `-speed_level` (0..=9). `None` = encoder default (0).
+    pub recode_speed_level: Option<u32>,
     /// Policy for automatic fixup of downloaded files.
     pub fixup: FixupPolicy,
 }
@@ -120,6 +127,9 @@ impl Default for PostProcess {
             recode_container: None,
             recode_threads: None,
             recode_preset: None,
+            recode_deadline: None,
+            recode_cpu_used: None,
+            recode_speed_level: None,
             fixup: FixupPolicy::default(),
         }
     }
@@ -170,5 +180,13 @@ mod tests {
         let pp = PostProcess::default();
         assert_eq!(pp.recode_threads, None);
         assert_eq!(pp.recode_preset, None);
+    }
+
+    #[test]
+    fn speed_control_fields_default_none() {
+        let pp = PostProcess::default();
+        assert_eq!(pp.recode_deadline, None);
+        assert_eq!(pp.recode_cpu_used, None);
+        assert_eq!(pp.recode_speed_level, None);
     }
 }

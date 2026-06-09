@@ -27,6 +27,12 @@ impl VpxDeadline {
     }
 }
 
+impl std::fmt::Display for VpxDeadline {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 impl FromStr for VpxDeadline {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
@@ -76,5 +82,10 @@ mod tests {
         for d in [VpxDeadline::Best, VpxDeadline::Good, VpxDeadline::Realtime] {
             assert_eq!(d.as_str().parse::<VpxDeadline>().unwrap(), d);
         }
+    }
+
+    #[test]
+    fn displays_as_str() {
+        assert_eq!(format!("{}", VpxDeadline::Good), "good");
     }
 }
