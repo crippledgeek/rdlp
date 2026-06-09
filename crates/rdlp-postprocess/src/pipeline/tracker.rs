@@ -173,8 +173,10 @@ impl FileTracker {
 impl Drop for FileTracker {
     /// Graceful-cancel cleanup: if the job did not [`commit`](FileTracker::commit)
     /// (or [`cleanup`](FileTracker::cleanup), which commits last), delete every
-    /// uncommitted issued path and any `current_files`, releasing each from the
-    /// [`TempRegistry`] (#335).
+    /// uncommitted issued path, any `current_files`, AND any `temp_files`
+    /// (superseded working files / the original download), releasing each from
+    /// the [`TempRegistry`] (#335, #404). This mirrors the success-path
+    /// `cleanup()`, which already drains `temp_files` — cancel is now symmetric.
     // Safe: synchronous remove_file in Drop is unavoidable — Drop cannot be
     // async, and this mirrors the existing justification on `cleanup()` and the
     // registry's own shutdown hook.
@@ -188,6 +190,7 @@ impl Drop for FileTracker {
             .issued
             .iter()
             .chain(self.current_files.iter())
+            .chain(self.temp_files.iter())
             .cloned()
             .collect();
         for path in to_delete {
@@ -323,6 +326,28 @@ mod tests {
         assert!(
             !reg.contains(&partial),
             "registry entry for partial must be released"
+        );
+    }
+
+    #[test]
+    fn drop_uncommitted_deletes_temp_files() {
+        // A stage supersedes the original input via replace(), moving it into
+        // temp_files. On an uncommitted (cancel) drop, that superseded file MUST
+        // be deleted — this is the #404 source-.mp4 leak.
+        let dir = TempDir::new().unwrap();
+        let reg = Arc::new(TempRegistry::new());
+        let original = dir.path().join("video.mp4");
+        fs::write(&original, b"orig").unwrap();
+        {
+            let mut tracker = FileTracker::new(vec![original.clone()], reg.clone());
+            let promoted = dir.path().join("video.rdlp-tmp-zzz.mp4");
+            fs::write(&promoted, b"new").unwrap();
+            tracker.replace(vec![promoted]); // original -> temp_files
+            // dropped here WITHOUT commit() -> cancel semantics
+        }
+        assert!(
+            !original.exists(),
+            "superseded original in temp_files must be deleted on uncommitted drop (#404)"
         );
     }
 
