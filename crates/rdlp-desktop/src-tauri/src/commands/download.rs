@@ -105,7 +105,8 @@ pub struct DownloadOptions {
     /// `VPx` deadline mode (`good`, `best`, `realtime`). `None` = encoder default.
     #[serde(default)]
     pub recode_deadline: Option<rdlp_types::VpxDeadline>,
-    /// `VPx` / AV1 cpu-used knob (-16..=16 depending on encoder). `None` = encoder default.
+    /// libvpx `-cpu-used` for VP8/VP9 recode. `None` = encoder default.
+    /// Range is encoder-specific (validated by `validate_speed_controls`).
     #[serde(default)]
     pub recode_cpu_used: Option<i32>,
     /// HEVC / VVC speed-level knob (encoder-specific range). `None` = encoder default.
@@ -603,6 +604,22 @@ mod tests {
         // deadline on an H.264 encoder must be rejected by the boundary validator.
         let err =
             rdlp_ffmpeg::validate_speed_controls(Some("libx264"), None, Some("good"), None, None);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn rejects_out_of_range_cpu_used() {
+        // VP9 cpu-used range is -8..=8; 16 must be rejected at the boundary.
+        let err =
+            rdlp_ffmpeg::validate_speed_controls(Some("libvpx-vp9"), None, None, Some(16), None);
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn rejects_out_of_range_speed_level() {
+        // xavs2 speed_level range is 0..=9; 10 must be rejected at the boundary.
+        let err =
+            rdlp_ffmpeg::validate_speed_controls(Some("libxavs2"), None, None, None, Some(10));
         assert!(err.is_err());
     }
 
