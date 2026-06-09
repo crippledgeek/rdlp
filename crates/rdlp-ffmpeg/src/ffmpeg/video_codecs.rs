@@ -36,6 +36,231 @@ pub struct VideoCodecInfo {
     pub encoders: Vec<VideoEncoderInfo>,
 }
 
+/// Which typed recode wire field a knob feeds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KnobField {
+    /// The encoder's `-preset` option (named string).
+    Preset,
+    /// The libvpx `-deadline` option (best / good / realtime).
+    Deadline,
+    /// The libvpx `-cpu-used` option (integer quality/speed trade-off).
+    CpuUsed,
+    /// The xavs2 `-speed_level` option (integer 0–9).
+    SpeedLevel,
+}
+
+/// Static-table form of a knob (lives next to `CODEC_PREFERENCES`).
+// Unused until Task 4 wires it into VideoEncoderInfo.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum KnobKindDef {
+    Choice {
+        choices: &'static [&'static str],
+        default: &'static str,
+    },
+    Int {
+        min: i32,
+        max: i32,
+        default: i32,
+    },
+}
+
+// Unused until Task 4 wires it into VideoEncoderInfo.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SpeedKnobDef {
+    pub field: KnobField,
+    pub label: &'static str,
+    pub kind: KnobKindDef,
+}
+
+/// Serde/IPC form of a knob (materialized into [`VideoEncoderInfo`]).
+// Unused until Task 4 wires it into VideoEncoderInfo.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind")]
+pub enum SpeedKnob {
+    /// Named-choice knob (e.g. preset, deadline).
+    Choice {
+        /// Which wire field this knob maps to.
+        field: KnobField,
+        /// Human-readable label for the UI.
+        label: String,
+        /// Ordered list of valid choice strings.
+        choices: Vec<String>,
+        /// Default choice string.
+        default: String,
+    },
+    /// Integer-range knob (e.g. cpu-used, speed-level, SVT-AV1 preset).
+    Int {
+        /// Which wire field this knob maps to.
+        field: KnobField,
+        /// Human-readable label for the UI.
+        label: String,
+        /// Minimum valid value (inclusive).
+        min: i32,
+        /// Maximum valid value (inclusive).
+        max: i32,
+        /// Default value.
+        default: i32,
+    },
+}
+
+impl SpeedKnob {
+    // Unused until Task 4 wires it into VideoEncoderInfo materialization.
+    #[allow(dead_code)]
+    pub(crate) fn from_def(d: &SpeedKnobDef) -> Self {
+        match d.kind {
+            KnobKindDef::Choice { choices, default } => Self::Choice {
+                field: d.field,
+                label: d.label.to_string(),
+                choices: choices.iter().map(|s| (*s).to_string()).collect(),
+                default: default.to_string(),
+            },
+            KnobKindDef::Int { min, max, default } => Self::Int {
+                field: d.field,
+                label: d.label.to_string(),
+                min,
+                max,
+                default,
+            },
+        }
+    }
+}
+
+// --- Per-encoder knob tables (verified against FFmpeg 8.0.1-mediaforge, 2026-06-09) ---
+// These constants are referenced only by speed_controls_def(), which is itself
+// unused until Task 4. The allows are removed once the wiring lands.
+#[allow(dead_code)]
+const PRESETS_X26X: &[&str] = &[
+    "ultrafast",
+    "superfast",
+    "veryfast",
+    "faster",
+    "fast",
+    "medium",
+    "slow",
+    "slower",
+    "veryslow",
+    "placebo",
+];
+#[allow(dead_code)]
+const PRESETS_VVENC: &[&str] = &["faster", "fast", "medium", "slow", "slower"];
+#[allow(dead_code)]
+const PRESETS_XEVE: &[&str] = &["default", "fast", "medium", "slow", "placebo"];
+#[allow(dead_code)]
+const DEADLINE_VALUES: &[&str] = &["best", "good", "realtime"];
+
+#[allow(dead_code)]
+const KNOBS_X264: &[SpeedKnobDef] = &[SpeedKnobDef {
+    field: KnobField::Preset,
+    label: "Preset",
+    kind: KnobKindDef::Choice {
+        choices: PRESETS_X26X,
+        default: "medium",
+    },
+}];
+#[allow(dead_code)]
+const KNOBS_X265: &[SpeedKnobDef] = KNOBS_X264; // identical preset vocabulary
+#[allow(dead_code)]
+const KNOBS_VVENC: &[SpeedKnobDef] = &[SpeedKnobDef {
+    field: KnobField::Preset,
+    label: "Preset",
+    kind: KnobKindDef::Choice {
+        choices: PRESETS_VVENC,
+        default: "medium",
+    },
+}];
+#[allow(dead_code)]
+const KNOBS_XEVE: &[SpeedKnobDef] = &[SpeedKnobDef {
+    field: KnobField::Preset,
+    label: "Preset",
+    kind: KnobKindDef::Choice {
+        choices: PRESETS_XEVE,
+        default: "medium",
+    },
+}];
+#[allow(dead_code)]
+const KNOBS_SVTAV1: &[SpeedKnobDef] = &[SpeedKnobDef {
+    field: KnobField::Preset,
+    label: "Preset",
+    kind: KnobKindDef::Int {
+        min: -2,
+        max: 13,
+        default: -2,
+    },
+}];
+#[allow(dead_code)]
+const KNOBS_VP9: &[SpeedKnobDef] = &[
+    SpeedKnobDef {
+        field: KnobField::Deadline,
+        label: "Deadline",
+        kind: KnobKindDef::Choice {
+            choices: DEADLINE_VALUES,
+            default: "good",
+        },
+    },
+    SpeedKnobDef {
+        field: KnobField::CpuUsed,
+        label: "CPU used",
+        kind: KnobKindDef::Int {
+            min: -8,
+            max: 8,
+            default: 1,
+        },
+    },
+];
+#[allow(dead_code)]
+const KNOBS_VP8: &[SpeedKnobDef] = &[
+    SpeedKnobDef {
+        field: KnobField::Deadline,
+        label: "Deadline",
+        kind: KnobKindDef::Choice {
+            choices: DEADLINE_VALUES,
+            default: "good",
+        },
+    },
+    SpeedKnobDef {
+        field: KnobField::CpuUsed,
+        label: "CPU used",
+        kind: KnobKindDef::Int {
+            min: -16,
+            max: 16,
+            default: 1,
+        },
+    },
+];
+#[allow(dead_code)]
+const KNOBS_XAVS2: &[SpeedKnobDef] = &[SpeedKnobDef {
+    field: KnobField::SpeedLevel,
+    label: "Speed level",
+    kind: KnobKindDef::Int {
+        min: 0,
+        max: 9,
+        default: 0,
+    },
+}];
+
+/// Speed-control descriptor for an encoder. Empty slice = encoder exposes no
+/// panel-controllable speed knob (or is not modeled yet, e.g. unlinked encoders).
+// Unused until Task 4 wires it into VideoEncoderInfo.
+#[allow(dead_code)]
+#[must_use]
+pub(crate) fn speed_controls_def(encoder: &str) -> &'static [SpeedKnobDef] {
+    match encoder {
+        "libx264" => KNOBS_X264,
+        "libx265" => KNOBS_X265,
+        "libvvenc" => KNOBS_VVENC,
+        "libxeve" => KNOBS_XEVE,
+        "libsvtav1" => KNOBS_SVTAV1,
+        "libvpx-vp9" => KNOBS_VP9,
+        "libvpx" => KNOBS_VP8,
+        "libxavs2" => KNOBS_XAVS2,
+        _ => &[],
+    }
+}
+
 /// Entry in the codec preferences table.
 struct CodecEntry {
     /// Canonical codec name
@@ -383,5 +608,50 @@ mod tests {
     fn test_available_encoders_for_unknown_codec() {
         let encoders = available_encoders_for_codec("nonexistent");
         assert!(encoders.is_empty());
+    }
+
+    #[test]
+    fn vp8_and_vp9_cpu_used_ranges_differ() {
+        let cpu = |k: &[SpeedKnobDef]| {
+            k.iter()
+                .find_map(|d| match (d.field, d.kind) {
+                    (KnobField::CpuUsed, KnobKindDef::Int { min, max, .. }) => Some((min, max)),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert_eq!(cpu(speed_controls_def("libvpx-vp9")), (-8, 8));
+        assert_eq!(cpu(speed_controls_def("libvpx")), (-16, 16));
+    }
+
+    #[test]
+    fn vvenc_presets_are_the_five_names() {
+        let knobs = speed_controls_def("libvvenc");
+        let first = knobs.first().expect("vvenc must have at least one knob");
+        match first.kind {
+            KnobKindDef::Choice { choices, default } => {
+                assert_eq!(choices, &["faster", "fast", "medium", "slow", "slower"]);
+                assert_eq!(default, "medium");
+            }
+            KnobKindDef::Int { .. } => panic!("vvenc preset should be a Choice"),
+        }
+    }
+
+    #[test]
+    fn svtav1_preset_is_numeric_range() {
+        let knobs = speed_controls_def("libsvtav1");
+        let first = knobs.first().expect("svtav1 must have at least one knob");
+        match first.kind {
+            KnobKindDef::Int { min, max, default } => {
+                assert_eq!((min, max, default), (-2, 13, -2));
+            }
+            KnobKindDef::Choice { .. } => panic!("svtav1 preset should be Int"),
+        }
+    }
+
+    #[test]
+    fn unlinked_or_unknown_encoder_has_no_knobs() {
+        assert!(speed_controls_def("libkvazaar").is_empty());
+        assert!(speed_controls_def("nonsense").is_empty());
     }
 }
