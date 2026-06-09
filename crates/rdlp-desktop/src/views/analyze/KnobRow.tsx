@@ -66,6 +66,7 @@ export function KnobRow({
                     onBlur={onBlur}
                     onChange={(e) => onChange(e.target.value)}
                     placeholder={String(knob.default)}
+                    aria-label={knob.label}
                     className="h-5 w-[90px] px-1.5 py-0 rounded-[3px] bg-[var(--surface-elevated)] border border-[#2a2a3e] text-[10px] text-[var(--text-muted)] placeholder:text-[var(--text-muted)] outline-none focus:border-[#4a9eff]"
                 />
             )}

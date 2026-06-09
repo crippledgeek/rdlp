@@ -19,10 +19,12 @@ import * as React from "react";
 interface SelectCtx {
     value: string;
     onValueChange?: ((v: string) => void) | undefined;
+    // React Aria (Jolly UI) Select uses selectedKey/onSelectionChange instead of value/onValueChange.
+    onSelectionChange?: ((key: string) => void) | undefined;
     open: boolean;
     setOpen: (o: boolean) => void;
     disabled?: boolean | undefined;
-    items: Map<string, string>; // value → label text
+    items: Map<string, string>; // value/id → label text
 }
 
 const Ctx = React.createContext<SelectCtx | null>(null);
@@ -39,18 +41,25 @@ function useCtx() {
 function Select({
     value,
     onValueChange,
+    // React Aria (Jolly UI) props — used by KnobRow and other desktop components
+    selectedKey,
+    onSelectionChange,
     disabled,
     children,
 }: {
     value?: string;
     onValueChange?: (v: string) => void;
+    selectedKey?: string;
+    onSelectionChange?: (key: string) => void;
     disabled?: boolean;
     children: React.ReactNode;
 }) {
     const [open, setOpen] = React.useState(false);
     const [items] = React.useState(() => new Map<string, string>());
+    // Support both shadcn (value/onValueChange) and React Aria (selectedKey/onSelectionChange) APIs.
+    const resolvedValue = selectedKey ?? value ?? "";
     return (
-        <Ctx.Provider value={{ value: value ?? "", onValueChange, open, setOpen, disabled, items }}>
+        <Ctx.Provider value={{ value: resolvedValue, onValueChange, onSelectionChange, open, setOpen, disabled, items }}>
             <div data-slot="select">{children}</div>
         </Ctx.Provider>
     );
@@ -110,24 +119,33 @@ function SelectContent({ children }: { children: React.ReactNode }) {
 
 function SelectItem({
     value,
+    // React Aria (Jolly UI) uses `id` as the item key, not `value`.
+    id,
     children,
+    textValue: _textValue,
     ...rest
 }: {
-    value: string;
+    value?: string;
+    id?: string;
     children: React.ReactNode;
+    textValue?: string;
 } & React.HTMLAttributes<HTMLDivElement>) {
     const ctx = useCtx();
+    // The item's key is `id` (React Aria) or `value` (shadcn); fall back to the other.
+    const key = id ?? value ?? "";
     // Register label text synchronously so SelectValue can display it
     // in the same render pass (useEffect would be too late).
     const label = typeof children === "string" ? children : "";
-    ctx.items.set(value, label);
+    ctx.items.set(key, label);
 
     return (
         <div
             role="option"
-            aria-selected={ctx.value === value}
+            aria-selected={ctx.value === key}
             onClick={() => {
-                ctx.onValueChange?.(value);
+                // Fire whichever callback the parent wired up.
+                ctx.onSelectionChange?.(key);
+                ctx.onValueChange?.(key);
                 ctx.setOpen(false);
             }}
             {...rest}

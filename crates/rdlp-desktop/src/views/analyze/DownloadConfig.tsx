@@ -26,16 +26,17 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import type { DownloadOptions } from "@/types";
+import type { DownloadOptions, KnobField } from "@/types";
 import { KnobRow } from "./KnobRow";
 
 // Maps SpeedKnob field names to TanStack Form field names.
-const FIELD_BY_KNOB = {
+// Typed as Record<KnobField, ...> so adding/removing a KnobField variant is a compile error.
+const FIELD_BY_KNOB: Record<KnobField, "recodePreset" | "recodeDeadline" | "recodeCpuUsed" | "recodeSpeedLevel"> = {
     preset: "recodePreset",
     deadline: "recodeDeadline",
     cpuUsed: "recodeCpuUsed",
     speedLevel: "recodeSpeedLevel",
-} as const;
+};
 
 const NONE_SENTINEL = "none";
 
