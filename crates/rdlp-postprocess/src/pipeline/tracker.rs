@@ -33,9 +33,10 @@ fn is_temp_named(path: &Path) -> bool {
 ///
 /// On `Drop` without a prior [`commit`] (or [`cleanup`], which commits as its
 /// last step), `FileTracker` performs graceful-cancel cleanup: it deletes every
-/// uncommitted path it issued via [`temp_path`] plus any `current_files`, and
-/// releases each from [`TempRegistry`]. This prevents partial recode output and
-/// intermediate files from leaking when a job is cancelled mid-pipeline (#335).
+/// uncommitted path it issued via [`temp_path`] plus any `current_files` and
+/// superseded `temp_files`, and releases each from [`TempRegistry`]. This
+/// prevents partial recode output and
+/// intermediate files from leaking when a job is cancelled mid-pipeline (#335, #404).
 /// [`TempRegistry`] remains the crash/stale backstop for the case where the
 /// process dies before `Drop` runs.
 pub struct FileTracker {
@@ -185,6 +186,23 @@ impl Drop for FileTracker {
         if self.committed {
             return;
         }
+        // Visible guard (#339): `issued` + `current_files` SHOULD be temp-
+        // namespaced. If a caller violated the `new()` precondition by passing a
+        // non-temp file, warn (but still delete — the cancel intent is to clear
+        // the working set). `temp_files` is deliberately EXCLUDED from this check:
+        // it legitimately holds real-named superseded files (e.g. the original
+        // download moved here by `replace()`), so a non-temp name there is
+        // expected, not a contract violation. Drop never panics.
+        for path in self.issued.iter().chain(self.current_files.iter()) {
+            if !is_temp_named(path) {
+                log::warn!(
+                    "FileTracker::Drop deleting non-temp-named file {} — unexpected; \
+                     current_files should be temp-namespaced",
+                    path.display(),
+                );
+            }
+        }
+        // Delete all three sets (issued + current_files + superseded temp_files).
         // Collect into an owned Vec to avoid borrowing self while mutating it.
         let to_delete: Vec<PathBuf> = self
             .issued
@@ -194,20 +212,8 @@ impl Drop for FileTracker {
             .cloned()
             .collect();
         for path in to_delete {
-            // Visible guard (#339): every deletable path SHOULD be
-            // temp-namespaced. If a caller violated the `new()` precondition by
-            // passing a non-temp file, warn (but still delete — the cancel
-            // intent is to clear the working set). Drop never panics.
-            if !is_temp_named(&path) {
-                log::warn!(
-                    "FileTracker::Drop deleting non-temp-named file {} — unexpected; \
-                     current_files should be temp-namespaced",
-                    path.display(),
-                );
-            }
-            // The issued and current sets may overlap (mark_temp re-files
-            // issued paths); the exists() guard + idempotent release make this
-            // safe to run per path.
+            // The sets may overlap (mark_temp re-files issued paths); the
+            // exists() guard + idempotent release make this safe to run per path.
             if path.exists()
                 && let Err(e) = std::fs::remove_file(&path)
             {
