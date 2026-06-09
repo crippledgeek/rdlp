@@ -339,7 +339,7 @@ mod tests {
         let original = dir.path().join("video.mp4");
         fs::write(&original, b"orig").unwrap();
         {
-            let mut tracker = FileTracker::new(vec![original.clone()], reg.clone());
+            let mut tracker = FileTracker::new(vec![original.clone()], reg);
             let promoted = dir.path().join("video.rdlp-tmp-zzz.mp4");
             fs::write(&promoted, b"new").unwrap();
             tracker.replace(vec![promoted]); // original -> temp_files
