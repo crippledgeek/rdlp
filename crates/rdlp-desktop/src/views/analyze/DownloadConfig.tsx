@@ -61,6 +61,13 @@ const downloadConfigSchema = z.object({
             { message: "Enter 1–64 or leave blank for auto" },
         ),
     recodePreset: z.string(),
+    recodeDeadline: z.string(), // "" | "best" | "good" | "realtime"
+    recodeCpuUsed: z
+        .string()
+        .refine((v) => v === "" || /^-?\d+$/.test(v), { message: "Enter an integer or leave blank" }),
+    recodeSpeedLevel: z
+        .string()
+        .refine((v) => v === "" || /^\d+$/.test(v), { message: "Enter 0–9 or leave blank" }),
     extractAudio: z.string(),
     embedThumbnail: z.boolean(),
     embedSubtitles: z.boolean(),
@@ -93,6 +100,9 @@ export function DownloadConfig() {
             recodeAudioMode: "copy",
             recodeThreads: "",
             recodePreset: "",
+            recodeDeadline: "",
+            recodeCpuUsed: "",
+            recodeSpeedLevel: "",
             extractAudio: "",
             embedThumbnail: settings?.embed_thumbnail ?? true,
             embedSubtitles: settings?.embed_subtitles ?? false,
@@ -135,6 +145,9 @@ export function DownloadConfig() {
                         : null,
                     recodeThreads: value.recodeThreads ? Number(value.recodeThreads) : null,
                     recodePreset: value.recodePreset || null,
+                    recodeDeadline: null,
+                    recodeCpuUsed: null,
+                    recodeSpeedLevel: null,
                     normalizeAudio: value.normalizeAudio || null,
                     loudnorm: null,
                     loudnormPreset: null,

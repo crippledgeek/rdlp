@@ -142,10 +142,26 @@ export interface PlaylistContext {
 
 // ========== Video Codec Types (camelCase — Rust uses #[serde(rename_all = "camelCase")]) ==========
 
+/**
+ * Which encoder-specific parameter a SpeedKnob controls.
+ * Mirrors Rust `KnobField` (camelCase serde).
+ */
+export type KnobField = "preset" | "deadline" | "cpuUsed" | "speedLevel";
+
+/**
+ * A single speed-control knob for a video encoder.
+ * Mirrors Rust `SpeedKnob` with #[serde(tag = "kind")]:
+ *   { kind: "choice", field, label, choices, default } | { kind: "int", field, label, min, max, default }
+ */
+export type SpeedKnob =
+    | { kind: "choice"; field: KnobField; label: string; choices: string[]; default: string }
+    | { kind: "int"; field: KnobField; label: string; min: number; max: number; default: number };
+
 /** Info about a single video encoder available in the linked FFmpeg build. */
 export interface VideoEncoderInfo {
     encoderName: string;
     displayName: string;
+    speedControls: SpeedKnob[];
 }
 
 /** Info about a video codec with its available encoders. */
@@ -305,6 +321,9 @@ export interface DownloadOptions {
     recodeContainer: string | null;
     recodeThreads: number | null;
     recodePreset: string | null;
+    recodeDeadline: string | null;
+    recodeCpuUsed: number | null;
+    recodeSpeedLevel: number | null;
     verbose: boolean | null;
 }
 
