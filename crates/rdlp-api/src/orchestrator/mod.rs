@@ -1,6 +1,7 @@
 //! Orchestrator module for coordinating extraction, download, and post-processing
 
 mod archive;
+mod cleanup;
 mod container_resolver;
 mod download;
 pub mod errors;

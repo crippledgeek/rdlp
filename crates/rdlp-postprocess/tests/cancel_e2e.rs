@@ -35,7 +35,9 @@ use tempfile::TempDir;
 use tokio_util::sync::CancellationToken;
 
 use rdlp_postprocess::pipeline::PipelineStage;
-use rdlp_postprocess::{FFmpegRunner, Pipeline, PipelineError, RecodeStage, TempRegistry};
+use rdlp_postprocess::{
+    FFmpegRunner, Pipeline, PipelineError, RecodeStage, RemuxStage, TempRegistry,
+};
 use rdlp_types::{ContainerFormat, InfoDict, PostProcess};
 
 fn ffmpeg_available() -> bool {
@@ -66,6 +68,36 @@ fn build_long_fixture(dir: &Path) -> Result<std::path::PathBuf, ()> {
             "ultrafast",
             "-pix_fmt",
             "yuv420p",
+            src.to_str().unwrap(),
+        ])
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if ok { Ok(src) } else { Err(()) }
+}
+
+/// Build a long (30 s) H.264 **MPEG-TS** fixture. The `.ts` extension forces
+/// `RemuxStage` (is_hls) to remux ts → mp4, which `replace()`s the original
+/// into `temp_files` — the exact #404 condition.
+fn build_long_ts_fixture(dir: &Path) -> Result<std::path::PathBuf, ()> {
+    let src = dir.join("src.ts");
+    let ok = Command::new("ffmpeg")
+        .args([
+            "-y",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=d=30:s=1280x720",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "ultrafast",
+            "-pix_fmt",
+            "yuv420p",
+            "-f",
+            "mpegts",
             src.to_str().unwrap(),
         ])
         .status()
@@ -177,5 +209,84 @@ async fn cancel_mid_recode_aborts_and_cleans_up() {
     assert!(
         leftovers.is_empty(),
         "cancel-cleanup must leave zero *.rdlp-tmp-*/.lock artifacts; found: {leftovers:?}"
+    );
+}
+
+/// #404 guard: cancelling mid-recode after a Remux stage has superseded the
+/// original download must delete the **real-named** source file (which lives in
+/// `temp_files`), not just the `*.rdlp-tmp-*` intermediates.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cancel_after_remux_deletes_real_named_source() {
+    if !ffmpeg_available() {
+        eprintln!("[SKIP] ffmpeg not available");
+        return;
+    }
+    let dir = TempDir::new().expect("tempdir");
+    let Ok(src) = build_long_ts_fixture(dir.path()) else {
+        eprintln!("[SKIP] fixture build failed");
+        return;
+    };
+    let work = dir.path().join("work");
+    std::fs::create_dir(&work).unwrap();
+    let input = work.join("video.ts"); // real-named HLS download
+    std::fs::rename(&src, &input).unwrap();
+
+    let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpegRunner::new"));
+    let stages: Vec<Arc<dyn PipelineStage>> = vec![
+        Arc::new(RemuxStage::new(Arc::clone(&ffmpeg))), // ts->mp4: video.ts -> temp_files
+        Arc::new(RecodeStage::new(ffmpeg)),             // slow encode -> cancel target
+    ];
+    let pipeline = Arc::new(Pipeline::new(stages, Arc::new(TempRegistry::new()), 4));
+
+    let config = Arc::new(PostProcess {
+        recode_video: Some(ContainerFormat::Mkv),
+        video_encoder: Some("libx264".to_string()),
+        ..PostProcess::default()
+    });
+    let info = InfoDict::new(
+        "id".to_string(),
+        "Cancel Src".to_string(),
+        "TestExtractor".to_string(),
+        "https://example.com/video".to_string(),
+    );
+
+    let token = CancellationToken::new();
+    let token_for_run = token.clone();
+    let pipeline_for_run = Arc::clone(&pipeline);
+    let input_for_run = input.clone();
+    let handle = tokio::spawn(async move {
+        pipeline_for_run
+            .run(
+                info,
+                vec![input_for_run],
+                config,
+                "video".to_string(),
+                true, // is_hls -> RemuxStage runs
+                false,
+                None,
+                Some(token_for_run),
+            )
+            .await
+    });
+
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    token.cancel();
+
+    let result = tokio::time::timeout(Duration::from_secs(10), handle)
+        .await
+        .expect("pipeline must complete within 10s after cancel")
+        .expect("pipeline task join");
+
+    let err = result.expect_err("mid-recode cancel must surface as Err");
+    assert!(
+        matches!(
+            err.downcast_ref::<PipelineError>(),
+            Some(PipelineError::Cancelled)
+        ),
+        "expected PipelineError::Cancelled, got: {err:?}"
+    );
+    assert!(
+        !input.exists(),
+        "real-named source in temp_files must be deleted on cancel (#404)"
     );
 }

@@ -33,9 +33,10 @@ fn is_temp_named(path: &Path) -> bool {
 ///
 /// On `Drop` without a prior [`commit`] (or [`cleanup`], which commits as its
 /// last step), `FileTracker` performs graceful-cancel cleanup: it deletes every
-/// uncommitted path it issued via [`temp_path`] plus any `current_files`, and
-/// releases each from [`TempRegistry`]. This prevents partial recode output and
-/// intermediate files from leaking when a job is cancelled mid-pipeline (#335).
+/// uncommitted path it issued via [`temp_path`] plus any `current_files` and
+/// superseded `temp_files`, and releases each from [`TempRegistry`]. This
+/// prevents partial recode output and
+/// intermediate files from leaking when a job is cancelled mid-pipeline (#335, #404).
 /// [`TempRegistry`] remains the crash/stale backstop for the case where the
 /// process dies before `Drop` runs.
 pub struct FileTracker {
@@ -173,8 +174,10 @@ impl FileTracker {
 impl Drop for FileTracker {
     /// Graceful-cancel cleanup: if the job did not [`commit`](FileTracker::commit)
     /// (or [`cleanup`](FileTracker::cleanup), which commits last), delete every
-    /// uncommitted issued path and any `current_files`, releasing each from the
-    /// [`TempRegistry`] (#335).
+    /// uncommitted issued path, any `current_files`, AND any `temp_files`
+    /// (superseded working files / the original download), releasing each from
+    /// the [`TempRegistry`] (#335, #404). This mirrors the success-path
+    /// `cleanup()`, which already drains `temp_files` — cancel is now symmetric.
     // Safe: synchronous remove_file in Drop is unavoidable — Drop cannot be
     // async, and this mirrors the existing justification on `cleanup()` and the
     // registry's own shutdown hook.
@@ -183,28 +186,34 @@ impl Drop for FileTracker {
         if self.committed {
             return;
         }
-        // Collect into an owned Vec to avoid borrowing self while mutating it.
-        let to_delete: Vec<PathBuf> = self
-            .issued
-            .iter()
-            .chain(self.current_files.iter())
-            .cloned()
-            .collect();
-        for path in to_delete {
-            // Visible guard (#339): every deletable path SHOULD be
-            // temp-namespaced. If a caller violated the `new()` precondition by
-            // passing a non-temp file, warn (but still delete — the cancel
-            // intent is to clear the working set). Drop never panics.
-            if !is_temp_named(&path) {
+        // Visible guard (#339): `issued` + `current_files` SHOULD be temp-
+        // namespaced. If a caller violated the `new()` precondition by passing a
+        // non-temp file, warn (but still delete — the cancel intent is to clear
+        // the working set). `temp_files` is deliberately EXCLUDED from this check:
+        // it legitimately holds real-named superseded files (e.g. the original
+        // download moved here by `replace()`), so a non-temp name there is
+        // expected, not a contract violation. Drop never panics.
+        for path in self.issued.iter().chain(self.current_files.iter()) {
+            if !is_temp_named(path) {
                 log::warn!(
                     "FileTracker::Drop deleting non-temp-named file {} — unexpected; \
                      current_files should be temp-namespaced",
                     path.display(),
                 );
             }
-            // The issued and current sets may overlap (mark_temp re-files
-            // issued paths); the exists() guard + idempotent release make this
-            // safe to run per path.
+        }
+        // Delete all three sets (issued + current_files + superseded temp_files).
+        // Collect into an owned Vec to avoid borrowing self while mutating it.
+        let to_delete: Vec<PathBuf> = self
+            .issued
+            .iter()
+            .chain(self.current_files.iter())
+            .chain(self.temp_files.iter())
+            .cloned()
+            .collect();
+        for path in to_delete {
+            // The sets may overlap (mark_temp re-files issued paths); the
+            // exists() guard + idempotent release make this safe to run per path.
             if path.exists()
                 && let Err(e) = std::fs::remove_file(&path)
             {
@@ -323,6 +332,28 @@ mod tests {
         assert!(
             !reg.contains(&partial),
             "registry entry for partial must be released"
+        );
+    }
+
+    #[test]
+    fn drop_uncommitted_deletes_temp_files() {
+        // A stage supersedes the original input via replace(), moving it into
+        // temp_files. On an uncommitted (cancel) drop, that superseded file MUST
+        // be deleted — this is the #404 source-.mp4 leak.
+        let dir = TempDir::new().unwrap();
+        let reg = Arc::new(TempRegistry::new());
+        let original = dir.path().join("video.mp4");
+        fs::write(&original, b"orig").unwrap();
+        {
+            let mut tracker = FileTracker::new(vec![original.clone()], reg);
+            let promoted = dir.path().join("video.rdlp-tmp-zzz.mp4");
+            fs::write(&promoted, b"new").unwrap();
+            tracker.replace(vec![promoted]); // original -> temp_files
+            // dropped here WITHOUT commit() -> cancel semantics
+        }
+        assert!(
+            !original.exists(),
+            "superseded original in temp_files must be deleted on uncommitted drop (#404)"
         );
     }
 
