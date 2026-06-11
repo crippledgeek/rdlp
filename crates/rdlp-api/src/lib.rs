@@ -34,6 +34,8 @@ pub mod result;
 #[cfg(feature = "serde")]
 pub mod dto;
 
+/// Cancellation disposition: keep-vs-discard intent for partial files.
+pub(crate) mod cancel;
 /// Conditional merge of request overrides into Config.
 pub(crate) mod merge;
 /// Internal orchestrator (moved from rdlp-cli).
