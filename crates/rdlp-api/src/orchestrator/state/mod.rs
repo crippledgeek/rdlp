@@ -11,12 +11,15 @@ use super::{
     errors::{OrchestratorError, Result},
 };
 use crate::events::Event;
+use anyhow::Context as _;
 use log::{debug, warn};
 use rdlp_types::Format;
 use std::fmt;
 use std::path::PathBuf;
 use tracing::instrument;
 
+#[cfg(test)]
+mod finalize_tests;
 #[cfg(test)]
 mod tests;
 
@@ -351,14 +354,27 @@ impl DownloadPhase {
                 let state = match *plan {
                     DownloadPlan::Merge { .. } => DownloadState::Fresh,
                     DownloadPlan::Single(_) => {
+                        // Probe resume against the deterministic .rdlp-part name —
+                        // the download writes there, not to the clean name (#406).
+                        let part = super::naming::part_path(&output_path);
                         let resume_offset = orchestrator
-                            .detect_resume_point(&output_path, format.filesize)
+                            .detect_resume_point(&part, format.filesize)
                             .await?;
 
-                        // Check if file is already complete
+                        // Already complete: the bytes are under .rdlp-part; commit
+                        // them to the clean name before returning Complete.
                         if let Some(expected_size) = format.filesize
                             && resume_offset == expected_size
                         {
+                            tokio::fs::rename(&part, &output_path)
+                                .await
+                                .with_context(|| {
+                                    format!(
+                                        "failed to finalize completed download {} -> {}",
+                                        part.display(),
+                                        output_path.display()
+                                    )
+                                })?;
                             return Ok(Self::Complete { path: output_path });
                         }
 
@@ -413,16 +429,32 @@ impl DownloadPhase {
                 // Branch on download plan
                 let (download_files, is_hls) = match *plan {
                     DownloadPlan::Single(_) => {
-                        // Single format: existing path
+                        // Download to the deterministic .rdlp-part name; the clean
+                        // name never appears on disk until the download commits.
+                        let part = super::naming::part_path(&output_path);
                         let Some(outcome) = orchestrator
-                            .download_with_cdn_fallback(&format, &output_path, state.offset())
+                            .download_with_cdn_fallback(&format, &part, state.offset())
                             .await?
                         else {
+                            // Explicit cancel: delete the .rdlp-part working file so
+                            // a cancel leaves no artifact (#406). Best-effort.
+                            let _ = tokio::fs::remove_file(&part).await;
                             orchestrator.emit(Event::Cancelled {
                                 id: orchestrator.download_id,
                             });
                             return Ok(Self::Cancelled);
                         };
+                        // Commit: rename .rdlp-part -> clean BEFORE post-processing
+                        // (Slice 1 finalizes pre-PP; Slice 2 moves it post-PP).
+                        tokio::fs::rename(&part, &output_path)
+                            .await
+                            .with_context(|| {
+                                format!(
+                                    "failed to finalize download {} -> {}",
+                                    part.display(),
+                                    output_path.display()
+                                )
+                            })?;
                         (vec![output_path.clone()], outcome.is_hls)
                     }
                     DownloadPlan::Merge {
