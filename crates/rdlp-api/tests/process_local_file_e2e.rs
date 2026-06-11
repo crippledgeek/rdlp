@@ -62,13 +62,12 @@ fn build_short_mp4_fixture(dir: &Path) -> std::path::PathBuf {
         ])
         .output()
         .expect("failed to spawn ffmpeg");
-    if !out.status.success() {
-        panic!(
-            "ffmpeg fixture-build failed (exit {})\nstderr: {}",
-            out.status,
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
+    assert!(
+        out.status.success(),
+        "ffmpeg fixture-build failed (exit {})\nstderr: {}",
+        out.status,
+        String::from_utf8_lossy(&out.stderr)
+    );
     src
 }
 
