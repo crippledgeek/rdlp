@@ -58,7 +58,14 @@ pub struct FileTracker {
     /// temp-named files); populated by `process_local_file` for a pre-existing
     /// local file (#414). Encodes the ownership rule: delete what we created,
     /// preserve what the user brought us.
-    borrowed: Vec<PathBuf>,
+    ///
+    /// Each entry is `(raw, canonical)`: the raw path as supplied by the caller,
+    /// plus the result of [`std::fs::canonicalize`] at [`new_borrowing`] time
+    /// (when the file is guaranteed to exist, so canonicalize succeeds).
+    /// Storing the canonical form enables [`is_borrowed`] to match equivalent
+    /// but textually-distinct representations (symlinks, resolved mount points)
+    /// without relying on the file still existing at check time (#416 M2).
+    borrowed: Vec<(PathBuf, Option<PathBuf>)>,
     /// Disarms the `Drop` cleanup once the job succeeds (`commit`/`cleanup`).
     committed: bool,
     temp_registry: Arc<TempRegistry>,
@@ -70,7 +77,7 @@ impl FileTracker {
     /// fields are made only once.
     const fn with_borrowed(
         files: Vec<PathBuf>,
-        borrowed: Vec<PathBuf>,
+        borrowed: Vec<(PathBuf, Option<PathBuf>)>,
         temp_registry: Arc<TempRegistry>,
     ) -> Self {
         Self {
@@ -105,24 +112,58 @@ impl FileTracker {
     /// input: never deleted (success or cancel), never queued for deletion by
     /// [`replace`]. For post-processing a pre-existing local file (#414) rather
     /// than a file rdlp downloaded.
+    ///
+    /// Each borrowed path is canonicalized at construction time (the files exist
+    /// here, so [`std::fs::canonicalize`] succeeds). The canonical form is stored
+    /// alongside the raw path so [`is_borrowed`] can match equivalent-but-
+    /// textually-distinct representations such as symlinks at cancel/cleanup time,
+    /// when the file may have been moved and canonicalize on the candidate would
+    /// fail (#416 M2).
     #[must_use]
     pub fn new_borrowing(files: Vec<PathBuf>, temp_registry: Arc<TempRegistry>) -> Self {
-        let borrowed = files.clone();
+        let borrowed = files
+            .iter()
+            .map(|raw| {
+                let canonical = std::fs::canonicalize(raw).ok();
+                (raw.clone(), canonical)
+            })
+            .collect();
         Self::with_borrowed(files, borrowed, temp_registry)
     }
 
     /// Whether `path` is a borrowed (user-owned) input that must never be
-    /// deleted or released by this tracker (#414). Centralises the membership
-    /// check used by `replace`, `cleanup`, and `Drop`.
+    /// deleted or released by this tracker (#414, #416 M2).
     ///
-    /// NOTE: comparison is by exact `PathBuf` equality. The pipeline preserves
-    /// borrowed paths byte-for-byte (stages clone `current_files[0]` and produce
-    /// NEW temp outputs; they never re-case or canonicalize the input), so this
-    /// holds on case-sensitive and case-insensitive filesystems alike today.
-    /// Hardening this against path-representation divergence (canonicalization /
-    /// case-folding) is tracked as a follow-up.
+    /// Two checks, in order:
+    /// 1. **Raw `PathBuf` equality** — cheap, no syscall; covers the common case
+    ///    where the pipeline round-trips the path unchanged.
+    /// 2. **Canonical equality** — canonicalize `path` and compare against the
+    ///    stored canonical form (computed at [`new_borrowing`] time when the file
+    ///    existed). Catches equivalent representations such as symlinks and
+    ///    resolved mount points.
+    ///
+    /// When `std::fs::canonicalize` can't run (Drop/cleanup, file already gone),
+    /// step 2 simply doesn't match and the result is determined by step 1 —
+    /// never worse than the original exact-match implementation.
     fn is_borrowed(&self, path: &Path) -> bool {
-        self.borrowed.iter().any(|b| b == path)
+        // Step 1: raw equality — O(n) but no syscall.
+        if self.borrowed.iter().any(|(raw, _)| raw.as_path() == path) {
+            return true;
+        }
+        // Step 2: equivalent representation (e.g. a symlink): if the candidate
+        // resolves to the same real path as a borrowed input's stored canonical,
+        // it's borrowed. `canonicalize` needs the file to exist, so it can fail
+        // in Drop/cleanup (file already gone) — in that case we simply fall
+        // through to the raw result above, never worse than exact-match.
+        if let Ok(candidate_canon) = std::fs::canonicalize(path)
+            && self
+                .borrowed
+                .iter()
+                .any(|(_, stored)| stored.as_deref() == Some(candidate_canon.as_path()))
+        {
+            return true;
+        }
+        false
     }
 
     /// Promote `new_files` to `current_files`, moving the old current files
@@ -487,6 +528,87 @@ mod tests {
         assert!(
             !is_temp_named(Path::new("My.Video.mkv")),
             "dotted clean name must NOT be temp-named"
+        );
+    }
+
+    // ── #416 M2 canonical borrowed-path matching tests ─────────────────────
+
+    /// Primary regression guard for #416 M2: if the user hands us a SYMLINK
+    /// path as the borrowed input but the pipeline internally resolves to the
+    /// canonical path (puts it in `current_files`), a cancel-Drop must NOT
+    /// delete the underlying real file.
+    ///
+    /// `PathBuf` equality is byte-for-byte, so `link.mp4` ≠ `source.mp4` under
+    /// exact equality even though both point to the same inode. The fix must
+    /// canonicalize stored borrowed paths at `new_borrowing` time so `Drop` can
+    /// match via the canonical form.
+    ///
+    /// Against the current exact-equality `is_borrowed` this test MUST fail
+    /// (the real source is deleted). After the fix it MUST pass.
+    #[test]
+    #[cfg(unix)] // symlinks are a POSIX concept; Windows requires privilege escalation
+    fn cancel_drop_survives_canonical_when_borrowed_via_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new().unwrap();
+        let reg = test_registry();
+
+        // The real file — the underlying target.
+        let real_src = dir.path().join("source.mp4");
+        fs::write(&real_src, b"user data").unwrap();
+
+        // A symlink that resolves to the same inode.
+        let link_src = dir.path().join("source_link.mp4");
+        symlink(&real_src, &link_src).expect("symlink creation failed");
+
+        // The user hands us the SYMLINK path as the borrowed input.
+        let mut t = FileTracker::new_borrowing(vec![link_src], reg);
+
+        // A pipeline stage resolves the symlink and puts the CANONICAL path
+        // in current_files. Drop's is_borrowed(real_src) returns false under
+        // exact equality → deletes real_src — the data-loss bug (#416 M2).
+        t.current_files = vec![real_src.clone()];
+        // uncommitted drop → cancel semantics
+        drop(t);
+
+        assert!(
+            real_src.exists(),
+            "borrowed source must survive cancel-Drop when borrowed via symlink \
+             but Drop sees the canonical path (#416 M2)"
+        );
+    }
+
+    /// Symmetric variant: tracker borrowed with the canonical path, pipeline
+    /// returns a SYMLINK to it in `current_files`. The symlink path itself may be
+    /// deleted (it is not the user's real file), but the real file must survive.
+    ///
+    /// NOTE: this variant passes even under exact equality (deleting the symlink
+    /// path removes the dangling symlink, not the real file), so it is included
+    /// as a regression guard to ensure the fix does not break this case.
+    #[test]
+    #[cfg(unix)]
+    fn cancel_drop_preserves_real_file_when_drop_sees_symlink_path() {
+        use std::os::unix::fs::symlink;
+
+        let dir = TempDir::new().unwrap();
+        let reg = test_registry();
+
+        let real_src = dir.path().join("source.mp4");
+        fs::write(&real_src, b"user data").unwrap();
+
+        let link_src = dir.path().join("source_link.mp4");
+        symlink(&real_src, &link_src).expect("symlink creation failed");
+
+        // Tracker borrowed with the canonical path.
+        let mut t = FileTracker::new_borrowing(vec![real_src.clone()], reg);
+
+        // Drop sees the symlink path in current_files.
+        t.current_files = vec![link_src];
+        drop(t);
+
+        assert!(
+            real_src.exists(),
+            "real file must survive even when Drop only sees a symlink path (#416 M2)"
         );
     }
 
