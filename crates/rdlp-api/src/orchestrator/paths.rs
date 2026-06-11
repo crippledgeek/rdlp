@@ -144,6 +144,16 @@ impl Orchestrator {
             })
             .collect();
 
+        // Step 1.5 (#406): neutralize the reserved temp-file markers so a user
+        // title containing them cannot collide with the download/pipeline naming
+        // scheme. Only the leading dot of each marker is changed to an
+        // underscore, so the visible title text is preserved while the strip
+        // logic (marker-search on the dotted form) can never mistake it for a
+        // real marker.
+        let sanitized = sanitized
+            .replace(super::naming::PART_MARKER, "_rdlp-part")
+            .replace(super::naming::TMP_MARKER, "_rdlp-tmp-");
+
         // Step 2: Trim leading/trailing dots and spaces (problematic on Windows)
         let trimmed = sanitized.trim_matches(|c| c == '.' || c == ' ');
 
@@ -194,5 +204,60 @@ impl Orchestrator {
         }
         // Fallback: simple truncation at char boundary
         name.chars().take(max_len).collect()
+    }
+}
+
+#[cfg(test)]
+mod sanitize_marker_tests {
+    use crate::orchestrator::Orchestrator;
+
+    #[test]
+    fn neutralizes_part_marker_in_title() {
+        let out = Orchestrator::sanitize_filename("foo.rdlp-part");
+        assert!(!out.contains(".rdlp-part"), "got: {out}");
+        assert_eq!(out, "foo_rdlp-part");
+    }
+
+    #[test]
+    fn neutralizes_tmp_marker_in_title() {
+        let out = Orchestrator::sanitize_filename("clip.rdlp-tmp-abc");
+        assert!(!out.contains(".rdlp-tmp-"), "got: {out}");
+        assert_eq!(out, "clip_rdlp-tmp-abc");
+    }
+
+    #[test]
+    fn leaves_ordinary_titles_unchanged() {
+        assert_eq!(
+            Orchestrator::sanitize_filename("Normal Title"),
+            "Normal Title"
+        );
+    }
+
+    #[test]
+    fn neutralizes_marker_after_leading_dots() {
+        // Guards the neutralize-BEFORE-trim ordering: trim must not re-expose a marker.
+        let out = Orchestrator::sanitize_filename("..rdlp-part");
+        assert!(!out.contains(".rdlp-part"), "got: {out}");
+    }
+
+    #[test]
+    fn neutralizes_all_marker_occurrences() {
+        let out = Orchestrator::sanitize_filename("x.rdlp-part.rdlp-part");
+        assert!(!out.contains(".rdlp-part"), "got: {out}");
+    }
+
+    #[test]
+    fn neutralized_title_round_trips_to_intended_clean_name() {
+        // The cross-module invariant: a title containing the marker, once
+        // sanitized, survives a full part_path -> finalize_to_clean cycle and
+        // yields the SANITIZED clean name, never a truncation at title text.
+        use crate::orchestrator::naming::{finalize_to_clean, part_path};
+        use std::path::PathBuf;
+
+        let stem = Orchestrator::sanitize_filename("foo.rdlp-part"); // "foo_rdlp-part"
+        let clean = PathBuf::from(format!("/v/{stem}.mp4"));
+        let part = part_path(&clean);
+        assert_eq!(part, PathBuf::from("/v/foo_rdlp-part.rdlp-part.mp4"));
+        assert_eq!(finalize_to_clean(&part), Some(clean));
     }
 }
