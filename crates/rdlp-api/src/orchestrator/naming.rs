@@ -70,8 +70,7 @@ pub(super) fn strip_temp_marker(file_name: &str) -> Option<&str> {
 /// plus the SURVIVOR's own extension (so a container change during post-processing,
 /// e.g., ts → mkv, is preserved in the final name). Returns `None` for stdout or
 /// for an already-clean name (no marker present).
-#[allow(dead_code)] // wired into the finalize path in a later task
-pub(super) fn finalize_to_clean(survivor: &Path) -> Option<PathBuf> {
+pub fn finalize_to_clean(survivor: &Path) -> Option<PathBuf> {
     if is_stdout(survivor) {
         return None;
     }
@@ -92,7 +91,7 @@ pub(super) fn finalize_to_clean(survivor: &Path) -> Option<PathBuf> {
 /// surfaced to the caller via context. Used by both the already-complete resume
 /// short-circuit and the normal download-completion path so the two share one
 /// rename call and one error message.
-pub(super) async fn finalize_part(part: &Path, clean: &Path) -> anyhow::Result<()> {
+pub async fn finalize_part(part: &Path, clean: &Path) -> anyhow::Result<()> {
     use anyhow::Context as _;
     tokio::fs::rename(part, clean).await.with_context(|| {
         format!(
@@ -108,6 +107,31 @@ pub(super) async fn finalize_part(part: &Path, clean: &Path) -> anyhow::Result<(
 /// may legitimately not exist yet, and a failed unlink must not mask the cancel.
 pub(super) async fn discard_part(part: &Path) {
     let _ = tokio::fs::remove_file(part).await;
+}
+
+/// Derive a pipeline-namespace temp path `{clean_stem}.rdlp-tmp-{uuid}.{ext}`
+/// from the clean target, in the SAME directory. Used at the download->pipeline
+/// seam so the post-process `FileTracker` only ever sees its own `.rdlp-tmp-`
+/// namespace (its marker logic and hardened cancel/Drop path stay untouched).
+/// The clean stem is recovered via marker-search, so a `.rdlp-part` input or a
+/// clean target both yield the same stem. Returns the input unchanged for the
+/// `-` stdout sentinel.
+pub fn seam_path(clean: &Path) -> PathBuf {
+    if is_stdout(clean) {
+        return clean.to_path_buf();
+    }
+    let raw = clean
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("video");
+    // If `clean` was actually a `.rdlp-part` name, recover the true stem.
+    let stem = strip_temp_marker(raw).unwrap_or(raw);
+    let id = uuid::Uuid::new_v4().simple().to_string();
+    let filename = match clean.extension().and_then(|e| e.to_str()) {
+        Some(ext) if !ext.is_empty() => format!("{stem}{TMP_MARKER}{id}.{ext}"),
+        _ => format!("{stem}{TMP_MARKER}{id}"),
+    };
+    clean.with_file_name(filename)
 }
 
 #[cfg(test)]
@@ -226,5 +250,47 @@ mod tests {
             strip_temp_marker("Guide.rdlp-part.intro.mp4"),
             Some("Guide")
         );
+    }
+
+    #[test]
+    fn seam_path_is_in_tmp_namespace_same_dir_and_ext() {
+        let clean = PathBuf::from("/v/My.Video.mp4");
+        let seam = seam_path(&clean);
+        let name = seam.file_name().unwrap().to_str().unwrap();
+        assert!(name.starts_with("My.Video.rdlp-tmp-"), "got: {name}");
+        assert!(
+            Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("mp4")),
+            "got: {name}"
+        );
+        assert_eq!(seam.parent(), clean.parent());
+        // the segment between ".rdlp-tmp-" and the extension is a 32-char hex uuid
+        let id_seg = name
+            .strip_prefix("My.Video.rdlp-tmp-")
+            .and_then(|s| s.strip_suffix(".mp4"))
+            .expect("seam name shape");
+        assert_eq!(
+            id_seg.len(),
+            32,
+            "uuid simple form is 32 hex chars: {id_seg}"
+        );
+        assert!(
+            id_seg.chars().all(|c| c.is_ascii_hexdigit()),
+            "got: {id_seg}"
+        );
+        // round-trips back to the clean name via the Slice-1 strip helper
+        assert_eq!(finalize_to_clean(&seam), Some(clean));
+    }
+
+    #[test]
+    fn seam_path_unique_across_calls() {
+        let clean = PathBuf::from("/v/X.mp4");
+        assert_ne!(seam_path(&clean), seam_path(&clean));
+    }
+
+    #[test]
+    fn seam_path_is_noop_for_stdout() {
+        assert_eq!(seam_path(&PathBuf::from("-")), PathBuf::from("-"));
     }
 }

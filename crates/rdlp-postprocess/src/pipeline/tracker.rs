@@ -123,10 +123,16 @@ impl FileTracker {
         self.current_files[0].clone()
     }
 
-    /// Delete all temp files and unregister them from [`TempRegistry`].
+    /// Delete all temp files and unregister them from [`TempRegistry`], then
+    /// disarm the cancel-cleanup [`Drop`] by committing. Does NOT rename the
+    /// surviving `current_files` to clean names — the pipeline returns them
+    /// temp-named (`*.rdlp-tmp-{uuid}.*`) and the orchestrator performs the
+    /// single final rename to the user-visible name (#406 Option X).
     ///
-    /// Called on successful pipeline completion. On crash, the
-    /// [`TempRegistry`] shutdown hook handles cleanup instead.
+    /// The surviving `current_files` are released from the [`TempRegistry`] here
+    /// (so no stale entry/lock lingers) but are NOT renamed — the orchestrator
+    /// performs the single final rename to the clean name and owns the survivor's
+    /// lifecycle thereafter.
     // Safe: invoked via tokio::task::spawn_blocking from pipeline/mod.rs:182.
     #[allow(clippy::disallowed_methods)]
     pub fn cleanup(&mut self) {
@@ -141,29 +147,14 @@ impl FileTracker {
             }
         }
 
-        // Rename current files from UUID temp names back to clean names
-        for file in &mut self.current_files {
-            if let Some(name) = file.file_name().and_then(|n| n.to_str())
-                && let Some(idx) = name.find(".rdlp-tmp-")
-            {
-                let clean_stem = &name[..idx];
-                let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
-                let clean_name = format!("{clean_stem}.{ext}");
-                let clean_path = file.with_file_name(&clean_name);
-                match std::fs::rename(&file, &clean_path) {
-                    Ok(()) => {
-                        self.temp_registry.release(file);
-                        *file = clean_path;
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "FileTracker: failed to rename {} → {}: {e}",
-                            file.display(),
-                            clean_name,
-                        );
-                    }
-                }
-            }
+        // The surviving `current_files` are returned temp-named for the
+        // orchestrator to finalize (#406 Option X). Release them from the
+        // registry HERE — registry bookkeeping stays in the pipeline, which owns
+        // the `TempRegistry`. This drops the advisory lock + removes the `.lock`
+        // sidecar so no stale entry survives; the orchestrator then renames the
+        // now-unregistered temp file to its clean user-visible name.
+        for file in &self.current_files {
+            self.temp_registry.release(file.as_path());
         }
 
         // Successful completion: disarm the cancel-cleanup Drop.
@@ -307,6 +298,45 @@ mod tests {
         assert!(!temp.exists());
     }
 
+    /// Slice 2 (#406 Option X): `cleanup()` MUST NOT rename the temp-named
+    /// survivor — it returns it as-is and the orchestrator does the final rename.
+    #[test]
+    fn cleanup_no_longer_renames_survivor() {
+        let dir = TempDir::new().unwrap();
+        let reg = test_registry();
+        // The survivor is the current_files entry — already temp-named (as the
+        // orchestrator UUID-renames inputs before handing them to FileTracker).
+        let survivor = dir.path().join("Title.rdlp-tmp-aaaa.mkv");
+        fs::write(&survivor, b"final").unwrap();
+        let mut tracker = FileTracker::new(vec![survivor.clone()], reg);
+        tracker.cleanup();
+        // Registry release assertion: the survivor was passed via FileTracker::new()
+        // (not via temp_path()), so it was never registered — reg.contains() would
+        // be vacuously false before and after. The release-on-cleanup path for
+        // temp_path()-registered survivors is covered by TempRegistry's own
+        // test_register_and_release test and by the registry Drop semantics tests.
+        // (a) The file STILL EXISTS at its .rdlp-tmp- name (NOT renamed to Title.mkv).
+        assert!(survivor.exists(), "cleanup() must NOT delete the survivor");
+        assert!(
+            !dir.path().join("Title.mkv").exists(),
+            "cleanup() must NOT create a clean-named file"
+        );
+        // (b) current_files[0] still contains the temp marker.
+        assert!(
+            tracker.current_files[0]
+                .to_str()
+                .unwrap()
+                .contains(".rdlp-tmp-"),
+            "current_files[0] must still be temp-named after cleanup()"
+        );
+        // (c) committed is true (observable: a second drop must not delete the survivor).
+        drop(tracker);
+        assert!(
+            survivor.exists(),
+            "committed tracker must not delete survivor on drop"
+        );
+    }
+
     #[test]
     fn drop_uncommitted_deletes_issued_temp_output() {
         let dir = TempDir::new().unwrap();
@@ -354,6 +384,38 @@ mod tests {
         assert!(
             !original.exists(),
             "superseded original in temp_files must be deleted on uncommitted drop (#404)"
+        );
+    }
+
+    /// Slice 2 (#406): the pipeline input is seam-named (`*.rdlp-tmp-*`), so
+    /// `FileTracker::Drop`'s `#339` non-temp-named warning CANNOT fire for it.
+    /// Pins that `is_temp_named` returns `true` for a seam-style name and
+    /// `false` for a clean name, i.e. the contract the caller (orchestrator)
+    /// must satisfy before handing the file to `FileTracker::new`.
+    #[test]
+    fn seam_name_is_temp_named_so_339_warning_cannot_fire() {
+        // Seam name produced by `seam_path()` — must be temp-named.
+        assert!(
+            is_temp_named(Path::new(
+                "Title.rdlp-tmp-abc123def456abc123def456abc123de.mp4"
+            )),
+            "seam-style name must be recognised as temp-named"
+        );
+        // Dotted-stem variant (the common real-world case).
+        assert!(
+            is_temp_named(Path::new(
+                "My.Video.rdlp-tmp-deadbeef12345678deadbeef12345678.mkv"
+            )),
+            "dotted-stem seam name must be recognised as temp-named"
+        );
+        // Clean names must NOT be recognised as temp-named.
+        assert!(
+            !is_temp_named(Path::new("Title.mp4")),
+            "clean name must NOT be temp-named"
+        );
+        assert!(
+            !is_temp_named(Path::new("My.Video.mkv")),
+            "dotted clean name must NOT be temp-named"
         );
     }
 

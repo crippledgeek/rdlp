@@ -71,6 +71,31 @@ fn make_callback_factory(
     })
 }
 
+/// Clean stem for sidecar (thumbnail/subtitle) discovery: the first file's name
+/// with any temp marker stripped, so a `.rdlp-tmp-{uuid}` / `.rdlp-part` pipeline
+/// input still resolves the originally-named sidecars (#406 slice 2).
+fn original_stem_for(files: &[PathBuf]) -> String {
+    files
+        .first()
+        .and_then(|f| f.file_name())
+        .and_then(|n| n.to_str())
+        .map_or_else(
+            || "video".to_owned(),
+            |name| {
+                super::naming::strip_temp_marker(name).map_or_else(
+                    || {
+                        std::path::Path::new(name)
+                            .file_stem()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("video")
+                            .to_owned()
+                    },
+                    ToOwned::to_owned,
+                )
+            },
+        )
+}
+
 impl Orchestrator {
     /// Check if post-processing is needed based on configuration
     pub(super) fn needs_postprocessing(&self) -> bool {
@@ -128,12 +153,7 @@ impl Orchestrator {
 
         debug!("Running post-processing pipeline...");
 
-        let original_stem = files
-            .first()
-            .and_then(|f| f.file_stem())
-            .and_then(|s| s.to_str())
-            .unwrap_or("video")
-            .to_owned();
+        let original_stem = original_stem_for(&files);
 
         // Build a per-stage progress callback factory.
         let callback_factory = Some(make_callback_factory(
@@ -236,5 +256,34 @@ impl Orchestrator {
         if deleted > 0 {
             debug!(deleted; "Cleaned up leftover segment files");
         }
+    }
+}
+
+#[cfg(test)]
+mod original_stem_tests {
+    use super::*;
+
+    #[test]
+    fn original_stem_strips_temp_marker() {
+        let files = vec![PathBuf::from("/v/My.Video.rdlp-tmp-abc.mp4")];
+        assert_eq!(original_stem_for(&files), "My.Video");
+    }
+
+    #[test]
+    fn original_stem_strips_part_marker() {
+        let files = vec![PathBuf::from("/v/Clip.rdlp-part.ts")];
+        assert_eq!(original_stem_for(&files), "Clip");
+    }
+
+    #[test]
+    fn original_stem_plain_name_unchanged() {
+        let files = vec![PathBuf::from("/v/My.Video.mp4")];
+        assert_eq!(original_stem_for(&files), "My.Video");
+    }
+
+    #[test]
+    fn original_stem_empty_defaults_to_video() {
+        let files: Vec<PathBuf> = vec![];
+        assert_eq!(original_stem_for(&files), "video");
     }
 }

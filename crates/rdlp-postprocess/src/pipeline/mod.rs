@@ -241,17 +241,17 @@ impl Pipeline {
             };
         };
 
-        // FileTracker::cleanup performs N × std::fs::remove_file and
-        // std::fs::rename. These are blocking syscalls that can stall
-        // the async runtime on slow or network filesystems. Move the
-        // work to a blocking worker so the executor stays responsive
-        // for any concurrent pipeline runs.
+        // FileTracker::cleanup performs N × std::fs::remove_file (temp_files)
+        // and commits. It no longer renames survivors — the returned files are
+        // temp-named (*.rdlp-tmp-{uuid}.*); the orchestrator does the single
+        // final rename to the clean name (#406 Option X). Run on a blocking
+        // worker so the blocking remove_file syscalls don't stall the runtime.
         let current_files = tokio::task::spawn_blocking(move || {
             let mut tracker = final_msg.tracker;
             tracker.cleanup();
             // `cleanup()` set `committed = true`, disarming the cancel-cleanup
-            // `Drop`. `FileTracker` now implements `Drop`, so the renamed final
-            // files can't be moved out of the field directly — take them,
+            // `Drop`. `FileTracker` now implements `Drop`, so the surviving
+            // temp-named files can't be moved out of the field directly — take them,
             // leaving the dropped tracker empty (and already committed).
             std::mem::take(&mut tracker.current_files)
         })

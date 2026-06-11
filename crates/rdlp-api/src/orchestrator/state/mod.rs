@@ -435,10 +435,14 @@ impl DownloadPhase {
                             });
                             return Ok(Self::Cancelled);
                         };
-                        // Commit: rename .rdlp-part -> clean BEFORE post-processing
-                        // (Slice 1 finalizes pre-PP; Slice 2 moves it post-PP).
-                        super::naming::finalize_part(&part, &output_path).await?;
-                        (vec![output_path.clone()], outcome.is_hls)
+                        // Seam: move the finished .rdlp-part into the pipeline's
+                        // own .rdlp-tmp-{uuid} namespace so post-processing's
+                        // FileTracker sees only its own markers (its hardened
+                        // cancel/Drop path is untouched). The clean name is NOT
+                        // created here — the coordinator finalizes after PP (#406).
+                        let seam = super::naming::seam_path(&output_path);
+                        super::naming::finalize_part(&part, &seam).await?;
+                        (vec![seam], outcome.is_hls)
                     }
                     DownloadPlan::Merge {
                         ref video,
@@ -501,7 +505,21 @@ impl DownloadPhase {
                     }
                     Err(e) => return Err(e),
                 };
-                let final_path = final_files.into_iter().next().unwrap_or(output_path);
+                let survivor = final_files
+                    .into_iter()
+                    .next()
+                    .unwrap_or_else(|| output_path.clone());
+                // Coordinator finalize (Option X): the ONE place the clean name
+                // is created — covers PP-ran, PP-skipped, and FFmpeg-missing. The
+                // pipeline (and the no-PP bypass) returns a temp-named survivor.
+                let final_path = match super::naming::finalize_to_clean(&survivor) {
+                    Some(clean) => {
+                        super::naming::finalize_part(&survivor, &clean).await?;
+                        clean
+                    }
+                    // No marker → already a clean name; use as-is.
+                    None => survivor,
+                };
 
                 // Verify the output file actually exists
                 if !final_path.exists() {

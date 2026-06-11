@@ -184,8 +184,12 @@ impl Orchestrator {
                         .await
                     {
                         Ok(Some(outcome)) => {
-                            crate::orchestrator::naming::finalize_part(&part, path).await?;
-                            download_result = Some((vec![path.clone()], outcome.is_hls, None));
+                            // Seam: move the finished .rdlp-part into the pipeline's
+                            // own .rdlp-tmp-{uuid} namespace; the clean name is
+                            // minted only after PP by the coordinator finalize (#406).
+                            let seam = crate::orchestrator::naming::seam_path(path);
+                            crate::orchestrator::naming::finalize_part(&part, &seam).await?;
+                            download_result = Some((vec![seam], outcome.is_hls, None));
                             break;
                         }
                         Ok(None) => {
@@ -337,7 +341,18 @@ impl Orchestrator {
         let final_files = self
             .run_postprocessing(final_info, download_files, is_hls)
             .await?;
-        let final_path = final_files.into_iter().next().unwrap_or(output_path);
+        let survivor = final_files
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| output_path.clone());
+        // Coordinator finalize (Option X): mint the clean name once, post-PP.
+        let final_path = match crate::orchestrator::naming::finalize_to_clean(&survivor) {
+            Some(clean) => {
+                crate::orchestrator::naming::finalize_part(&survivor, &clean).await?;
+                clean
+            }
+            None => survivor,
+        };
 
         // HLS downloads produce .ts files that should be remuxed.
         if is_hls {

@@ -52,6 +52,9 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 rdlp-redact = { path = "crates/rdlp-redact" }
 
+# UUID generation
+uuid = { version = "1", features = ["v4"] }
+
 # Async runtime
 tokio = { version = "1.49", features = ["macros", "rt-multi-thread", "fs", "process", "io-util", "io-std", "signal"] }
 tokio-util = { version = "0.7", features = ["rt"] }
