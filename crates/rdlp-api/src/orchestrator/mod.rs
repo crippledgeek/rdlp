@@ -10,6 +10,7 @@ mod execution;
 mod extraction;
 mod interactive;
 mod merge_download;
+mod naming;
 mod paths;
 mod playlist;
 mod postprocess;
