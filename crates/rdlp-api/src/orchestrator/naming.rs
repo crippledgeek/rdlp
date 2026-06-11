@@ -260,10 +260,27 @@ mod tests {
         let seam = seam_path(&clean);
         let name = seam.file_name().unwrap().to_str().unwrap();
         assert!(name.starts_with("My.Video.rdlp-tmp-"), "got: {name}");
-        assert!(Path::new(name)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("mp4")), "got: {name}");
+        assert!(
+            Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("mp4")),
+            "got: {name}"
+        );
         assert_eq!(seam.parent(), clean.parent());
+        // the segment between ".rdlp-tmp-" and the extension is a 32-char hex uuid
+        let id_seg = name
+            .strip_prefix("My.Video.rdlp-tmp-")
+            .and_then(|s| s.strip_suffix(".mp4"))
+            .expect("seam name shape");
+        assert_eq!(
+            id_seg.len(),
+            32,
+            "uuid simple form is 32 hex chars: {id_seg}"
+        );
+        assert!(
+            id_seg.chars().all(|c| c.is_ascii_hexdigit()),
+            "got: {id_seg}"
+        );
         // round-trips back to the clean name via the Slice-1 strip helper
         assert_eq!(finalize_to_clean(&seam), Some(clean));
     }
