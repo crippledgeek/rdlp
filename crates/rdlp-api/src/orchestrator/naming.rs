@@ -10,17 +10,14 @@ use std::path::{Path, PathBuf};
 
 /// Deterministic download-in-progress marker. Resumable; same-directory; never
 /// carries a UUID (a random name would break resume on relaunch — see spec).
-#[allow(dead_code)] // used by finalize_to_clean in the next task
 pub(super) const PART_MARKER: &str = ".rdlp-part";
 
 /// Pipeline-intermediate marker (random per stage; owned by rdlp-postprocess).
 /// Mirrored here only so the finalize helper can strip either marker.
-#[allow(dead_code)] // used by finalize_to_clean in the next task
 pub(super) const TMP_MARKER: &str = ".rdlp-tmp-";
 
 /// The stdout sentinel. Temp-naming is meaningless when output goes to stdout.
 /// Matches ONLY the exact `-` token, not a path whose last component is `-`.
-#[allow(dead_code)] // used by part_path and finalize_to_clean
 fn is_stdout(path: &Path) -> bool {
     path.as_os_str() == "-"
 }
@@ -44,6 +41,37 @@ pub(super) fn part_path(clean: &Path) -> PathBuf {
         _ => format!("{stem}{PART_MARKER}"),
     };
     clean.with_file_name(filename)
+}
+
+/// Recover the clean stem from a temp-named file, stripping EITHER marker.
+///
+/// Uses marker-SEARCH (not a first-dot split) so dotted stems survive:
+/// `My.Video.rdlp-tmp-abc.mkv` → `My.Video`. The `.rdlp-part` marker is
+/// preferred; the pipeline `.rdlp-tmp-` marker is the fallback. Returns `None`
+/// if neither marker is present (the name is already clean).
+fn strip_temp_marker(file_name: &str) -> Option<&str> {
+    let idx = file_name
+        .find(PART_MARKER)
+        .or_else(|| file_name.find(TMP_MARKER))?;
+    Some(&file_name[..idx])
+}
+
+/// Derive the clean output path for a temp-named survivor: marker-stripped stem
+/// plus the SURVIVOR's own extension (so a container change during post-processing,
+/// e.g., ts → mkv, is preserved in the final name). Returns `None` for stdout or
+/// for an already-clean name (no marker present).
+#[allow(dead_code)] // wired into the finalize path in a later task
+pub(super) fn finalize_to_clean(survivor: &Path) -> Option<PathBuf> {
+    if is_stdout(survivor) {
+        return None;
+    }
+    let name = survivor.file_name()?.to_str()?;
+    let stem = strip_temp_marker(name)?;
+    let clean = match survivor.extension().and_then(|e| e.to_str()) {
+        Some(ext) if !ext.is_empty() => format!("{stem}.{ext}"),
+        _ => stem.to_owned(),
+    };
+    Some(survivor.with_file_name(clean))
 }
 
 #[cfg(test)]
@@ -85,5 +113,55 @@ mod tests {
     fn part_path_collapses_trailing_dot_to_no_extension() {
         let clean = PathBuf::from("/v/Title.");
         assert_eq!(part_path(&clean), PathBuf::from("/v/Title.rdlp-part"));
+    }
+
+    #[test]
+    fn strip_recovers_stem_from_part_marker() {
+        assert_eq!(strip_temp_marker("Title.rdlp-part.mp4"), Some("Title"));
+    }
+
+    #[test]
+    fn strip_recovers_stem_from_tmp_marker() {
+        assert_eq!(
+            strip_temp_marker("Title.rdlp-tmp-abc123.mkv"),
+            Some("Title")
+        );
+    }
+
+    #[test]
+    fn strip_preserves_dotted_stem() {
+        assert_eq!(
+            strip_temp_marker("My.Video.S01E01.rdlp-tmp-deadbeef.mkv"),
+            Some("My.Video.S01E01")
+        );
+    }
+
+    #[test]
+    fn strip_returns_none_when_no_marker() {
+        assert_eq!(strip_temp_marker("Title.mp4"), None);
+    }
+
+    #[test]
+    fn finalize_uses_survivor_extension_for_container_change() {
+        let survivor = PathBuf::from("/v/Title.rdlp-tmp-abc.mkv");
+        assert_eq!(
+            finalize_to_clean(&survivor),
+            Some(PathBuf::from("/v/Title.mkv"))
+        );
+    }
+
+    #[test]
+    fn finalize_strips_part_marker() {
+        let survivor = PathBuf::from("/v/Title.rdlp-part.mp4");
+        assert_eq!(
+            finalize_to_clean(&survivor),
+            Some(PathBuf::from("/v/Title.mp4"))
+        );
+    }
+
+    #[test]
+    fn finalize_is_none_for_stdout_or_clean_name() {
+        assert_eq!(finalize_to_clean(&PathBuf::from("-")), None);
+        assert_eq!(finalize_to_clean(&PathBuf::from("/v/Title.mp4")), None);
     }
 }
