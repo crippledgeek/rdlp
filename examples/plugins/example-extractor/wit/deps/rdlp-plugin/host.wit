@@ -1,4 +1,4 @@
-package rdlp:plugin@0.3.0;
+package rdlp:plugin@0.4.0;
 
 interface host-fetch {
     record request {
@@ -178,6 +178,19 @@ interface host-extract-helpers {
     record mpd-fragment {
         url: string,
         duration: option<f64>,
+        /// Subrange of `url` to fetch via HTTP `Range:` header.
+        /// `(start, end_exclusive)`. Matches `rdlp_types::Fragment.byte_range`.
+        /// When set, plugins receive DASH ranged media segments (SegmentList /
+        /// SegmentBase with `@mediaRange`).
+        byte-range: option<tuple<u64, u64>>,
+        /// `<Initialization>` segment URI for THIS fragment. Per-fragment so
+        /// multi-init streams work correctly. When `none`, plugins fall back
+        /// to the format-level fragment-base-url (yt-dlp `initialization_url`
+        /// convention).
+        init-url: option<string>,
+        /// Subrange of `init-url`. Same `(start, end_exclusive)` convention
+        /// as `byte-range`.
+        init-byte-range: option<tuple<u64, u64>>,
     }
 
     record mpd-format {
