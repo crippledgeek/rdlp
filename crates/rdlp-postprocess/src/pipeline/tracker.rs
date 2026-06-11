@@ -128,6 +128,11 @@ impl FileTracker {
     /// surviving `current_files` to clean names — the pipeline returns them
     /// temp-named (`*.rdlp-tmp-{uuid}.*`) and the orchestrator performs the
     /// single final rename to the user-visible name (#406 Option X).
+    ///
+    /// The surviving `current_files` are released from the [`TempRegistry`] here
+    /// (so no stale entry/lock lingers) but are NOT renamed — the orchestrator
+    /// performs the single final rename to the clean name and owns the survivor's
+    /// lifecycle thereafter.
     // Safe: invoked via tokio::task::spawn_blocking from pipeline/mod.rs:182.
     #[allow(clippy::disallowed_methods)]
     pub fn cleanup(&mut self) {
@@ -140,6 +145,16 @@ impl FileTracker {
             {
                 log::warn!("FileTracker: failed to delete temp {}: {e}", path.display());
             }
+        }
+
+        // The surviving `current_files` are returned temp-named for the
+        // orchestrator to finalize (#406 Option X). Release them from the
+        // registry HERE — registry bookkeeping stays in the pipeline, which owns
+        // the `TempRegistry`. This drops the advisory lock + removes the `.lock`
+        // sidecar so no stale entry survives; the orchestrator then renames the
+        // now-unregistered temp file to its clean user-visible name.
+        for file in &self.current_files {
+            self.temp_registry.release(file.as_path());
         }
 
         // Successful completion: disarm the cancel-cleanup Drop.
@@ -295,6 +310,11 @@ mod tests {
         fs::write(&survivor, b"final").unwrap();
         let mut tracker = FileTracker::new(vec![survivor.clone()], reg);
         tracker.cleanup();
+        // Registry release assertion: the survivor was passed via FileTracker::new()
+        // (not via temp_path()), so it was never registered — reg.contains() would
+        // be vacuously false before and after. The release-on-cleanup path for
+        // temp_path()-registered survivors is covered by TempRegistry's own
+        // test_register_and_release test and by the registry Drop semantics tests.
         // (a) The file STILL EXISTS at its .rdlp-tmp- name (NOT renamed to Title.mkv).
         assert!(survivor.exists(), "cleanup() must NOT delete the survivor");
         assert!(
