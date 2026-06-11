@@ -70,8 +70,7 @@ pub(super) fn strip_temp_marker(file_name: &str) -> Option<&str> {
 /// plus the SURVIVOR's own extension (so a container change during post-processing,
 /// e.g., ts → mkv, is preserved in the final name). Returns `None` for stdout or
 /// for an already-clean name (no marker present).
-#[allow(dead_code)] // wired into the finalize path in a later task
-pub(super) fn finalize_to_clean(survivor: &Path) -> Option<PathBuf> {
+pub fn finalize_to_clean(survivor: &Path) -> Option<PathBuf> {
     if is_stdout(survivor) {
         return None;
     }
@@ -92,7 +91,7 @@ pub(super) fn finalize_to_clean(survivor: &Path) -> Option<PathBuf> {
 /// surfaced to the caller via context. Used by both the already-complete resume
 /// short-circuit and the normal download-completion path so the two share one
 /// rename call and one error message.
-pub(super) async fn finalize_part(part: &Path, clean: &Path) -> anyhow::Result<()> {
+pub async fn finalize_part(part: &Path, clean: &Path) -> anyhow::Result<()> {
     use anyhow::Context as _;
     tokio::fs::rename(part, clean).await.with_context(|| {
         format!(
@@ -117,8 +116,7 @@ pub(super) async fn discard_part(part: &Path) {
 /// The clean stem is recovered via marker-search, so a `.rdlp-part` input or a
 /// clean target both yield the same stem. Returns the input unchanged for the
 /// `-` stdout sentinel.
-#[allow(dead_code)] // wired into the seam at Task 4/5/6
-pub(super) fn seam_path(clean: &Path) -> PathBuf {
+pub fn seam_path(clean: &Path) -> PathBuf {
     if is_stdout(clean) {
         return clean.to_path_buf();
     }
