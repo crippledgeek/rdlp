@@ -22,8 +22,9 @@ pub enum Signal {
 pub enum SignalAction {
     /// Begin graceful cancel; carry the exit code to emit later (130/143).
     GracefulCancel(u8),
-    /// A human pressed Ctrl+C again (or during a programmatic stop) — exit now.
-    ForceExit,
+    /// A human pressed Ctrl+C again (or during a programmatic stop) — exit now
+    /// with this exit code.
+    ForceExit(u8),
     /// Repeat programmatic signal while already cancelling — ignore.
     Ignore,
 }
@@ -37,7 +38,7 @@ pub const fn next_action(graceful_started: bool, sig: Signal) -> SignalAction {
         (false, Signal::Interrupt) => SignalAction::GracefulCancel(130),
         (false, Signal::Terminate) => SignalAction::GracefulCancel(143),
         // Any human interrupt after a graceful cancel has begun: force-exit now.
-        (true, Signal::Interrupt) => SignalAction::ForceExit,
+        (true, Signal::Interrupt) => SignalAction::ForceExit(130),
         // Repeat programmatic signal while already cancelling: ignore (preserve
         // the systemd/docker grace window — do NOT force).
         (true, Signal::Terminate) => SignalAction::Ignore,
@@ -116,7 +117,7 @@ mod tests {
     fn test_second_sigint_force_exits() {
         assert_eq!(
             next_action(true, Signal::Interrupt),
-            SignalAction::ForceExit
+            SignalAction::ForceExit(130)
         );
     }
     #[test]
@@ -127,7 +128,7 @@ mod tests {
         // — documented separately because it pins a distinct user-facing guarantee.
         assert_eq!(
             next_action(true, Signal::Interrupt),
-            SignalAction::ForceExit
+            SignalAction::ForceExit(130)
         );
     }
     #[test]

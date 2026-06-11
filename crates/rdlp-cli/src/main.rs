@@ -20,6 +20,7 @@ use rdlp_api::{RdlpApiError, RdlpClient};
 use rdlp_cli::event_handler::CliEventHandler;
 use rdlp_cli::interactive::DialoguerCallback;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 use tracing_subscriber::layer::SubscriberExt;
@@ -70,11 +71,19 @@ fn main() -> Result<()> {
         .build()
         .context("failed to build Tokio runtime")?;
 
-    runtime.block_on(async_main())
+    let exit_signal = Arc::new(AtomicU8::new(0));
+    let result = runtime.block_on(async_main(Arc::clone(&exit_signal)));
+
+    // #413: a graceful signal-cancel set the conventional exit code; emit it.
+    let code = exit_signal.load(Ordering::SeqCst);
+    if code != 0 {
+        std::process::exit(i32::from(code)); // 130 = SIGINT, 143 = SIGTERM
+    }
+    result
 }
 
 #[allow(clippy::too_many_lines)] // top-level CLI dispatch; extracting sub-functions would add indirection without clarity
-async fn async_main() -> Result<()> {
+async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
     let args = Args::parse();
 
     // Build config with precedence: CLI > config file > defaults
@@ -387,6 +396,30 @@ async fn async_main() -> Result<()> {
 
     // Start the download
     let mut handle = client.download(request);
+
+    // #413: drive cancellation from OS signals. First interrupt → graceful
+    // (keep the resumable partial); second SIGINT → force-exit 130.
+    {
+        use rdlp_cli::signal::{SignalAction, next_action, wait_for_signal};
+        let interrupt = handle.interrupt_handle();
+        let exit_for_task = Arc::clone(&exit_signal);
+        tokio::spawn(async move {
+            let mut graceful_started = false;
+            loop {
+                let sig = wait_for_signal().await;
+                match next_action(graceful_started, sig) {
+                    SignalAction::GracefulCancel(code) => {
+                        graceful_started = true;
+                        exit_for_task.store(code, Ordering::SeqCst);
+                        interrupt.interrupt();
+                    }
+                    SignalAction::ForceExit(code) => std::process::exit(i32::from(code)),
+                    SignalAction::Ignore => {}
+                }
+            }
+        });
+    }
+
     let mut event_handler = CliEventHandler::new(Arc::clone(&multi_progress), quiet);
 
     // Drain all events (progress, status, etc.)
