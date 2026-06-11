@@ -48,11 +48,15 @@ pub(super) fn part_path(clean: &Path) -> PathBuf {
 /// Uses marker-SEARCH (not a first-dot split) so dotted stems survive:
 /// `My.Video.rdlp-tmp-abc.mkv` → `My.Video`. The `.rdlp-part` marker is
 /// preferred; the pipeline `.rdlp-tmp-` marker is the fallback. Returns `None`
-/// if neither marker is present (the name is already clean).
+/// if neither marker is present (the name is already clean) or if a marker sits
+/// at index 0 (no stem precedes it).
 pub(super) fn strip_temp_marker(file_name: &str) -> Option<&str> {
     let idx = file_name
         .find(PART_MARKER)
         .or_else(|| file_name.find(TMP_MARKER))?;
+    if idx == 0 {
+        return None; // no real stem precedes the marker
+    }
     Some(&file_name[..idx])
 }
 
@@ -163,5 +167,32 @@ mod tests {
     fn finalize_is_none_for_stdout_or_clean_name() {
         assert_eq!(finalize_to_clean(&PathBuf::from("-")), None);
         assert_eq!(finalize_to_clean(&PathBuf::from("/v/Title.mp4")), None);
+    }
+
+    #[test]
+    fn strip_returns_none_for_marker_at_index_zero() {
+        assert_eq!(strip_temp_marker(".rdlp-part.mp4"), None);
+        // and finalize must therefore decline rather than produce a stemless name
+        assert_eq!(finalize_to_clean(&PathBuf::from("/v/.rdlp-part.mp4")), None);
+    }
+
+    #[test]
+    fn strip_prefers_part_marker_when_both_present() {
+        // part is found first and wins the or_else chain
+        assert_eq!(
+            strip_temp_marker("Title.rdlp-part.rdlp-tmp-abc.mkv"),
+            Some("Title")
+        );
+    }
+
+    #[test]
+    fn strip_truncates_when_stem_legitimately_contains_marker() {
+        // Documented trade-off: a title literally containing the marker substring
+        // is truncated at the first marker. sanitize_filename neutralizes this
+        // upstream; this test pins the helper's raw behavior.
+        assert_eq!(
+            strip_temp_marker("Guide.rdlp-part.intro.mp4"),
+            Some("Guide")
+        );
     }
 }
