@@ -55,8 +55,8 @@ async fn seam_then_finalize_yields_clean_name() {
     assert!(clean.exists() && !seam.exists());
 }
 
-/// Slice 2 (#406): pins the two arms of the finalize contract that
-/// `process_local_file` (and the playlist episode path) relies on.
+/// Slice 2 (#406): pins the contract of the `finalize_to_clean` + `finalize_part`
+/// helper pair that `process_local_file` (and the playlist episode path) depends on.
 ///
 /// - `Some` arm: a temp-named survivor (`Title.rdlp-tmp-<uuid>.mkv`) is renamed
 ///   to `Title.mkv` on disk; `finalize_to_clean` returns the clean path.
@@ -64,8 +64,9 @@ async fn seam_then_finalize_yields_clean_name() {
 ///   `finalize_to_clean` returning `None` — the orchestrator treats this as
 ///   "already at the final name, no rename needed" and uses the path as-is.
 ///
-/// Together these two cases cover both branches of the `match finalize_to_clean`
-/// expression in `process_local_file` (client/mod.rs).
+/// This test pins the naming helper contract itself, not the client/mod.rs
+/// wiring (integration testing the full download→finalize path requires
+/// `FFmpeg` and is out of scope for unit tests).
 #[tokio::test]
 async fn process_local_finalize_some_renames_none_passes_through() {
     let dir = tempfile::tempdir().unwrap();

@@ -407,6 +407,38 @@ mod tests {
         );
     }
 
+    /// Negative companion to `thumbnail_discovery_uses_clean_original_stem_under_seam`:
+    /// pins the regression direction. With the same clean sidecar `My.Video.jpg` on disk
+    /// and the same seam-named media file, but `original_stem` set to the SEAM stem itself
+    /// (what an unfixed Task 3 would have done), `find_thumbnail` returns `None` because:
+    /// - Primary lookup tries `{seam_stem}.jpg` (doesn't exist; the sidecar is `My.Video.jpg`)
+    /// - Fallback skips because `current_stem` == `original_stem` (both are the seam stem)
+    /// - Result: `None`
+    #[test]
+    fn thumbnail_discovery_misses_when_original_stem_is_seam_stem() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        // Sidecar is still written with the clean stem.
+        let thumb = dir.path().join("My.Video.jpg");
+        fs::write(&thumb, b"fake-jpg").unwrap();
+
+        // The media file on disk is seam-named.
+        let seam_media = dir
+            .path()
+            .join("My.Video.rdlp-tmp-deadbeef12345678deadbeef12345678.mp4");
+        // But original_stem is SET TO THE SEAM STEM itself (the regression).
+        let original_stem = "My.Video.rdlp-tmp-deadbeef12345678deadbeef12345678";
+
+        let result = ThumbnailStage::find_thumbnail(&seam_media, original_stem);
+        assert_eq!(
+            result, None,
+            "find_thumbnail must return None when original_stem is the seam stem \
+             (because the sidecar My.Video.jpg exists but lookup tries My.Video.rdlp-tmp-*.jpg)"
+        );
+    }
+
     #[tokio::test]
     async fn process_warns_when_no_thumbnail_found() {
         let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
