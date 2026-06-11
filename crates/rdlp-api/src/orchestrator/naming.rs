@@ -49,7 +49,7 @@ pub(super) fn part_path(clean: &Path) -> PathBuf {
 /// `My.Video.rdlp-tmp-abc.mkv` → `My.Video`. The `.rdlp-part` marker is
 /// preferred; the pipeline `.rdlp-tmp-` marker is the fallback. Returns `None`
 /// if neither marker is present (the name is already clean).
-fn strip_temp_marker(file_name: &str) -> Option<&str> {
+pub(super) fn strip_temp_marker(file_name: &str) -> Option<&str> {
     let idx = file_name
         .find(PART_MARKER)
         .or_else(|| file_name.find(TMP_MARKER))?;
