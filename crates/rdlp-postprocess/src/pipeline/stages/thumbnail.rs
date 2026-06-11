@@ -376,6 +376,37 @@ mod tests {
         assert_eq!(result, Some(thumb));
     }
 
+    /// Slice 2 (#406 Task 3): `original_stem` is the CLEAN stem (marker-stripped
+    /// by the orchestrator), while the main file in the tracker is seam-named
+    /// (`My.Video.rdlp-tmp-<uuid>.mp4`). `find_thumbnail` must resolve the
+    /// sidecar `My.Video.jpg` via `original_stem`, NOT via the seam-named stem
+    /// (which would produce `My.Video.rdlp-tmp-<uuid>.jpg` — a non-existent path).
+    #[test]
+    fn thumbnail_discovery_uses_clean_original_stem_under_seam() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        let dir = TempDir::new().unwrap();
+        // Thumbnail is written next to the clean stem, as the orchestrator produces.
+        let thumb = dir.path().join("My.Video.jpg");
+        fs::write(&thumb, b"fake-jpg").unwrap();
+
+        // The media file on disk is seam-named (as FileTracker sees it at this stage).
+        let seam_media = dir
+            .path()
+            .join("My.Video.rdlp-tmp-deadbeef12345678deadbeef12345678.mp4");
+        // original_stem carries the clean stem — set by Task 3 in the orchestrator.
+        let original_stem = "My.Video";
+
+        let result = ThumbnailStage::find_thumbnail(&seam_media, original_stem);
+        assert_eq!(
+            result,
+            Some(thumb),
+            "find_thumbnail must find My.Video.jpg via original_stem \
+             even when the media file is seam-named"
+        );
+    }
+
     #[tokio::test]
     async fn process_warns_when_no_thumbnail_found() {
         let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));

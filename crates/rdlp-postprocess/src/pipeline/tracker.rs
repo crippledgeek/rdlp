@@ -387,6 +387,38 @@ mod tests {
         );
     }
 
+    /// Slice 2 (#406): the pipeline input is seam-named (`*.rdlp-tmp-*`), so
+    /// `FileTracker::Drop`'s `#339` non-temp-named warning CANNOT fire for it.
+    /// Pins that `is_temp_named` returns `true` for a seam-style name and
+    /// `false` for a clean name, i.e. the contract the caller (orchestrator)
+    /// must satisfy before handing the file to `FileTracker::new`.
+    #[test]
+    fn seam_name_is_temp_named_so_339_warning_cannot_fire() {
+        // Seam name produced by `seam_path()` — must be temp-named.
+        assert!(
+            is_temp_named(Path::new(
+                "Title.rdlp-tmp-abc123def456abc123def456abc123de.mp4"
+            )),
+            "seam-style name must be recognised as temp-named"
+        );
+        // Dotted-stem variant (the common real-world case).
+        assert!(
+            is_temp_named(Path::new(
+                "My.Video.rdlp-tmp-deadbeef12345678deadbeef12345678.mkv"
+            )),
+            "dotted-stem seam name must be recognised as temp-named"
+        );
+        // Clean names must NOT be recognised as temp-named.
+        assert!(
+            !is_temp_named(Path::new("Title.mp4")),
+            "clean name must NOT be temp-named"
+        );
+        assert!(
+            !is_temp_named(Path::new("My.Video.mkv")),
+            "dotted clean name must NOT be temp-named"
+        );
+    }
+
     #[test]
     fn drop_after_commit_keeps_files() {
         let dir = TempDir::new().unwrap();

@@ -55,6 +55,61 @@ async fn seam_then_finalize_yields_clean_name() {
     assert!(clean.exists() && !seam.exists());
 }
 
+/// Slice 2 (#406): pins the two arms of the finalize contract that
+/// `process_local_file` (and the playlist episode path) relies on.
+///
+/// - `Some` arm: a temp-named survivor (`Title.rdlp-tmp-<uuid>.mkv`) is renamed
+///   to `Title.mkv` on disk; `finalize_to_clean` returns the clean path.
+/// - `None` arm: an already-clean-named survivor (`Title.mkv`) passes
+///   `finalize_to_clean` returning `None` — the orchestrator treats this as
+///   "already at the final name, no rename needed" and uses the path as-is.
+///
+/// Together these two cases cover both branches of the `match finalize_to_clean`
+/// expression in `process_local_file` (client/mod.rs).
+#[tokio::test]
+async fn process_local_finalize_some_renames_none_passes_through() {
+    let dir = tempfile::tempdir().unwrap();
+
+    // --- Some arm: temp-named survivor → clean name via finalize_part ---
+    let clean_mkv = dir.path().join("Title.mkv");
+    let seam = seam_path(&clean_mkv);
+    // The seam name must contain the tmp marker.
+    assert!(
+        seam.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.contains(".rdlp-tmp-")),
+        "seam_path must produce a .rdlp-tmp-* name"
+    );
+    tokio::fs::write(&seam, b"pipeline output").await.unwrap();
+
+    // finalize_to_clean on the temp-named file returns Some(clean).
+    let derived_clean = finalize_to_clean(&seam).expect("Some arm must derive clean path");
+    assert_eq!(
+        derived_clean, clean_mkv,
+        "derived clean path must match target"
+    );
+    finalize_part(&seam, &derived_clean).await.unwrap();
+    assert!(
+        clean_mkv.exists(),
+        "clean file must exist after finalize_part"
+    );
+    assert!(!seam.exists(), "seam file must be gone after finalize_part");
+
+    // --- None arm: already-clean survivor → finalize_to_clean returns None ---
+    // This is the passthrough case: the file is already at its final name
+    // (no pipeline ran, or caller already finalised it).
+    assert_eq!(
+        finalize_to_clean(&clean_mkv),
+        None,
+        "finalize_to_clean must return None for a clean-named file (no rename needed)"
+    );
+    // The file is still intact — no rename or deletion occurred.
+    assert!(
+        clean_mkv.exists(),
+        "clean-named file must be untouched when finalize_to_clean returns None"
+    );
+}
+
 #[tokio::test]
 async fn discard_part_removes_and_is_noop_when_absent() {
     let dir = tempfile::tempdir().unwrap();
