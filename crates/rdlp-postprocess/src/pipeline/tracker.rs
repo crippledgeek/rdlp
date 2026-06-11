@@ -123,10 +123,11 @@ impl FileTracker {
         self.current_files[0].clone()
     }
 
-    /// Delete all temp files and unregister them from [`TempRegistry`].
-    ///
-    /// Called on successful pipeline completion. On crash, the
-    /// [`TempRegistry`] shutdown hook handles cleanup instead.
+    /// Delete all temp files and unregister them from [`TempRegistry`], then
+    /// disarm the cancel-cleanup [`Drop`] by committing. Does NOT rename the
+    /// surviving `current_files` to clean names — the pipeline returns them
+    /// temp-named (`*.rdlp-tmp-{uuid}.*`) and the orchestrator performs the
+    /// single final rename to the user-visible name (#406 Option X).
     // Safe: invoked via tokio::task::spawn_blocking from pipeline/mod.rs:182.
     #[allow(clippy::disallowed_methods)]
     pub fn cleanup(&mut self) {
@@ -138,31 +139,6 @@ impl FileTracker {
                 && let Err(e) = std::fs::remove_file(&path)
             {
                 log::warn!("FileTracker: failed to delete temp {}: {e}", path.display());
-            }
-        }
-
-        // Rename current files from UUID temp names back to clean names
-        for file in &mut self.current_files {
-            if let Some(name) = file.file_name().and_then(|n| n.to_str())
-                && let Some(idx) = name.find(".rdlp-tmp-")
-            {
-                let clean_stem = &name[..idx];
-                let ext = file.extension().and_then(|e| e.to_str()).unwrap_or("mp4");
-                let clean_name = format!("{clean_stem}.{ext}");
-                let clean_path = file.with_file_name(&clean_name);
-                match std::fs::rename(&file, &clean_path) {
-                    Ok(()) => {
-                        self.temp_registry.release(file);
-                        *file = clean_path;
-                    }
-                    Err(e) => {
-                        log::warn!(
-                            "FileTracker: failed to rename {} → {}: {e}",
-                            file.display(),
-                            clean_name,
-                        );
-                    }
-                }
             }
         }
 
@@ -305,6 +281,40 @@ mod tests {
         tracker.replace(vec![dir.path().join("new.mp4")]);
         tracker.cleanup();
         assert!(!temp.exists());
+    }
+
+    /// Slice 2 (#406 Option X): `cleanup()` MUST NOT rename the temp-named
+    /// survivor — it returns it as-is and the orchestrator does the final rename.
+    #[test]
+    fn cleanup_no_longer_renames_survivor() {
+        let dir = TempDir::new().unwrap();
+        let reg = test_registry();
+        // The survivor is the current_files entry — already temp-named (as the
+        // orchestrator UUID-renames inputs before handing them to FileTracker).
+        let survivor = dir.path().join("Title.rdlp-tmp-aaaa.mkv");
+        fs::write(&survivor, b"final").unwrap();
+        let mut tracker = FileTracker::new(vec![survivor.clone()], reg);
+        tracker.cleanup();
+        // (a) The file STILL EXISTS at its .rdlp-tmp- name (NOT renamed to Title.mkv).
+        assert!(survivor.exists(), "cleanup() must NOT delete the survivor");
+        assert!(
+            !dir.path().join("Title.mkv").exists(),
+            "cleanup() must NOT create a clean-named file"
+        );
+        // (b) current_files[0] still contains the temp marker.
+        assert!(
+            tracker.current_files[0]
+                .to_str()
+                .unwrap()
+                .contains(".rdlp-tmp-"),
+            "current_files[0] must still be temp-named after cleanup()"
+        );
+        // (c) committed is true (observable: a second drop must not delete the survivor).
+        drop(tracker);
+        assert!(
+            survivor.exists(),
+            "committed tracker must not delete survivor on drop"
+        );
     }
 
     #[test]
