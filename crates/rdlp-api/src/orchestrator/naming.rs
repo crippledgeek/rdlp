@@ -108,6 +108,17 @@ pub async fn finalize_part(part: &Path, clean: &Path) -> anyhow::Result<()> {
         // after the remove, `clean` is gone forever. Move the existing file aside
         // first and restore it if the rename fails, so `clean` is never lost.
         let backup = {
+            // A real media output path always has a file name; a root or
+            // directory path reaching this branch would be a caller-contract
+            // violation (the orchestrator only calls finalize_part on actual
+            // file paths). Verified here so the `.unwrap_or_default()` fallback
+            // is known-safe and an assertion fires in debug builds.
+            debug_assert!(
+                clean.file_name().is_some(),
+                "finalize_part: clean path has no file name component (degenerate path?) — \
+                 backup name would be empty: {}",
+                clean.display()
+            );
             let mut name = clean
                 .file_name()
                 .map(std::ffi::OsStr::to_os_string)
@@ -115,9 +126,19 @@ pub async fn finalize_part(part: &Path, clean: &Path) -> anyhow::Result<()> {
             name.push(format!(".rdlp-bak-{}", uuid::Uuid::new_v4().simple()));
             clean.with_file_name(name)
         };
-        tokio::fs::rename(clean, &backup)
-            .await
-            .with_context(|| format!("failed to back up existing {}", clean.display()))?;
+        // NOTE (#414 follow-up): a second Ctrl+C force-exit (process::exit) in the
+        // micro-window between this backup rename and the rename below would orphan
+        // the `.rdlp-bak-{uuid}` file (it holds the user's data — no loss, just a
+        // leftover). finalize_part has no TempRegistry handle to register the backup
+        // for stale-sweep; tracked as a follow-up.
+        tokio::fs::rename(clean, &backup).await.with_context(|| {
+            format!(
+                "failed to back up existing {} while finalizing {} -> {}",
+                clean.display(),
+                part.display(),
+                clean.display()
+            )
+        })?;
         match tokio::fs::rename(part, clean).await {
             Ok(()) => {
                 // Success: drop the backup (best-effort; ignore errors).

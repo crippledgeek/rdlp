@@ -106,6 +106,20 @@ impl FileTracker {
         }
     }
 
+    /// Whether `path` is a borrowed (user-owned) input that must never be
+    /// deleted or released by this tracker (#414). Centralises the membership
+    /// check used by `replace`, `cleanup`, and `Drop`.
+    ///
+    /// NOTE: comparison is by exact `PathBuf` equality. The pipeline preserves
+    /// borrowed paths byte-for-byte (stages clone `current_files[0]` and produce
+    /// NEW temp outputs; they never re-case or canonicalize the input), so this
+    /// holds on case-sensitive and case-insensitive filesystems alike today.
+    /// Hardening this against path-representation divergence (canonicalization /
+    /// case-folding) is tracked as a follow-up.
+    fn is_borrowed(&self, path: &Path) -> bool {
+        self.borrowed.iter().any(|b| b == path)
+    }
+
     /// Promote `new_files` to `current_files`, moving the old current files
     /// into `temp_files`.
     ///
@@ -116,7 +130,7 @@ impl FileTracker {
         for f in old {
             // #414: a borrowed (user-owned) input is never deleted — drop it from
             // tracking instead of queueing it in `temp_files`.
-            if self.borrowed.contains(&f) {
+            if self.is_borrowed(&f) {
                 continue;
             }
             self.temp_files.push(f);
@@ -125,6 +139,10 @@ impl FileTracker {
 
     /// Mark a path as a temp file without changing `current_files`.
     pub fn mark_temp(&mut self, path: PathBuf) {
+        debug_assert!(
+            !self.is_borrowed(&path),
+            "a borrowed (user-owned) input must never be marked temp (#414)"
+        );
         self.temp_files.push(path);
     }
 
@@ -194,8 +212,12 @@ impl FileTracker {
         // the `TempRegistry`. This drops the advisory lock + removes the `.lock`
         // sidecar so no stale entry survives; the orchestrator then renames the
         // now-unregistered temp file to its clean user-visible name.
+        // Skip borrowed paths: a borrowed source was never registered with the
+        // registry, so releasing it would be a contract violation.
         for file in &self.current_files {
-            self.temp_registry.release(file.as_path());
+            if !self.is_borrowed(file) {
+                self.temp_registry.release(file.as_path());
+            }
         }
 
         // Successful completion: disarm the cancel-cleanup Drop.
@@ -227,7 +249,7 @@ impl Drop for FileTracker {
         // expected, not a contract violation. Borrowed paths are excluded entirely
         // — they are user-owned and must never be deleted (#414). Drop never panics.
         for path in self.issued.iter().chain(self.current_files.iter()) {
-            if !is_temp_named(path) && !self.borrowed.contains(path) {
+            if !is_temp_named(path) && !self.is_borrowed(path) {
                 log::warn!(
                     "FileTracker::Drop deleting non-temp-named file {} — unexpected; \
                      current_files should be temp-namespaced",
@@ -243,7 +265,7 @@ impl Drop for FileTracker {
             .iter()
             .chain(self.current_files.iter())
             .chain(self.temp_files.iter())
-            .filter(|p| !self.borrowed.contains(p)) // #414: never delete borrowed
+            .filter(|p| !self.is_borrowed(p)) // #414: never delete borrowed
             .cloned()
             .collect();
         for path in to_delete {
