@@ -427,9 +427,11 @@ impl DownloadPhase {
                             .download_with_cdn_fallback(&format, &part, state.offset())
                             .await?
                         else {
-                            // Explicit cancel: delete the .rdlp-part working file so
-                            // a cancel leaves no artifact (#406). Best-effort.
-                            super::naming::discard_part(&part).await;
+                            // #413: an interrupt keeps the resumable .rdlp-part for
+                            // resume; an explicit cancel (default) deletes it.
+                            if !orchestrator.should_keep_partial() {
+                                super::naming::discard_part(&part).await;
+                            }
                             orchestrator.emit(Event::Cancelled {
                                 id: orchestrator.download_id,
                             });

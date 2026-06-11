@@ -114,6 +114,8 @@ pub struct Orchestrator {
     pub(super) cancel_token: CancellationToken,
     /// Optional interactive callback for user input
     pub(super) interactive: Option<Arc<dyn InteractiveCallback>>,
+    /// Keep-vs-discard intent for cancellation (#413). Default Discard.
+    pub(super) cancel_disposition: crate::cancel::CancelDisposition,
 }
 
 impl Orchestrator {
@@ -154,6 +156,9 @@ impl Orchestrator {
     /// process-level cached built-in registry (no plugin support in that path).
     /// Callers that support plugins **MUST** pass a pre-built registry from
     /// [`RdlpClient`] so plugins are available for every download.
+    ///
+    /// Uses a fresh `Discard` [`crate::cancel::CancelDisposition`]; callers
+    /// needing a shared keep-vs-discard intent use [`Self::new_with_shared`].
     #[must_use]
     pub fn new_with_registry(
         config: Arc<Config>,
@@ -173,6 +178,7 @@ impl Orchestrator {
             temp_registry,
             extractor_registry,
             None,
+            crate::cancel::CancelDisposition::new(),
         )
     }
 
@@ -196,6 +202,7 @@ impl Orchestrator {
         temp_registry: Option<Arc<TempRegistry>>,
         extractor_registry: Option<Arc<ExtractorRegistry>>,
         shared_http: Option<SharedHttpClient>,
+        cancel_disposition: crate::cancel::CancelDisposition,
     ) -> Self {
         let (http_client, cookie_jar) = if let Some(shared) = shared_http {
             (shared.client, shared.cookie_jar)
@@ -256,6 +263,7 @@ impl Orchestrator {
             download_id,
             cancel_token,
             interactive,
+            cancel_disposition,
         }
     }
 
@@ -293,6 +301,11 @@ impl Orchestrator {
         ];
 
         Some(Arc::new(Pipeline::new(stages, temp_registry, 2)))
+    }
+
+    /// Whether a cancellation should keep the resumable download partial.
+    pub(super) fn should_keep_partial(&self) -> bool {
+        self.cancel_disposition.should_keep()
     }
 
     /// Emit an event to the event channel, ignoring send failures.
@@ -507,6 +520,28 @@ impl Orchestrator {
             Ok(Err(e)) => warn!("Failed to write to download archive: {e}"),
             Err(e) => warn!("Archive record task join failed: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module)]
+mod cancel_disposition_tests {
+    use super::*;
+    use crate::events::Event;
+    use crate::handle::DownloadId;
+    use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
+
+    #[tokio::test]
+    async fn test_should_keep_partial_reflects_disposition() {
+        let config = Arc::new(rdlp_types::Config::default());
+        let (tx, _rx) = mpsc::channel::<Event>(1);
+        let id = DownloadId::next();
+        let token = CancellationToken::new();
+        let orch = Orchestrator::new(config, tx, id, token, None);
+        assert!(!orch.should_keep_partial(), "default is Discard");
+        orch.cancel_disposition.set_keep();
+        assert!(orch.should_keep_partial(), "after set_keep -> Keep");
     }
 }
 

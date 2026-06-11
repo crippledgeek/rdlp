@@ -203,6 +203,7 @@ impl RdlpClient {
                 Some(registry),
                 Some(extractor_registry),
                 shared_http,
+                crate::cancel::CancelDisposition::new(), // Task 3 replaces with shared clone
             );
 
             // Load cookies: fatal when explicitly requested, non-fatal otherwise
