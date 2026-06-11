@@ -60,6 +60,12 @@ pub struct Args {
     pub url: Option<String>,
 
     /// Output template or directory (e.g., "%(title)s.%(ext)s" or "./downloads/")
+    ///
+    /// Note: resume across restarts requires a deterministic name. Templates using
+    /// `%(epoch)s` (or a future live `%(autonumber)s`) render a different name each run,
+    /// so an interrupted download cannot be resumed and restarts from zero. Build the
+    /// template from stable metadata (`title`, `id`, `uploader`, `ext`, `upload_date`) for
+    /// resumable downloads.
     #[arg(short, long)]
     pub output: Option<String>,
 
