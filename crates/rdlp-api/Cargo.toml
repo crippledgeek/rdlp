@@ -25,6 +25,7 @@ rdlp-redact = { workspace = true, features = ["log-kv"] }
 rdlp-plugin = { path = "../rdlp-plugin" }
 
 dirs = { workspace = true }
+uuid = { version = "1", features = ["v4"] }
 tokio = { workspace = true }
 tokio-util = { workspace = true }
 async-trait = { workspace = true }
