@@ -36,7 +36,8 @@ use tokio_util::sync::CancellationToken;
 
 use rdlp_postprocess::pipeline::PipelineStage;
 use rdlp_postprocess::{
-    FFmpegRunner, Pipeline, PipelineError, RecodeStage, RemuxStage, TempRegistry,
+    FFmpegRunner, Pipeline, PipelineError, PipelineRunOptions, RecodeStage, RemuxStage,
+    TempRegistry,
 };
 use rdlp_types::{ContainerFormat, InfoDict, PostProcess};
 
@@ -174,11 +175,13 @@ async fn cancel_mid_recode_aborts_and_cleans_up() {
             .run(
                 info,
                 vec![input],
-                false,
+                PipelineRunOptions {
+                    keep_inputs: false,
+                    is_hls: false,
+                    verbose: false,
+                },
                 config,
                 "video".to_string(),
-                false,
-                false,
                 None,
                 Some(token_for_run),
             )
@@ -260,11 +263,13 @@ async fn cancel_after_remux_deletes_real_named_source() {
             .run(
                 info,
                 vec![input_for_run],
-                false,
+                PipelineRunOptions {
+                    keep_inputs: false,
+                    is_hls: true,
+                    verbose: false,
+                },
                 config,
                 "video".to_string(),
-                true, // is_hls -> RemuxStage runs
-                false,
                 None,
                 Some(token_for_run),
             )

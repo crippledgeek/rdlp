@@ -65,6 +65,24 @@ pub struct FileTracker {
 }
 
 impl FileTracker {
+    /// Shared constructor — the field list lives in exactly ONE place. Both
+    /// [`new`] and [`new_borrowing`] delegate here so changes to the struct
+    /// fields are made only once.
+    const fn with_borrowed(
+        files: Vec<PathBuf>,
+        borrowed: Vec<PathBuf>,
+        temp_registry: Arc<TempRegistry>,
+    ) -> Self {
+        Self {
+            current_files: files,
+            temp_files: Vec::new(),
+            issued: Vec::new(),
+            borrowed,
+            committed: false,
+            temp_registry,
+        }
+    }
+
     /// Create a new tracker with the given initial files.
     ///
     /// # Precondition
@@ -80,14 +98,7 @@ impl FileTracker {
     /// (which must NOT be deleted), use [`new_borrowing`] instead of satisfying
     /// this precondition.
     pub const fn new(files: Vec<PathBuf>, temp_registry: Arc<TempRegistry>) -> Self {
-        Self {
-            current_files: files,
-            temp_files: Vec::new(),
-            issued: Vec::new(),
-            borrowed: Vec::new(),
-            committed: false,
-            temp_registry,
-        }
+        Self::with_borrowed(files, Vec::new(), temp_registry)
     }
 
     /// Like [`new`], but marks every initial file as a **borrowed** user-owned
@@ -96,14 +107,8 @@ impl FileTracker {
     /// than a file rdlp downloaded.
     #[must_use]
     pub fn new_borrowing(files: Vec<PathBuf>, temp_registry: Arc<TempRegistry>) -> Self {
-        Self {
-            borrowed: files.clone(),
-            current_files: files,
-            temp_files: Vec::new(),
-            issued: Vec::new(),
-            committed: false,
-            temp_registry,
-        }
+        let borrowed = files.clone();
+        Self::with_borrowed(files, borrowed, temp_registry)
     }
 
     /// Whether `path` is a borrowed (user-owned) input that must never be

@@ -16,7 +16,7 @@
 //! ## Quick Start
 //!
 //! ```no_run
-//! use rdlp_postprocess::{Pipeline, TempRegistry};
+//! use rdlp_postprocess::{Pipeline, PipelineRunOptions, TempRegistry};
 //! use rdlp_postprocess::pipeline::PipelineStage;
 //! use rdlp_postprocess::{MergeStage, RemuxStage, MetadataStage, ThumbnailStage};
 //! use rdlp_postprocess::FFmpegRunner;
@@ -47,8 +47,9 @@
 //!
 //! let config = Arc::new(PostProcess::default());
 //! let files = vec![PathBuf::from("video.mp4")];
+//! let opts = PipelineRunOptions { keep_inputs: false, is_hls: false, verbose: false };
 //!
-//! let output = pipeline.run(info, files, false, config, "video".to_string(), false, false, None, None).await?;
+//! let output = pipeline.run(info, files, opts, config, "video".to_string(), None, None).await?;
 //! println!("Output: {output:?}");
 //! # Ok(())
 //! # }
@@ -87,7 +88,7 @@ pub use pipeline::stages::{
     AudioExtractStage, FinalizeMetadataStage, FixupStage, MergeStage, MetadataStage,
     NormalizeStage, RecodeStage, RemuxStage, SubtitleStage, ThumbnailStage,
 };
-pub use pipeline::{BatchInput, Pipeline, PipelineError, TempRegistry};
+pub use pipeline::{BatchInput, Pipeline, PipelineError, PipelineRunOptions, TempRegistry};
 
 // Re-export FFmpegRunner so callers don't need a direct rdlp-ffmpeg dependency
 pub use rdlp_ffmpeg::FFmpegRunner;

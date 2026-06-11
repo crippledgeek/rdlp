@@ -9,6 +9,7 @@ use crate::orchestrator::errors::OrchestratorError;
 use crate::orchestrator::eta::EtaEstimator;
 use log::{debug, warn};
 use rdlp_core::{PostProcessCallback, PostProcessCallbackFactory};
+use rdlp_postprocess::PipelineRunOptions;
 use rdlp_postprocess::pipeline::PipelineError;
 use rdlp_types::Progress;
 use std::path::PathBuf;
@@ -170,11 +171,13 @@ impl Orchestrator {
             .run(
                 info.clone(),
                 files.clone(),
-                keep_inputs,
+                PipelineRunOptions {
+                    keep_inputs,
+                    is_hls,
+                    verbose: self.config.verbose,
+                },
                 Arc::new(pp_config),
                 original_stem,
-                is_hls,
-                self.config.verbose,
                 callback_factory,
                 Some(self.cancel_token.clone()),
             )
