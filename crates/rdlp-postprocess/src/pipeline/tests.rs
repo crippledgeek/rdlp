@@ -1,14 +1,13 @@
 use super::*;
 use std::path::PathBuf;
 
-/// 8-tuple returned by `run_args` for `Pipeline::run` calls in tests.
+/// 7-tuple returned by `run_args` for `Pipeline::run` calls in tests.
 type RunArgs = (
     InfoDict,
     Vec<PathBuf>,
     Arc<PostProcess>,
     String,
-    bool,
-    bool,
+    PipelineRunOptions,
     Option<PostProcessCallbackFactory>,
     Option<CancellationToken>,
 );
@@ -101,8 +100,11 @@ fn run_args(files: Vec<PathBuf>) -> RunArgs {
         files,
         Arc::new(PostProcess::default()),
         "video".to_string(),
-        false,
-        false,
+        PipelineRunOptions {
+            keep_inputs: false,
+            is_hls: false,
+            verbose: false,
+        },
         None,
         None, // cancel — default to None for back-compat tests
     )
@@ -111,10 +113,10 @@ fn run_args(files: Vec<PathBuf>) -> RunArgs {
 #[tokio::test]
 async fn test_pipeline_passthrough() {
     let pipeline = make_pipeline(vec![Arc::new(PassthroughStage)]);
-    let (info, files, config, stem, hls, verbose, cb, cancel) =
+    let (info, files, config, stem, opts, cb, cancel) =
         run_args(vec![PathBuf::from("/tmp/video.mp4")]);
     let result = pipeline
-        .run(info, files, config, stem, hls, verbose, cb, cancel)
+        .run(info, files, opts, config, stem, cb, cancel)
         .await;
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), vec![PathBuf::from("/tmp/video.mp4")]);
@@ -123,10 +125,10 @@ async fn test_pipeline_passthrough() {
 #[tokio::test]
 async fn test_pipeline_skip_stage() {
     let pipeline = make_pipeline(vec![Arc::new(SkipStage), Arc::new(PassthroughStage)]);
-    let (info, files, config, stem, hls, verbose, cb, cancel) =
+    let (info, files, config, stem, opts, cb, cancel) =
         run_args(vec![PathBuf::from("/tmp/video.mp4")]);
     let result = pipeline
-        .run(info, files, config, stem, hls, verbose, cb, cancel)
+        .run(info, files, opts, config, stem, cb, cancel)
         .await;
     assert!(result.is_ok());
 }
@@ -134,10 +136,10 @@ async fn test_pipeline_skip_stage() {
 #[tokio::test]
 async fn test_pipeline_fatal_error_cascades() {
     let pipeline = make_pipeline(vec![Arc::new(FailStage), Arc::new(PassthroughStage)]);
-    let (info, files, config, stem, hls, verbose, cb, cancel) =
+    let (info, files, config, stem, opts, cb, cancel) =
         run_args(vec![PathBuf::from("/tmp/video.mp4")]);
     let result = pipeline
-        .run(info, files, config, stem, hls, verbose, cb, cancel)
+        .run(info, files, opts, config, stem, cb, cancel)
         .await;
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
@@ -150,10 +152,10 @@ async fn test_pipeline_nonfatal_passes_through() {
         Arc::new(NonFatalFailStage),
         Arc::new(PassthroughStage),
     ]);
-    let (info, files, config, stem, hls, verbose, cb, cancel) =
+    let (info, files, config, stem, opts, cb, cancel) =
         run_args(vec![PathBuf::from("/tmp/video.mp4")]);
     let result = pipeline
-        .run(info, files, config, stem, hls, verbose, cb, cancel)
+        .run(info, files, opts, config, stem, cb, cancel)
         .await;
     assert!(result.is_ok());
 }
@@ -216,9 +218,9 @@ async fn test_pipeline_cleanup_does_not_block_runtime() {
         }
     });
 
-    let (info, files, config, stem, hls, verbose, cb, cancel) = run_args(vec![video.clone()]);
+    let (info, files, config, stem, opts, cb, cancel) = run_args(vec![video.clone()]);
     let result = pipeline
-        .run(info, files, config, stem, hls, verbose, cb, cancel)
+        .run(info, files, opts, config, stem, cb, cancel)
         .await;
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), vec![video]);
@@ -262,10 +264,9 @@ async fn test_pipeline_concurrent_semaphore() {
     for _ in 0..6 {
         let p = StdArc::clone(&pipeline);
         handles.push(tokio::spawn(async move {
-            let (info, files, config, stem, hls, verbose, cb, cancel) =
+            let (info, files, config, stem, opts, cb, cancel) =
                 run_args(vec![PathBuf::from("/tmp/v.mp4")]);
-            p.run(info, files, config, stem, hls, verbose, cb, cancel)
-                .await
+            p.run(info, files, opts, config, stem, cb, cancel).await
         }));
     }
     for h in handles {
@@ -306,14 +307,13 @@ async fn pipeline_run_returns_cancelled_when_token_pre_cancelled() {
     }
 
     let pipeline = make_pipeline(vec![Arc::new(CountingStage(Arc::clone(&count)))]);
-    let (info, files, config, stem, hls, verbose, cb, _) =
-        run_args(vec![PathBuf::from("/tmp/video.mp4")]);
+    let (info, files, config, stem, opts, cb, _) = run_args(vec![PathBuf::from("/tmp/video.mp4")]);
 
     let token = CancellationToken::new();
     token.cancel(); // pre-cancel BEFORE run
 
     let result = pipeline
-        .run(info, files, config, stem, hls, verbose, cb, Some(token))
+        .run(info, files, opts, config, stem, cb, Some(token))
         .await;
 
     assert!(result.is_err(), "pre-cancelled token must surface as Err");
@@ -399,11 +399,10 @@ async fn pipeline_run_cancels_mid_pipeline() {
         Arc::new(DownstreamCountingStage(Arc::clone(&downstream_count))),
         Arc::new(DownstreamCountingStage(Arc::clone(&downstream_count))),
     ]);
-    let (info, files, config, stem, hls, verbose, cb, _) =
-        run_args(vec![PathBuf::from("/tmp/video.mp4")]);
+    let (info, files, config, stem, opts, cb, _) = run_args(vec![PathBuf::from("/tmp/video.mp4")]);
 
     let result = pipeline
-        .run(info, files, config, stem, hls, verbose, cb, Some(token))
+        .run(info, files, opts, config, stem, cb, Some(token))
         .await;
 
     assert!(result.is_err(), "mid-pipeline cancel must surface as Err");
@@ -425,11 +424,10 @@ async fn pipeline_run_cancels_mid_pipeline() {
 #[tokio::test]
 async fn pipeline_run_with_none_cancel_runs_to_completion() {
     let pipeline = make_pipeline(vec![Arc::new(PassthroughStage)]);
-    let (info, files, config, stem, hls, verbose, cb, _) =
-        run_args(vec![PathBuf::from("/tmp/video.mp4")]);
+    let (info, files, config, stem, opts, cb, _) = run_args(vec![PathBuf::from("/tmp/video.mp4")]);
 
     let result = pipeline
-        .run(info, files, config, stem, hls, verbose, cb, None)
+        .run(info, files, opts, config, stem, cb, None)
         .await;
 
     assert!(

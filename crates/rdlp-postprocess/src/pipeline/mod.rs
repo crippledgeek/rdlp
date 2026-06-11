@@ -143,6 +143,19 @@ pub trait PipelineStage: Send + Sync {
 // Pipeline
 // ---------------------------------------------------------------------------
 
+/// Per-run pipeline options. Bundles the boolean flags so call sites are
+/// self-documenting and the flags can't be positionally transposed.
+#[derive(Debug, Clone, Copy)]
+pub struct PipelineRunOptions {
+    /// Borrow caller-supplied inputs (never delete them) — for a pre-existing
+    /// local file rather than a file rdlp downloaded (#414).
+    pub keep_inputs: bool,
+    /// The input is an HLS download (drives `RemuxStage`).
+    pub is_hls: bool,
+    /// Verbose logging.
+    pub verbose: bool,
+}
+
 /// Channel-based post-processing pipeline.
 pub struct Pipeline {
     stages: Vec<Arc<dyn PipelineStage>>,
@@ -171,6 +184,12 @@ impl Pipeline {
     ///
     /// Returns the final `current_files` from the tracker on success.
     ///
+    /// `opts.keep_inputs = true` constructs a borrowing [`FileTracker`] that never
+    /// deletes the input files (success or cancel). Use this for user-supplied
+    /// source files (`process_local_file`). `opts.keep_inputs = false` (the default
+    /// everywhere else) gives the pipeline full ownership — inputs are deleted
+    /// after successful processing.
+    ///
     /// # Errors
     ///
     /// Returns [`PipelineError`] if any fatal stage fails (merge, audio extract,
@@ -181,10 +200,9 @@ impl Pipeline {
         &self,
         info: InfoDict,
         files: Vec<std::path::PathBuf>,
+        opts: PipelineRunOptions,
         config: Arc<PostProcess>,
         original_stem: String,
-        is_hls: bool,
-        verbose: bool,
         callback_factory: Option<PostProcessCallbackFactory>,
         cancel: Option<CancellationToken>,
     ) -> anyhow::Result<Vec<std::path::PathBuf>> {
@@ -193,7 +211,11 @@ impl Pipeline {
                 anyhow::anyhow!("pipeline concurrency semaphore closed unexpectedly")
             })?;
 
-        let tracker = FileTracker::new(files, Arc::clone(&self.temp_registry));
+        let tracker = if opts.keep_inputs {
+            FileTracker::new_borrowing(files, Arc::clone(&self.temp_registry))
+        } else {
+            FileTracker::new(files, Arc::clone(&self.temp_registry))
+        };
 
         let (error_tx, error_rx) = oneshot::channel::<PipelineError>();
 
@@ -211,8 +233,8 @@ impl Pipeline {
             tracker,
             config,
             original_stem,
-            is_hls,
-            verbose,
+            is_hls: opts.is_hls,
+            verbose: opts.verbose,
             callback_factory,
             error_tx: Some(error_tx),
             warnings: Vec::new(),
@@ -284,10 +306,13 @@ impl Pipeline {
                     .run(
                         input.info,
                         input.files,
+                        PipelineRunOptions {
+                            keep_inputs: false,
+                            is_hls: input.is_hls,
+                            verbose,
+                        },
                         config,
                         input.original_stem,
-                        input.is_hls,
-                        verbose,
                         factory,
                         cancel_clone,
                     )

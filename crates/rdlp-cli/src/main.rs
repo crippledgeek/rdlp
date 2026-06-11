@@ -30,6 +30,30 @@ use args::{Args, PluginCmd, PluginSubcommand};
 use commands::{fail_with, print_codecs, print_fields};
 use config::build_config;
 
+/// #413/#414: spawn the OS-signal → graceful-cancel task for an in-flight
+/// download or local-file job. First interrupt → graceful (record the
+/// conventional exit code + `interrupt()`, keeping any resumable partial or the
+/// user's source); second SIGINT → force-exit. Detached: aborts with the runtime
+/// when the job finishes normally.
+fn spawn_signal_task(interrupt: rdlp_api::InterruptHandle, exit_signal: Arc<AtomicU8>) {
+    use rdlp_cli::signal::{SignalAction, next_action, wait_for_signal};
+    tokio::spawn(async move {
+        let mut graceful_started = false;
+        loop {
+            let sig = wait_for_signal().await;
+            match next_action(graceful_started, sig) {
+                SignalAction::GracefulCancel(code) => {
+                    graceful_started = true;
+                    exit_signal.store(code, Ordering::SeqCst);
+                    interrupt.interrupt();
+                }
+                SignalAction::ForceExit(code) => std::process::exit(i32::from(code)),
+                SignalAction::Ignore => {}
+            }
+        }
+    });
+}
+
 /// Get optimal number of worker threads for I/O-heavy workloads
 fn optimal_worker_threads() -> usize {
     // For I/O-bound work (downloads), use 2x CPU cores
@@ -367,6 +391,12 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
     if !url.contains("://") && local_path.exists() {
         info!("Processing local file: {}", local_path.display());
         let mut handle = client.process_local_file(local_path.to_path_buf());
+
+        // #414: a long local transcode must cancel gracefully on Ctrl+C/SIGTERM
+        // (cooperative FFmpeg abort + the user's source preserved), not an
+        // abrupt kill.
+        spawn_signal_task(handle.interrupt_handle(), Arc::clone(&exit_signal));
+
         let mut event_handler = CliEventHandler::new(Arc::clone(&multi_progress), quiet);
 
         while let Some(event) = handle.events().recv().await {
@@ -378,6 +408,10 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
                 if let Some(path) = result.output_files.first() {
                     info!("Success! Processed file: {}", path.display());
                 }
+                Ok(())
+            }
+            Err(RdlpApiError::UserCancelled) => {
+                // User cancelled - already printed message via events
                 Ok(())
             }
             Err(e) => fail_with(&e, verbose),
@@ -397,28 +431,9 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
     // Start the download
     let mut handle = client.download(request);
 
-    // #413: drive cancellation from OS signals. First interrupt → graceful
-    // (keep the resumable partial); second SIGINT → force-exit 130.
-    {
-        use rdlp_cli::signal::{SignalAction, next_action, wait_for_signal};
-        let interrupt = handle.interrupt_handle();
-        let exit_for_task = Arc::clone(&exit_signal);
-        tokio::spawn(async move {
-            let mut graceful_started = false;
-            loop {
-                let sig = wait_for_signal().await;
-                match next_action(graceful_started, sig) {
-                    SignalAction::GracefulCancel(code) => {
-                        graceful_started = true;
-                        exit_for_task.store(code, Ordering::SeqCst);
-                        interrupt.interrupt();
-                    }
-                    SignalAction::ForceExit(code) => std::process::exit(i32::from(code)),
-                    SignalAction::Ignore => {}
-                }
-            }
-        });
-    }
+    // #413: drive cancellation from OS signals (first interrupt → graceful,
+    // keep the resumable partial; second SIGINT → force-exit).
+    spawn_signal_task(handle.interrupt_handle(), Arc::clone(&exit_signal));
 
     let mut event_handler = CliEventHandler::new(Arc::clone(&multi_progress), quiet);
 

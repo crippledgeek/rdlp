@@ -39,6 +39,11 @@ fn is_temp_named(path: &Path) -> bool {
 /// intermediate files from leaking when a job is cancelled mid-pipeline (#335, #404).
 /// [`TempRegistry`] remains the crash/stale backstop for the case where the
 /// process dies before `Drop` runs.
+///
+/// When post-processing a pre-existing local file (`process_local_file`, #414),
+/// use [`new_borrowing`] so the user's original file is never deleted — neither
+/// on success nor on cancel. The download path uses [`new`] (empty borrowed set)
+/// and retains its existing behaviour unchanged.
 pub struct FileTracker {
     /// The live files currently being processed.
     pub(crate) current_files: Vec<PathBuf>,
@@ -47,12 +52,37 @@ pub struct FileTracker {
     /// Every path handed out by [`temp_path`] — the uncommitted-output set
     /// deleted on cancel-drop.
     issued: Vec<PathBuf>,
+    /// Caller-supplied, user-owned inputs that MUST NOT be deleted — neither on
+    /// success ([`cleanup`]) nor on cancel ([`Drop`]) — and are never moved into
+    /// the delete-set by [`replace`]. Empty for the download path (rdlp owns its
+    /// temp-named files); populated by `process_local_file` for a pre-existing
+    /// local file (#414). Encodes the ownership rule: delete what we created,
+    /// preserve what the user brought us.
+    borrowed: Vec<PathBuf>,
     /// Disarms the `Drop` cleanup once the job succeeds (`commit`/`cleanup`).
     committed: bool,
     temp_registry: Arc<TempRegistry>,
 }
 
 impl FileTracker {
+    /// Shared constructor — the field list lives in exactly ONE place. Both
+    /// [`new`] and [`new_borrowing`] delegate here so changes to the struct
+    /// fields are made only once.
+    const fn with_borrowed(
+        files: Vec<PathBuf>,
+        borrowed: Vec<PathBuf>,
+        temp_registry: Arc<TempRegistry>,
+    ) -> Self {
+        Self {
+            current_files: files,
+            temp_files: Vec::new(),
+            issued: Vec::new(),
+            borrowed,
+            committed: false,
+            temp_registry,
+        }
+    }
+
     /// Create a new tracker with the given initial files.
     ///
     /// # Precondition
@@ -64,26 +94,60 @@ impl FileTracker {
     /// clear the working set), but a [`log::warn!`] is emitted naming the path,
     /// since it signals a caller-contract violation. The orchestrator satisfies
     /// this precondition by UUID-renaming inputs to `*.rdlp-tmp-*` before
-    /// constructing the tracker.
+    /// constructing the tracker. To post-process a pre-existing user-owned file
+    /// (which must NOT be deleted), use [`new_borrowing`] instead of satisfying
+    /// this precondition.
     pub const fn new(files: Vec<PathBuf>, temp_registry: Arc<TempRegistry>) -> Self {
-        Self {
-            current_files: files,
-            temp_files: Vec::new(),
-            issued: Vec::new(),
-            committed: false,
-            temp_registry,
-        }
+        Self::with_borrowed(files, Vec::new(), temp_registry)
+    }
+
+    /// Like [`new`], but marks every initial file as a **borrowed** user-owned
+    /// input: never deleted (success or cancel), never queued for deletion by
+    /// [`replace`]. For post-processing a pre-existing local file (#414) rather
+    /// than a file rdlp downloaded.
+    #[must_use]
+    pub fn new_borrowing(files: Vec<PathBuf>, temp_registry: Arc<TempRegistry>) -> Self {
+        let borrowed = files.clone();
+        Self::with_borrowed(files, borrowed, temp_registry)
+    }
+
+    /// Whether `path` is a borrowed (user-owned) input that must never be
+    /// deleted or released by this tracker (#414). Centralises the membership
+    /// check used by `replace`, `cleanup`, and `Drop`.
+    ///
+    /// NOTE: comparison is by exact `PathBuf` equality. The pipeline preserves
+    /// borrowed paths byte-for-byte (stages clone `current_files[0]` and produce
+    /// NEW temp outputs; they never re-case or canonicalize the input), so this
+    /// holds on case-sensitive and case-insensitive filesystems alike today.
+    /// Hardening this against path-representation divergence (canonicalization /
+    /// case-folding) is tracked as a follow-up.
+    fn is_borrowed(&self, path: &Path) -> bool {
+        self.borrowed.iter().any(|b| b == path)
     }
 
     /// Promote `new_files` to `current_files`, moving the old current files
     /// into `temp_files`.
+    ///
+    /// Borrowed (user-owned) inputs are dropped from tracking rather than
+    /// queued for deletion (#414).
     pub fn replace(&mut self, new_files: Vec<PathBuf>) {
         let old = std::mem::replace(&mut self.current_files, new_files);
-        self.temp_files.extend(old);
+        for f in old {
+            // #414: a borrowed (user-owned) input is never deleted — drop it from
+            // tracking instead of queueing it in `temp_files`.
+            if self.is_borrowed(&f) {
+                continue;
+            }
+            self.temp_files.push(f);
+        }
     }
 
     /// Mark a path as a temp file without changing `current_files`.
     pub fn mark_temp(&mut self, path: PathBuf) {
+        debug_assert!(
+            !self.is_borrowed(&path),
+            "a borrowed (user-owned) input must never be marked temp (#414)"
+        );
         self.temp_files.push(path);
     }
 
@@ -153,8 +217,12 @@ impl FileTracker {
         // the `TempRegistry`. This drops the advisory lock + removes the `.lock`
         // sidecar so no stale entry survives; the orchestrator then renames the
         // now-unregistered temp file to its clean user-visible name.
+        // Skip borrowed paths: a borrowed source was never registered with the
+        // registry, so releasing it would be a contract violation.
         for file in &self.current_files {
-            self.temp_registry.release(file.as_path());
+            if !self.is_borrowed(file) {
+                self.temp_registry.release(file.as_path());
+            }
         }
 
         // Successful completion: disarm the cancel-cleanup Drop.
@@ -183,9 +251,10 @@ impl Drop for FileTracker {
         // the working set). `temp_files` is deliberately EXCLUDED from this check:
         // it legitimately holds real-named superseded files (e.g. the original
         // download moved here by `replace()`), so a non-temp name there is
-        // expected, not a contract violation. Drop never panics.
+        // expected, not a contract violation. Borrowed paths are excluded entirely
+        // — they are user-owned and must never be deleted (#414). Drop never panics.
         for path in self.issued.iter().chain(self.current_files.iter()) {
-            if !is_temp_named(path) {
+            if !is_temp_named(path) && !self.is_borrowed(path) {
                 log::warn!(
                     "FileTracker::Drop deleting non-temp-named file {} — unexpected; \
                      current_files should be temp-namespaced",
@@ -193,13 +262,15 @@ impl Drop for FileTracker {
                 );
             }
         }
-        // Delete all three sets (issued + current_files + superseded temp_files).
+        // Delete all three sets (issued + current_files + superseded temp_files),
+        // excluding borrowed (user-owned) inputs which must never be deleted (#414).
         // Collect into an owned Vec to avoid borrowing self while mutating it.
         let to_delete: Vec<PathBuf> = self
             .issued
             .iter()
             .chain(self.current_files.iter())
             .chain(self.temp_files.iter())
+            .filter(|p| !self.is_borrowed(p)) // #414: never delete borrowed
             .cloned()
             .collect();
         for path in to_delete {
@@ -416,6 +487,88 @@ mod tests {
         assert!(
             !is_temp_named(Path::new("My.Video.mkv")),
             "dotted clean name must NOT be temp-named"
+        );
+    }
+
+    // ── #414 borrowed-input tests ────────────────────────────────────────────
+
+    /// A borrowed (user-owned) file must survive an uncommitted (cancel) Drop.
+    #[test]
+    fn test_drop_does_not_delete_borrowed_input() {
+        let dir = TempDir::new().unwrap();
+        let reg = test_registry();
+        let src = dir.path().join("localfile.mp4");
+        fs::write(&src, b"user data").unwrap();
+        {
+            let _t = FileTracker::new_borrowing(vec![src.clone()], reg);
+            // uncommitted drop here → cancel semantics
+        }
+        assert!(src.exists(), "borrowed user input must survive cancel-Drop");
+    }
+
+    /// After a `replace()`, the borrowed source must NOT be queued for deletion.
+    /// On an uncommitted Drop, the temp output is deleted but the source survives.
+    #[test]
+    fn test_replace_keeps_borrowed_then_drop() {
+        let dir = TempDir::new().unwrap();
+        let reg = test_registry();
+        let src = dir.path().join("localfile.mp4");
+        fs::write(&src, b"user data").unwrap();
+        let out;
+        {
+            let mut t = FileTracker::new_borrowing(vec![src.clone()], reg);
+            out = t.temp_path(&src, "mkv");
+            fs::write(&out, b"recoded").unwrap();
+            t.replace(vec![out.clone()]);
+            // uncommitted drop → cancel: out (current_files) deleted, src preserved
+        }
+        assert!(
+            src.exists(),
+            "borrowed source must survive replace + cancel-Drop"
+        );
+        assert!(
+            !out.exists(),
+            "non-borrowed issued temp must be deleted on cancel-Drop"
+        );
+    }
+
+    /// After a successful `cleanup()`, the borrowed source AND the recode output survive.
+    #[test]
+    fn test_cleanup_keeps_borrowed_after_replace() {
+        let dir = TempDir::new().unwrap();
+        let reg = test_registry();
+        let src = dir.path().join("localfile.mp4");
+        fs::write(&src, b"user data").unwrap();
+        let out;
+        {
+            let mut t = FileTracker::new_borrowing(vec![src.clone()], reg);
+            out = t.temp_path(&src, "mkv");
+            fs::write(&out, b"recoded").unwrap();
+            t.replace(vec![out.clone()]);
+            t.cleanup();
+        }
+        assert!(
+            src.exists(),
+            "borrowed source must survive successful cleanup"
+        );
+        assert!(out.exists(), "the survivor (recode output) must be kept");
+    }
+
+    /// #404 regression guard: a file owned via the NORMAL `new()` constructor
+    /// (rdlp-owned temp) must still be deleted on an uncommitted Drop.
+    #[test]
+    fn test_non_borrowed_temp_still_deleted_on_drop() {
+        let dir = TempDir::new().unwrap();
+        let reg = test_registry();
+        let tmp = dir.path().join("video.rdlp-tmp-abc.mp4");
+        fs::write(&tmp, b"partial").unwrap();
+        {
+            let _t = FileTracker::new(vec![tmp.clone()], reg);
+            // uncommitted drop → cancel semantics
+        }
+        assert!(
+            !tmp.exists(),
+            "non-borrowed owned temp must still be deleted on cancel"
         );
     }
 
