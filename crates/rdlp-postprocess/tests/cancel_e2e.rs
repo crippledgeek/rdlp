@@ -174,6 +174,7 @@ async fn cancel_mid_recode_aborts_and_cleans_up() {
             .run(
                 info,
                 vec![input],
+                false,
                 config,
                 "video".to_string(),
                 false,
@@ -259,6 +260,7 @@ async fn cancel_after_remux_deletes_real_named_source() {
             .run(
                 info,
                 vec![input_for_run],
+                false,
                 config,
                 "video".to_string(),
                 true, // is_hls -> RemuxStage runs

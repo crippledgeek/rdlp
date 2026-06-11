@@ -672,7 +672,7 @@ impl RdlpClient {
             }
 
             match orchestrator
-                .run_postprocessing(&info, vec![path], false)
+                .run_postprocessing(&info, vec![path], false, false)
                 .await
             {
                 Ok(output_files) => {

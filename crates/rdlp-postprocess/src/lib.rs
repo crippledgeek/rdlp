@@ -48,7 +48,7 @@
 //! let config = Arc::new(PostProcess::default());
 //! let files = vec![PathBuf::from("video.mp4")];
 //!
-//! let output = pipeline.run(info, files, config, "video".to_string(), false, false, None, None).await?;
+//! let output = pipeline.run(info, files, false, config, "video".to_string(), false, false, None, None).await?;
 //! println!("Output: {output:?}");
 //! # Ok(())
 //! # }

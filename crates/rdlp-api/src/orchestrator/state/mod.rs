@@ -490,7 +490,7 @@ impl DownloadPhase {
                 // re-returning UserCancelled so the client's terminal_event()
                 // still surfaces it as Event::Cancelled (PR #399). (#404)
                 let final_files = match orchestrator
-                    .run_postprocessing(&info, download_files.clone(), is_hls)
+                    .run_postprocessing(&info, download_files.clone(), is_hls, false)
                     .await
                 {
                     Ok(files) => files,

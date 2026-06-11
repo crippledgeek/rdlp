@@ -114,7 +114,7 @@ async fn test_pipeline_passthrough() {
     let (info, files, config, stem, hls, verbose, cb, cancel) =
         run_args(vec![PathBuf::from("/tmp/video.mp4")]);
     let result = pipeline
-        .run(info, files, config, stem, hls, verbose, cb, cancel)
+        .run(info, files, false, config, stem, hls, verbose, cb, cancel)
         .await;
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), vec![PathBuf::from("/tmp/video.mp4")]);
@@ -126,7 +126,7 @@ async fn test_pipeline_skip_stage() {
     let (info, files, config, stem, hls, verbose, cb, cancel) =
         run_args(vec![PathBuf::from("/tmp/video.mp4")]);
     let result = pipeline
-        .run(info, files, config, stem, hls, verbose, cb, cancel)
+        .run(info, files, false, config, stem, hls, verbose, cb, cancel)
         .await;
     assert!(result.is_ok());
 }
@@ -137,7 +137,7 @@ async fn test_pipeline_fatal_error_cascades() {
     let (info, files, config, stem, hls, verbose, cb, cancel) =
         run_args(vec![PathBuf::from("/tmp/video.mp4")]);
     let result = pipeline
-        .run(info, files, config, stem, hls, verbose, cb, cancel)
+        .run(info, files, false, config, stem, hls, verbose, cb, cancel)
         .await;
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
@@ -153,7 +153,7 @@ async fn test_pipeline_nonfatal_passes_through() {
     let (info, files, config, stem, hls, verbose, cb, cancel) =
         run_args(vec![PathBuf::from("/tmp/video.mp4")]);
     let result = pipeline
-        .run(info, files, config, stem, hls, verbose, cb, cancel)
+        .run(info, files, false, config, stem, hls, verbose, cb, cancel)
         .await;
     assert!(result.is_ok());
 }
@@ -218,7 +218,7 @@ async fn test_pipeline_cleanup_does_not_block_runtime() {
 
     let (info, files, config, stem, hls, verbose, cb, cancel) = run_args(vec![video.clone()]);
     let result = pipeline
-        .run(info, files, config, stem, hls, verbose, cb, cancel)
+        .run(info, files, false, config, stem, hls, verbose, cb, cancel)
         .await;
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), vec![video]);
@@ -264,7 +264,7 @@ async fn test_pipeline_concurrent_semaphore() {
         handles.push(tokio::spawn(async move {
             let (info, files, config, stem, hls, verbose, cb, cancel) =
                 run_args(vec![PathBuf::from("/tmp/v.mp4")]);
-            p.run(info, files, config, stem, hls, verbose, cb, cancel)
+            p.run(info, files, false, config, stem, hls, verbose, cb, cancel)
                 .await
         }));
     }
@@ -313,7 +313,17 @@ async fn pipeline_run_returns_cancelled_when_token_pre_cancelled() {
     token.cancel(); // pre-cancel BEFORE run
 
     let result = pipeline
-        .run(info, files, config, stem, hls, verbose, cb, Some(token))
+        .run(
+            info,
+            files,
+            false,
+            config,
+            stem,
+            hls,
+            verbose,
+            cb,
+            Some(token),
+        )
         .await;
 
     assert!(result.is_err(), "pre-cancelled token must surface as Err");
@@ -403,7 +413,17 @@ async fn pipeline_run_cancels_mid_pipeline() {
         run_args(vec![PathBuf::from("/tmp/video.mp4")]);
 
     let result = pipeline
-        .run(info, files, config, stem, hls, verbose, cb, Some(token))
+        .run(
+            info,
+            files,
+            false,
+            config,
+            stem,
+            hls,
+            verbose,
+            cb,
+            Some(token),
+        )
         .await;
 
     assert!(result.is_err(), "mid-pipeline cancel must surface as Err");
@@ -429,7 +449,7 @@ async fn pipeline_run_with_none_cancel_runs_to_completion() {
         run_args(vec![PathBuf::from("/tmp/video.mp4")]);
 
     let result = pipeline
-        .run(info, files, config, stem, hls, verbose, cb, None)
+        .run(info, files, false, config, stem, hls, verbose, cb, None)
         .await;
 
     assert!(

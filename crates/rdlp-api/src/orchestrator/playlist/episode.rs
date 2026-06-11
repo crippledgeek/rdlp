@@ -342,7 +342,7 @@ impl Orchestrator {
 
         // Run post-processing if configured (or automatic for HLS).
         let final_files = self
-            .run_postprocessing(final_info, download_files, is_hls)
+            .run_postprocessing(final_info, download_files, is_hls, false)
             .await?;
         let survivor = final_files
             .into_iter()

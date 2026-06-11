@@ -171,16 +171,23 @@ impl Pipeline {
     ///
     /// Returns the final `current_files` from the tracker on success.
     ///
+    /// `keep_inputs = true` constructs a borrowing [`FileTracker`] that never
+    /// deletes the input files (success or cancel). Use this for user-supplied
+    /// source files (`process_local_file`). `keep_inputs = false` (the default
+    /// everywhere else) gives the pipeline full ownership — inputs are deleted
+    /// after successful processing.
+    ///
     /// # Errors
     ///
     /// Returns [`PipelineError`] if any fatal stage fails (merge, audio extract,
     /// normalize, remux, or recode). Non-fatal stages (subtitle, metadata,
     /// thumbnail, fixup) log warnings and continue.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::fn_params_excessive_bools)]
     pub async fn run(
         &self,
         info: InfoDict,
         files: Vec<std::path::PathBuf>,
+        keep_inputs: bool,
         config: Arc<PostProcess>,
         original_stem: String,
         is_hls: bool,
@@ -193,7 +200,11 @@ impl Pipeline {
                 anyhow::anyhow!("pipeline concurrency semaphore closed unexpectedly")
             })?;
 
-        let tracker = FileTracker::new(files, Arc::clone(&self.temp_registry));
+        let tracker = if keep_inputs {
+            FileTracker::new_borrowing(files, Arc::clone(&self.temp_registry))
+        } else {
+            FileTracker::new(files, Arc::clone(&self.temp_registry))
+        };
 
         let (error_tx, error_rx) = oneshot::channel::<PipelineError>();
 
@@ -284,6 +295,7 @@ impl Pipeline {
                     .run(
                         input.info,
                         input.files,
+                        false,
                         config,
                         input.original_stem,
                         input.is_hls,

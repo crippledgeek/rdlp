@@ -116,6 +116,10 @@ impl Orchestrator {
     /// * `info` - Video metadata
     /// * `files` - Downloaded file paths
     /// * `is_hls` - Whether this was an HLS download (triggers automatic remux)
+    /// * `keep_inputs` - When `true`, input files are borrowed (not owned) by the
+    ///   pipeline: the originals are preserved on both success and cancel. Set for
+    ///   user-supplied source files that must not be deleted (e.g. `process_local_file`);
+    ///   `false` for files rdlp downloaded itself (the default everywhere else).
     ///
     /// # Returns
     /// * `Ok(paths)` - Processed file paths (may differ from input if conversion occurred)
@@ -125,6 +129,7 @@ impl Orchestrator {
         info: &rdlp_types::InfoDict,
         files: Vec<PathBuf>,
         is_hls: bool,
+        keep_inputs: bool,
     ) -> Result<Vec<PathBuf>> {
         debug!(
             "[PostProcess] Called: is_hls={is_hls}, pipeline={}",
@@ -165,6 +170,7 @@ impl Orchestrator {
             .run(
                 info.clone(),
                 files.clone(),
+                keep_inputs,
                 Arc::new(pp_config),
                 original_stem,
                 is_hls,
