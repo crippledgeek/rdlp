@@ -161,27 +161,38 @@ impl Orchestrator {
                         .as_ref()
                         .expect("output_path set in is_none guard above");
 
-                    // Detect resume point (recalculate on retry for partial HLS)
-                    let resume_offset = self.detect_resume_point(path, format.filesize).await?;
+                    // Download writes the deterministic .rdlp-part name; the clean
+                    // name appears only after the download commits (#406).
+                    let part = crate::orchestrator::naming::part_path(path);
 
-                    // Check if file is already complete
+                    // Detect resume point against the part name (recalculate on
+                    // retry for partial HLS).
+                    let resume_offset = self.detect_resume_point(&part, format.filesize).await?;
+
+                    // Check if file is already complete: commit .rdlp-part -> clean.
                     if let Some(expected_size) = format.filesize
                         && resume_offset == expected_size
                     {
                         debug!("File already complete, skipping");
+                        crate::orchestrator::naming::finalize_part(&part, path).await?;
                         return Ok(Some(path.clone()));
                     }
 
                     // Download with CDN fallback
                     match self
-                        .download_with_cdn_fallback(&format, path, resume_offset)
+                        .download_with_cdn_fallback(&format, &part, resume_offset)
                         .await
                     {
                         Ok(Some(outcome)) => {
+                            crate::orchestrator::naming::finalize_part(&part, path).await?;
                             download_result = Some((vec![path.clone()], outcome.is_hls, None));
                             break;
                         }
-                        Ok(None) => return Ok(None),
+                        Ok(None) => {
+                            // Explicit cancel: drop the .rdlp-part working file.
+                            let _ = tokio::fs::remove_file(&part).await;
+                            return Ok(None);
+                        }
                         Err(e) if attempt < MAX_EXTRACT_RETRIES && is_reextractable_error(&e) => {
                             warn!("All CDN URLs failed: {e}");
                             warn!("Will re-extract fresh URLs after delay");
