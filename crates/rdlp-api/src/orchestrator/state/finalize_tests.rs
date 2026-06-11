@@ -1,4 +1,4 @@
-use crate::orchestrator::naming::{finalize_to_clean, part_path};
+use crate::orchestrator::naming::{discard_part, finalize_part, finalize_to_clean, part_path};
 
 // Pins the round-trip the Single download path relies on: a .rdlp-part file
 // finalizes to exactly the clean output name (no marker residue, same dir).
@@ -15,4 +15,38 @@ async fn part_file_finalizes_to_clean_name() {
     assert!(clean.exists(), "clean name must exist after finalize");
     assert!(!part.exists(), "part name must be gone after finalize");
     assert_eq!(finalize_to_clean(&part), Some(clean));
+}
+
+#[tokio::test]
+async fn finalize_part_renames_and_reports_missing() {
+    let dir = tempfile::tempdir().unwrap();
+    let clean = dir.path().join("Show.mp4");
+    let part = part_path(&clean);
+
+    // Success: part exists -> renamed to clean.
+    tokio::fs::write(&part, b"data").await.unwrap();
+    finalize_part(&part, &clean).await.unwrap();
+    assert!(clean.exists() && !part.exists());
+
+    // Failure surfaces with context when the part is missing.
+    let err = finalize_part(&part, &clean).await.unwrap_err();
+    assert!(
+        format!("{err:#}").contains("failed to finalize download"),
+        "got: {err:#}"
+    );
+}
+
+#[tokio::test]
+async fn discard_part_removes_and_is_noop_when_absent() {
+    let dir = tempfile::tempdir().unwrap();
+    let clean = dir.path().join("Ep.mp4");
+    let part = part_path(&clean);
+
+    tokio::fs::write(&part, b"partial").await.unwrap();
+    discard_part(&part).await;
+    assert!(!part.exists(), "cancel must remove the .rdlp-part file");
+    assert!(!clean.exists(), "cancel must not create the clean name");
+
+    // Idempotent: discarding an already-absent part does not panic/error.
+    discard_part(&part).await;
 }

@@ -60,6 +60,9 @@ pub(super) fn strip_temp_marker(file_name: &str) -> Option<&str> {
     if idx == 0 {
         return None; // no real stem precedes the marker
     }
+    // SAFETY: PART_MARKER and TMP_MARKER are ASCII, so `find` returns an index
+    // on a UTF-8 char boundary; the byte-slice below can never split a codepoint.
+    debug_assert!(file_name.is_char_boundary(idx));
     Some(&file_name[..idx])
 }
 
@@ -83,10 +86,12 @@ pub(super) fn finalize_to_clean(survivor: &Path) -> Option<PathBuf> {
 
 /// Atomically commit a finished `.rdlp-part` download to its clean output name.
 ///
-/// Same-directory rename (no `EXDEV`); on failure the `.rdlp-part` file is left
-/// on disk (resumable) rather than a half-renamed state. Used by both the
-/// already-complete resume short-circuit and the normal download-completion
-/// path so the two share one error message and one rename call.
+/// Same-directory rename (no `EXDEV`), atomic on POSIX. On failure the rename
+/// is a no-op: the `.rdlp-part` file is left intact (a re-run re-probes it and
+/// re-attempts finalize) and the clean name is not created — the error is
+/// surfaced to the caller via context. Used by both the already-complete resume
+/// short-circuit and the normal download-completion path so the two share one
+/// rename call and one error message.
 pub(super) async fn finalize_part(part: &Path, clean: &Path) -> anyhow::Result<()> {
     use anyhow::Context as _;
     tokio::fs::rename(part, clean).await.with_context(|| {
@@ -96,6 +101,13 @@ pub(super) async fn finalize_part(part: &Path, clean: &Path) -> anyhow::Result<(
             clean.display()
         )
     })
+}
+
+/// Best-effort removal of a `.rdlp-part` working file on explicit cancel, so a
+/// cancelled download leaves no artifact (#406). Errors are ignored: the file
+/// may legitimately not exist yet, and a failed unlink must not mask the cancel.
+pub(super) async fn discard_part(part: &Path) {
+    let _ = tokio::fs::remove_file(part).await;
 }
 
 #[cfg(test)]

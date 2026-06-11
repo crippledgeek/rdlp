@@ -429,7 +429,7 @@ impl DownloadPhase {
                         else {
                             // Explicit cancel: delete the .rdlp-part working file so
                             // a cancel leaves no artifact (#406). Best-effort.
-                            let _ = tokio::fs::remove_file(&part).await;
+                            super::naming::discard_part(&part).await;
                             orchestrator.emit(Event::Cancelled {
                                 id: orchestrator.download_id,
                             });
