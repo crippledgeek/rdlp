@@ -47,7 +47,7 @@ pub(crate) mod plugin_bootstrap;
 pub use client::RdlpClient;
 pub use errors::RdlpApiError;
 pub use events::Event;
-pub use handle::{DownloadHandle, DownloadId};
+pub use handle::{DownloadHandle, DownloadId, InterruptHandle};
 pub use orchestrator::InteractiveCallback;
 pub use rdlp_core::{DownloadProgress, config_io};
 pub use rdlp_postprocess::TempRegistry;

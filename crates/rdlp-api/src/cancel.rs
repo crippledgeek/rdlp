@@ -10,7 +10,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 const DISCARD: u8 = 0;
-#[allow(dead_code)] // wired into Orchestrator + DownloadHandle in Tasks 2-3
 const KEEP: u8 = 1;
 
 /// Keep-vs-discard intent for the next cancellation.
@@ -19,7 +18,6 @@ const KEEP: u8 = 1;
 /// delete-on-cancel behavior, because the desktop cancels via the raw
 /// `CancellationToken` and never goes through [`crate::DownloadHandle::cancel`].
 /// Only an explicit interrupt (`set_keep`) opts into keeping the partial.
-#[allow(dead_code)] // wired into Orchestrator + DownloadHandle in Tasks 2-3
 #[allow(clippy::redundant_pub_crate)] // module is pub(crate); items use pub(crate) for explicitness
 #[derive(Clone)]
 pub(crate) struct CancelDisposition(Arc<AtomicU8>);
@@ -30,7 +28,6 @@ impl Default for CancelDisposition {
     }
 }
 
-#[allow(dead_code)] // wired into Orchestrator + DownloadHandle in Tasks 2-3
 #[allow(clippy::redundant_pub_crate)]
 impl CancelDisposition {
     /// A fresh disposition defaulting to `Discard`.
