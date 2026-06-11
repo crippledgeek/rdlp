@@ -179,12 +179,14 @@ impl RdlpClient {
         let (tx, rx) = mpsc::channel::<Event>(256);
         let cancel_token = CancellationToken::new();
 
+        let cancel_disposition = crate::cancel::CancelDisposition::new();
         let shared_http = self.shared_http_for(&request);
         let config = Arc::new(self.build_config(&request));
         let interactive_flag = request.format.interactive;
         let url = request.url;
         let interactive_cb = self.interactive.clone();
         let token = cancel_token.clone();
+        let disposition_for_task = cancel_disposition.clone();
         let registry = Arc::clone(&self.temp_registry);
         let extractor_registry = Arc::clone(&self.extractor_registry);
 
@@ -203,6 +205,7 @@ impl RdlpClient {
                 Some(registry),
                 Some(extractor_registry),
                 shared_http,
+                disposition_for_task,
             );
 
             // Load cookies: fatal when explicitly requested, non-fatal otherwise
@@ -330,7 +333,7 @@ impl RdlpClient {
             Err(err)
         });
 
-        DownloadHandle::new(id, rx, cancel_token, join_handle)
+        DownloadHandle::new(id, rx, cancel_token, cancel_disposition, join_handle)
     }
 
     /// Extract metadata without downloading.
@@ -714,7 +717,13 @@ impl RdlpClient {
             }
         });
 
-        DownloadHandle::new(id, rx, cancel_token, join_handle)
+        DownloadHandle::new(
+            id,
+            rx,
+            cancel_token,
+            crate::cancel::CancelDisposition::new(),
+            join_handle,
+        )
     }
 
     /// Returns the shared client+jar to reuse for `request`, or `None` if it

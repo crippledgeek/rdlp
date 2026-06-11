@@ -193,8 +193,11 @@ impl Orchestrator {
                             break;
                         }
                         Ok(None) => {
-                            // Explicit cancel: drop the .rdlp-part working file.
-                            crate::orchestrator::naming::discard_part(&part).await;
+                            // #413: interrupt keeps the resumable partial; explicit
+                            // cancel (default) deletes it.
+                            if !self.should_keep_partial() {
+                                crate::orchestrator::naming::discard_part(&part).await;
+                            }
                             return Ok(None);
                         }
                         Err(e) if attempt < MAX_EXTRACT_RETRIES && is_reextractable_error(&e) => {
