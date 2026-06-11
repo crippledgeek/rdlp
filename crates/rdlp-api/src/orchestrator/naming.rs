@@ -10,10 +10,14 @@ use std::path::{Path, PathBuf};
 
 /// Deterministic download-in-progress marker. Resumable; same-directory; never
 /// carries a UUID (a random name would break resume on relaunch — see spec).
+/// Its leading `.` is mirrored as `_` by `sanitize_filename` Step 1.5 to
+/// neutralize title collisions — keep the two in sync.
 pub(super) const PART_MARKER: &str = ".rdlp-part";
 
 /// Pipeline-intermediate marker (random per stage; owned by rdlp-postprocess).
 /// Mirrored here only so the finalize helper can strip either marker.
+/// Its leading `.` is mirrored as `_` by `sanitize_filename` Step 1.5 to
+/// neutralize title collisions — keep the two in sync.
 pub(super) const TMP_MARKER: &str = ".rdlp-tmp-";
 
 /// The stdout sentinel. Temp-naming is meaningless when output goes to stdout.

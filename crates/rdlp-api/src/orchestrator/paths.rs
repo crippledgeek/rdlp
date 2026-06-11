@@ -232,4 +232,32 @@ mod sanitize_marker_tests {
             "Normal Title"
         );
     }
+
+    #[test]
+    fn neutralizes_marker_after_leading_dots() {
+        // Guards the neutralize-BEFORE-trim ordering: trim must not re-expose a marker.
+        let out = Orchestrator::sanitize_filename("..rdlp-part");
+        assert!(!out.contains(".rdlp-part"), "got: {out}");
+    }
+
+    #[test]
+    fn neutralizes_all_marker_occurrences() {
+        let out = Orchestrator::sanitize_filename("x.rdlp-part.rdlp-part");
+        assert!(!out.contains(".rdlp-part"), "got: {out}");
+    }
+
+    #[test]
+    fn neutralized_title_round_trips_to_intended_clean_name() {
+        // The cross-module invariant: a title containing the marker, once
+        // sanitized, survives a full part_path -> finalize_to_clean cycle and
+        // yields the SANITIZED clean name, never a truncation at title text.
+        use crate::orchestrator::naming::{finalize_to_clean, part_path};
+        use std::path::PathBuf;
+
+        let stem = Orchestrator::sanitize_filename("foo.rdlp-part"); // "foo_rdlp-part"
+        let clean = PathBuf::from(format!("/v/{stem}.mp4"));
+        let part = part_path(&clean);
+        assert_eq!(part, PathBuf::from("/v/foo_rdlp-part.rdlp-part.mp4"));
+        assert_eq!(finalize_to_clean(&part), Some(clean));
+    }
 }
