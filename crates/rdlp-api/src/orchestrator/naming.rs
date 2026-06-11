@@ -31,7 +31,6 @@ fn is_stdout(path: &Path) -> bool {
 /// `~/V/Title.mp4` → `~/V/Title.rdlp-part.mp4`. Always the SAME directory as the
 /// clean target, so the finalize rename never crosses a filesystem boundary
 /// (no `EXDEV`). Returns the input unchanged for the `-` stdout sentinel.
-#[allow(dead_code)] // will be used by orchestrator::download in the next task
 pub(super) fn part_path(clean: &Path) -> PathBuf {
     if is_stdout(clean) {
         return clean.to_path_buf();
@@ -80,6 +79,23 @@ pub(super) fn finalize_to_clean(survivor: &Path) -> Option<PathBuf> {
         _ => stem.to_owned(),
     };
     Some(survivor.with_file_name(clean))
+}
+
+/// Atomically commit a finished `.rdlp-part` download to its clean output name.
+///
+/// Same-directory rename (no `EXDEV`); on failure the `.rdlp-part` file is left
+/// on disk (resumable) rather than a half-renamed state. Used by both the
+/// already-complete resume short-circuit and the normal download-completion
+/// path so the two share one error message and one rename call.
+pub(super) async fn finalize_part(part: &Path, clean: &Path) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+    tokio::fs::rename(part, clean).await.with_context(|| {
+        format!(
+            "failed to finalize download {} -> {}",
+            part.display(),
+            clean.display()
+        )
+    })
 }
 
 #[cfg(test)]

@@ -11,7 +11,6 @@ use super::{
     errors::{OrchestratorError, Result},
 };
 use crate::events::Event;
-use anyhow::Context as _;
 use log::{debug, warn};
 use rdlp_types::Format;
 use std::fmt;
@@ -366,15 +365,7 @@ impl DownloadPhase {
                         if let Some(expected_size) = format.filesize
                             && resume_offset == expected_size
                         {
-                            tokio::fs::rename(&part, &output_path)
-                                .await
-                                .with_context(|| {
-                                    format!(
-                                        "failed to finalize completed download {} -> {}",
-                                        part.display(),
-                                        output_path.display()
-                                    )
-                                })?;
+                            super::naming::finalize_part(&part, &output_path).await?;
                             return Ok(Self::Complete { path: output_path });
                         }
 
@@ -446,15 +437,7 @@ impl DownloadPhase {
                         };
                         // Commit: rename .rdlp-part -> clean BEFORE post-processing
                         // (Slice 1 finalizes pre-PP; Slice 2 moves it post-PP).
-                        tokio::fs::rename(&part, &output_path)
-                            .await
-                            .with_context(|| {
-                                format!(
-                                    "failed to finalize download {} -> {}",
-                                    part.display(),
-                                    output_path.display()
-                                )
-                            })?;
+                        super::naming::finalize_part(&part, &output_path).await?;
                         (vec![output_path.clone()], outcome.is_hls)
                     }
                     DownloadPlan::Merge {
