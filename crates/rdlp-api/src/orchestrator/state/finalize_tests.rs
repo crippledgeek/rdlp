@@ -1,4 +1,6 @@
-use crate::orchestrator::naming::{discard_part, finalize_part, finalize_to_clean, part_path};
+use crate::orchestrator::naming::{
+    discard_part, finalize_part, finalize_to_clean, part_path, seam_path,
+};
 
 // Pins the round-trip the Single download path relies on: a .rdlp-part file
 // finalizes to exactly the clean output name (no marker residue, same dir).
@@ -34,6 +36,23 @@ async fn finalize_part_renames_and_reports_missing() {
         format!("{err:#}").contains("failed to finalize download"),
         "got: {err:#}"
     );
+}
+
+#[tokio::test]
+async fn seam_then_finalize_yields_clean_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let clean = dir.path().join("Show.mp4");
+    let part = part_path(&clean);
+    tokio::fs::write(&part, b"x").await.unwrap();
+
+    let seam = seam_path(&clean);
+    finalize_part(&part, &seam).await.unwrap();
+    assert!(seam.exists() && !part.exists());
+
+    let target = finalize_to_clean(&seam).unwrap();
+    finalize_part(&seam, &target).await.unwrap();
+    assert_eq!(target, clean);
+    assert!(clean.exists() && !seam.exists());
 }
 
 #[tokio::test]
