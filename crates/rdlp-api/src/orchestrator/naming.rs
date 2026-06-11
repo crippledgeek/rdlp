@@ -19,6 +19,7 @@ pub(super) const PART_MARKER: &str = ".rdlp-part";
 pub(super) const TMP_MARKER: &str = ".rdlp-tmp-";
 
 /// The stdout sentinel. Temp-naming is meaningless when output goes to stdout.
+/// Matches ONLY the exact `-` token, not a path whose last component is `-`.
 #[allow(dead_code)] // used by part_path and finalize_to_clean
 fn is_stdout(path: &Path) -> bool {
     path.as_os_str() == "-"
@@ -38,10 +39,10 @@ pub(super) fn part_path(clean: &Path) -> PathBuf {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("video");
-    let filename = clean.extension().and_then(|e| e.to_str()).map_or_else(
-        || format!("{stem}{PART_MARKER}"),
-        |ext| format!("{stem}{PART_MARKER}.{ext}"),
-    );
+    let filename = match clean.extension().and_then(|e| e.to_str()) {
+        Some(ext) if !ext.is_empty() => format!("{stem}{PART_MARKER}.{ext}"),
+        _ => format!("{stem}{PART_MARKER}"),
+    };
     clean.with_file_name(filename)
 }
 
@@ -78,5 +79,11 @@ mod tests {
     fn part_path_is_noop_for_stdout() {
         let clean = PathBuf::from("-");
         assert_eq!(part_path(&clean), PathBuf::from("-"));
+    }
+
+    #[test]
+    fn part_path_collapses_trailing_dot_to_no_extension() {
+        let clean = PathBuf::from("/v/Title.");
+        assert_eq!(part_path(&clean), PathBuf::from("/v/Title.rdlp-part"));
     }
 }
