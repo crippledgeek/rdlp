@@ -83,23 +83,68 @@ pub fn finalize_to_clean(survivor: &Path) -> Option<PathBuf> {
     Some(survivor.with_file_name(clean))
 }
 
-/// Atomically commit a finished `.rdlp-part` download to its clean output name.
+/// Atomically commit a finished temp-named file to its clean output name.
 ///
-/// Same-directory rename (no `EXDEV`), atomic on POSIX. On failure the rename
-/// is a no-op: the `.rdlp-part` file is left intact (a re-run re-probes it and
-/// re-attempts finalize) and the clean name is not created — the error is
-/// surfaced to the caller via context. Used by both the already-complete resume
-/// short-circuit and the normal download-completion path so the two share one
-/// rename call and one error message.
+/// Same-directory rename (no `EXDEV`). On POSIX `rename(2)` replaces an
+/// existing destination atomically. On Windows `MoveFileExW` fails if the
+/// destination exists unless `MOVEFILE_REPLACE_EXISTING` is set; `tokio::fs::rename`
+/// does NOT set that flag, so we must handle a pre-existing clean file before
+/// renaming. This matters for the borrowed-input (`keep_inputs=true`) same-
+/// container in-place case: the source is still on disk when finalize runs and
+/// the survivor must replace it (#414).
+///
+/// Uses a **backup-restore** pattern when `clean` already exists: the existing
+/// file is moved aside first, and restored if the final rename fails, so `clean`
+/// is never lost without `part` safely in place.
+///
+/// On failure the temp file is left intact and the error is surfaced to the
+/// caller via context.
 pub async fn finalize_part(part: &Path, clean: &Path) -> anyhow::Result<()> {
     use anyhow::Context as _;
-    tokio::fs::rename(part, clean).await.with_context(|| {
-        format!(
-            "failed to finalize download {} -> {}",
-            part.display(),
-            clean.display()
-        )
-    })
+
+    if part != clean && tokio::fs::try_exists(clean).await.unwrap_or(false) {
+        // `clean` already exists (e.g. keep_inputs same-container in-place case).
+        // A bare remove-then-rename has a data-loss window: if the rename fails
+        // after the remove, `clean` is gone forever. Move the existing file aside
+        // first and restore it if the rename fails, so `clean` is never lost.
+        let backup = {
+            let mut name = clean
+                .file_name()
+                .map(std::ffi::OsStr::to_os_string)
+                .unwrap_or_default();
+            name.push(format!(".rdlp-bak-{}", uuid::Uuid::new_v4().simple()));
+            clean.with_file_name(name)
+        };
+        tokio::fs::rename(clean, &backup)
+            .await
+            .with_context(|| format!("failed to back up existing {}", clean.display()))?;
+        match tokio::fs::rename(part, clean).await {
+            Ok(()) => {
+                // Success: drop the backup (best-effort; ignore errors).
+                let _ = tokio::fs::remove_file(&backup).await;
+                Ok(())
+            }
+            Err(e) => {
+                // Restore the original so `clean` is never lost.
+                let _ = tokio::fs::rename(&backup, clean).await;
+                Err(e).with_context(|| {
+                    format!(
+                        "failed to finalize {} -> {} (original restored)",
+                        part.display(),
+                        clean.display()
+                    )
+                })
+            }
+        }
+    } else {
+        tokio::fs::rename(part, clean).await.with_context(|| {
+            format!(
+                "failed to finalize download {} -> {}",
+                part.display(),
+                clean.display()
+            )
+        })
+    }
 }
 
 /// Best-effort removal of a `.rdlp-part` working file on explicit cancel, so a
@@ -292,5 +337,53 @@ mod tests {
     #[test]
     fn seam_path_is_noop_for_stdout() {
         assert_eq!(seam_path(&PathBuf::from("-")), PathBuf::from("-"));
+    }
+
+    /// `finalize_part` must overwrite an existing clean file.
+    ///
+    /// This exercises the Windows-safe path: on POSIX `rename(2)` replaces
+    /// atomically, but `tokio::fs::rename` on Windows fails if the destination
+    /// already exists. For `process_local_file` with `keep_inputs=true`, the
+    /// borrowed source file still exists on disk when the survivor is finalized
+    /// to the same path (same-container in-place update), so `finalize_part`
+    /// must remove it first (#414).
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // std::fs helpers in test fixtures — per clippy.toml policy (c)
+    async fn test_finalize_part_overwrites_existing_clean() {
+        use std::io::Write as _;
+        use tempfile::TempDir;
+        let dir = TempDir::new().expect("tempdir");
+
+        // The survivor (temp-named output from the pipeline).
+        let part = dir.path().join("video.rdlp-tmp-abc123.mp4");
+        // The pre-existing clean destination (the borrowed source still on disk).
+        let clean = dir.path().join("video.mp4");
+
+        // Write distinct sentinel content so we can tell which file won.
+        {
+            let mut f = std::fs::File::create(&part).expect("create part");
+            f.write_all(b"survivor-content").expect("write part");
+        }
+        {
+            let mut f = std::fs::File::create(&clean).expect("create clean");
+            f.write_all(b"old-source-content").expect("write clean");
+        }
+
+        assert!(part.exists(), "part must exist before finalize");
+        assert!(clean.exists(), "clean must exist before finalize");
+
+        finalize_part(&part, &clean)
+            .await
+            .expect("finalize_part must succeed even when clean already exists");
+
+        // The survivor's content is now at the clean path.
+        let content = std::fs::read(&clean).expect("read clean after finalize");
+        assert_eq!(
+            content, b"survivor-content",
+            "clean must contain survivor content"
+        );
+
+        // The temp part must be gone.
+        assert!(!part.exists(), "part must be removed after finalize");
     }
 }

@@ -31,10 +31,20 @@ async fn finalize_part_renames_and_reports_missing() {
     assert!(clean.exists() && !part.exists());
 
     // Failure surfaces with context when the part is missing.
+    // At this point `clean` exists (from the successful rename above), so the
+    // backup-restore branch fires: `clean` is backed up, the rename of the
+    // missing `part` fails, `clean` is restored, and the error includes
+    // "(original restored)". The key invariant is that `clean` is intact.
     let err = finalize_part(&part, &clean).await.unwrap_err();
+    let msg = format!("{err:#}");
     assert!(
-        format!("{err:#}").contains("failed to finalize download"),
-        "got: {err:#}"
+        msg.contains("failed to finalize") || msg.contains("No such file"),
+        "got: {msg}"
+    );
+    // The original `clean` must be restored after the failed rename.
+    assert!(
+        clean.exists(),
+        "clean must be restored after failed finalize"
     );
 }
 

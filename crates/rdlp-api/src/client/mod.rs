@@ -672,7 +672,7 @@ impl RdlpClient {
             }
 
             match orchestrator
-                .run_postprocessing(&info, vec![path], false, false)
+                .run_postprocessing(&info, vec![path], false, true) // keep_inputs=true: user's source is borrowed, never deleted (#414)
                 .await
             {
                 Ok(output_files) => {
