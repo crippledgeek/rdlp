@@ -49,6 +49,14 @@ pub enum OrchestratorError {
     #[error("Download failed: {0}")]
     DownloadFailed(#[source] RdlpError),
 
+    /// Post-processing pipeline failed with a fatal, non-cancel error.
+    ///
+    /// Propagated from [`run_postprocessing`] when the pipeline returns a
+    /// non-[`PipelineError::Cancelled`] failure. The caller receives
+    /// [`Event::Failed`] rather than a silent fallback to the unprocessed files.
+    #[error("Post-processing failed: {0}")]
+    PostProcessingFailed(String),
+
     /// Resume detection failed
     #[error("Failed to detect resume point: {0}")]
     ResumeDetectionFailed(String),

@@ -981,6 +981,13 @@ mod terminal_event_tests {
     }
 
     /// Every non-cancel terminal error stays a genuine [`Event::Failed`].
+    ///
+    /// This loop includes [`RdlpApiError::FfmpegError`] — which is the variant
+    /// that [`OrchestratorError::PostProcessingFailed`] maps to via
+    /// `From<OrchestratorError>`. Regression guard: before the fix,
+    /// `PostProcessingFailed` did not exist and the non-cancel arm silently
+    /// returned `Ok(files)` instead of propagating an error at all, so this
+    /// case could never reach `terminal_event`.
     #[test]
     fn non_cancel_errors_map_to_failed_event() {
         let id = DownloadId::next();
@@ -995,14 +1002,50 @@ mod terminal_event_tests {
             RdlpApiError::FfmpegError {
                 message: "encoder error".into(),
             },
+            // PostProcessingFailed → FfmpegError → Event::Failed (the swallow fix).
+            RdlpApiError::from(
+                crate::orchestrator::OrchestratorError::PostProcessingFailed(
+                    "remux failed: codec not found".into(),
+                ),
+            ),
         ];
-        for err in cases {
-            let event = terminal_event(id, &err);
+        for err in &cases {
+            let event = terminal_event(id, err);
             assert!(
                 matches!(event, Event::Failed { .. }),
                 "non-cancel error {err:?} must map to Event::Failed, got {event:?}",
             );
         }
+    }
+
+    /// [`OrchestratorError::PostProcessingFailed`] must convert to
+    /// [`RdlpApiError::FfmpegError`], NOT to [`RdlpApiError::UserCancelled`].
+    ///
+    /// If it accidentally mapped to `UserCancelled` the UI would bucket a
+    /// failed remux as a deliberate user cancel — the same wrong behavior as
+    /// the recode-cancel → "Failed" bug, but in the opposite direction.
+    #[test]
+    fn postprocessing_failed_maps_to_ffmpeg_error_not_cancelled() {
+        use crate::orchestrator::OrchestratorError;
+
+        let orch_err = OrchestratorError::PostProcessingFailed("stage error: no codec".into());
+        let api_err = RdlpApiError::from(orch_err);
+
+        assert!(
+            matches!(api_err, RdlpApiError::FfmpegError { .. }),
+            "PostProcessingFailed must map to RdlpApiError::FfmpegError, got {api_err:?}",
+        );
+        assert!(
+            !matches!(api_err, RdlpApiError::UserCancelled),
+            "PostProcessingFailed must NOT map to UserCancelled",
+        );
+
+        let id = DownloadId::next();
+        let event = terminal_event(id, &api_err);
+        assert!(
+            matches!(event, Event::Failed { .. }),
+            "PostProcessingFailed must produce Event::Failed, got {event:?}",
+        );
     }
 
     /// The Failed event preserves the originating error verbatim (the patch must
