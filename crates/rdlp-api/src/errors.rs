@@ -242,6 +242,7 @@ impl From<OrchestratorError> for RdlpApiError {
             OrchestratorError::Io(io_err) => Self::IoError {
                 message: io_err.to_string(),
             },
+            OrchestratorError::PostProcessingFailed(msg) => Self::FfmpegError { message: msg },
             OrchestratorError::InteractiveNotConfigured => Self::InvalidInput {
                 message: "Interactive selection not configured".into(),
             },

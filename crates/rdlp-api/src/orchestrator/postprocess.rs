@@ -7,7 +7,7 @@ use crate::events::Event;
 use crate::handle::DownloadId;
 use crate::orchestrator::errors::OrchestratorError;
 use crate::orchestrator::eta::EtaEstimator;
-use log::{debug, warn};
+use log::{debug, error, warn};
 use rdlp_core::{PostProcessCallback, PostProcessCallbackFactory};
 use rdlp_postprocess::PipelineRunOptions;
 use rdlp_postprocess::pipeline::PipelineError;
@@ -95,6 +95,26 @@ fn original_stem_for(files: &[PathBuf]) -> String {
                 )
             },
         )
+}
+
+/// Classify a pipeline error as either a user-cancel or a fatal failure.
+///
+/// This is a pure function extracted for testability. The cancel vs.
+/// non-cancel distinction is the only branching: a [`PipelineError::Cancelled`]
+/// becomes [`OrchestratorError::UserCancelled`] so the UI surfaces a deliberate
+/// cancel correctly; every other error becomes
+/// [`OrchestratorError::PostProcessingFailed`] so it propagates as
+/// [`Event::Failed`] rather than being silently swallowed.
+pub fn classify_pipeline_err(e: &anyhow::Error) -> OrchestratorError {
+    if matches!(
+        e.downcast_ref::<PipelineError>(),
+        Some(PipelineError::Cancelled)
+    ) {
+        OrchestratorError::UserCancelled
+    } else {
+        error!("Post-processing pipeline failed: {e:#}");
+        OrchestratorError::PostProcessingFailed(format!("{e:#}"))
+    }
 }
 
 impl Orchestrator {
@@ -199,20 +219,7 @@ impl Orchestrator {
                 }
                 Ok(output_files)
             }
-            Err(e) => {
-                // Cancellation MUST propagate as OrchestratorError::UserCancelled.
-                // Any non-cancel pipeline error keeps today's silent warn-and-fallback
-                // behaviour (returns the original input files; logs a warning).
-                if matches!(
-                    e.downcast_ref::<PipelineError>(),
-                    Some(PipelineError::Cancelled)
-                ) {
-                    return Err(OrchestratorError::UserCancelled);
-                }
-                warn!("Post-processing pipeline failed: {e}");
-                // Return original files on failure.
-                Ok(files)
-            }
+            Err(e) => Err(classify_pipeline_err(&e)),
         }
     }
 
@@ -264,6 +271,56 @@ impl Orchestrator {
 
         if deleted > 0 {
             debug!(deleted; "Cleaned up leftover segment files");
+        }
+    }
+}
+
+#[cfg(test)]
+mod classify_tests {
+    use super::*;
+    use rdlp_postprocess::pipeline::PipelineError;
+
+    /// A [`PipelineError::Cancelled`] MUST classify as `UserCancelled`, not
+    /// `PostProcessingFailed`. Regression guard: the cancel→Failed bug.
+    #[test]
+    fn cancelled_pipeline_error_maps_to_user_cancelled() {
+        let err = anyhow::Error::new(PipelineError::Cancelled);
+        let result = classify_pipeline_err(&err);
+        assert!(
+            matches!(result, OrchestratorError::UserCancelled),
+            "PipelineError::Cancelled must map to UserCancelled, got {result:?}",
+        );
+    }
+
+    /// Any non-cancel pipeline error MUST classify as `PostProcessingFailed`,
+    /// NOT as `Ok(files)`. This pins the fix: before the change the non-cancel
+    /// arm silently returned `Ok(files)` — the error was swallowed entirely so
+    /// this test didn't exist (no classifier fn existed). A `StageFailure` error
+    /// classified here would previously have been silently swallowed.
+    #[test]
+    fn non_cancel_pipeline_error_maps_to_postprocessing_failed() {
+        let err = anyhow::anyhow!("stage failed: remux codec error");
+        let result = classify_pipeline_err(&err);
+        assert!(
+            matches!(result, OrchestratorError::PostProcessingFailed(_)),
+            "non-cancel error must map to PostProcessingFailed, got {result:?}",
+        );
+    }
+
+    /// The error message is preserved in `PostProcessingFailed` so operators
+    /// can read the root cause from `Event::Failed.error.user_message()`.
+    #[test]
+    fn postprocessing_failed_preserves_message() {
+        let err = anyhow::anyhow!("codec unavailable");
+        let result = classify_pipeline_err(&err);
+        match result {
+            OrchestratorError::PostProcessingFailed(msg) => {
+                assert!(
+                    msg.contains("codec unavailable"),
+                    "message not preserved: {msg}",
+                );
+            }
+            other => panic!("expected PostProcessingFailed, got {other:?}"),
         }
     }
 }

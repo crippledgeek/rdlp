@@ -267,8 +267,17 @@ impl Orchestrator {
                     // Parallel download of video + audio
                     match self.download_merge_pair(&video, &audio, path).await {
                         Ok(Some(merge_outcome)) => {
+                            // Seam both streams into the pipeline's .rdlp-tmp-{uuid}
+                            // namespace (mirrors the Single-path seam and state/mod.rs
+                            // Merge branch — strips the .{label}.{format_id} infix).
+                            let video_seam =
+                                super::super::naming::seam_stream(path, &merge_outcome.video_path)
+                                    .await?;
+                            let audio_seam =
+                                super::super::naming::seam_stream(path, &merge_outcome.audio_path)
+                                    .await?;
                             download_result = Some((
-                                vec![merge_outcome.video_path, merge_outcome.audio_path],
+                                vec![video_seam, audio_seam],
                                 merge_outcome.is_hls,
                                 Some(vec![video, audio]),
                             ));
@@ -304,10 +313,14 @@ impl Orchestrator {
         }
         let final_info = &final_info_owned;
 
-        // Download thumbnail if needed (before post-processing so embed can find it)
-        if self.config.postprocess.embed_thumbnail || self.config.postprocess.write_thumbnail {
-            self.download_thumbnail(final_info, &output_path).await;
-        }
+        // Download thumbnail for embedding or standalone use. Capture the
+        // written path so a PP-cancel can delete it (#404 / #411).
+        let thumbnail_path =
+            if self.config.postprocess.embed_thumbnail || self.config.postprocess.write_thumbnail {
+                self.download_thumbnail(final_info, &output_path).await
+            } else {
+                None
+            };
 
         // Download subtitles: resolve per-episode URLs from language names.
         let episode_subs = if subtitle_langs.is_empty() {
@@ -340,22 +353,34 @@ impl Orchestrator {
             );
         }
 
-        // Run post-processing if configured (or automatic for HLS).
-        let final_files = self
-            .run_postprocessing(final_info, download_files, is_hls, false)
-            .await?;
+        // Run post-processing if configured (or automatic for HLS). On a user
+        // cancel, delete the orchestrator-owned sidecars (thumbnail + session
+        // state; the source is reclaimed by FileTracker::Drop) before returning
+        // UserCancelled so the caller surfaces Event::Cancelled (#404 / #411).
+        let final_files = match self
+            .run_postprocessing(final_info, download_files.clone(), is_hls, false)
+            .await
+        {
+            Ok(files) => files,
+            Err(e @ OrchestratorError::UserCancelled) => {
+                super::super::cleanup::cleanup_cancelled_artifacts(
+                    output_dir,
+                    self.config.output_to_stdout,
+                    &final_info.title,
+                    &download_files,
+                    thumbnail_path.as_deref(),
+                )
+                .await;
+                return Err(e);
+            }
+            Err(e) => return Err(e),
+        };
         let survivor = final_files
             .into_iter()
             .next()
             .unwrap_or_else(|| output_path.clone());
-        // Coordinator finalize (Option X): mint the clean name once, post-PP.
-        let final_path = match crate::orchestrator::naming::finalize_to_clean(&survivor) {
-            Some(clean) => {
-                crate::orchestrator::naming::finalize_part(&survivor, &clean).await?;
-                clean
-            }
-            None => survivor,
-        };
+        // Coordinator finalize (Option X / #412): single helper covers all paths.
+        let final_path = crate::orchestrator::naming::finalize_survivor(survivor).await?;
 
         // HLS downloads produce .ts files that should be remuxed.
         if is_hls {

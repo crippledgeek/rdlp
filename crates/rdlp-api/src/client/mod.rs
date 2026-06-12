@@ -676,21 +676,16 @@ impl RdlpClient {
                 .await
             {
                 Ok(output_files) => {
-                    // Pipeline returns temp-named survivors (#406 Option X);
+                    // Pipeline returns temp-named survivors (#406 Option X / #412);
                     // finalize each to its clean name before reporting.
                     let mut finalized = Vec::with_capacity(output_files.len());
                     for f in output_files {
-                        match crate::orchestrator::naming::finalize_to_clean(&f) {
-                            Some(clean) => {
-                                crate::orchestrator::naming::finalize_part(&f, &clean)
-                                    .await
-                                    .map_err(|e| RdlpApiError::IoError {
-                                        message: format!("{e:#}"),
-                                    })?;
-                                finalized.push(clean);
-                            }
-                            None => finalized.push(f),
-                        }
+                        let clean = crate::orchestrator::naming::finalize_survivor(f)
+                            .await
+                            .map_err(|e| RdlpApiError::IoError {
+                                message: format!("{e:#}"),
+                            })?;
+                        finalized.push(clean);
                     }
                     let result = crate::DownloadResult {
                         id,
@@ -709,6 +704,13 @@ impl RdlpClient {
                 }
                 Err(e) => {
                     let err = RdlpApiError::from(e);
+                    // No orchestrator-owned sidecars to clean up here: the local-
+                    // file path never downloads a thumbnail and never writes session
+                    // state. The user's source file is borrowed (keep_inputs=true),
+                    // so FileTracker::Drop preserves it. The only temp artifacts are
+                    // the pipeline's own .rdlp-tmp-{uuid} files, which FileTracker::Drop
+                    // already removes on cancel/error (#414 / #404).
+                    //
                     // intentional: receiver may have disconnected
                     // (cancellation surfaces as Event::Cancelled, not Failed).
                     let _ = tx.send(terminal_event(id, &err)).await;
@@ -986,6 +988,13 @@ mod terminal_event_tests {
     }
 
     /// Every non-cancel terminal error stays a genuine [`Event::Failed`].
+    ///
+    /// This loop includes [`RdlpApiError::FfmpegError`] — which is the variant
+    /// that [`OrchestratorError::PostProcessingFailed`] maps to via
+    /// `From<OrchestratorError>`. Regression guard: before the fix,
+    /// `PostProcessingFailed` did not exist and the non-cancel arm silently
+    /// returned `Ok(files)` instead of propagating an error at all, so this
+    /// case could never reach `terminal_event`.
     #[test]
     fn non_cancel_errors_map_to_failed_event() {
         let id = DownloadId::next();
@@ -1000,14 +1009,50 @@ mod terminal_event_tests {
             RdlpApiError::FfmpegError {
                 message: "encoder error".into(),
             },
+            // PostProcessingFailed → FfmpegError → Event::Failed (the swallow fix).
+            RdlpApiError::from(
+                crate::orchestrator::OrchestratorError::PostProcessingFailed(
+                    "remux failed: codec not found".into(),
+                ),
+            ),
         ];
-        for err in cases {
-            let event = terminal_event(id, &err);
+        for err in &cases {
+            let event = terminal_event(id, err);
             assert!(
                 matches!(event, Event::Failed { .. }),
                 "non-cancel error {err:?} must map to Event::Failed, got {event:?}",
             );
         }
+    }
+
+    /// [`OrchestratorError::PostProcessingFailed`] must convert to
+    /// [`RdlpApiError::FfmpegError`], NOT to [`RdlpApiError::UserCancelled`].
+    ///
+    /// If it accidentally mapped to `UserCancelled` the UI would bucket a
+    /// failed remux as a deliberate user cancel — the same wrong behavior as
+    /// the recode-cancel → "Failed" bug, but in the opposite direction.
+    #[test]
+    fn postprocessing_failed_maps_to_ffmpeg_error_not_cancelled() {
+        use crate::orchestrator::OrchestratorError;
+
+        let orch_err = OrchestratorError::PostProcessingFailed("stage error: no codec".into());
+        let api_err = RdlpApiError::from(orch_err);
+
+        assert!(
+            matches!(api_err, RdlpApiError::FfmpegError { .. }),
+            "PostProcessingFailed must map to RdlpApiError::FfmpegError, got {api_err:?}",
+        );
+        assert!(
+            !matches!(api_err, RdlpApiError::UserCancelled),
+            "PostProcessingFailed must NOT map to UserCancelled",
+        );
+
+        let id = DownloadId::next();
+        let event = terminal_event(id, &api_err);
+        assert!(
+            matches!(event, Event::Failed { .. }),
+            "PostProcessingFailed must produce Event::Failed, got {event:?}",
+        );
     }
 
     /// The Failed event preserves the originating error verbatim (the patch must

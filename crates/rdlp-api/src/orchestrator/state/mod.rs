@@ -465,7 +465,15 @@ impl DownloadPhase {
                         // returns true
                         info.requested_formats = Some(vec![video.clone(), audio.clone()]);
 
-                        (vec![outcome.video_path, outcome.audio_path], outcome.is_hls)
+                        // Seam both streams into the pipeline's .rdlp-tmp-{uuid}
+                        // namespace so FileTracker and original_stem_for see only
+                        // the clean stem (never the .{label}.{format_id} infix from
+                        // merge_stream_path — mirrors the Single-path seam above).
+                        let video_seam =
+                            super::naming::seam_stream(&output_path, &outcome.video_path).await?;
+                        let audio_seam =
+                            super::naming::seam_stream(&output_path, &outcome.audio_path).await?;
+                        (vec![video_seam, audio_seam], outcome.is_hls)
                     }
                 };
 
@@ -511,17 +519,9 @@ impl DownloadPhase {
                     .into_iter()
                     .next()
                     .unwrap_or_else(|| output_path.clone());
-                // Coordinator finalize (Option X): the ONE place the clean name
-                // is created — covers PP-ran, PP-skipped, and FFmpeg-missing. The
-                // pipeline (and the no-PP bypass) returns a temp-named survivor.
-                let final_path = match super::naming::finalize_to_clean(&survivor) {
-                    Some(clean) => {
-                        super::naming::finalize_part(&survivor, &clean).await?;
-                        clean
-                    }
-                    // No marker → already a clean name; use as-is.
-                    None => survivor,
-                };
+                // Coordinator finalize (Option X / #412): single helper covers
+                // PP-ran, PP-skipped, and FFmpeg-missing paths.
+                let final_path = super::naming::finalize_survivor(survivor).await?;
 
                 // Verify the output file actually exists
                 if !final_path.exists() {
