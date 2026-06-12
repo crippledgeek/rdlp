@@ -36,7 +36,7 @@ jobs:
         # log fields (the .expose()-then-log surface — #427). NOTE: rdlp-api error
         # `#[error]`/`format!` `{url}` sites are guarded by the RedactedUrlBuf TYPE
         # + unit tests, NOT by grep (a grep can't tell redacted {url} from raw) —
-        # see CODING_RULES.md "URL Redaction — Two Controls".
+        # see CODING_RULES.md "URL Redaction — Controls (tiered)".
         # Multiline-aware; credential URLs must be wrapped in
         # rdlp_redact::RedactedUrl / rdlp_security::sanitize_for_logging (#328/#392/#422/#427).
         run: bash scripts/check-url-redaction.sh
@@ -49,6 +49,18 @@ jobs:
         # copy ships an MVP plugin compiled against an older contract.
         # Diff guard: if the host WIT and vendored copy diverge, fail loud.
         run: bash scripts/check-wit-drift.sh
+
+      - name: Install semgrep
+        run: pipx install semgrep || pip install semgrep
+
+      - name: Check log-field URL redaction (Semgrep gate)
+        # Tier-2 backstop (#428): flags any raw `url = <x>` in a `log` macro that
+        # the type-level RedactedUrl guard didn't force. Sanitizer-aware (Semgrep
+        # generic mode) — treats RedactedUrl::new()/RedactedUrlBuf/sanitize_for_logging
+        # (incl. qualified rdlp_redact::* / rdlp_security::* forms) as sanitizers.
+        env:
+          RDLP_REQUIRE_SEMGREP: "1"
+        run: bash scripts/check-log-redaction.sh
 
   build-and-test:
     name: Build & Test (${{ matrix.platform }})
