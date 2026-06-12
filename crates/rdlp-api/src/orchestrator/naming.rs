@@ -216,36 +216,22 @@ async fn finalize_part_replace_windows(part: &Path, clean: &Path) -> anyhow::Res
         clean.with_file_name(name)
     };
     // NOTE (#416-M1): a second Ctrl+C force-exit (process::exit) in the micro-window
-    // between this backup rename and the rename below would orphan the
+    // between the two renames inside `replace_with_backup` would orphan the
     // `.rdlp-bak-{uuid}` file (it holds the user's data — no loss, just a leftover).
     // This orphan window is Windows-only; Unix takes the atomic direct-rename path
     // in finalize_part and never reaches this helper.
-    tokio::fs::rename(clean, &backup).await.with_context(|| {
-        format!(
-            "failed to back up existing {} while finalizing {} -> {}",
-            clean.display(),
-            part.display(),
-            clean.display()
-        )
-    })?;
-    match tokio::fs::rename(part, clean).await {
-        Ok(()) => {
-            // Success: drop the backup (best-effort; ignore errors).
-            let _ = tokio::fs::remove_file(&backup).await;
-            Ok(())
-        }
-        Err(e) => {
-            // Restore the original so `clean` is never lost.
-            let _ = tokio::fs::rename(&backup, clean).await;
-            Err(e).with_context(|| {
-                format!(
-                    "failed to finalize {} -> {} (original restored)",
-                    part.display(),
-                    clean.display()
-                )
-            })
-        }
-    }
+
+    // Delegate the staged rename + rollback to the testable seam (#421); `RealFs`
+    // renames via `tokio::fs::rename`.
+    replace::replace_with_backup(&replace::RealFs, part, clean, &backup)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to finalize {} -> {} (Windows backup-replace; original restored on failure)",
+                part.display(),
+                clean.display()
+            )
+        })
 }
 
 /// Finalize a (possibly temp-named) pipeline survivor to its clean output name.
