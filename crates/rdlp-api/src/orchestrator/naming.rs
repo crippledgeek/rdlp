@@ -83,6 +83,64 @@ pub fn finalize_to_clean(survivor: &Path) -> Option<PathBuf> {
     Some(survivor.with_file_name(clean))
 }
 
+/// Injectable single-rename seam so the Windows backup-restore rollback arm is
+/// testable on every platform (#421). Gated `cfg(any(windows, test))`: the
+/// backup-restore is only *called* from `#[cfg(windows)]` production code, so an
+/// unconditional module would dead-code-warn on a Linux release build; the
+/// cross-platform tests still need it compiled under `cfg(test)`.
+#[cfg(any(windows, test))]
+mod replace {
+    use std::io;
+    use std::path::Path;
+
+    /// Abstracts one `rename` so tests can inject a failure. Generic dispatch
+    /// (`<R: Renamer>`), so native async-fn-in-trait needs no `#[async_trait]`
+    /// and no boxing; never used as `dyn`.
+    ///
+    /// `Sync` is required because `replace_with_backup` holds `&R` across an
+    /// `.await` point; `Send` is not (the future is always awaited on the same
+    /// task).
+    pub trait Renamer: Sync {
+        async fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
+    }
+
+    /// Production implementation — the real filesystem.
+    pub struct RealFs;
+
+    impl Renamer for RealFs {
+        async fn rename(&self, from: &Path, to: &Path) -> io::Result<()> {
+            tokio::fs::rename(from, to).await
+        }
+    }
+
+    /// Backup-restore commit of `part` over an existing `clean`: stage `clean`
+    /// aside to `backup`, move `part` into place, and on failure restore the
+    /// backup (best-effort) so `clean` is never lost. Returns the original
+    /// error on failure. The caller-supplied `backup` MUST use the `.rdlp-bak-`
+    /// prefix (NOT `.rdlp-tmp-`): it must stay invisible to
+    /// `TempRegistry::cleanup_stale`, which marker-scans `.rdlp-tmp-` and would
+    /// otherwise delete the user's sole in-window copy (the #416-M1 data-loss
+    /// trap).
+    pub async fn replace_with_backup<R: Renamer>(
+        fs: &R,
+        part: &Path,
+        clean: &Path,
+        backup: &Path,
+    ) -> io::Result<()> {
+        fs.rename(clean, backup).await?;
+        match fs.rename(part, clean).await {
+            Ok(()) => {
+                let _ = tokio::fs::remove_file(backup).await;
+                Ok(())
+            }
+            Err(e) => {
+                let _ = fs.rename(backup, clean).await; // rollback (best-effort)
+                Err(e)
+            }
+        }
+    }
+}
+
 /// Atomically commit a finished temp-named file to its clean output name.
 ///
 /// Same-directory rename (no `EXDEV`). On POSIX `rename(2)` atomically replaces an
@@ -158,36 +216,22 @@ async fn finalize_part_replace_windows(part: &Path, clean: &Path) -> anyhow::Res
         clean.with_file_name(name)
     };
     // NOTE (#416-M1): a second Ctrl+C force-exit (process::exit) in the micro-window
-    // between this backup rename and the rename below would orphan the
+    // between the two renames inside `replace_with_backup` would orphan the
     // `.rdlp-bak-{uuid}` file (it holds the user's data — no loss, just a leftover).
     // This orphan window is Windows-only; Unix takes the atomic direct-rename path
     // in finalize_part and never reaches this helper.
-    tokio::fs::rename(clean, &backup).await.with_context(|| {
-        format!(
-            "failed to back up existing {} while finalizing {} -> {}",
-            clean.display(),
-            part.display(),
-            clean.display()
-        )
-    })?;
-    match tokio::fs::rename(part, clean).await {
-        Ok(()) => {
-            // Success: drop the backup (best-effort; ignore errors).
-            let _ = tokio::fs::remove_file(&backup).await;
-            Ok(())
-        }
-        Err(e) => {
-            // Restore the original so `clean` is never lost.
-            let _ = tokio::fs::rename(&backup, clean).await;
-            Err(e).with_context(|| {
-                format!(
-                    "failed to finalize {} -> {} (original restored)",
-                    part.display(),
-                    clean.display()
-                )
-            })
-        }
-    }
+
+    // Delegate the staged rename + rollback to the testable seam (#421); `RealFs`
+    // renames via `tokio::fs::rename`.
+    replace::replace_with_backup(&replace::RealFs, part, clean, &backup)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to finalize {} -> {} (Windows backup-replace; original restored on failure)",
+                part.display(),
+                clean.display()
+            )
+        })
 }
 
 /// Finalize a (possibly temp-named) pipeline survivor to its clean output name.
@@ -666,5 +710,205 @@ mod tests {
             Some(expected_clean),
             "finalize_to_clean on the seam must yield the clean path (stream ext preserved)"
         );
+    }
+
+    // ---- #421: Renamer-seam tests for the backup-restore rollback arm ----
+
+    /// Test-only `Renamer` that fails `rename` when `from` is in `fail_from`,
+    /// and performs a real rename otherwise. Path-predicate (not fail-on-Nth)
+    /// so it is order-independent: the rollback rename also targets `clean`,
+    /// so a "fail-when-to==clean" predicate would wrongly fail the rollback;
+    /// "fail-when-from-matches" is unambiguous.
+    struct FaultyRenamer {
+        fail_from: Vec<PathBuf>,
+    }
+
+    impl super::replace::Renamer for FaultyRenamer {
+        async fn rename(
+            &self,
+            from: &std::path::Path,
+            to: &std::path::Path,
+        ) -> std::io::Result<()> {
+            if self.fail_from.iter().any(|p| p.as_path() == from) {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "injected rename failure",
+                ));
+            }
+            tokio::fs::rename(from, to).await
+        }
+    }
+
+    /// N1 — replace step fails, rollback restores the original. The core
+    /// guarantee: on a failed `part -> clean`, `clean` is rolled back from the
+    /// backup, the backup is consumed, `part` is untouched, and the INJECTED
+    /// error is returned.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // std::fs in test fixtures — clippy.toml policy
+    async fn replace_with_backup_rolls_back_when_replace_fails() {
+        use std::io::Write as _;
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let clean = dir.path().join("out.mp4");
+        let part = dir.path().join("out.rdlp-tmp-abc.mp4");
+        let backup = dir.path().join("out.mp4.rdlp-bak-test");
+        std::fs::File::create(&clean)
+            .unwrap()
+            .write_all(b"original")
+            .unwrap();
+        std::fs::File::create(&part)
+            .unwrap()
+            .write_all(b"new")
+            .unwrap();
+
+        let fs = FaultyRenamer {
+            fail_from: vec![part.clone()],
+        };
+        let result = super::replace::replace_with_backup(&fs, &part, &clean, &backup).await;
+
+        assert!(
+            result.is_err(),
+            "must return Err when the replace rename fails"
+        );
+        assert_eq!(
+            result.unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied,
+            "must propagate the INJECTED error, not a rollback/generic error"
+        );
+        assert_eq!(
+            std::fs::read(&clean).unwrap(),
+            b"original",
+            "clean must be rolled back"
+        );
+        assert!(
+            !backup.exists(),
+            "backup must be consumed by the rollback rename"
+        );
+        assert_eq!(
+            std::fs::read(&part).unwrap(),
+            b"new",
+            "part must be untouched"
+        );
+    }
+
+    /// N2 — backup step fails: nothing is touched. If the first
+    /// `clean -> backup` rename fails, the `?` returns before `part`/`clean`
+    /// are disturbed.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn replace_with_backup_leaves_files_intact_when_backup_step_fails() {
+        use std::io::Write as _;
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let clean = dir.path().join("out.mp4");
+        let part = dir.path().join("out.rdlp-tmp-abc.mp4");
+        let backup = dir.path().join("out.mp4.rdlp-bak-test");
+        std::fs::File::create(&clean)
+            .unwrap()
+            .write_all(b"original")
+            .unwrap();
+        std::fs::File::create(&part)
+            .unwrap()
+            .write_all(b"new")
+            .unwrap();
+
+        let fs = FaultyRenamer {
+            fail_from: vec![clean.clone()],
+        };
+        let result = super::replace::replace_with_backup(&fs, &part, &clean, &backup).await;
+
+        assert!(
+            result.is_err(),
+            "must return Err when the backup rename fails"
+        );
+        assert_eq!(
+            std::fs::read(&clean).unwrap(),
+            b"original",
+            "clean untouched"
+        );
+        assert_eq!(std::fs::read(&part).unwrap(), b"new", "part untouched");
+        assert!(
+            !backup.exists(),
+            "no backup should exist when staging failed"
+        );
+    }
+
+    /// N3 — worst case: replace fails AND rollback fails. The rollback is
+    /// best-effort, so the original replace error is returned. The data-safety
+    /// contract: NOTHING is deleted — both backup (original) and part (new)
+    /// survive and are recoverable.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn replace_with_backup_never_destroys_data_on_double_failure() {
+        use std::io::Write as _;
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let clean = dir.path().join("out.mp4");
+        let part = dir.path().join("out.rdlp-tmp-abc.mp4");
+        let backup = dir.path().join("out.mp4.rdlp-bak-test");
+        std::fs::File::create(&clean)
+            .unwrap()
+            .write_all(b"original")
+            .unwrap();
+        std::fs::File::create(&part)
+            .unwrap()
+            .write_all(b"new")
+            .unwrap();
+
+        // Fail BOTH the replace (from==part) and the rollback (from==backup).
+        let fs = FaultyRenamer {
+            fail_from: vec![part.clone(), backup.clone()],
+        };
+        let result = super::replace::replace_with_backup(&fs, &part, &clean, &backup).await;
+
+        assert!(result.is_err(), "must return Err");
+        assert_eq!(
+            result.unwrap_err().kind(),
+            std::io::ErrorKind::PermissionDenied,
+            "must return the original replace error"
+        );
+        // No data destroyed: backup holds the original, part holds the new.
+        assert_eq!(
+            std::fs::read(&backup).unwrap(),
+            b"original",
+            "backup (original) must survive"
+        );
+        assert_eq!(
+            std::fs::read(&part).unwrap(),
+            b"new",
+            "part (new) must survive"
+        );
+        assert!(
+            !clean.exists(),
+            "clean must not exist at its original path when rollback failed (it lives in backup)"
+        );
+    }
+
+    /// P1 — success path through the seam with the real filesystem.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)]
+    async fn replace_with_backup_succeeds_with_real_fs() {
+        use std::io::Write as _;
+        let dir = tempfile::TempDir::new().expect("tempdir");
+        let clean = dir.path().join("out.mp4");
+        let part = dir.path().join("out.rdlp-tmp-abc.mp4");
+        let backup = dir.path().join("out.mp4.rdlp-bak-test");
+        std::fs::File::create(&clean)
+            .unwrap()
+            .write_all(b"original")
+            .unwrap();
+        std::fs::File::create(&part)
+            .unwrap()
+            .write_all(b"new")
+            .unwrap();
+
+        super::replace::replace_with_backup(&super::replace::RealFs, &part, &clean, &backup)
+            .await
+            .expect("success path must Ok");
+
+        assert_eq!(
+            std::fs::read(&clean).unwrap(),
+            b"new",
+            "clean must hold the new content"
+        );
+        assert!(!backup.exists(), "backup must be removed on success");
+        assert!(!part.exists(), "part must be consumed on success");
     }
 }
