@@ -222,9 +222,10 @@ mod tests {
 
     #[test]
     fn test_from_extract_error() {
+        use rdlp_redact::RedactedUrlBuf;
         let api_err = RdlpApiError::ExtractError {
             message: "page not found".into(),
-            source_url: "https://example.com".into(),
+            source_url: RedactedUrlBuf::from("https://example.com"),
         };
         let app_err = AppError::from(api_err);
         match app_err {

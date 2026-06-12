@@ -6105,6 +6105,7 @@ dependencies = [
  "rdlp-ffmpeg",
  "rdlp-http",
  "rdlp-postprocess",
+ "rdlp-redact",
  "rdlp-security",
  "rdlp-types",
  "serde",
