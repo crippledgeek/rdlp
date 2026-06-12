@@ -109,8 +109,8 @@ check "pp:structured-kv:url_field" \
 # ---------------------------------------------------------------------------
 # API layer (rdlp-api) — #427 defense-in-depth (DELIBERATELY NARROW).
 #
-# Two controls protect rdlp-api's URL surface; each catches what the other
-# cannot (see CODING_RULES.md "URL redaction — two controls"):
+# Tiered controls protect rdlp-api's URL surface; each catches what the others
+# cannot (see CODING_RULES.md "URL Redaction — Controls (tiered)"):
 #
 #   1. THE TYPE SYSTEM is the PRIMARY guard for error-enum URL fields. The
 #      `url` field of `RdlpApiError::UnsupportedUrl` / `OrchestratorError::

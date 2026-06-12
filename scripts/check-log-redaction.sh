@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# check-log-redaction.sh — Semgrep AST gate (#428): no raw URL in a `log` kv field.
+# check-log-redaction.sh — Semgrep gate (#428): no raw URL in a `log` kv field.
 #
-# Tier-2 backstop to the type-level RedactedUrl guard. AST/flow-aware, so it
-# distinguishes `url = raw` from `url = RedactedUrl::new(raw)` — which the regex
-# gate (check-url-redaction.sh) fundamentally cannot. See CODING_RULES.md.
+# Tier-2 backstop to the type-level RedactedUrl guard. Sanitizer-aware (Semgrep
+# `generic` mode), so it distinguishes `url = raw` from `url = RedactedUrl::new(raw)`
+# — which the regex gate (check-url-redaction.sh) fundamentally cannot. See
+# CODING_RULES.md "URL Redaction — Controls (tiered)".
 #
 # Runner resolution: prefer an installed `semgrep`; else `uvx semgrep` (ephemeral).
 # If neither is available: warn + skip locally (exit 0); CI installs semgrep so it

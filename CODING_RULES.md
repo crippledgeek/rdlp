@@ -305,13 +305,15 @@ messages (CWE-532 / OWASP "redact at source"). **Each catches what the others ca
    `String` URL in an error field that a Display/format interpolates, and never
    store a "pre-redacted `String`" (the type must carry the guarantee).
 
-2. **Semgrep AST gate is the SECONDARY backstop** (`scripts/check-log-redaction.sh`,
-   rule `scripts/semgrep/log-url-redaction.yml`). It flags any raw value passed to a
-   `*url*` key in a `log` macro (`debug!/info!/warn!/error!/trace!`) — including the
-   no-sigil `url = x` and two-kv forms the regex cannot reach — and is flow-aware:
-   `RedactedUrl::new(...)`, `RedactedUrlBuf`, and `sanitize_for_logging(...)` are
-   recognized sanitizers, so wrapped sites pass. This is the CWE-532-recommended
-   control class (AST static analysis) for the residual log-field surface a redacting
+2. **Semgrep gate is the SECONDARY backstop** (`scripts/check-log-redaction.sh`,
+   rule `scripts/semgrep/log-url-redaction.yml`; Semgrep `generic` mode — Rust mode
+   cannot cross the `log` macro `;` kv/message separator). It flags any raw value
+   passed to a `*url*` key in a `log` macro (`debug!/info!/warn!/error!/trace!`) —
+   including the no-sigil `url = x` and two-kv forms the regex cannot reach — and is
+   sanitizer-aware: `RedactedUrl::new(...)`, `RedactedUrlBuf`, `sanitize_for_logging(...)`,
+   and their qualified `rdlp_redact::*` / `rdlp_security::*` forms are recognized
+   sanitizers, so wrapped sites pass. This is the CWE-532-recommended control class
+   (automated static analysis) for the residual log-field surface a redacting
    type cannot force (a value that must stay raw for I/O in the same function, e.g.
    a thumbnail URL used for the GET — #428).
 
