@@ -218,7 +218,12 @@ impl From<RdlpError> for RdlpApiError {
 impl From<OrchestratorError> for RdlpApiError {
     fn from(err: OrchestratorError) -> Self {
         match err {
-            OrchestratorError::NoExtractor { url } => Self::UnsupportedUrl { url },
+            // Phase 1 bridge: `url` is now `RedactedUrlBuf`; `UnsupportedUrl.url` is still
+            // `String` (changed to `RedactedUrlBuf` in Phase 2). Use `.expose()` to produce
+            // the raw string temporarily — Phase 2 removes this conversion entirely.
+            OrchestratorError::NoExtractor { url } => Self::UnsupportedUrl {
+                url: url.expose().to_owned(),
+            },
             OrchestratorError::ExtractionFailed(rdlp_err)
             | OrchestratorError::DownloadFailed(rdlp_err) => Self::from(rdlp_err),
             OrchestratorError::UserCancelled => Self::UserCancelled,

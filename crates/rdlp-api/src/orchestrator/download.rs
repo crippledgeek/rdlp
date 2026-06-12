@@ -157,7 +157,7 @@ impl Orchestrator {
             .downloader_registry
             .find_downloader_with_headers(&format.url, format.http_headers.as_ref())
             .ok_or_else(|| OrchestratorError::NoDownloader {
-                url: format.url.clone(),
+                url: RedactedUrlBuf::from(format.url.clone()),
             })?;
 
         // Validate CDN token expiry
@@ -371,7 +371,7 @@ impl Orchestrator {
             .downloader_registry
             .find_downloader_with_headers(&format.url, format.http_headers.as_ref())
             .ok_or_else(|| OrchestratorError::NoDownloader {
-                url: format.url.clone(),
+                url: RedactedUrlBuf::from(format.url.clone()),
             })?;
 
         Self::check_cdn_token_expiry(&format.url)?;
