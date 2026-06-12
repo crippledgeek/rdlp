@@ -287,11 +287,11 @@ let data = fetch_url(&url)
     .context("Failed to fetch playlist")?;
 ```
 
-### URL Redaction — Two Controls
+### URL Redaction — Controls (tiered)
 
 URLs may carry credentials (signed CDN tokens, OAuth, AWS SigV4) in userinfo/query.
-Two complementary controls keep them out of logs and error messages
-(CWE-532 / OWASP "redact at source"). **Each catches what the other cannot.**
+Three complementary controls, in priority tiers, keep them out of logs and error
+messages (CWE-532 / OWASP "redact at source"). **Each catches what the others cannot.**
 
 1. **The type system is the PRIMARY guard.** A URL that can reach operator-visible
    output (an error `Display`, `user_message()`, a `format!`, a log field) must be
@@ -305,7 +305,17 @@ Two complementary controls keep them out of logs and error messages
    `String` URL in an error field that a Display/format interpolates, and never
    store a "pre-redacted `String`" (the type must carry the guarantee).
 
-2. **`scripts/check-url-redaction.sh` is the SECONDARY guard (defense-in-depth).**
+2. **Semgrep AST gate is the SECONDARY backstop** (`scripts/check-log-redaction.sh`,
+   rule `scripts/semgrep/log-url-redaction.yml`). It flags any raw value passed to a
+   `*url*` key in a `log` macro (`debug!/info!/warn!/error!/trace!`) — including the
+   no-sigil `url = x` and two-kv forms the regex cannot reach — and is flow-aware:
+   `RedactedUrl::new(...)`, `RedactedUrlBuf`, and `sanitize_for_logging(...)` are
+   recognized sanitizers, so wrapped sites pass. This is the CWE-532-recommended
+   control class (AST static analysis) for the residual log-field surface a redacting
+   type cannot force (a value that must stay raw for I/O in the same function, e.g.
+   a thumbnail URL used for the GET — #428).
+
+3. **`scripts/check-url-redaction.sh` is the TERTIARY canary (defense-in-depth).**
    It greps for raw URL interpolation idioms in `rdlp-extractor`, `rdlp-postprocess`,
    and `rdlp-api`. **It deliberately does NOT gate error-`Display`/`format!` `{url}`
    sites in `rdlp-api`** — a grep cannot distinguish a redacted `{url}`
