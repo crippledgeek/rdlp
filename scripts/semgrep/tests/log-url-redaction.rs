@@ -8,6 +8,12 @@ fn f(thumbnail_url: &str, e: u8, fmt: &str) {
     warn!(url = thumbnail_url; "rejected: {e}");
     // ruleid: raw-url-in-log-field
     warn!(url = thumbnail_url, status = 503; "non-success");
+    // ruleid: raw-url-in-log-field
+    error!(url = thumbnail_url; "boom");
+    // ruleid: raw-url-in-log-field
+    info!(url = thumbnail_url; "info");
+    // ruleid: raw-url-in-log-field
+    trace!(url = thumbnail_url; "trace");
     // ok: raw-url-in-log-field
     warn!(url = RedactedUrl::new(thumbnail_url); "rejected: {e}");
     // ok: raw-url-in-log-field

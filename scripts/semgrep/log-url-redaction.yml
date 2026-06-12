@@ -8,7 +8,7 @@ rules:
       Raw URL in a log kv field reaches the logger unredacted (CWE-532).
       Wrap the value with rdlp_redact::RedactedUrl::new(<url>) so its
       ToValue/Display redacts credentials. See CODING_RULES.md
-      "URL Redaction — controls". (#428)
+      "URL Redaction — Controls (tiered)". (#428)
     patterns:
       - pattern-either:
           - pattern: debug!(url = $X ...)
