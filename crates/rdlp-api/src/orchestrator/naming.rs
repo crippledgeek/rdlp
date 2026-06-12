@@ -194,6 +194,43 @@ pub(super) async fn discard_part(part: &Path) {
     let _ = tokio::fs::remove_file(part).await;
 }
 
+/// Seam a finished merge-stream download into the pipeline's `.rdlp-tmp-{uuid}`
+/// namespace, deriving the CLEAN stem from `clean_target` and preserving the
+/// stream's own extension.
+///
+/// Mirrors the Single-path seam (`part` → `seam`) so `MergeStage` and
+/// `original_stem_for` see only the clean stem, never the `.{label}.{format_id}`
+/// infix emitted by `merge_stream_path`. Each call generates a fresh UUID, so
+/// two streams with the same extension (rare) will not collide.
+///
+/// # Errors
+/// Propagates any I/O error from the underlying rename.
+pub async fn seam_stream(clean_target: &Path, stream: &Path) -> anyhow::Result<PathBuf> {
+    use anyhow::Context as _;
+
+    let ext = stream.extension().and_then(|e| e.to_str()).unwrap_or("");
+    // Build a clean intermediate path: same dir, clean stem, stream's extension.
+    // `with_extension("")` strips the target's extension entirely — only reached
+    // for an extension-less stream (a downloader always emits a container ext, so
+    // this is a defensive fallback, not a normal path).
+    let clean = if ext.is_empty() {
+        clean_target.with_extension("")
+    } else {
+        clean_target.with_extension(ext)
+    };
+    let seam = seam_path(&clean);
+    // finalize_part already names both paths in its context; wrap it so the
+    // failure is identifiable as a merge-stream seam (not a "download finalize").
+    finalize_part(stream, &seam).await.with_context(|| {
+        format!(
+            "seam_stream: failed to move merge stream {} -> {}",
+            stream.display(),
+            seam.display()
+        )
+    })?;
+    Ok(seam)
+}
+
 /// Derive a pipeline-namespace temp path `{clean_stem}.rdlp-tmp-{uuid}.{ext}`
 /// from the clean target, in the SAME directory. Used at the download->pipeline
 /// seam so the post-process `FileTracker` only ever sees its own `.rdlp-tmp-`
@@ -474,5 +511,81 @@ mod tests {
 
         // The temp part must be gone.
         assert!(!part.exists(), "part must be removed after finalize");
+    }
+
+    /// `seam_stream` moves a raw `.{label}.{format_id}.{ext}` merge-stream file
+    /// into the pipeline's `.rdlp-tmp-{uuid}` namespace, deriving the clean stem
+    /// from `clean_target` and preserving the stream's own extension.
+    ///
+    /// Failing-first test: the helper does not exist before this commit, so the
+    /// test can't even compile. Once the helper exists, it pins the exact invariant
+    /// that the `.video.f137` infix NEVER reaches the pipeline.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // std::fs helpers in test fixtures — per clippy.toml policy (c)
+    async fn seam_stream_moves_into_tmp_namespace_and_strips_label_infix() {
+        use std::io::Write as _;
+        use tempfile::TempDir;
+        let dir = TempDir::new().expect("tempdir");
+
+        // The clean target the orchestrator computed (e.g. /v/Title.mkv).
+        let clean_target = dir.path().join("Title.mkv");
+        // The raw merge-stream file as produced by merge_stream_path.
+        let stream = dir.path().join("Title.video.f137.mp4");
+        {
+            let mut f = std::fs::File::create(&stream).expect("create stream");
+            f.write_all(b"video-bytes").expect("write");
+        }
+
+        let seam = seam_stream(&clean_target, &stream)
+            .await
+            .expect("seam_stream must succeed");
+
+        // 1. Lives in the same directory as clean_target.
+        assert_eq!(
+            seam.parent(),
+            clean_target.parent(),
+            "seam must be in the same directory as clean_target"
+        );
+
+        // 2. Name starts with the clean stem (not the .video.f137 infix).
+        let name = seam.file_name().unwrap().to_str().unwrap();
+        assert!(
+            name.starts_with("Title.rdlp-tmp-"),
+            "seam name must start with clean stem + tmp marker, got: {name}"
+        );
+
+        // 3. Name does NOT contain the label infix or format_id.
+        assert!(
+            !name.contains(".video."),
+            "seam name must not contain '.video.' infix, got: {name}"
+        );
+        assert!(
+            !name.contains("f137"),
+            "seam name must not contain 'f137' format_id, got: {name}"
+        );
+
+        // 4. Stream's own extension is preserved (mp4, not mkv).
+        assert!(
+            seam.extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("mp4")),
+            "seam must preserve the stream's extension (mp4), got: {name}"
+        );
+
+        // 5. The original stream file was moved (no longer exists).
+        assert!(
+            !stream.exists(),
+            "stream file must be gone after seam_stream"
+        );
+
+        // 6. The seam file exists on disk.
+        assert!(seam.exists(), "seam file must exist on disk");
+
+        // 7. finalize_to_clean recovers the correct clean path (stem + stream ext).
+        let expected_clean = dir.path().join("Title.mp4");
+        assert_eq!(
+            finalize_to_clean(&seam),
+            Some(expected_clean),
+            "finalize_to_clean on the seam must yield the clean path (stream ext preserved)"
+        );
     }
 }

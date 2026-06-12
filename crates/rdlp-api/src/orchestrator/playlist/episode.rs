@@ -267,8 +267,17 @@ impl Orchestrator {
                     // Parallel download of video + audio
                     match self.download_merge_pair(&video, &audio, path).await {
                         Ok(Some(merge_outcome)) => {
+                            // Seam both streams into the pipeline's .rdlp-tmp-{uuid}
+                            // namespace (mirrors the Single-path seam and state/mod.rs
+                            // Merge branch — strips the .{label}.{format_id} infix).
+                            let video_seam =
+                                super::super::naming::seam_stream(path, &merge_outcome.video_path)
+                                    .await?;
+                            let audio_seam =
+                                super::super::naming::seam_stream(path, &merge_outcome.audio_path)
+                                    .await?;
                             download_result = Some((
-                                vec![merge_outcome.video_path, merge_outcome.audio_path],
+                                vec![video_seam, audio_seam],
                                 merge_outcome.is_hls,
                                 Some(vec![video, audio]),
                             ));

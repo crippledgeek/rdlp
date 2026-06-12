@@ -465,7 +465,15 @@ impl DownloadPhase {
                         // returns true
                         info.requested_formats = Some(vec![video.clone(), audio.clone()]);
 
-                        (vec![outcome.video_path, outcome.audio_path], outcome.is_hls)
+                        // Seam both streams into the pipeline's .rdlp-tmp-{uuid}
+                        // namespace so FileTracker and original_stem_for see only
+                        // the clean stem (never the .{label}.{format_id} infix from
+                        // merge_stream_path — mirrors the Single-path seam above).
+                        let video_seam =
+                            super::naming::seam_stream(&output_path, &outcome.video_path).await?;
+                        let audio_seam =
+                            super::naming::seam_stream(&output_path, &outcome.audio_path).await?;
+                        (vec![video_seam, audio_seam], outcome.is_hls)
                     }
                 };
 
