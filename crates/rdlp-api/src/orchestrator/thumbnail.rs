@@ -5,6 +5,7 @@
 
 use super::Orchestrator;
 use log::{debug, info, warn};
+use rdlp_redact::RedactedUrl;
 use std::path::{Path, PathBuf};
 
 impl Orchestrator {
@@ -38,7 +39,7 @@ impl Orchestrator {
                 .map(|t| t.url.as_str())
         })?;
 
-        debug!(url = thumbnail_url; "Downloading thumbnail");
+        debug!(url = RedactedUrl::new(thumbnail_url); "Downloading thumbnail");
 
         // Determine extension from URL (default to jpg)
         let ext = thumbnail_url
@@ -63,7 +64,7 @@ impl Orchestrator {
         // attacker-controlled extractor could return a private/loopback
         // URL in `info.thumbnail`.
         if let Err(e) = rdlp_security::validate_url_security(thumbnail_url) {
-            warn!(url = thumbnail_url; "Thumbnail URL rejected by security gate: {e}");
+            warn!(url = RedactedUrl::new(thumbnail_url); "Thumbnail URL rejected by security gate: {e}");
             return None;
         }
 
@@ -81,14 +82,14 @@ impl Orchestrator {
         let response = match request.send().await {
             Ok(resp) => resp,
             Err(e) => {
-                warn!(url = thumbnail_url; "Failed to download thumbnail: {e}");
+                warn!(url = RedactedUrl::new(thumbnail_url); "Failed to download thumbnail: {e}");
                 return None;
             }
         };
 
         if !response.status().is_success() {
             warn!(
-                url = thumbnail_url,
+                url = RedactedUrl::new(thumbnail_url),
                 status = response.status().as_u16();
                 "Thumbnail download returned non-success status"
             );
@@ -102,7 +103,7 @@ impl Orchestrator {
                 Some(Ok(chunk)) => {
                     if bytes.len().saturating_add(chunk.len()) > MAX_THUMBNAIL_BYTES {
                         warn!(
-                            url = thumbnail_url;
+                            url = RedactedUrl::new(thumbnail_url);
                             "Thumbnail exceeds {MAX_THUMBNAIL_BYTES}-byte cap; aborting"
                         );
                         return None;
