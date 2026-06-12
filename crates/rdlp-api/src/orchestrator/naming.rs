@@ -168,6 +168,25 @@ pub async fn finalize_part(part: &Path, clean: &Path) -> anyhow::Result<()> {
     }
 }
 
+/// Finalize a (possibly temp-named) pipeline survivor to its clean output name.
+///
+/// If the survivor carries a temp marker (`.rdlp-part` or `.rdlp-tmp-`), it is
+/// atomically renamed to the clean name and that clean path is returned.
+/// If the survivor already carries a clean name (no marker present, or the
+/// `-` stdout sentinel), it is returned unchanged and no rename is attempted.
+///
+/// This is the single coordinator-finalize call — the one place the clean name
+/// is created — covering PP-ran, PP-skipped, and FFmpeg-missing paths.
+pub async fn finalize_survivor(survivor: PathBuf) -> anyhow::Result<PathBuf> {
+    match finalize_to_clean(&survivor) {
+        Some(clean) => {
+            finalize_part(&survivor, &clean).await?;
+            Ok(clean)
+        }
+        None => Ok(survivor),
+    }
+}
+
 /// Best-effort removal of a `.rdlp-part` working file on explicit cancel, so a
 /// cancelled download leaves no artifact (#406). Errors are ignored: the file
 /// may legitimately not exist yet, and a failed unlink must not mask the cancel.
@@ -358,6 +377,55 @@ mod tests {
     #[test]
     fn seam_path_is_noop_for_stdout() {
         assert_eq!(seam_path(&PathBuf::from("-")), PathBuf::from("-"));
+    }
+
+    /// `finalize_survivor` renames a temp-named file to its clean path (Some arm).
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // std::fs helpers in test fixtures — per clippy.toml policy (c)
+    async fn finalize_survivor_renames_temp_named_file() {
+        use std::io::Write as _;
+        use tempfile::TempDir;
+        let dir = TempDir::new().expect("tempdir");
+
+        let survivor = dir.path().join("Title.rdlp-tmp-abc.mkv");
+        let expected_clean = dir.path().join("Title.mkv");
+
+        {
+            let mut f = std::fs::File::create(&survivor).expect("create survivor");
+            f.write_all(b"content").expect("write");
+        }
+
+        let result = finalize_survivor(survivor.clone())
+            .await
+            .expect("finalize_survivor must succeed");
+
+        assert_eq!(result, expected_clean, "must return the clean path");
+        assert!(
+            expected_clean.exists(),
+            "clean file must exist after rename"
+        );
+        assert!(!survivor.exists(), "temp file must be gone after rename");
+    }
+
+    /// `finalize_survivor` returns a clean-named path unchanged (None arm).
+    #[tokio::test]
+    async fn finalize_survivor_passthrough_for_clean_name() {
+        // No file on disk needed — the None arm just echoes the input.
+        let clean = PathBuf::from("/v/Title.mkv");
+        let result = finalize_survivor(clean.clone())
+            .await
+            .expect("finalize_survivor must not error for clean name");
+        assert_eq!(result, clean, "clean name must be returned unchanged");
+    }
+
+    /// `finalize_survivor` is a no-op for the stdout `-` sentinel.
+    #[tokio::test]
+    async fn finalize_survivor_passthrough_for_stdout_sentinel() {
+        let stdout = PathBuf::from("-");
+        let result = finalize_survivor(stdout.clone())
+            .await
+            .expect("finalize_survivor must not error for stdout sentinel");
+        assert_eq!(result, stdout, "stdout sentinel must be returned unchanged");
     }
 
     /// `finalize_part` must overwrite an existing clean file.

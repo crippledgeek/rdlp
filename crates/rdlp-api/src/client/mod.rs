@@ -676,21 +676,16 @@ impl RdlpClient {
                 .await
             {
                 Ok(output_files) => {
-                    // Pipeline returns temp-named survivors (#406 Option X);
+                    // Pipeline returns temp-named survivors (#406 Option X / #412);
                     // finalize each to its clean name before reporting.
                     let mut finalized = Vec::with_capacity(output_files.len());
                     for f in output_files {
-                        match crate::orchestrator::naming::finalize_to_clean(&f) {
-                            Some(clean) => {
-                                crate::orchestrator::naming::finalize_part(&f, &clean)
-                                    .await
-                                    .map_err(|e| RdlpApiError::IoError {
-                                        message: format!("{e:#}"),
-                                    })?;
-                                finalized.push(clean);
-                            }
-                            None => finalized.push(f),
-                        }
+                        let clean = crate::orchestrator::naming::finalize_survivor(f)
+                            .await
+                            .map_err(|e| RdlpApiError::IoError {
+                                message: format!("{e:#}"),
+                            })?;
+                        finalized.push(clean);
                     }
                     let result = crate::DownloadResult {
                         id,

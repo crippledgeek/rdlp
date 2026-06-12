@@ -348,14 +348,8 @@ impl Orchestrator {
             .into_iter()
             .next()
             .unwrap_or_else(|| output_path.clone());
-        // Coordinator finalize (Option X): mint the clean name once, post-PP.
-        let final_path = match crate::orchestrator::naming::finalize_to_clean(&survivor) {
-            Some(clean) => {
-                crate::orchestrator::naming::finalize_part(&survivor, &clean).await?;
-                clean
-            }
-            None => survivor,
-        };
+        // Coordinator finalize (Option X / #412): single helper covers all paths.
+        let final_path = crate::orchestrator::naming::finalize_survivor(survivor).await?;
 
         // HLS downloads produce .ts files that should be remuxed.
         if is_hls {

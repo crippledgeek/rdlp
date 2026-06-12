@@ -511,17 +511,9 @@ impl DownloadPhase {
                     .into_iter()
                     .next()
                     .unwrap_or_else(|| output_path.clone());
-                // Coordinator finalize (Option X): the ONE place the clean name
-                // is created — covers PP-ran, PP-skipped, and FFmpeg-missing. The
-                // pipeline (and the no-PP bypass) returns a temp-named survivor.
-                let final_path = match super::naming::finalize_to_clean(&survivor) {
-                    Some(clean) => {
-                        super::naming::finalize_part(&survivor, &clean).await?;
-                        clean
-                    }
-                    // No marker → already a clean name; use as-is.
-                    None => survivor,
-                };
+                // Coordinator finalize (Option X / #412): single helper covers
+                // PP-ran, PP-skipped, and FFmpeg-missing paths.
+                let final_path = super::naming::finalize_survivor(survivor).await?;
 
                 // Verify the output file actually exists
                 if !final_path.exists() {
