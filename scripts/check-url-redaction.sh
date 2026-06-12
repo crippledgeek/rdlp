@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # check-url-redaction.sh — CI gate: verify all operator-visible URL interpolations in
-# rdlp-extractor are wrapped with rdlp_redact::RedactedUrl (or sanitize_for_logging).
+# rdlp-extractor AND the post-processing pipeline (rdlp-postprocess) are wrapped with
+# rdlp_redact::RedactedUrl (or sanitize_for_logging).
 #
 # Exit 0 = PASS (no offenders found).
 # Exit 1 = FAIL (raw URL interpolations remain).
@@ -13,22 +14,37 @@
 # the need to filter out RedactedUrl wraps: compliant code passes the URL as a
 # positional argument *outside* the string, so the in-string {*url} pattern never
 # fires on it.
+#
+# Scope rationale (#422): the fatal post-process stages (Merge/Remux/Recode/
+# AudioExtract/Normalize) author the `.context(...)` strings that
+# `classify_pipeline_err` flattens via `{e:#}` into `OrchestratorError::
+# PostProcessingFailed` → `Event::Failed`.  Today those contexts are static
+# literals (no URL), but a future stage that fetches a URL (e.g. a remote-subtitle
+# or plugin post-processor) could inline one.  Gating rdlp-postprocess closes that
+# regression window at the authoring surface.  The classifier itself lives in
+# rdlp-api but cannot introduce a URL (it only formats `{e:#}` + a static string),
+# so it needs no separate gate.  rdlp-ffmpeg is intentionally NOT gated: its only
+# `url` token is `AVFormatContext.url`, which for a file muxer is the local output
+# path (not a network URL) and appears only in diagnostic logs.
 
 set -euo pipefail
 
-TARGET="crates/rdlp-extractor/src"
+EXTRACTOR_TARGET="crates/rdlp-extractor/src"
+PIPELINE_TARGET="crates/rdlp-postprocess/src"
 FAIL=0
 
 # Helper: run rg -U (multiline), filter out already-compliant lines and test files,
 # report hits.
-# Args: <label> <rg-pattern>
+# Args: <label> <rg-pattern> [target-dir]   (target defaults to the extractor crate)
 check() {
     local label="$1"
     local pattern="$2"
+    local target="${3:-$EXTRACTOR_TARGET}"
     local hits
-    hits=$(rg -U --type rust -n "$pattern" "$TARGET" 2>/dev/null \
+    hits=$(rg -U --type rust -n "$pattern" "$target" 2>/dev/null \
         | grep -v 'RedactedUrl' \
         | grep -v 'sanitize_for_logging' \
+        | grep -v 'safe_url' \
         | grep -v '/tests/' \
         | grep -v '#\[cfg(test)\]' \
         | grep -v '^\s*//' \
@@ -64,8 +80,33 @@ check "log_if_verbose:format" \
 check "structured-kv:url_field" \
     '[a-z_]*url[a-z_]*:[?%]\s*='
 
+# ---------------------------------------------------------------------------
+# Post-processing pipeline (rdlp-postprocess) — #422 defense-in-depth.
+#
+# Fatal-stage `.context(...)` strings reach Event::Failed via classify_pipeline_err's
+# `{e:#}` flatten, so a URL inlined into any error/log macro here would surface to
+# the operator unredacted.  Two durable classes:
+#
+#   P1. Any error/log-producing macro whose string literal inlines `{*url}` —
+#       covers `.context(format!("…{url}"))`, `.with_context(|| format!(…{url}))`,
+#       bare `anyhow!`/`bail!`, and the `error!`/`warn!`/`info!`/`debug!`/`trace!`/
+#       `panic!` log macros.  `format!` is in the alternation, so any `.context(...)`
+#       built from a `format!` is caught regardless of the surrounding call.
+#   P2. Structured-kv `*url*` fields (same class as #5, re-run against the pipeline).
+# ---------------------------------------------------------------------------
+
+# P1. error/log macro inlining {*url} in the string literal.
+check "pp:macro:format_url" \
+    '(format!|anyhow!|bail!|error!|warn!|info!|debug!|trace!|panic!)\(\s*"(?:[^"\\]|\\.)*\{[a-z_]*url' \
+    "$PIPELINE_TARGET"
+
+# P2. Structured-kv log fields in the pipeline.
+check "pp:structured-kv:url_field" \
+    '[a-z_]*url[a-z_]*:[?%]\s*=' \
+    "$PIPELINE_TARGET"
+
 if [[ $FAIL -eq 0 ]]; then
-    echo "PASS — no raw URL interpolations found in $TARGET"
+    echo "PASS — no raw URL interpolations found in $EXTRACTOR_TARGET or $PIPELINE_TARGET"
     exit 0
 else
     echo ""
