@@ -5,6 +5,7 @@
 
 use crate::orchestrator::OrchestratorError;
 use rdlp_core::RdlpError;
+use rdlp_redact::RedactedUrlBuf;
 use std::borrow::Cow;
 use thiserror::Error;
 
@@ -22,10 +23,15 @@ pub enum RdlpApiError {
     },
 
     /// No extractor found for the given URL.
+    ///
+    /// `url` is stored as [`RedactedUrlBuf`] so that `#[error("…{url}")]`
+    /// Display and `user_message()` automatically strip credentials — the type
+    /// system enforces this at every construction site.
     #[error("Unsupported URL: {url}")]
     UnsupportedUrl {
-        /// The URL that no extractor was found for.
-        url: String,
+        /// The URL that no extractor was found for. Credentials are redacted
+        /// in all Display / Debug output.
+        url: RedactedUrlBuf,
     },
 
     /// Extraction failed (metadata retrieval).
@@ -176,7 +182,9 @@ impl From<RdlpError> for RdlpApiError {
                 message,
                 source_url: url.map(|u| u.to_string()).unwrap_or_default(),
             },
-            RdlpError::NoExtractor(url) => Self::UnsupportedUrl { url },
+            RdlpError::NoExtractor(url) => Self::UnsupportedUrl {
+                url: RedactedUrlBuf::from(url),
+            },
             RdlpError::InvalidUrl(msg) | RdlpError::FormatSelection(msg) => {
                 Self::InvalidInput { message: msg }
             }
@@ -218,12 +226,7 @@ impl From<RdlpError> for RdlpApiError {
 impl From<OrchestratorError> for RdlpApiError {
     fn from(err: OrchestratorError) -> Self {
         match err {
-            // Phase 1 bridge: `url` is now `RedactedUrlBuf`; `UnsupportedUrl.url` is still
-            // `String` (changed to `RedactedUrlBuf` in Phase 2). Use `.expose()` to produce
-            // the raw string temporarily — Phase 2 removes this conversion entirely.
-            OrchestratorError::NoExtractor { url } => Self::UnsupportedUrl {
-                url: url.expose().to_owned(),
-            },
+            OrchestratorError::NoExtractor { url } => Self::UnsupportedUrl { url },
             OrchestratorError::ExtractionFailed(rdlp_err)
             | OrchestratorError::DownloadFailed(rdlp_err) => Self::from(rdlp_err),
             OrchestratorError::UserCancelled => Self::UserCancelled,
@@ -451,7 +454,8 @@ mod tests {
         let err: RdlpApiError = RdlpError::NoExtractor("http://unknown.com".into()).into();
         match err {
             RdlpApiError::UnsupportedUrl { url } => {
-                assert_eq!(url, "http://unknown.com");
+                // `url` is now `RedactedUrlBuf`; use `.expose()` to check the raw value.
+                assert_eq!(url.expose(), "http://unknown.com");
             }
             other => panic!("Expected UnsupportedUrl, got: {other:?}"),
         }
@@ -544,6 +548,73 @@ mod tests {
             );
         } else {
             panic!("expected ExtractError");
+        }
+    }
+
+    // ── Phase 2 redaction tests ────────────────────────────────────────────────
+    // Failing-first: these tests reference `RedactedUrlBuf` in the `UnsupportedUrl`
+    // field, which is still `String` until the Phase 2 type change below. The first
+    // two tests (unsupported_url_*) fail with a type-mismatch compile error before
+    // the change; `from_rdlp_no_extractor_redacts` fails at runtime because the raw
+    // `String` still contains "SECRET"; `no_downloader_invalid_input_redacts` already
+    // passes (Phase 1 made NoDownloader.url `RedactedUrlBuf`).
+
+    #[test]
+    fn unsupported_url_display_redacts() {
+        use rdlp_redact::RedactedUrlBuf;
+        let err = RdlpApiError::UnsupportedUrl {
+            url: RedactedUrlBuf::from("https://x.com/v?token=SECRET"),
+        };
+        let s = err.to_string();
+        assert!(!s.contains("SECRET"), "raw token must not leak: {s}");
+        assert!(s.contains("token=***"), "redacted form expected: {s}");
+    }
+
+    #[test]
+    fn unsupported_url_user_message_redacts() {
+        use rdlp_redact::RedactedUrlBuf;
+        let err = RdlpApiError::UnsupportedUrl {
+            url: RedactedUrlBuf::from("https://x.com/v?token=SECRET"),
+        };
+        let msg = err.user_message();
+        assert!(!msg.contains("SECRET"), "raw token must not leak: {msg}");
+        assert!(msg.contains("token=***"), "redacted form expected: {msg}");
+    }
+
+    #[test]
+    fn from_rdlp_no_extractor_redacts() {
+        let api: RdlpApiError =
+            RdlpError::NoExtractor("https://x.com/v?token=SECRET".to_owned()).into();
+        match api {
+            RdlpApiError::UnsupportedUrl { url } => {
+                let s = url.to_string();
+                assert!(!s.contains("SECRET"), "raw token must not leak: {s}");
+                assert!(s.contains("token=***"), "redacted form expected: {s}");
+            }
+            other => panic!("expected UnsupportedUrl, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_downloader_invalid_input_redacts() {
+        use crate::orchestrator::OrchestratorError;
+        use rdlp_redact::RedactedUrlBuf;
+        let api: RdlpApiError = OrchestratorError::NoDownloader {
+            url: RedactedUrlBuf::from("https://cdn.example.com/seg.ts?token=SECRET"),
+        }
+        .into();
+        match api {
+            RdlpApiError::InvalidInput { message } => {
+                assert!(
+                    !message.contains("SECRET"),
+                    "raw token must not leak: {message}"
+                );
+                assert!(
+                    message.contains("token=***"),
+                    "redacted form expected: {message}"
+                );
+            }
+            other => panic!("expected InvalidInput, got: {other:?}"),
         }
     }
 
