@@ -31,6 +31,7 @@ set -euo pipefail
 
 EXTRACTOR_TARGET="crates/rdlp-extractor/src"
 PIPELINE_TARGET="crates/rdlp-postprocess/src"
+API_TARGET="crates/rdlp-api/src"
 FAIL=0
 
 # Helper: run rg -U (multiline), filter out already-compliant lines and test files,
@@ -105,8 +106,39 @@ check "pp:structured-kv:url_field" \
     '[a-z_]*url[a-z_]*:[?%]\s*=' \
     "$PIPELINE_TARGET"
 
+# ---------------------------------------------------------------------------
+# API layer (rdlp-api) — #427 defense-in-depth (DELIBERATELY NARROW).
+#
+# Two controls protect rdlp-api's URL surface; each catches what the other
+# cannot (see CODING_RULES.md "URL redaction — two controls"):
+#
+#   1. THE TYPE SYSTEM is the PRIMARY guard for error-enum URL fields. The
+#      `url` field of `RdlpApiError::UnsupportedUrl` / `OrchestratorError::
+#      {NoExtractor,NoDownloader}` is `rdlp_redact::RedactedUrlBuf`, whose
+#      `Display` redacts — so `#[error("…{url}")]` and `format!("…{url}")`
+#      auto-redact (#427). This grep CANNOT verify that surface: a redacted
+#      `{url}` (RedactedUrlBuf) and a raw `{url}` (String) are the SAME token
+#      in source. The compliant precedent `#[error("…{source_url}…")]`
+#      (errors.rs) would false-positive under an error-attr/format pattern.
+#      Industry standard: redact at source via a secret type (CWE-532;
+#      secrets-as-types). So we do NOT add a `{*url}` error-attr/format check
+#      here — the type + the unit tests guard it.
+#
+#   2. THIS GREP is the SECONDARY guard, for the one surface the type cannot
+#      cover: a raw URL passed to a STRUCTURED-KV log field (`url:? = <var>`).
+#      A `.expose()`-then-log bypass lands here. Only the `:?`/`:%` form is
+#      gated; the positional no-sigil `url = <var>` form is added by #428
+#      (after orchestrator/thumbnail.rs is wrapped — it is the one remaining
+#      raw `url = thumbnail_url` site today).
+# ---------------------------------------------------------------------------
+
+# A1. Structured-kv `:?`/`:%` url fields in rdlp-api (the .expose()-then-log surface).
+check "api:structured-kv:url_field" \
+    '[a-z_]*url[a-z_]*:[?%]\s*=' \
+    "$API_TARGET"
+
 if [[ $FAIL -eq 0 ]]; then
-    echo "PASS — no raw URL interpolations found in $EXTRACTOR_TARGET or $PIPELINE_TARGET"
+    echo "PASS — no raw URL interpolations found in $EXTRACTOR_TARGET, $PIPELINE_TARGET, or $API_TARGET"
     exit 0
 else
     echo ""
