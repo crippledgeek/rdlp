@@ -50,6 +50,17 @@ jobs:
         # Diff guard: if the host WIT and vendored copy diverge, fail loud.
         run: bash scripts/check-wit-drift.sh
 
+      - name: Install semgrep
+        run: pipx install semgrep || pip install semgrep
+
+      - name: Check log-field URL redaction (Semgrep AST gate)
+        # Tier-2 backstop (#428): flags any raw `url = <x>` in a `log` macro that
+        # the type-level RedactedUrl guard didn't force. AST-aware — treats
+        # RedactedUrl::new()/RedactedUrlBuf/sanitize_for_logging as sanitizers.
+        env:
+          RDLP_REQUIRE_SEMGREP: "1"
+        run: bash scripts/check-log-redaction.sh
+
   build-and-test:
     name: Build & Test (${{ matrix.platform }})
     needs: lint
