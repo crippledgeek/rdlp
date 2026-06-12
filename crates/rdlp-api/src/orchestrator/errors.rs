@@ -9,6 +9,7 @@
 //! - I/O errors are preserved directly via `#[from]`.
 
 use rdlp_core::RdlpError;
+use rdlp_redact::RedactedUrlBuf;
 use std::path::PathBuf;
 use thiserror::Error;
 
@@ -19,7 +20,7 @@ pub enum OrchestratorError {
     #[error("No extractor found for URL: {url}")]
     NoExtractor {
         /// The URL that no extractor was found for
-        url: String,
+        url: RedactedUrlBuf,
     },
 
     /// Video extraction failed (wraps domain `RdlpError`)
@@ -42,7 +43,7 @@ pub enum OrchestratorError {
     #[error("No downloader found for URL: {url}")]
     NoDownloader {
         /// The URL that no downloader was found for
-        url: String,
+        url: RedactedUrlBuf,
     },
 
     /// Download failed (wraps domain `RdlpError`)
@@ -121,3 +122,49 @@ pub fn is_reextractable_error(err: &OrchestratorError) -> bool {
 
 /// Result type for orchestrator operations
 pub type Result<T> = std::result::Result<T, OrchestratorError>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rdlp_redact::RedactedUrlBuf;
+
+    /// `NoExtractor` display must redact credentials in the URL.
+    ///
+    /// Failing-first: with `url: String`, `to_string()` would produce the raw
+    /// URL including "SECRET", causing `!contains("SECRET")` to fail.
+    #[test]
+    fn no_extractor_display_redacts() {
+        let err = OrchestratorError::NoExtractor {
+            url: RedactedUrlBuf::from("https://x.example.com/v?token=SECRET"),
+        };
+        let display = err.to_string();
+        assert!(
+            !display.contains("SECRET"),
+            "Display must not contain raw credential; got: {display}"
+        );
+        assert!(
+            display.contains("token=***"),
+            "Display must contain redacted placeholder; got: {display}"
+        );
+    }
+
+    /// `NoDownloader` display must redact credentials in the URL.
+    ///
+    /// Failing-first: with `url: String`, `to_string()` would produce the raw
+    /// URL including "SECRET", causing `!contains("SECRET")` to fail.
+    #[test]
+    fn no_downloader_display_redacts() {
+        let err = OrchestratorError::NoDownloader {
+            url: RedactedUrlBuf::from("https://cdn.example.com/v?token=SECRET"),
+        };
+        let display = err.to_string();
+        assert!(
+            !display.contains("SECRET"),
+            "Display must not contain raw credential; got: {display}"
+        );
+        assert!(
+            display.contains("token=***"),
+            "Display must contain redacted placeholder; got: {display}"
+        );
+    }
+}

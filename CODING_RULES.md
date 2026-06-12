@@ -287,6 +287,37 @@ let data = fetch_url(&url)
     .context("Failed to fetch playlist")?;
 ```
 
+### URL Redaction — Two Controls
+
+URLs may carry credentials (signed CDN tokens, OAuth, AWS SigV4) in userinfo/query.
+Two complementary controls keep them out of logs and error messages
+(CWE-532 / OWASP "redact at source"). **Each catches what the other cannot.**
+
+1. **The type system is the PRIMARY guard.** A URL that can reach operator-visible
+   output (an error `Display`, `user_message()`, a `format!`, a log field) must be
+   stored as `rdlp_redact::RedactedUrlBuf` (or borrowed `RedactedUrl<'_>`), whose
+   `Display`/`Debug` redact via `redact_str`. Then `#[error("…{url}")]` and
+   `format!("…{url}")` auto-redact — the raw value can only escape via an explicit
+   `.expose()`. This is "secrets-as-types": redaction is compiler-enforced, not a
+   convention a future call site can forget. Mirror the precedents
+   `RdlpError::Extraction.url: Option<RedactedUrlBuf>` and
+   `RdlpApiError::UnsupportedUrl.url: RedactedUrlBuf` (#427). **Never** store a raw
+   `String` URL in an error field that a Display/format interpolates, and never
+   store a "pre-redacted `String`" (the type must carry the guarantee).
+
+2. **`scripts/check-url-redaction.sh` is the SECONDARY guard (defense-in-depth).**
+   It greps for raw URL interpolation idioms in `rdlp-extractor`, `rdlp-postprocess`,
+   and `rdlp-api`. **It deliberately does NOT gate error-`Display`/`format!` `{url}`
+   sites in `rdlp-api`** — a grep cannot distinguish a redacted `{url}`
+   (`RedactedUrlBuf`) from a raw one (`String`); both are the same token in source,
+   and it would false-positive on the compliant `{source_url}` precedent. That
+   surface is the type system's job (control 1). The grep's residual role is the
+   surface the type cannot cover: a raw URL passed to a structured-kv log field
+   (`url:? = some_string`) — i.e. an `.expose()`-then-log bypass.
+
+When you add a new URL-bearing error variant or log a URL: pick the field type
+(`RedactedUrlBuf`) first; the grep gate is the backstop, not the design.
+
 ## Code Reuse
 
 ### Extractor Format Building

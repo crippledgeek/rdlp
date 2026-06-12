@@ -30,12 +30,15 @@ jobs:
 
       - name: Check URL log redaction
         # Fails if any raw URL is interpolated into an operator-visible string in
-        # rdlp-extractor (RdlpError message/reason fields, RdlpError ctor message-args,
-        # positional log macros, structured-kv log fields) OR in the rdlp-postprocess
-        # pipeline (fatal-stage `.context(...)` / error / log macros that reach
-        # Event::Failed via classify_pipeline_err's `{e:#}` flatten — #422).
+        # rdlp-extractor (RdlpError message/reason fields, ctor message-args, log
+        # macros, structured-kv fields), the rdlp-postprocess pipeline (fatal-stage
+        # `.context(...)` reaching Event::Failed — #422), OR rdlp-api structured-kv
+        # log fields (the .expose()-then-log surface — #427). NOTE: rdlp-api error
+        # `#[error]`/`format!` `{url}` sites are guarded by the RedactedUrlBuf TYPE
+        # + unit tests, NOT by grep (a grep can't tell redacted {url} from raw) —
+        # see CODING_RULES.md "URL Redaction — Two Controls".
         # Multiline-aware; credential URLs must be wrapped in
-        # rdlp_redact::RedactedUrl / rdlp_security::sanitize_for_logging (#328/#392/#422).
+        # rdlp_redact::RedactedUrl / rdlp_security::sanitize_for_logging (#328/#392/#422/#427).
         run: bash scripts/check-url-redaction.sh
 
       - name: Check WIT vendor drift

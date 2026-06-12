@@ -5,6 +5,7 @@ use super::{
     errors::{OrchestratorError, Result},
 };
 use log::{debug, info};
+use rdlp_redact::RedactedUrlBuf;
 use rdlp_types::{SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchResultPreview};
 use tracing::instrument;
 
@@ -24,7 +25,7 @@ impl Orchestrator {
 
         let extractor = self.extractor_registry.find_extractor(url).ok_or_else(|| {
             OrchestratorError::NoExtractor {
-                url: url.to_owned(),
+                url: RedactedUrlBuf::from(url),
             }
         })?;
 
@@ -92,7 +93,7 @@ impl Orchestrator {
     pub(super) async fn extract_lazy_formats(&self, url: &str) -> Result<rdlp_types::InfoDict> {
         let extractor = self.extractor_registry.find_extractor(url).ok_or_else(|| {
             OrchestratorError::NoExtractor {
-                url: url.to_owned(),
+                url: RedactedUrlBuf::from(url),
             }
         })?;
 
@@ -138,7 +139,7 @@ impl Orchestrator {
 
         let extractor = self.extractor_registry.find_extractor(url).ok_or_else(|| {
             OrchestratorError::NoExtractor {
-                url: url.to_owned(),
+                url: RedactedUrlBuf::from(url),
             }
         })?;
 
