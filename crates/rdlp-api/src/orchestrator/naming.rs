@@ -85,86 +85,108 @@ pub fn finalize_to_clean(survivor: &Path) -> Option<PathBuf> {
 
 /// Atomically commit a finished temp-named file to its clean output name.
 ///
-/// Same-directory rename (no `EXDEV`). On POSIX `rename(2)` replaces an
-/// existing destination atomically. On Windows `MoveFileExW` fails if the
-/// destination exists unless `MOVEFILE_REPLACE_EXISTING` is set; `tokio::fs::rename`
-/// does NOT set that flag, so we must handle a pre-existing clean file before
-/// renaming. This matters for the borrowed-input (`keep_inputs=true`) same-
-/// container in-place case: the source is still on disk when finalize runs and
-/// the survivor must replace it (#414).
+/// Same-directory rename (no `EXDEV`). On POSIX `rename(2)` atomically replaces an
+/// existing destination — so a direct rename is correct and safe even when `clean`
+/// already exists (the `keep_inputs=true` same-container in-place case, #414).
+/// No backup file is created on Unix; there is no orphan window.
 ///
-/// Uses a **backup-restore** pattern when `clean` already exists: the existing
-/// file is moved aside first, and restored if the final rename fails, so `clean`
-/// is never lost without `part` safely in place.
+/// On Windows `MoveFileExW` does NOT set `MOVEFILE_REPLACE_EXISTING` when called
+/// via `tokio::fs::rename`, so the rename fails if `clean` exists. For that case
+/// a **backup-restore** helper (`finalize_part_replace_windows`) moves `clean`
+/// aside first, renames `part` into place, and restores on failure — see its
+/// doc-comment for the rationale and the narrow orphan-window note (#416-M1).
 ///
 /// On failure the temp file is left intact and the error is surfaced to the
 /// caller via context.
 pub async fn finalize_part(part: &Path, clean: &Path) -> anyhow::Result<()> {
     use anyhow::Context as _;
 
+    // POSIX rename(2) atomically REPLACES an existing destination, so a direct
+    // rename is correct even when `clean` already exists (the keep_inputs in-place
+    // case) — no backup file, no data-loss window. The backup-restore below is a
+    // Windows-only workaround: tokio::fs::rename there does not set
+    // MOVEFILE_REPLACE_EXISTING and fails if `clean` exists (#414 / #416-M1).
+    #[cfg(windows)]
     if part != clean && tokio::fs::try_exists(clean).await.unwrap_or(false) {
-        // `clean` already exists (e.g. keep_inputs same-container in-place case).
-        // A bare remove-then-rename has a data-loss window: if the rename fails
-        // after the remove, `clean` is gone forever. Move the existing file aside
-        // first and restore it if the rename fails, so `clean` is never lost.
-        let backup = {
-            // A real media output path always has a file name; a root or
-            // directory path reaching this branch would be a caller-contract
-            // violation (the orchestrator only calls finalize_part on actual
-            // file paths). Verified here so the `.unwrap_or_default()` fallback
-            // is known-safe and an assertion fires in debug builds.
-            debug_assert!(
-                clean.file_name().is_some(),
-                "finalize_part: clean path has no file name component (degenerate path?) — \
-                 backup name would be empty: {}",
-                clean.display()
-            );
-            let mut name = clean
-                .file_name()
-                .map(std::ffi::OsStr::to_os_string)
-                .unwrap_or_default();
-            name.push(format!(".rdlp-bak-{}", uuid::Uuid::new_v4().simple()));
-            clean.with_file_name(name)
-        };
-        // NOTE (#414 follow-up): a second Ctrl+C force-exit (process::exit) in the
-        // micro-window between this backup rename and the rename below would orphan
-        // the `.rdlp-bak-{uuid}` file (it holds the user's data — no loss, just a
-        // leftover). finalize_part has no TempRegistry handle to register the backup
-        // for stale-sweep; tracked as a follow-up.
-        tokio::fs::rename(clean, &backup).await.with_context(|| {
-            format!(
-                "failed to back up existing {} while finalizing {} -> {}",
-                clean.display(),
-                part.display(),
-                clean.display()
-            )
-        })?;
-        match tokio::fs::rename(part, clean).await {
-            Ok(()) => {
-                // Success: drop the backup (best-effort; ignore errors).
-                let _ = tokio::fs::remove_file(&backup).await;
-                Ok(())
-            }
-            Err(e) => {
-                // Restore the original so `clean` is never lost.
-                let _ = tokio::fs::rename(&backup, clean).await;
-                Err(e).with_context(|| {
-                    format!(
-                        "failed to finalize {} -> {} (original restored)",
-                        part.display(),
-                        clean.display()
-                    )
-                })
-            }
+        return finalize_part_replace_windows(part, clean).await;
+    }
+
+    // Unix (always) and Windows (when `clean` does not yet exist — the normal
+    // download case): a direct rename, atomic-replace on POSIX.
+    tokio::fs::rename(part, clean).await.with_context(|| {
+        format!(
+            "failed to finalize download {} -> {}",
+            part.display(),
+            clean.display()
+        )
+    })
+}
+
+/// Windows-only helper: replace a pre-existing `clean` file with `part`.
+///
+/// `tokio::fs::rename` on Windows does NOT set `MOVEFILE_REPLACE_EXISTING`, so it
+/// fails if `clean` already exists. This helper moves `clean` aside to a
+/// `.rdlp-bak-{uuid}` sidecar, renames `part` into its place, then removes the
+/// sidecar on success. On rename failure the sidecar is restored so `clean` is
+/// never permanently lost.
+///
+/// The backup is intentionally NOT named `.rdlp-tmp-*`: `TempRegistry::cleanup_stale`
+/// marker-scans `.rdlp-tmp-` names and would delete the user's sole in-window copy.
+/// A `.rdlp-bak-` sidecar is invisible to the stale-sweep, so the user's data
+/// survives a force-exit in the micro-window between the two renames (#416-M1).
+#[cfg(windows)]
+async fn finalize_part_replace_windows(part: &Path, clean: &Path) -> anyhow::Result<()> {
+    use anyhow::Context as _;
+
+    let backup = {
+        // A real media output path always has a file name; a root or directory
+        // path reaching this branch would be a caller-contract violation (the
+        // orchestrator only calls finalize_part on actual file paths). Verified
+        // here so the `.unwrap_or_default()` fallback is known-safe and an
+        // assertion fires in debug builds.
+        debug_assert!(
+            clean.file_name().is_some(),
+            "finalize_part: clean path has no file name component (degenerate path?) — \
+             backup name would be empty: {}",
+            clean.display()
+        );
+        let mut name = clean
+            .file_name()
+            .map(std::ffi::OsStr::to_os_string)
+            .unwrap_or_default();
+        name.push(format!(".rdlp-bak-{}", uuid::Uuid::new_v4().simple()));
+        clean.with_file_name(name)
+    };
+    // NOTE (#416-M1): a second Ctrl+C force-exit (process::exit) in the micro-window
+    // between this backup rename and the rename below would orphan the
+    // `.rdlp-bak-{uuid}` file (it holds the user's data — no loss, just a leftover).
+    // This orphan window is Windows-only; Unix takes the atomic direct-rename path
+    // in finalize_part and never reaches this helper.
+    tokio::fs::rename(clean, &backup).await.with_context(|| {
+        format!(
+            "failed to back up existing {} while finalizing {} -> {}",
+            clean.display(),
+            part.display(),
+            clean.display()
+        )
+    })?;
+    match tokio::fs::rename(part, clean).await {
+        Ok(()) => {
+            // Success: drop the backup (best-effort; ignore errors).
+            let _ = tokio::fs::remove_file(&backup).await;
+            Ok(())
         }
-    } else {
-        tokio::fs::rename(part, clean).await.with_context(|| {
-            format!(
-                "failed to finalize download {} -> {}",
-                part.display(),
-                clean.display()
-            )
-        })
+        Err(e) => {
+            // Restore the original so `clean` is never lost.
+            let _ = tokio::fs::rename(&backup, clean).await;
+            Err(e).with_context(|| {
+                format!(
+                    "failed to finalize {} -> {} (original restored)",
+                    part.display(),
+                    clean.display()
+                )
+            })
+        }
     }
 }
 
@@ -467,12 +489,15 @@ mod tests {
 
     /// `finalize_part` must overwrite an existing clean file.
     ///
-    /// This exercises the Windows-safe path: on POSIX `rename(2)` replaces
-    /// atomically, but `tokio::fs::rename` on Windows fails if the destination
-    /// already exists. For `process_local_file` with `keep_inputs=true`, the
-    /// borrowed source file still exists on disk when the survivor is finalized
-    /// to the same path (same-container in-place update), so `finalize_part`
-    /// must remove it first (#414).
+    /// For `process_local_file` with `keep_inputs=true`, the borrowed source file
+    /// still exists on disk when the survivor is finalized to the same path
+    /// (same-container in-place update), so `finalize_part` must handle a
+    /// pre-existing `clean` (#414).
+    ///
+    /// On Unix this is handled by the atomic direct-rename path (`rename(2)` replaces
+    /// an existing destination). On Windows `finalize_part_replace_windows` is used
+    /// instead (backup-restore). This test runs on Unix and exercises the direct-rename
+    /// path.
     #[tokio::test]
     #[allow(clippy::disallowed_methods)] // std::fs helpers in test fixtures — per clippy.toml policy (c)
     async fn test_finalize_part_overwrites_existing_clean() {
@@ -511,6 +536,60 @@ mod tests {
 
         // The temp part must be gone.
         assert!(!part.exists(), "part must be removed after finalize");
+    }
+
+    /// After `finalize_part` succeeds with a pre-existing `clean`, the directory
+    /// must contain ONLY the clean file — no `.rdlp-bak-*` sidecar and no leftover
+    /// `part` file.
+    ///
+    /// On Unix this pins the structural guarantee of the atomic direct-rename path:
+    /// no backup is ever written, so there is no sidecar to orphan even under a
+    /// force-exit. The force-exit orphan-window elimination itself is structural
+    /// (the `#[cfg(windows)]` cfg-gate) and is not directly unit-observable, but
+    /// the absence of a `.rdlp-bak-*` file proves the Unix path was taken.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // std::fs helpers in test fixtures — per clippy.toml policy (c)
+    async fn test_finalize_part_no_bak_sidecar_on_overwrite() {
+        use std::io::Write as _;
+        use tempfile::TempDir;
+        let dir = TempDir::new().expect("tempdir");
+
+        let part = dir.path().join("clip.rdlp-tmp-xyz.mp4");
+        let clean = dir.path().join("clip.mp4");
+
+        {
+            let mut f = std::fs::File::create(&part).expect("create part");
+            f.write_all(b"new-content").expect("write part");
+        }
+        {
+            let mut f = std::fs::File::create(&clean).expect("create clean");
+            f.write_all(b"old-content").expect("write clean");
+        }
+
+        finalize_part(&part, &clean)
+            .await
+            .expect("finalize_part must succeed");
+
+        // Only `clean` must remain — no `part`, no `.rdlp-bak-*` sidecar.
+        let mut entries: Vec<String> = std::fs::read_dir(dir.path())
+            .expect("read_dir")
+            .filter_map(std::result::Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        entries.sort();
+
+        assert_eq!(
+            entries,
+            vec!["clip.mp4"],
+            "directory must contain exactly the clean file — no sidecar, no part; got: {entries:?}"
+        );
+
+        // The content must be the survivor's.
+        let content = std::fs::read(&clean).expect("read clean");
+        assert_eq!(
+            content, b"new-content",
+            "clean must hold the survivor content"
+        );
     }
 
     /// `seam_stream` moves a raw `.{label}.{format_id}.{ext}` merge-stream file

@@ -31,21 +31,22 @@ async fn finalize_part_renames_and_reports_missing() {
     assert!(clean.exists() && !part.exists());
 
     // Failure surfaces with context when the part is missing.
-    // At this point `clean` exists (from the successful rename above), so the
-    // backup-restore branch fires: `clean` is backed up, the rename of the
-    // missing `part` fails, `clean` is restored, and the error includes
-    // "(original restored)". The key invariant is that `clean` is intact.
+    // At this point `clean` exists (from the successful rename above).
+    // On Unix: the direct atomic rename fires and fails (part is gone) — the
+    // OS never touches `clean`, so it remains intact and the error contains
+    // "No such file" or "failed to finalize".
+    // On Windows: the backup-restore branch fires — `clean` is backed up,
+    // the rename of the missing `part` fails, `clean` is restored, and the
+    // error includes "(original restored)". Either way the key invariant is
+    // that `clean` is intact after the error.
     let err = finalize_part(&part, &clean).await.unwrap_err();
     let msg = format!("{err:#}");
     assert!(
         msg.contains("failed to finalize") || msg.contains("No such file"),
         "got: {msg}"
     );
-    // The original `clean` must be restored after the failed rename.
-    assert!(
-        clean.exists(),
-        "clean must be restored after failed finalize"
-    );
+    // The original `clean` must still exist after the failed rename.
+    assert!(clean.exists(), "clean must be intact after failed finalize");
 }
 
 #[tokio::test]
