@@ -43,6 +43,7 @@ tauri-build = { version = "2", features = [] }
 
 [dev-dependencies]
 mockito = { workspace = true }
+rdlp-redact = { path = "../../rdlp-redact" }
 
 [lints.rust]
 missing_docs = "warn"
