@@ -1,0 +1,29 @@
+rules:
+  - id: raw-url-in-log-field
+    languages: [generic]
+    severity: ERROR
+    paths:
+      include: ['*.rs']
+    message: >-
+      Raw URL in a log kv field reaches the logger unredacted (CWE-532).
+      Wrap the value with rdlp_redact::RedactedUrl::new(<url>) so its
+      ToValue/Display redacts credentials. See CODING_RULES.md
+      "URL Redaction — controls". (#428)
+    patterns:
+      - pattern-either:
+          - pattern: debug!(url = $X ...)
+          - pattern: info!(url = $X ...)
+          - pattern: warn!(url = $X ...)
+          - pattern: error!(url = $X ...)
+          - pattern: trace!(url = $X ...)
+      - metavariable-pattern:
+          metavariable: $X
+          patterns:
+            # Sanitizers — prefix-anchored to the call forms used in-tree.
+            # generic-mode pattern-not is prefix-matched; enumerate the real
+            # qualified + bare forms (validated: surrounding-ellipsis breaks it).
+            - pattern-not: RedactedUrl ...
+            - pattern-not: RedactedUrlBuf ...
+            - pattern-not: rdlp_redact ...
+            - pattern-not: sanitize_for_logging ...
+            - pattern-not: rdlp_security ...
