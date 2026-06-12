@@ -704,6 +704,13 @@ impl RdlpClient {
                 }
                 Err(e) => {
                     let err = RdlpApiError::from(e);
+                    // No orchestrator-owned sidecars to clean up here: the local-
+                    // file path never downloads a thumbnail and never writes session
+                    // state. The user's source file is borrowed (keep_inputs=true),
+                    // so FileTracker::Drop preserves it. The only temp artifacts are
+                    // the pipeline's own .rdlp-tmp-{uuid} files, which FileTracker::Drop
+                    // already removes on cancel/error (#414 / #404).
+                    //
                     // intentional: receiver may have disconnected
                     // (cancellation surfaces as Event::Cancelled, not Failed).
                     let _ = tx.send(terminal_event(id, &err)).await;
