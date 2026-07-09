@@ -33,10 +33,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use log::{debug, warn};
-use rdlp_core::{
-    ExponentialBuilder, ExtractionContext, InfoExtractor, RdlpError, Result, Retryable,
-    SearchExtractor,
-};
+use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result, SearchExtractor};
 use rdlp_types::{InfoDict, SearchPageResponse, SearchQuery, SearchResultPreview};
 use scraper::Html;
 
@@ -97,26 +94,7 @@ impl PornHubExtractor {
         url: &str,
         ctx: &ExtractionContext,
     ) -> Result<Vec<SearchResultPreview>> {
-        let response = (|| async { ctx.http_client.get(url).send().await })
-            .retry(
-                ExponentialBuilder::default()
-                    .with_max_times(2)
-                    .with_min_delay(Duration::from_millis(500)),
-            )
-            .when(|e| e.is_timeout() || e.is_connect())
-            .await
-            .map_err(|e| RdlpError::Network {
-                message: format!("Failed to fetch PornHub search API: {e}"),
-                url: Some(url.to_string().into()),
-            })?;
-
-        rdlp_core::check_http_response(&response)?;
-
-        let body = response.text().await.map_err(|e| RdlpError::Network {
-            message: format!("Failed to read PornHub API response: {e}"),
-            url: Some(url.to_string().into()),
-        })?;
-
+        let body = BaseExtractor::fetch_webpage_with_retry(url, ctx).await?;
         search::parse_api_search_results(&body)
     }
 
@@ -130,26 +108,7 @@ impl PornHubExtractor {
         url: &str,
         ctx: &ExtractionContext,
     ) -> Result<Vec<SearchResultPreview>> {
-        let response = (|| async { ctx.http_client.get(url).send().await })
-            .retry(
-                ExponentialBuilder::default()
-                    .with_max_times(2)
-                    .with_min_delay(Duration::from_millis(500)),
-            )
-            .when(|e| e.is_timeout() || e.is_connect())
-            .await
-            .map_err(|e| RdlpError::Network {
-                message: format!("Failed to fetch PornHub HTML search page: {e}"),
-                url: Some(url.to_string().into()),
-            })?;
-
-        rdlp_core::check_http_response(&response)?;
-
-        let body = response.text().await.map_err(|e| RdlpError::Network {
-            message: format!("Failed to read PornHub HTML search response: {e}"),
-            url: Some(url.to_string().into()),
-        })?;
-
+        let body = BaseExtractor::fetch_webpage_with_retry(url, ctx).await?;
         search_html::parse_html_search_results(&body)
     }
 

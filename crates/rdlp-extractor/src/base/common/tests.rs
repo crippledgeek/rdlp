@@ -352,3 +352,110 @@ fn webpage_cap_documented_value() {
     // Pin the documented cap. Bumping is fine but should be intentional.
     assert_eq!(super::MAX_WEBPAGE_BYTES, 50 * 1024 * 1024);
 }
+
+// ========================================================================
+// fetch_webpage_with_retry
+// ========================================================================
+//
+// The retry-aware fetch helper unifies the hand-rolled
+// "GET-with-backon-retry → check status → read body" blocks that four
+// site extractors had each re-implemented (pornhub ×2, redtube, xhamster).
+// Those copies ADDED retry but DROPPED the URL-length check and the
+// `fetch_capped_text` body cap that `fetch_webpage` enforces — reading
+// bodies with an uncapped `response.text()`. This helper restores
+// safety parity: same URL-length guard and same streaming body cap as
+// `fetch_webpage`, PLUS transient-failure retry.
+//
+// These tests assert the two safety guards fire on the retry path (the
+// exact behavior the hand-rolled copies lacked) alongside the happy path
+// and status propagation.
+
+#[tokio::test]
+async fn fetch_webpage_with_retry_returns_body_on_200() {
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", mockito::Matcher::Any)
+        .with_status(200)
+        .with_header("content-type", "text/html; charset=utf-8")
+        .with_body("<html>ok</html>")
+        .create_async()
+        .await;
+
+    let ctx = crate::hls::test_support::test_ctx();
+    let body = BaseExtractor::fetch_webpage_with_retry(&server.url(), &ctx)
+        .await
+        .expect("200 response must yield the body");
+
+    assert_eq!(body, "<html>ok</html>");
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn fetch_webpage_with_retry_propagates_5xx_as_error() {
+    // A 5xx is a *successful* HTTP exchange returning a bad status — it is
+    // NOT a timeout/connect error, so the backon `.when(...)` predicate must
+    // not retry it; it should fail fast via `check_http_response`.
+    let mut server = mockito::Server::new_async().await;
+    let mock = server
+        .mock("GET", mockito::Matcher::Any)
+        .with_status(503)
+        .with_body("service unavailable")
+        .expect(1) // proves 5xx is not retried by the transient-error predicate
+        .create_async()
+        .await;
+
+    let ctx = crate::hls::test_support::test_ctx();
+    let result = BaseExtractor::fetch_webpage_with_retry(&server.url(), &ctx).await;
+
+    assert!(result.is_err(), "503 must propagate as an error");
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn fetch_webpage_with_retry_rejects_overlong_url() {
+    // The URL-length guard `fetch_webpage` has — which the hand-rolled
+    // retry copies dropped. An over-cap URL must be rejected as an
+    // `Extraction` error BEFORE any network call. The URL points at an
+    // unroutable loopback path: if the guard failed to fire, the attempted
+    // fetch would surface as a `Network` error instead, so asserting the
+    // `Extraction` variant proves the guard short-circuited pre-network.
+    let overlong = format!("http://127.0.0.1/{}", "a".repeat(MAX_URL_LENGTH));
+    assert!(overlong.len() > MAX_URL_LENGTH);
+
+    let ctx = crate::hls::test_support::test_ctx();
+    let err = BaseExtractor::fetch_webpage_with_retry(&overlong, &ctx)
+        .await
+        .expect_err("an over-cap URL must be rejected");
+
+    assert!(
+        matches!(err, RdlpError::Extraction { .. }),
+        "expected Extraction (URL too long), got: {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn fetch_webpage_with_retry_enforces_body_cap() {
+    // The body cap `fetch_webpage` enforces via `fetch_capped_text` — which
+    // the hand-rolled retry copies dropped in favour of an uncapped
+    // `response.text()`. A body one byte over `MAX_WEBPAGE_BYTES` must abort
+    // mid-stream with a Network error rather than buffer to completion.
+    // Intentionally large (~50 MB) — the sole functional guard that the
+    // retry path routes through the streaming cap; freed immediately.
+    let mut server = mockito::Server::new_async().await;
+    let oversized = vec![b'a'; MAX_WEBPAGE_BYTES + 1];
+    let mock = server
+        .mock("GET", mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(oversized)
+        .create_async()
+        .await;
+
+    let ctx = crate::hls::test_support::test_ctx();
+    let result = BaseExtractor::fetch_webpage_with_retry(&server.url(), &ctx).await;
+
+    assert!(
+        matches!(result, Err(RdlpError::Network { .. })),
+        "a body over the cap must be rejected as a Network error, got: {result:?}"
+    );
+    mock.assert_async().await;
+}

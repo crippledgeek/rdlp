@@ -22,10 +22,7 @@ mod search;
 
 use async_trait::async_trait;
 use log::{debug, warn};
-use rdlp_core::{
-    ExponentialBuilder, ExtractionContext, InfoExtractor, RdlpError, Result, Retryable,
-    SearchExtractor,
-};
+use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result, SearchExtractor};
 use rdlp_types::{InfoDict, SearchPageResponse};
 use regex::Regex;
 use scraper::Html;
@@ -406,26 +403,7 @@ impl RedTubeExtractor {
         url: &str,
         ctx: &ExtractionContext,
     ) -> Result<(Vec<rdlp_types::SearchResultPreview>, Option<u64>)> {
-        let response = (|| async { ctx.http_client.get(url).send().await })
-            .retry(
-                ExponentialBuilder::default()
-                    .with_max_times(2)
-                    .with_min_delay(Duration::from_millis(500)),
-            )
-            .when(|e| e.is_timeout() || e.is_connect())
-            .await
-            .map_err(|e| RdlpError::Network {
-                message: format!("Failed to fetch search API: {e}"),
-                url: Some(url.to_string().into()),
-            })?;
-
-        rdlp_core::check_http_response(&response)?;
-
-        let body = response.text().await.map_err(|e| RdlpError::Network {
-            message: format!("Failed to read search API response: {e}"),
-            url: Some(url.to_string().into()),
-        })?;
-
+        let body = BaseExtractor::fetch_webpage_with_retry(url, ctx).await?;
         search::parse_api_search_results(&body)
     }
 
@@ -435,7 +413,9 @@ impl RedTubeExtractor {
         url: &str,
         ctx: &ExtractionContext,
     ) -> Result<Vec<rdlp_types::SearchResultPreview>> {
-        let webpage = BaseExtractor::fetch_webpage(url, ctx).await?;
+        // Retry-aware sibling: the HTML path is a fallback for a flaky API, so
+        // a transient CDN reset here should retry rather than abandon search.
+        let webpage = BaseExtractor::fetch_webpage_with_retry(url, ctx).await?;
         search::parse_html_search_results(&webpage)
     }
 }

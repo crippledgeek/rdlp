@@ -45,8 +45,12 @@ mod string_utils;
 #[cfg(test)]
 mod tests;
 
+use std::time::Duration;
+
 use log::debug;
-use rdlp_core::{ExtractionContext, RdlpError, Result, check_http_response};
+use rdlp_core::{
+    ExponentialBuilder, ExtractionContext, RdlpError, Result, Retryable, check_http_response,
+};
 use rdlp_types::Codec;
 use rdlp_types::Format;
 use regex::Regex;
@@ -67,6 +71,21 @@ pub(crate) use rdlp_security::MAX_URL_LENGTH;
 /// the entire body and OOM the host. 50 MB covers any realistic HTML +
 /// JSON-LD payload with multiple orders of magnitude of headroom.
 pub(crate) const MAX_WEBPAGE_BYTES: usize = 50 * 1024 * 1024;
+
+/// Transient-failure retry budget for `fetch_webpage_with_retry`.
+///
+/// 2 retries (3 attempts total) with a 500 ms exponential base back off. This
+/// is the exact policy the four site extractors (pornhub ×2, redtube,
+/// xhamster) each hand-rolled for their search/pagination fetches before it
+/// was unified here — enough to ride out a brief CDN hiccup without stalling a
+/// pagination loop. Only timeout/connect errors are retried (see the `.when`
+/// predicate); a returned HTTP error status is not a transient fault and is
+/// failed fast by `check_http_response`.
+const FETCH_RETRY_MAX_TIMES: usize = 2;
+
+/// Base back-off delay between retry attempts, in milliseconds.
+/// See [`FETCH_RETRY_MAX_TIMES`] for the rationale of the shared policy.
+const FETCH_RETRY_MIN_DELAY_MS: u64 = 500;
 
 // ============================================================================
 // Base Extractor
@@ -180,6 +199,70 @@ impl BaseExtractor {
         let webpage = fetch_capped_text(response, url).await?;
 
         // Debug output if verbose
+        if ctx.config.verbose {
+            crate::utils::debug_print_webpage_sample(&webpage, DEFAULT_DEBUG_SAMPLE_SIZE);
+        }
+
+        Ok(webpage)
+    }
+
+    /// Fetch a webpage like [`fetch_webpage`](Self::fetch_webpage), but retry
+    /// transient timeout/connect failures with exponential back off.
+    ///
+    /// This is the retry-aware sibling of `fetch_webpage`. It applies the
+    /// **same safety guards** — the [`MAX_URL_LENGTH`] check and the
+    /// [`fetch_capped_text`] streaming body cap ([`MAX_WEBPAGE_BYTES`]) — and
+    /// additionally wraps the GET in a `backon` exponential retry
+    /// ([`FETCH_RETRY_MAX_TIMES`] attempts, [`FETCH_RETRY_MIN_DELAY_MS`] base
+    /// delay). Only timeout/connect errors are retried; a non-2xx status is a
+    /// definitive result and is surfaced immediately by `check_http_response`.
+    ///
+    /// Use this for search/pagination fetches against CDNs prone to transient
+    /// resets. The four site extractors that previously hand-rolled this
+    /// GET-retry-read block (pornhub, redtube, xhamster) dropped the URL and
+    /// body-size guards in the process; routing them through this helper
+    /// restores safety parity with `fetch_webpage`.
+    ///
+    /// # Arguments
+    /// * `url` - The URL to fetch
+    /// * `ctx` - Extraction context with HTTP client and config
+    ///
+    /// # Returns
+    /// The webpage content as a string
+    ///
+    /// # Errors
+    /// - `RdlpError::Extraction` if the URL exceeds [`MAX_URL_LENGTH`]
+    /// - `RdlpError::Network` if the request fails (after retries), the status
+    ///   is non-2xx, or the body exceeds [`MAX_WEBPAGE_BYTES`]
+    pub(crate) async fn fetch_webpage_with_retry(
+        url: &str,
+        ctx: &ExtractionContext,
+    ) -> Result<String> {
+        // Security: Validate URL length (parity with `fetch_webpage`).
+        if url.len() > MAX_URL_LENGTH {
+            return Err(RdlpError::Extraction {
+                message: format!("URL too long: {} bytes (max: {MAX_URL_LENGTH})", url.len()),
+                url: Some(url.to_string().into()),
+            });
+        }
+
+        let response = (|| async { ctx.http_client.get(url).send().await })
+            .retry(
+                ExponentialBuilder::default()
+                    .with_max_times(FETCH_RETRY_MAX_TIMES)
+                    .with_min_delay(Duration::from_millis(FETCH_RETRY_MIN_DELAY_MS)),
+            )
+            .when(|e| e.is_timeout() || e.is_connect())
+            .await
+            .map_err(|e| RdlpError::Network {
+                message: format!("Failed to fetch webpage: {e}"),
+                url: Some(url.to_string().into()),
+            })?;
+
+        check_http_response(&response)?;
+
+        let webpage = fetch_capped_text(response, url).await?;
+
         if ctx.config.verbose {
             crate::utils::debug_print_webpage_sample(&webpage, DEFAULT_DEBUG_SAMPLE_SIZE);
         }

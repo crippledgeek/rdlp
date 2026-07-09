@@ -7,10 +7,6 @@ fingerprint = "8c6b8e22faf810b1"
 reason = "Acceptable test boilerplate (build_*_plugin x3 in plugin golden tests)"
 
 [[ignore]]
-fingerprint = "e79a123cf3c33161"
-reason = "Initiative #5: InfoExtractorExt — fetch_api/html_search_page shared across PornHub+RedTube (tracking issue)"
-
-[[ignore]]
 fingerprint = "36dd26d02f5ee08b"
 reason = "Intentional single-call vs paginated twin (Orchestrator::search vs search_page; matches RdlpClient pair)"
 

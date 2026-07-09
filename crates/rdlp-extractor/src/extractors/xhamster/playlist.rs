@@ -4,13 +4,11 @@
 
 use super::XHamsterExtractor;
 use super::patterns;
-use crate::base::common::MAX_PLAYLIST_SIZE;
+use crate::base::common::{BaseExtractor, MAX_PLAYLIST_SIZE};
 use futures::stream::{self, StreamExt};
 use lazy_regex::{Lazy, Regex, lazy_regex};
 use log::{debug, info, warn};
-use rdlp_core::{
-    ExponentialBuilder, ExtractionContext, RdlpError, Result, Retryable, check_http_response,
-};
+use rdlp_core::{ExtractionContext, RdlpError, Result};
 use rdlp_types::InfoDict;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -51,25 +49,7 @@ impl XHamsterExtractor {
 
             debug!(page, url:? = rdlp_redact::RedactedUrl::new(&page_url); "[XHamster] Fetching user page");
 
-            let response = (|| async { ctx.http_client.get(&page_url).send().await })
-                .retry(
-                    ExponentialBuilder::default()
-                        .with_max_times(2)
-                        .with_min_delay(Duration::from_millis(500)),
-                )
-                .when(|e| e.is_timeout() || e.is_connect())
-                .await
-                .map_err(|e| RdlpError::Network {
-                    message: format!("Failed to fetch user page {page}: {e}"),
-                    url: Some(page_url.clone().into()),
-                })?;
-
-            check_http_response(&response)?;
-
-            let webpage = response.text().await.map_err(|e| RdlpError::Network {
-                message: format!("Failed to read user page {page}: {e}"),
-                url: Some(page_url.clone().into()),
-            })?;
+            let webpage = BaseExtractor::fetch_webpage_with_retry(&page_url, ctx).await?;
 
             // Extract video URLs from the page
             let page_urls = extract_user_video_urls(&webpage);
