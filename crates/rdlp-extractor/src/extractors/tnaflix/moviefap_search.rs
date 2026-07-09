@@ -6,12 +6,9 @@
 use async_trait::async_trait;
 use log::debug;
 use rdlp_core::{ExtractionContext, Result};
-use std::time::Duration;
 
 use super::{moviefap_search_helpers, moviefap_search_patterns};
-
-/// Rate limit delay between search page fetches (500 ms)
-const PAGE_RATE_LIMIT_MS: u64 = 500;
+use crate::base::common::PaginatedSearch;
 
 /// MovieFap search extractor
 ///
@@ -24,6 +21,17 @@ impl MovieFapSearchExtractor {
     #[must_use]
     pub fn new() -> Self {
         Self
+    }
+}
+
+#[async_trait]
+impl PaginatedSearch for MovieFapSearchExtractor {
+    fn search_log_tag(&self) -> &'static str {
+        "[MovieFap]"
+    }
+
+    fn validate_search_filters(&self, filters: &[rdlp_types::SearchFilter]) -> Result<()> {
+        moviefap_search_helpers::validate_search_filters(filters)
     }
 
     /// Fetch a single search results page and return `(results, max_page_number)`.
@@ -48,55 +56,6 @@ impl MovieFapSearchExtractor {
         );
 
         Ok((page_results, max_pages))
-    }
-
-    /// Collect all pages up to `MAX_PLAYLIST_SIZE` results.
-    async fn search_all_pages(
-        &self,
-        query: &rdlp_types::SearchQuery,
-        ctx: &ExtractionContext,
-    ) -> Result<Vec<rdlp_types::SearchResultPreview>> {
-        moviefap_search_helpers::validate_search_filters(&query.filters)?;
-
-        let max_results = query
-            .max_results
-            .unwrap_or(crate::base::common::MAX_PLAYLIST_SIZE);
-
-        let mut all_results = Vec::new();
-        let mut page = 1usize;
-
-        loop {
-            let (page_results, max_pages) = match self.fetch_search_page(query, page, ctx).await {
-                Ok(r) => r,
-                Err(e) => {
-                    debug!(page; "[MovieFap] Failed to fetch search page, returning partial results: {e}");
-                    break;
-                }
-            };
-
-            if page_results.is_empty() {
-                debug!(page; "[MovieFap] No results on page, stopping pagination");
-                break;
-            }
-
-            all_results.extend(page_results);
-
-            if all_results.len() >= max_results {
-                all_results.truncate(max_results);
-                break;
-            }
-
-            if page >= max_pages {
-                break;
-            }
-
-            page += 1;
-            tokio::time::sleep(Duration::from_millis(PAGE_RATE_LIMIT_MS)).await;
-        }
-
-        debug!(count = all_results.len(), pages = page; "[MovieFap] Search complete");
-
-        Ok(all_results)
     }
 }
 

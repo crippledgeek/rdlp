@@ -53,7 +53,7 @@ use regex::Regex;
 
 // Re-export selectors, patterns, and constants from submodule
 pub(crate) use protocol::protocol_for_url;
-pub(crate) use search::append_search_filters;
+pub(crate) use search::{PaginatedSearch, append_search_filters};
 pub(crate) use selectors::*;
 
 /// Maximum URL length to prevent memory exhaustion attacks
