@@ -216,6 +216,9 @@ pub struct Args {
     #[arg(long, value_name = "MODE", default_value = "copy")]
     pub recode_audio: String,
 
+    // Help text hardcodes the bounds: keep `1-64` in sync with
+    // `rdlp_types::config::MAX_RECODE_THREADS` and `8` in sync with
+    // `rdlp_ffmpeg`'s `AUTO_RECODE_THREADS_CAP`.
     /// Encoder threads for video recode (1-64). Omit for auto (min(cores, 8)).
     #[arg(long, value_name = "N")]
     pub recode_threads: Option<u32>,
