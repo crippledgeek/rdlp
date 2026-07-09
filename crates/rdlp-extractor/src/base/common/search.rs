@@ -7,8 +7,18 @@
 //! `ordering` / `period` / `category` / `tags[]` filter vocabulary (PornHub,
 //! RedTube) delegate that appending here.
 
-use rdlp_types::SearchFilter;
+use async_trait::async_trait;
+use log::debug;
+use rdlp_core::{ExtractionContext, Result};
+use rdlp_types::{SearchFilter, SearchQuery, SearchResultPreview};
+use std::time::Duration;
 use url::form_urlencoded;
+
+use super::MAX_PLAYLIST_SIZE;
+
+/// Delay between successive search-page fetches. All API-paginated sites that
+/// share the [`PaginatedSearch`] scaffold rate-limit at this interval.
+pub(crate) const PAGE_RATE_LIMIT_MS: u64 = 500;
 
 /// Append the standard API search filters to an in-progress search URL.
 ///
@@ -51,6 +61,89 @@ pub(crate) fn append_search_filters(url: &mut String, filters: &[SearchFilter]) 
             }
             _ => {}
         }
+    }
+}
+
+/// Shared multi-page search pagination for API-style search extractors.
+///
+/// Sites whose search fetches page N and learns the total page count from the
+/// same response (XHamster, TNAFlix, EMPFlix, MovieFap) share one pagination
+/// loop: fetch pages in order, accumulate previews, and stop at the first of —
+/// `max_results` reached, `max_pages` reached, an empty page, or a fetch error
+/// (returning the partial results gathered so far). Implementors supply only
+/// the per-site pieces (a single-page fetch, a log tag, filter validation);
+/// [`search_all_pages`](Self::search_all_pages) is the shared default and
+/// should not be overridden.
+///
+/// Sites with a different pagination shape (e.g. PornHub/RedTube, which chain
+/// an HTML-vs-API fallback per page) intentionally do NOT implement this trait.
+#[async_trait]
+pub(crate) trait PaginatedSearch: Send + Sync {
+    /// Bracketed site tag used in log lines, e.g. `"[XHamster]"`.
+    fn search_log_tag(&self) -> &'static str;
+
+    /// Validate the query's filters against this site's supported filter set.
+    fn validate_search_filters(&self, filters: &[SearchFilter]) -> Result<()>;
+
+    /// Fetch a single search page, returning `(results, max_pages)`.
+    async fn fetch_search_page(
+        &self,
+        query: &SearchQuery,
+        page: usize,
+        ctx: &ExtractionContext,
+    ) -> Result<(Vec<SearchResultPreview>, usize)>;
+
+    /// Delay between successive page fetches. Defaults to [`PAGE_RATE_LIMIT_MS`].
+    fn page_rate_limit(&self) -> Duration {
+        Duration::from_millis(PAGE_RATE_LIMIT_MS)
+    }
+
+    /// Collect results across pages until `max_results` / `max_pages` / an empty
+    /// page / a fetch error. Shared scaffold — do not override.
+    async fn search_all_pages(
+        &self,
+        query: &SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<Vec<SearchResultPreview>> {
+        self.validate_search_filters(&query.filters)?;
+
+        let tag = self.search_log_tag();
+        let max_results = query.max_results.unwrap_or(MAX_PLAYLIST_SIZE);
+        let mut all_results = Vec::new();
+        let mut page = 1usize;
+
+        loop {
+            let (page_results, max_pages) = match self.fetch_search_page(query, page, ctx).await {
+                Ok(result) => result,
+                Err(e) => {
+                    debug!(page; "{tag} Failed to fetch search page, returning partial results: {e}");
+                    break;
+                }
+            };
+
+            if page_results.is_empty() {
+                debug!(page; "{tag} No results on page, stopping pagination");
+                break;
+            }
+
+            all_results.extend(page_results);
+
+            if all_results.len() >= max_results {
+                all_results.truncate(max_results);
+                break;
+            }
+
+            if page >= max_pages {
+                break;
+            }
+
+            page += 1;
+            tokio::time::sleep(self.page_rate_limit()).await;
+        }
+
+        debug!(count = all_results.len(), pages = page; "{tag} Search complete");
+
+        Ok(all_results)
     }
 }
 
@@ -128,5 +221,178 @@ mod tests {
         let out = append(&[filter("bogus", "value"), filter("ordering", "top")]);
         assert!(!out.contains("bogus"), "got {out}");
         assert!(out.ends_with("&ordering=top"), "got {out}");
+    }
+
+    // ---- PaginatedSearch scaffold ----
+
+    use crate::hls::test_support::test_ctx;
+    use rdlp_core::RdlpError;
+    use rdlp_types::SearchQuery;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn preview(i: usize) -> SearchResultPreview {
+        SearchResultPreview {
+            video_url: format!("https://x.test/v{i}"),
+            title: format!("v{i}"),
+            thumbnail_url: None,
+            duration: None,
+            uploader: None,
+            uploader_url: None,
+            actors: Vec::new(),
+            view_count: None,
+            upload_date: None,
+        }
+    }
+
+    fn previews(n: usize) -> Vec<SearchResultPreview> {
+        (0..n).map(preview).collect()
+    }
+
+    enum Page {
+        Ok(Vec<SearchResultPreview>, usize),
+        Fail,
+    }
+
+    struct MockSearch {
+        script: Vec<Page>,
+        validation_fails: bool,
+        fetches: AtomicUsize,
+    }
+
+    impl MockSearch {
+        fn new(script: Vec<Page>) -> Self {
+            Self {
+                script,
+                validation_fails: false,
+                fetches: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl PaginatedSearch for MockSearch {
+        fn search_log_tag(&self) -> &'static str {
+            "[Mock]"
+        }
+        fn validate_search_filters(&self, _filters: &[SearchFilter]) -> Result<()> {
+            if self.validation_fails {
+                Err(RdlpError::extraction(
+                    "mock validation failure",
+                    "https://x.test",
+                ))
+            } else {
+                Ok(())
+            }
+        }
+        // No real sleeps in tests.
+        fn page_rate_limit(&self) -> Duration {
+            Duration::ZERO
+        }
+        async fn fetch_search_page(
+            &self,
+            _query: &SearchQuery,
+            page: usize,
+            _ctx: &ExtractionContext,
+        ) -> Result<(Vec<SearchResultPreview>, usize)> {
+            self.fetches.fetch_add(1, Ordering::SeqCst);
+            match self.script.get(page - 1) {
+                Some(Page::Ok(results, max_pages)) => Ok((results.clone(), *max_pages)),
+                Some(Page::Fail) => Err(RdlpError::extraction(
+                    "mock fetch failure",
+                    "https://x.test",
+                )),
+                None => Ok((Vec::new(), page)), // past the script → empty page
+            }
+        }
+    }
+
+    fn query(max_results: Option<usize>) -> SearchQuery {
+        SearchQuery {
+            query: "q".to_string(),
+            filters: Vec::new(),
+            max_results,
+            page: None,
+        }
+    }
+
+    async fn run(script: Vec<Page>, max_results: Option<usize>) -> Vec<SearchResultPreview> {
+        MockSearch::new(script)
+            .search_all_pages(&query(max_results), &test_ctx())
+            .await
+            .expect("scaffold returns partial results, never errors")
+    }
+
+    #[tokio::test]
+    async fn accumulates_across_pages_then_truncates_to_max_results() {
+        // page1: 3, page2: 3, cap 4 → extend to 6, truncate to 4.
+        let out = run(
+            vec![Page::Ok(previews(3), 10), Page::Ok(previews(3), 10)],
+            Some(4),
+        )
+        .await;
+        assert_eq!(out.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn stops_at_max_pages_without_fetching_beyond() {
+        // page1 reports max_pages=1; page2 (if fetched) would add 5 — must not.
+        let out = run(
+            vec![Page::Ok(previews(2), 1), Page::Ok(previews(5), 1)],
+            None,
+        )
+        .await;
+        assert_eq!(out.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn stops_on_empty_page() {
+        let out = run(
+            vec![Page::Ok(previews(2), 10), Page::Ok(Vec::new(), 10)],
+            None,
+        )
+        .await;
+        assert_eq!(out.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn fetch_error_returns_partial_results() {
+        let out = run(vec![Page::Ok(previews(2), 10), Page::Fail], None).await;
+        assert_eq!(out.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn truncates_within_a_single_page() {
+        let out = run(vec![Page::Ok(previews(5), 10)], Some(3)).await;
+        assert_eq!(out.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn accumulates_all_pages_when_uncapped() {
+        // 2 pages, no result cap; max_pages=2 stops the loop naturally → all 5,
+        // no truncation (the one path the other multi-page tests don't cover).
+        let out = run(
+            vec![Page::Ok(previews(3), 2), Page::Ok(previews(2), 2)],
+            None,
+        )
+        .await;
+        assert_eq!(out.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn validation_error_returns_err_without_fetching() {
+        // The only scaffold path that returns Err (not partial results): a
+        // failed filter validation must short-circuit BEFORE any page fetch.
+        let mock = MockSearch {
+            script: vec![Page::Ok(previews(3), 10)],
+            validation_fails: true,
+            fetches: AtomicUsize::new(0),
+        };
+        let result = mock.search_all_pages(&query(None), &test_ctx()).await;
+        assert!(result.is_err(), "validation failure must propagate as Err");
+        assert_eq!(
+            mock.fetches.load(Ordering::SeqCst),
+            0,
+            "must not fetch any page when validation fails"
+        );
     }
 }

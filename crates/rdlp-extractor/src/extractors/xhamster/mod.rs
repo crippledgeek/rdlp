@@ -32,7 +32,7 @@ use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result, SearchExtra
 use rdlp_types::{InfoDict, SearchPageResponse};
 use std::time::Duration;
 
-use crate::base::common::{BaseExtractor, MAX_PLAYLIST_SIZE};
+use crate::base::common::{BaseExtractor, PaginatedSearch};
 use crate::hls::detect_format_sizes_lazy;
 
 pub use patterns::{XHAMSTER_EMBED_PATTERN, XHAMSTER_VIDEO_PATTERN};
@@ -40,7 +40,8 @@ pub use patterns::{XHAMSTER_EMBED_PATTERN, XHAMSTER_VIDEO_PATTERN};
 /// Timeout for extracting a single video in playlist mode (30 seconds)
 const VIDEO_EXTRACTION_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Rate limit delay between user page fetches (500ms)
+/// Rate limit delay between playlist page fetches (500ms). Search pagination
+/// uses the shared `PaginatedSearch` default instead.
 const PAGE_RATE_LIMIT_MS: u64 = 500;
 
 /// Number of concurrent video extractions
@@ -247,6 +248,17 @@ impl XHamsterExtractor {
             url: Some(url.to_string().into()),
         })
     }
+}
+
+#[async_trait]
+impl PaginatedSearch for XHamsterExtractor {
+    fn search_log_tag(&self) -> &'static str {
+        "[XHamster]"
+    }
+
+    fn validate_search_filters(&self, filters: &[rdlp_types::SearchFilter]) -> Result<()> {
+        search::validate_search_filters(filters)
+    }
 
     /// Fetch a single search page, returning its results and the max page count.
     async fn fetch_search_page(
@@ -269,52 +281,6 @@ impl XHamsterExtractor {
         let max_pages = search::parse_max_pages(&initials).unwrap_or(1);
 
         Ok((page_results, max_pages))
-    }
-
-    /// Perform a paginated search, collecting results across all pages.
-    async fn search_all_pages(
-        &self,
-        query: &rdlp_types::SearchQuery,
-        ctx: &ExtractionContext,
-    ) -> Result<Vec<rdlp_types::SearchResultPreview>> {
-        search::validate_search_filters(&query.filters)?;
-
-        let max_results = query.max_results.unwrap_or(MAX_PLAYLIST_SIZE);
-        let mut all_results = Vec::new();
-        let mut page = 1_usize;
-
-        loop {
-            let (page_results, max_pages) = match self.fetch_search_page(query, page, ctx).await {
-                Ok(result) => result,
-                Err(e) => {
-                    debug!(page; "[XHamster] Failed to fetch search page, returning partial results: {e}");
-                    break;
-                }
-            };
-
-            if page_results.is_empty() {
-                debug!(page; "[XHamster] No results on page, stopping pagination");
-                break;
-            }
-
-            all_results.extend(page_results);
-
-            if all_results.len() >= max_results {
-                all_results.truncate(max_results);
-                break;
-            }
-
-            if page >= max_pages {
-                break;
-            }
-
-            page += 1;
-            tokio::time::sleep(Duration::from_millis(PAGE_RATE_LIMIT_MS)).await;
-        }
-
-        debug!(count = all_results.len(), pages = page; "[XHamster] Search complete");
-
-        Ok(all_results)
     }
 }
 
