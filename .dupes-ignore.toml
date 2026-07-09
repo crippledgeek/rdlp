@@ -47,10 +47,6 @@ fingerprint = "c724f5103213d974"
 reason = "Same domain-separation rationale (resolve_audio_encoder vs resolve_encoder for video)"
 
 [[ignore]]
-fingerprint = "e12f9e5e11985162"
-reason = "Rule of Three pending: build_api_search_url is duplicated in PornHub+RedTube; extract when a 3rd extractor needs the same pattern (tracking issue)"
-
-[[ignore]]
 fingerprint = "f07ba850fd9c6f4d"
 reason = "Acceptable test redundancy; two distinct retry scenarios (exhausted vs non-retryable) share assertion shape"
 

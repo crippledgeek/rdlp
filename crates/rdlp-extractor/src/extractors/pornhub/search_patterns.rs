@@ -20,38 +20,7 @@ const HTML_SEARCH_BASE: &str = "https://www.pornhub.com/video/search";
 pub(crate) fn build_api_search_url(query: &str, filters: &[SearchFilter]) -> String {
     let encoded_query: String = form_urlencoded::byte_serialize(query.as_bytes()).collect();
     let mut url = format!("{API_BASE}?search={encoded_query}&output=json&thumbsize=large");
-
-    for filter in filters {
-        match filter.key.as_str() {
-            "ordering" => {
-                url.push_str("&ordering=");
-                url.push_str(&filter.value);
-            }
-            "period" => {
-                url.push_str("&period=");
-                url.push_str(&filter.value);
-            }
-            "category" => {
-                let encoded: String =
-                    form_urlencoded::byte_serialize(filter.value.as_bytes()).collect();
-                url.push_str("&category=");
-                url.push_str(&encoded);
-            }
-            "tags" => {
-                for tag in filter.value.split(',') {
-                    let trimmed = tag.trim();
-                    if !trimmed.is_empty() {
-                        let encoded: String =
-                            form_urlencoded::byte_serialize(trimmed.as_bytes()).collect();
-                        url.push_str("&tags[]=");
-                        url.push_str(&encoded);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
+    crate::base::common::append_search_filters(&mut url, filters);
     url
 }
 
