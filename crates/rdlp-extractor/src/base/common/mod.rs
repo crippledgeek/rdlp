@@ -38,6 +38,7 @@ pub mod json_ld;
 mod metadata;
 mod parsing;
 pub(crate) mod protocol;
+mod search;
 pub mod selector_macro;
 mod selectors;
 mod string_utils;
@@ -52,6 +53,7 @@ use regex::Regex;
 
 // Re-export selectors, patterns, and constants from submodule
 pub(crate) use protocol::protocol_for_url;
+pub(crate) use search::append_search_filters;
 pub(crate) use selectors::*;
 
 /// Maximum URL length to prevent memory exhaustion attacks

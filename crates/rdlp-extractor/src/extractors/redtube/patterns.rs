@@ -53,39 +53,7 @@ pub(crate) fn build_api_search_url(query: &str, filters: &[SearchFilter]) -> Str
         "https://api.redtube.com/?data=redtube.Videos.searchVideos\
          &output=json&search={encoded_query}&thumbsize=big"
     );
-
-    for filter in filters {
-        match filter.key.as_str() {
-            "ordering" => {
-                url.push_str("&ordering=");
-                url.push_str(&filter.value);
-            }
-            "period" => {
-                url.push_str("&period=");
-                url.push_str(&filter.value);
-            }
-            "category" => {
-                let encoded: String =
-                    form_urlencoded::byte_serialize(filter.value.as_bytes()).collect();
-                url.push_str("&category=");
-                url.push_str(&encoded);
-            }
-            "tags" => {
-                // Tags are comma-separated, each sent as tags[]
-                for tag in filter.value.split(',') {
-                    let trimmed = tag.trim();
-                    if !trimmed.is_empty() {
-                        let encoded: String =
-                            form_urlencoded::byte_serialize(trimmed.as_bytes()).collect();
-                        url.push_str("&tags[]=");
-                        url.push_str(&encoded);
-                    }
-                }
-            }
-            _ => {} // Unknown filters are silently ignored (validation is done elsewhere)
-        }
-    }
-
+    crate::base::common::append_search_filters(&mut url, filters);
     url
 }
 
