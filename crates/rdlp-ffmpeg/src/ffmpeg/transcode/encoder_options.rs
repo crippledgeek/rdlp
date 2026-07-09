@@ -27,6 +27,15 @@ pub fn build_video_encoder_options(
     opts: &VideoConvertOptions,
     encoder_name: &str,
 ) -> Vec<(&'static str, String)> {
+    // Precondition: only reached on the transcode path. `convert_video` routes
+    // `remux_only` to the stream-copy branch before any encoder is opened, so an
+    // encoder-option list is never built for a remux. The debug-only tripwire
+    // documents and enforces that in tests/dev.
+    debug_assert!(
+        !opts.remux_only,
+        "build_video_encoder_options reached on a remux_only path; the encode path is gated upstream"
+    );
+
     let mut kv: Vec<(&'static str, String)> = Vec::new();
 
     if let Some(ref preset) = opts.preset {
@@ -73,6 +82,20 @@ mod tests {
             threads,
             ..Default::default()
         }
+    }
+
+    #[test]
+    #[should_panic(expected = "remux_only path")]
+    fn remux_only_trips_debug_assert() {
+        // Contract violation: the encode path is gated upstream, so a
+        // `remux_only` options struct must never reach the encoder-option
+        // builder. The debug-only tripwire fires in tests/dev.
+        let opts = VideoConvertOptions {
+            remux_only: true,
+            threads: Some(4),
+            ..Default::default()
+        };
+        let _ = build_video_encoder_options(&opts, "libx265");
     }
 
     #[test]
