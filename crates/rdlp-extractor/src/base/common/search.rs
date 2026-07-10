@@ -10,11 +10,112 @@
 use async_trait::async_trait;
 use log::debug;
 use rdlp_core::{ExtractionContext, Result};
-use rdlp_types::{SearchFilter, SearchQuery, SearchResultPreview};
+use rdlp_types::{SearchFilter, SearchFilterDescriptor, SearchQuery, SearchResultPreview};
 use std::time::Duration;
 use url::form_urlencoded;
 
 use super::MAX_PLAYLIST_SIZE;
+
+/// How one filter key's value is validated by [`validate_against_descriptors`].
+///
+/// `#[allow(dead_code)]`: only exercised by `validator_tests` until Task 5/6
+/// of the search-filter-dedup sprint migrate per-site validators to call
+/// `validate_against_descriptors` — not a speculative future-use allowance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum KeyValidation {
+    /// Value must be one of the descriptor's `allowed_values` (the default).
+    AllowedValues,
+    /// Any value accepted (the site's API validates server-side); skip the check.
+    FreeText,
+    /// Value must parse as `u32`.
+    NumericU32,
+}
+
+/// A filter-validation failure — data only, no baked-in wording. Each call site
+/// maps this to its own exact `RdlpError` message (producer returns data,
+/// consumer formats). `NonNumeric` is distinct from `InvalidValue` because the
+/// numeric path's message ("Must be a number.") differs from the allowed-values
+/// message ("Allowed: …").
+/// `#[allow(dead_code)]`: same rationale as [`KeyValidation`] — consumed by
+/// Task 5/6, not yet by production call sites.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(dead_code)]
+pub(crate) enum FilterValidationError {
+    UnknownKey {
+        key: String,
+        available: Vec<String>,
+    },
+    InvalidValue {
+        key: String,
+        value: String,
+        allowed: Vec<String>,
+    },
+    NonNumeric {
+        key: String,
+        value: String,
+    },
+}
+
+/// Validate `filters` against a site's `descriptors`. Unknown keys and
+/// out-of-set values are rejected. `overrides` lists keys whose value check
+/// differs from the default `AllowedValues` (keys absent default to it).
+///
+/// Returns a typed error; the caller formats it. NOTE the explicit
+/// `std::result::Result` — `Result` is shadowed here by `rdlp_core::Result`.
+///
+/// `#[allow(dead_code)]`: same rationale as [`KeyValidation`] — consumed by
+/// Task 5/6, not yet by production call sites.
+#[allow(dead_code)]
+pub(crate) fn validate_against_descriptors(
+    filters: &[SearchFilter],
+    descriptors: &[SearchFilterDescriptor],
+    overrides: &[(&str, KeyValidation)],
+) -> std::result::Result<(), FilterValidationError> {
+    for filter in filters {
+        let Some(descriptor) = descriptors.iter().find(|d| d.key == filter.key) else {
+            return Err(FilterValidationError::UnknownKey {
+                key: filter.key.clone(),
+                available: descriptors.iter().map(|d| d.key.clone()).collect(),
+            });
+        };
+
+        let policy = overrides
+            .iter()
+            .find(|(k, _)| *k == filter.key)
+            .map_or(KeyValidation::AllowedValues, |(_, p)| *p);
+
+        match policy {
+            KeyValidation::FreeText => {}
+            KeyValidation::NumericU32 => {
+                if filter.value.parse::<u32>().is_err() {
+                    return Err(FilterValidationError::NonNumeric {
+                        key: filter.key.clone(),
+                        value: filter.value.clone(),
+                    });
+                }
+            }
+            KeyValidation::AllowedValues => {
+                let ok = descriptor
+                    .allowed_values
+                    .iter()
+                    .any(|v| v.value == filter.value);
+                if !ok {
+                    return Err(FilterValidationError::InvalidValue {
+                        key: filter.key.clone(),
+                        value: filter.value.clone(),
+                        allowed: descriptor
+                            .allowed_values
+                            .iter()
+                            .map(|v| v.value.clone())
+                            .collect(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
 
 /// Delay between successive search-page fetches. All API-paginated sites that
 /// share the [`PaginatedSearch`] scaffold rate-limit at this interval.
@@ -530,5 +631,83 @@ mod tests {
         )
         .await;
         assert_eq!(out.len(), 6, "all 3 pages fetched (latest count = 3)");
+    }
+
+    mod validator_tests {
+        use super::super::{FilterValidationError, KeyValidation, validate_against_descriptors};
+        use rdlp_types::{SearchFilter, SearchFilterDescriptor, SearchFilterValue};
+
+        fn descriptors() -> Vec<SearchFilterDescriptor> {
+            vec![
+                SearchFilterDescriptor::new(
+                    "ordering",
+                    "Sort by",
+                    SearchFilterValue::list([("newest", "Newest"), ("rating", "Top")]),
+                    Some("newest"),
+                ),
+                SearchFilterDescriptor::new("category", "Category", vec![], None),
+                SearchFilterDescriptor::new("dur", "Duration", vec![], None),
+            ]
+        }
+        fn f(k: &str, v: &str) -> SearchFilter {
+            SearchFilter {
+                key: k.into(),
+                value: v.into(),
+            }
+        }
+
+        #[test]
+        fn ok_when_value_allowed() {
+            let r = validate_against_descriptors(&[f("ordering", "rating")], &descriptors(), &[]);
+            assert!(r.is_ok());
+        }
+
+        #[test]
+        fn unknown_key() {
+            let r = validate_against_descriptors(&[f("bogus", "x")], &descriptors(), &[]);
+            assert_eq!(
+                r.unwrap_err(),
+                FilterValidationError::UnknownKey {
+                    key: "bogus".into(),
+                    available: vec!["ordering".into(), "category".into(), "dur".into()],
+                }
+            );
+        }
+
+        #[test]
+        fn invalid_value_reports_allowed() {
+            let r = validate_against_descriptors(&[f("ordering", "nope")], &descriptors(), &[]);
+            assert_eq!(
+                r.unwrap_err(),
+                FilterValidationError::InvalidValue {
+                    key: "ordering".into(),
+                    value: "nope".into(),
+                    allowed: vec!["newest".into(), "rating".into()],
+                }
+            );
+        }
+
+        #[test]
+        fn free_text_skips_check() {
+            let r = validate_against_descriptors(
+                &[f("category", "anything-goes")],
+                &descriptors(),
+                &[("category", KeyValidation::FreeText)],
+            );
+            assert!(r.is_ok());
+        }
+
+        #[test]
+        fn numeric_accepts_digits_rejects_non_digits() {
+            let ov = &[("dur", KeyValidation::NumericU32)];
+            assert!(validate_against_descriptors(&[f("dur", "42")], &descriptors(), ov).is_ok());
+            assert_eq!(
+                validate_against_descriptors(&[f("dur", "x")], &descriptors(), ov).unwrap_err(),
+                FilterValidationError::NonNumeric {
+                    key: "dur".into(),
+                    value: "x".into()
+                }
+            );
+        }
     }
 }
