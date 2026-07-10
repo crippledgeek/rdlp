@@ -45,7 +45,7 @@ impl BaseExtractor {
         max_length: usize,
     ) {
         trace!("\n=== [{prefix}] {label} ===");
-        trace!("{}", &content.chars().take(max_length).collect::<String>());
+        trace!("{}", content.chars().take(max_length).collect::<String>());
         if content.len() > max_length {
             trace!("... (truncated, {} total chars)", content.len());
         }
