@@ -29,21 +29,16 @@ mod search_patterns;
 mod tests;
 mod utils;
 
-use std::time::Duration;
-
 use async_trait::async_trait;
 use log::{debug, warn};
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result, SearchExtractor};
 use rdlp_types::{InfoDict, SearchPageResponse, SearchQuery, SearchResultPreview};
 use scraper::Html;
 
-use crate::base::common::{BaseExtractor, MAX_PLAYLIST_SIZE};
+use crate::base::common::{BaseExtractor, PaginatedSearch, Termination};
 use crate::hls::detect_format_sizes_lazy;
 
 pub use patterns::{PORNHUB_PLAYLIST_URL_PATTERN, PORNHUB_VIDEO_URL_PATTERN};
-
-/// Rate limit between search page fetches (milliseconds).
-const SEARCH_RATE_LIMIT_MS: u64 = 500;
 
 /// Expected number of results per API page. Used to detect the last page:
 /// if a page returns fewer than this, there are no more pages.
@@ -111,74 +106,49 @@ impl PornHubExtractor {
         let body = BaseExtractor::fetch_webpage_with_retry(url, ctx).await?;
         search_html::parse_html_search_results(&body)
     }
+}
 
-    /// Paginated search across all pages, collecting up to `max_results` results.
-    ///
-    /// Uses the HTML search page as the primary source with a 500ms rate limit between pages.
-    /// Falls back to the JSON API on page 1 HTML failures or empty results.
-    ///
-    /// # Arguments
-    /// * `query` - Search query with optional filters and result cap.
-    /// * `ctx` - Extraction context with HTTP client.
-    async fn search_all_pages(
+#[async_trait]
+impl PaginatedSearch for PornHubExtractor {
+    fn search_log_tag(&self) -> &'static str {
+        "[PornHub]"
+    }
+
+    fn validate_search_filters(&self, filters: &[rdlp_types::SearchFilter]) -> Result<()> {
+        search::validate_search_filters(filters)
+    }
+
+    async fn fetch_search_page(
         &self,
         query: &SearchQuery,
+        page: usize,
         ctx: &ExtractionContext,
-    ) -> Result<Vec<SearchResultPreview>> {
-        search::validate_search_filters(&query.filters)?;
-
-        let max_results = query.max_results.unwrap_or(MAX_PLAYLIST_SIZE);
-        let mut all_results = Vec::new();
-        let mut page = 1_u32;
-
-        loop {
-            let html_url = search_patterns::build_html_search_url(&query.query, page);
-            debug!(page, url:? = rdlp_security::sanitize_for_logging(&html_url); "[PornHub] Fetching HTML search page");
-
-            let page_results = match self.fetch_html_search_page(&html_url, ctx).await {
-                Ok(results) if !results.is_empty() => results,
-                outcome => {
-                    if page == 1 {
-                        let reason = match &outcome {
-                            Ok(_) => "HTML returned 0 results".to_string(),
-                            Err(e) => format!("{e}"),
-                        };
-                        debug!(
-                            "[PornHub] HTML search failed/empty on page 1, falling back to API: {reason}"
-                        );
-                        let base_url =
-                            search_patterns::build_api_search_url(&query.query, &query.filters);
-                        match self.fetch_api_search_page(&base_url, ctx).await {
-                            Ok(api_results) => api_results,
-                            Err(api_err) => {
-                                warn!("[PornHub] API fallback also failed on page 1: {api_err}");
-                                break;
-                            }
+    ) -> Result<(Vec<SearchResultPreview>, Termination)> {
+        let html_url = search_patterns::build_html_search_url(&query.query, page as u32);
+        match self.fetch_html_search_page(&html_url, ctx).await {
+            Ok(results) if !results.is_empty() => Ok((results, Termination::UntilEmpty)),
+            outcome => {
+                if page == 1 {
+                    let base_url =
+                        search_patterns::build_api_search_url(&query.query, &query.filters);
+                    match self.fetch_api_search_page(&base_url, ctx).await {
+                        Ok(api_results) => Ok((api_results, Termination::UntilEmpty)),
+                        Err(api_err) => {
+                            // Preserve the operator-visible WARN (never downgrade
+                            // to the shared loop's DEBUG). Then propagate → the
+                            // loop breaks with partial results, as today.
+                            warn!("[PornHub] API fallback also failed on page 1: {api_err}");
+                            Err(api_err)
                         }
-                    } else {
-                        debug!(page; "[PornHub] HTML search failed on later page, returning partial results");
-                        break;
+                    }
+                } else {
+                    match outcome {
+                        Ok(empty) => Ok((empty, Termination::UntilEmpty)),
+                        Err(e) => Err(e),
                     }
                 }
-            };
-
-            if page_results.is_empty() {
-                break;
             }
-
-            all_results.extend(page_results);
-
-            if all_results.len() >= max_results {
-                all_results.truncate(max_results);
-                break;
-            }
-
-            page += 1;
-            tokio::time::sleep(Duration::from_millis(SEARCH_RATE_LIMIT_MS)).await;
         }
-
-        debug!(count = all_results.len(), pages = page; "[PornHub] Search complete");
-        Ok(all_results)
     }
 }
 

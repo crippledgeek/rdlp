@@ -27,16 +27,12 @@ use rdlp_types::{InfoDict, SearchPageResponse};
 use regex::Regex;
 use scraper::Html;
 use std::sync::LazyLock;
-use std::time::Duration;
 
-use crate::base::common::{BaseExtractor, MAX_PLAYLIST_SIZE};
+use crate::base::common::{BaseExtractor, PaginatedSearch, Termination};
 use crate::base::tnaflix_network::TnaFlixNetworkBase;
 use crate::hls::detect_format_sizes_lazy;
 use crate::utils::make_absolute_url;
 use patterns::REDTUBE_URL_PATTERN;
-
-/// Rate limit delay between search page fetches (500ms).
-const SEARCH_RATE_LIMIT_MS: u64 = 500;
 
 /// RedTube extractor
 pub struct RedTubeExtractor {
@@ -192,6 +188,17 @@ impl RedTubeExtractor {
     }
 }
 
+/// Map a RedTube API total-result `count` to a pagination terminator.
+/// `Some(total)` → `Pages(ceil(total / page_size))`; `None` → `UntilEmpty`.
+fn termination_from_count(count: Option<u64>) -> Termination {
+    match count {
+        Some(total) => {
+            Termination::Pages((total as usize).div_ceil(patterns::API_RESULTS_PER_PAGE as usize))
+        }
+        None => Termination::UntilEmpty,
+    }
+}
+
 /// Extract performer/pornstar names from RedTube video page HTML.
 ///
 /// Looks for `<a href="/pornstar/name">` links within the `.performers-list` section.
@@ -303,100 +310,6 @@ impl InfoExtractor for RedTubeExtractor {
 }
 
 impl RedTubeExtractor {
-    /// Perform paginated search across all pages, collecting results.
-    ///
-    /// Uses the JSON API as the primary source. Falls back to HTML scraping
-    /// if the API request fails. Rate-limits at 500ms between page fetches.
-    /// Caps results at `max_results` or `MAX_PLAYLIST_SIZE`.
-    async fn search_all_pages(
-        &self,
-        query: &rdlp_types::SearchQuery,
-        ctx: &ExtractionContext,
-    ) -> Result<Vec<rdlp_types::SearchResultPreview>> {
-        let descriptors = patterns::search_filter_descriptors();
-        search::validate_search_filters(&query.filters, &descriptors)?;
-
-        let max_results = query.max_results.unwrap_or(MAX_PLAYLIST_SIZE);
-        let mut all_results = Vec::new();
-        let mut page = 1_u32;
-        let mut total_count: Option<u64> = None;
-
-        let base_url = patterns::build_api_search_url(&query.query, &query.filters);
-
-        loop {
-            let page_url = if page == 1 {
-                base_url.clone()
-            } else {
-                patterns::build_api_search_url_page(&base_url, page)
-            };
-
-            debug!(
-                page;
-                "[RedTube] Fetching search page"
-            );
-
-            // Try JSON API first
-            let page_results = match self.fetch_api_search_page(&page_url, ctx).await {
-                Ok((results, count)) => {
-                    if total_count.is_none() {
-                        total_count = count;
-                    }
-                    results
-                }
-                Err(e) => {
-                    if page == 1 {
-                        // First page failed, try HTML fallback
-                        debug!("[RedTube] API search failed, falling back to HTML: {e}");
-                        let html_url = patterns::build_html_search_url(&query.query);
-                        match self.fetch_html_search_page(&html_url, ctx).await {
-                            Ok(results) => results,
-                            Err(html_err) => {
-                                warn!("[RedTube] HTML fallback also failed: {html_err}");
-                                break;
-                            }
-                        }
-                    } else {
-                        debug!(
-                            page;
-                            "[RedTube] Failed to fetch search page, returning partial results: {e}"
-                        );
-                        break;
-                    }
-                }
-            };
-
-            if page_results.is_empty() {
-                debug!(page; "[RedTube] No results on page, stopping pagination");
-                break;
-            }
-
-            all_results.extend(page_results);
-
-            if all_results.len() >= max_results {
-                all_results.truncate(max_results);
-                break;
-            }
-
-            // Check if we have more pages based on total count
-            if let Some(total) = total_count {
-                let fetched_so_far = page as u64 * u64::from(patterns::API_RESULTS_PER_PAGE);
-                if fetched_so_far >= total {
-                    break;
-                }
-            }
-
-            page += 1;
-            tokio::time::sleep(Duration::from_millis(SEARCH_RATE_LIMIT_MS)).await;
-        }
-
-        debug!(
-            count = all_results.len(), pages = page;
-            "[RedTube] Search complete"
-        );
-
-        Ok(all_results)
-    }
-
     /// Fetch and parse a single API search page.
     async fn fetch_api_search_page(
         &self,
@@ -417,6 +330,49 @@ impl RedTubeExtractor {
         // a transient CDN reset here should retry rather than abandon search.
         let webpage = BaseExtractor::fetch_webpage_with_retry(url, ctx).await?;
         search::parse_html_search_results(&webpage)
+    }
+}
+
+#[async_trait]
+impl PaginatedSearch for RedTubeExtractor {
+    fn search_log_tag(&self) -> &'static str {
+        "[RedTube]"
+    }
+
+    fn validate_search_filters(&self, filters: &[rdlp_types::SearchFilter]) -> Result<()> {
+        let descriptors = patterns::search_filter_descriptors();
+        search::validate_search_filters(filters, &descriptors)
+    }
+
+    async fn fetch_search_page(
+        &self,
+        query: &rdlp_types::SearchQuery,
+        page: usize,
+        ctx: &ExtractionContext,
+    ) -> Result<(Vec<rdlp_types::SearchResultPreview>, Termination)> {
+        let base_url = patterns::build_api_search_url(&query.query, &query.filters);
+        let page_url = if page == 1 {
+            base_url
+        } else {
+            patterns::build_api_search_url_page(&base_url, page as u32)
+        };
+        match self.fetch_api_search_page(&page_url, ctx).await {
+            Ok((results, count)) => Ok((results, termination_from_count(count))),
+            Err(e) => {
+                if page == 1 {
+                    let html_url = patterns::build_html_search_url(&query.query);
+                    match self.fetch_html_search_page(&html_url, ctx).await {
+                        Ok(results) => Ok((results, Termination::UntilEmpty)),
+                        Err(html_err) => {
+                            warn!("[RedTube] HTML fallback also failed: {html_err}");
+                            Err(html_err)
+                        }
+                    }
+                } else {
+                    Err(e)
+                }
+            }
+        }
     }
 }
 
@@ -563,5 +519,25 @@ mod tests {
         let period = filters.iter().find(|f| f.key == "period");
         assert!(period.is_some());
         assert_eq!(period.unwrap().allowed_values.len(), 3);
+    }
+
+    #[test]
+    fn termination_from_count_maps_totals_to_page_counts() {
+        use super::termination_from_count;
+        use crate::base::common::Termination;
+        assert_eq!(termination_from_count(Some(0)), Termination::Pages(0));
+        assert_eq!(termination_from_count(Some(1)), Termination::Pages(1));
+        assert_eq!(termination_from_count(Some(19)), Termination::Pages(1));
+        assert_eq!(termination_from_count(Some(20)), Termination::Pages(1));
+        assert_eq!(termination_from_count(Some(21)), Termination::Pages(2));
+        assert_eq!(termination_from_count(Some(40)), Termination::Pages(2));
+        assert_eq!(termination_from_count(Some(41)), Termination::Pages(3));
+    }
+
+    #[test]
+    fn termination_from_count_none_is_until_empty() {
+        use super::termination_from_count;
+        use crate::base::common::Termination;
+        assert_eq!(termination_from_count(None), Termination::UntilEmpty);
     }
 }
