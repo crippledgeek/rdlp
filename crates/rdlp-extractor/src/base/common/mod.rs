@@ -57,10 +57,6 @@ use regex::Regex;
 
 // Re-export selectors, patterns, and constants from submodule
 pub(crate) use protocol::protocol_for_url;
-// `FilterValidationError`/`KeyValidation`/`validate_against_descriptors` have
-// no production call site yet — Task 5/6 of the search-filter-dedup sprint
-// migrate per-site validators to use them via this re-export.
-#[allow(unused_imports)]
 pub(crate) use search::{
     FilterValidationError, KeyValidation, PaginatedSearch, Termination, append_search_filters,
     validate_against_descriptors,

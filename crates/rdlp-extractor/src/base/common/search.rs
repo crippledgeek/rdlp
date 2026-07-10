@@ -17,12 +17,7 @@ use url::form_urlencoded;
 use super::MAX_PLAYLIST_SIZE;
 
 /// How one filter key's value is validated by [`validate_against_descriptors`].
-///
-/// `#[allow(dead_code)]`: only exercised by `validator_tests` until Task 5/6
-/// of the search-filter-dedup sprint migrate per-site validators to call
-/// `validate_against_descriptors` — not a speculative future-use allowance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum KeyValidation {
     /// Value must be one of the descriptor's `allowed_values` (the default).
     AllowedValues,
@@ -37,10 +32,7 @@ pub(crate) enum KeyValidation {
 /// consumer formats). `NonNumeric` is distinct from `InvalidValue` because the
 /// numeric path's message ("Must be a number.") differs from the allowed-values
 /// message ("Allowed: …").
-/// `#[allow(dead_code)]`: same rationale as [`KeyValidation`] — consumed by
-/// Task 5/6, not yet by production call sites.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum FilterValidationError {
     UnknownKey {
         key: String,
@@ -63,10 +55,6 @@ pub(crate) enum FilterValidationError {
 ///
 /// Returns a typed error; the caller formats it. NOTE the explicit
 /// `std::result::Result` — `Result` is shadowed here by `rdlp_core::Result`.
-///
-/// `#[allow(dead_code)]`: same rationale as [`KeyValidation`] — consumed by
-/// Task 5/6, not yet by production call sites.
-#[allow(dead_code)]
 pub(crate) fn validate_against_descriptors(
     filters: &[SearchFilter],
     descriptors: &[SearchFilterDescriptor],

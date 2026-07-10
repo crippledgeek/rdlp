@@ -226,50 +226,40 @@ pub(crate) fn validate_search_filters(
     filters: &[SearchFilter],
     descriptors: &[SearchFilterDescriptor],
 ) -> Result<()> {
-    for filter in filters {
-        let descriptor = descriptors.iter().find(|d| d.key == filter.key);
+    use crate::base::common::{FilterValidationError, KeyValidation, validate_against_descriptors};
 
-        match descriptor {
-            None => {
-                let valid_keys: Vec<&str> = descriptors.iter().map(|d| d.key.as_str()).collect();
-                return Err(RdlpError::Extraction {
-                    message: format!(
-                        "Unknown filter '{}' for RedTube. Available: {}",
-                        filter.key,
-                        valid_keys.join(", ")
-                    ),
-                    url: None,
-                });
-            }
-            Some(desc) => {
-                // "category" and "tags" have suggested values for UI display,
-                // but the API accepts arbitrary strings, so bypass strict validation.
-                if filter.key == "category" || filter.key == "tags" {
-                    continue;
-                }
-
-                let valid = desc.allowed_values.iter().any(|v| v.value == filter.value);
-                if !valid {
-                    let allowed: Vec<&str> = desc
-                        .allowed_values
-                        .iter()
-                        .map(|v| v.value.as_str())
-                        .collect();
-                    return Err(RdlpError::Extraction {
-                        message: format!(
-                            "Invalid value '{}' for filter '{}'. Allowed: {}",
-                            filter.value,
-                            filter.key,
-                            allowed.join(", ")
-                        ),
-                        url: None,
-                    });
-                }
-            }
-        }
-    }
-
-    Ok(())
+    validate_against_descriptors(
+        filters,
+        descriptors,
+        &[
+            ("category", KeyValidation::FreeText),
+            ("tags", KeyValidation::FreeText),
+        ],
+    )
+    .map_err(|e| match e {
+        FilterValidationError::UnknownKey { key, available } => RdlpError::Extraction {
+            message: format!(
+                "Unknown filter '{key}' for RedTube. Available: {}",
+                available.join(", ")
+            ),
+            url: None,
+        },
+        FilterValidationError::InvalidValue {
+            key,
+            value,
+            allowed,
+        } => RdlpError::Extraction {
+            message: format!(
+                "Invalid value '{value}' for filter '{key}'. Allowed: {}",
+                allowed.join(", ")
+            ),
+            url: None,
+        },
+        FilterValidationError::NonNumeric { key, value } => RdlpError::Extraction {
+            message: format!("Invalid value '{value}' for filter '{key}'. Must be a number."),
+            url: None,
+        },
+    })
 }
 
 #[cfg(test)]
