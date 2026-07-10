@@ -29,6 +29,32 @@ pub enum JobStatus {
     Cancelled,
 }
 
+/// Upper bound on the character length of a stored [`CurrentUnit::title`].
+///
+/// `title` originates from extractor-supplied episode titles (arriving via
+/// `Event::PlaylistItemStarted`) and is serialized into every `queue` IPC
+/// response for the job's lifetime. A pathologically long title would be
+/// re-sent on every poll with no size bound (the UI's `truncate` CSS is
+/// visual-only). Clamping at storage time bounds the serialized payload
+/// (≤ 4× this value in bytes, worst case for 4-byte UTF-8) regardless of
+/// what the extractor produces. 512 characters comfortably fits any
+/// legitimate episode/merge-phase label while bounding abuse; the localhost
+/// IPC trust boundary makes this defense-in-depth (issue #371).
+const MAX_UNIT_TITLE_LEN: usize = 512;
+
+/// Clamp a unit title to [`MAX_UNIT_TITLE_LEN`] characters, cutting on a UTF-8
+/// character boundary (never a byte offset — that would panic or split a
+/// multi-byte sequence). Returns the input allocation unchanged when within
+/// the cap; single-pass via [`str::char_indices`].
+fn clamp_unit_title(title: String) -> String {
+    match title.char_indices().nth(MAX_UNIT_TITLE_LEN) {
+        // The byte offset of the (cap+1)th char is a valid boundary to cut at.
+        Some((byte_idx, _)) => title[..byte_idx].to_owned(),
+        // Fewer than cap+1 chars — already within bound, no reallocation.
+        None => title,
+    }
+}
+
 /// Live snapshot of the in-progress sub-unit (playlist episode or merge phase).
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -96,11 +122,15 @@ impl DownloadJob {
     }
 
     /// Record the in-progress sub-unit (playlist episode or merge Video/Audio).
+    ///
+    /// `title` is extractor-supplied and reaches the IPC boundary; it is
+    /// clamped to [`MAX_UNIT_TITLE_LEN`] characters before storage so a
+    /// pathologically long title cannot bloat every `queue` response (#371).
     pub(crate) fn set_current_unit(&mut self, index: usize, total: usize, title: String) {
         self.current_unit = Some(CurrentUnit {
             index,
             total,
-            title,
+            title: clamp_unit_title(title),
         });
     }
 
@@ -606,6 +636,72 @@ mod tests {
         job.set_current_unit(1, 2, "Video".to_owned());
         let u = job.current_unit.as_ref().expect("set");
         assert_eq!((u.index, u.total, u.title.as_str()), (1, 2, "Video"));
+    }
+
+    #[test]
+    fn set_current_unit_clamps_overlong_title() {
+        let mut q = DownloadQueue::new();
+        q.add_job("j", "https://example.com/v", None, None);
+        let job = q.get_job_mut("j").unwrap();
+
+        // A pathologically long extractor-supplied title.
+        let long = "x".repeat(MAX_UNIT_TITLE_LEN * 4);
+        job.set_current_unit(1, 2, long);
+
+        let u = job.current_unit.as_ref().expect("set");
+        assert_eq!(u.title.chars().count(), MAX_UNIT_TITLE_LEN);
+    }
+
+    #[test]
+    fn set_current_unit_preserves_short_title() {
+        let mut q = DownloadQueue::new();
+        q.add_job("j", "https://example.com/v", None, None);
+        let job = q.get_job_mut("j").unwrap();
+        job.set_current_unit(1, 2, "Ep 1 — The Beginning".to_owned());
+        let u = job.current_unit.as_ref().expect("set");
+        assert_eq!(u.title, "Ep 1 — The Beginning");
+    }
+
+    #[test]
+    fn set_current_unit_preserves_title_at_exact_cap() {
+        // Off-by-one guard: a title of EXACTLY the cap must pass through
+        // unchanged. A `>=` clamp instead of `>` would wrongly truncate a
+        // legitimate 512-char label; the far-over clamp tests can't catch that.
+        let mut q = DownloadQueue::new();
+        q.add_job("j", "https://example.com/v", None, None);
+        let job = q.get_job_mut("j").unwrap();
+        let at_cap = "x".repeat(MAX_UNIT_TITLE_LEN);
+        job.set_current_unit(1, 2, at_cap.clone());
+        let u = job.current_unit.as_ref().expect("set");
+        assert_eq!(u.title, at_cap);
+        assert_eq!(u.title.chars().count(), MAX_UNIT_TITLE_LEN);
+    }
+
+    #[test]
+    fn set_current_unit_clamps_one_over_cap() {
+        // The other side of the boundary: one char past the cap IS truncated.
+        let mut q = DownloadQueue::new();
+        q.add_job("j", "https://example.com/v", None, None);
+        let job = q.get_job_mut("j").unwrap();
+        job.set_current_unit(1, 2, "x".repeat(MAX_UNIT_TITLE_LEN + 1));
+        let u = job.current_unit.as_ref().expect("set");
+        assert_eq!(u.title.chars().count(), MAX_UNIT_TITLE_LEN);
+    }
+
+    #[test]
+    fn set_current_unit_clamps_on_char_boundary() {
+        let mut q = DownloadQueue::new();
+        q.add_job("j", "https://example.com/v", None, None);
+        let job = q.get_job_mut("j").unwrap();
+
+        // Multi-byte chars: naive byte-slicing at the cap would panic /
+        // corrupt UTF-8. Clamping MUST count and cut on char boundaries.
+        let long = "é".repeat(MAX_UNIT_TITLE_LEN + 100);
+        job.set_current_unit(1, 2, long);
+        let u = job.current_unit.as_ref().expect("set");
+        assert_eq!(u.title.chars().count(), MAX_UNIT_TITLE_LEN);
+        // Round-trips as valid UTF-8 (no split multi-byte sequence).
+        assert!(u.title.chars().all(|c| c == 'é'));
     }
 
     #[test]
