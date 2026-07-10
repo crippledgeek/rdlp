@@ -176,43 +176,43 @@ pub fn parse_pagination(html: &str) -> Option<usize> {
 /// # Errors
 /// Returns [`RdlpError::Extraction`] if an unrecognised key or value is encountered.
 pub fn validate_search_filters(filters: &[SearchFilter]) -> Result<()> {
-    const VALID_ORDERINGS: &[&str] = &["featured", "newest", "duration", "rating"];
+    use crate::base::common::{FilterValidationError, validate_against_descriptors};
 
-    for filter in filters {
-        match filter.key.as_str() {
-            "ordering" => {
-                if !VALID_ORDERINGS.contains(&filter.value.as_str()) {
-                    return Err(RdlpError::Extraction {
-                        message: format!(
-                            "Invalid TNAFlix ordering value '{}'. Valid values: {}",
-                            filter.value,
-                            VALID_ORDERINGS.join(", ")
-                        ),
-                        url: None,
-                    });
-                }
-            }
-            "category" => {
-                if !search_patterns::is_valid_category(&filter.value) {
-                    return Err(RdlpError::Extraction {
-                        message: format!(
-                            "Invalid TNAFlix category '{}'. Use search_filters() to see valid values.",
-                            filter.value
-                        ),
-                        url: None,
-                    });
-                }
-            }
-            other => {
-                return Err(RdlpError::Extraction {
-                    message: format!("Unknown TNAFlix search filter key '{other}'"),
-                    url: None,
-                });
+    let descriptors = search_patterns::search_filter_descriptors();
+    validate_against_descriptors(filters, &descriptors, &[]).map_err(|e| match e {
+        FilterValidationError::UnknownKey { key, .. } => RdlpError::Extraction {
+            message: format!("Unknown TNAFlix search filter key '{key}'"),
+            url: None,
+        },
+        FilterValidationError::InvalidValue {
+            key,
+            value,
+            allowed,
+        } if key == "category" => {
+            let _ = allowed;
+            RdlpError::Extraction {
+                message: format!(
+                    "Invalid TNAFlix category '{value}'. Use search_filters() to see valid values."
+                ),
+                url: None,
             }
         }
-    }
-
-    Ok(())
+        FilterValidationError::InvalidValue {
+            key,
+            value,
+            allowed,
+        } => RdlpError::Extraction {
+            message: format!(
+                "Invalid TNAFlix {key} value '{value}'. Valid values: {}",
+                allowed.join(", ")
+            ),
+            url: None,
+        },
+        FilterValidationError::NonNumeric { key, value } => RdlpError::Extraction {
+            message: format!("Invalid TNAFlix {key} value '{value}'. Valid values: "),
+            url: None,
+        },
+    })
 }
 
 /// Parse a duration string like `"12:34"` or `"1:23:45"` into seconds.
@@ -492,6 +492,25 @@ mod tests {
             value: "new".to_string(),
         }];
         assert!(validate_search_filters(&filters).is_ok());
+    }
+
+    #[test]
+    fn test_validate_search_filters_category_case_sensitive() {
+        // Category matching is case-sensitive: a differently-cased form of a
+        // valid slug/section must be rejected (regression guard for the removed
+        // is_valid_category case-sensitivity check, now enforced via the
+        // descriptor-driven AllowedValues path).
+        let upper_section = vec![SearchFilter {
+            key: "category".to_string(),
+            value: "New".to_string(), // valid slug is "new"
+        }];
+        assert!(validate_search_filters(&upper_section).is_err());
+
+        let upper_slug = vec![SearchFilter {
+            key: "category".to_string(),
+            value: "TEEN-PORN".to_string(), // valid slug is "teen-porn"
+        }];
+        assert!(validate_search_filters(&upper_slug).is_err());
     }
 
     #[test]

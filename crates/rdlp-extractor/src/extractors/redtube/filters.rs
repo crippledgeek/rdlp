@@ -10,7 +10,7 @@ use rdlp_types::{SearchFilterDescriptor, SearchFilterValue};
 /// Sourced from the `redtube.Categories.getCategoriesList` API endpoint.
 /// Test/spam entries and non-adult categories are excluded.
 fn category_values() -> Vec<SearchFilterValue> {
-    [
+    SearchFilterValue::list([
         ("Amateur", "Amateur"),
         ("Anal", "Anal"),
         ("Arab", "Arab"),
@@ -94,13 +94,7 @@ fn category_values() -> Vec<SearchFilterValue> {
         ("Virtual Reality", "Virtual Reality"),
         ("Webcam", "Webcam"),
         ("Young and Old", "Young and Old"),
-    ]
-    .into_iter()
-    .map(|(value, label)| SearchFilterValue {
-        value: value.to_string(),
-        label: label.to_string(),
-    })
-    .collect()
+    ])
 }
 
 /// Build the list of common RedTube tag filter values.
@@ -110,7 +104,7 @@ fn category_values() -> Vec<SearchFilterValue> {
 /// non-English text, and overly-specific compound tags are excluded.
 /// Users can still type custom tags not in this list (free-text bypass).
 fn tag_values() -> Vec<SearchFilterValue> {
-    [
+    SearchFilterValue::list([
         ("18 year old", "18 Year Old"),
         ("amateur", "Amateur"),
         ("amateur couple", "Amateur Couple"),
@@ -165,13 +159,7 @@ fn tag_values() -> Vec<SearchFilterValue> {
         ("trans", "Trans"),
         ("vr", "VR"),
         ("yoga", "Yoga"),
-    ]
-    .into_iter()
-    .map(|(value, label)| SearchFilterValue {
-        value: value.to_string(),
-        label: label.to_string(),
-    })
-    .collect()
+    ])
 }
 
 /// Return the static filter descriptors for RedTube search.
@@ -183,64 +171,30 @@ fn tag_values() -> Vec<SearchFilterValue> {
 /// - `tags`: comma-separated tags (enum with free-text bypass)
 pub fn search_filter_descriptors() -> Vec<SearchFilterDescriptor> {
     vec![
-        SearchFilterDescriptor {
-            key: "ordering".to_string(),
-            display_name: "Sort by".to_string(),
-            allowed_values: vec![
-                SearchFilterValue {
-                    value: "relevance".to_string(),
-                    label: "Relevance".to_string(),
-                },
-                SearchFilterValue {
-                    value: "newest".to_string(),
-                    label: "Newest".to_string(),
-                },
-                SearchFilterValue {
-                    value: "mostviewed".to_string(),
-                    label: "Most viewed".to_string(),
-                },
-                SearchFilterValue {
-                    value: "rating".to_string(),
-                    label: "Top rated".to_string(),
-                },
-                SearchFilterValue {
-                    value: "mostfavoured".to_string(),
-                    label: "Most favoured".to_string(),
-                },
-            ],
-            default: Some("relevance".to_string()),
-        },
-        SearchFilterDescriptor {
-            key: "period".to_string(),
-            display_name: "Time period".to_string(),
-            allowed_values: vec![
-                SearchFilterValue {
-                    value: "alltime".to_string(),
-                    label: "All time".to_string(),
-                },
-                SearchFilterValue {
-                    value: "weekly".to_string(),
-                    label: "This week".to_string(),
-                },
-                SearchFilterValue {
-                    value: "monthly".to_string(),
-                    label: "This month".to_string(),
-                },
-            ],
-            default: Some("alltime".to_string()),
-        },
-        SearchFilterDescriptor {
-            key: "category".to_string(),
-            display_name: "Category".to_string(),
-            allowed_values: category_values(),
-            default: None,
-        },
-        SearchFilterDescriptor {
-            key: "tags".to_string(),
-            display_name: "Tags".to_string(),
-            allowed_values: tag_values(),
-            default: None,
-        },
+        SearchFilterDescriptor::new(
+            "ordering",
+            "Sort by",
+            SearchFilterValue::list([
+                ("relevance", "Relevance"),
+                ("newest", "Newest"),
+                ("mostviewed", "Most viewed"),
+                ("rating", "Top rated"),
+                ("mostfavoured", "Most favoured"),
+            ]),
+            Some("relevance"),
+        ),
+        SearchFilterDescriptor::new(
+            "period",
+            "Time period",
+            SearchFilterValue::list([
+                ("alltime", "All time"),
+                ("weekly", "This week"),
+                ("monthly", "This month"),
+            ]),
+            Some("alltime"),
+        ),
+        SearchFilterDescriptor::new("category", "Category", category_values(), None),
+        SearchFilterDescriptor::new("tags", "Tags", tag_values(), None),
     ]
 }
 

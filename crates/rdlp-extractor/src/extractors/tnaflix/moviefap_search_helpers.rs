@@ -144,30 +144,30 @@ pub(crate) fn parse_pagination(html: &str) -> Option<usize> {
 /// # Errors
 /// Returns [`RdlpError::Extraction`] if an unrecognised key or value is encountered.
 pub(crate) fn validate_search_filters(filters: &[SearchFilter]) -> Result<()> {
-    for filter in filters {
-        match filter.key.as_str() {
-            "ordering" => {
-                if !moviefap_search_patterns::VALID_ORDERINGS.contains(&filter.value.as_str()) {
-                    return Err(RdlpError::Extraction {
-                        message: format!(
-                            "Invalid MovieFap ordering value '{}'. Valid values: {}",
-                            filter.value,
-                            moviefap_search_patterns::VALID_ORDERINGS.join(", ")
-                        ),
-                        url: None,
-                    });
-                }
-            }
-            other => {
-                return Err(RdlpError::Extraction {
-                    message: format!("Unknown MovieFap search filter key '{other}'"),
-                    url: None,
-                });
-            }
-        }
-    }
+    use crate::base::common::{FilterValidationError, validate_against_descriptors};
 
-    Ok(())
+    let descriptors = moviefap_search_patterns::search_filter_descriptors();
+    validate_against_descriptors(filters, &descriptors, &[]).map_err(|e| match e {
+        FilterValidationError::UnknownKey { key, .. } => RdlpError::Extraction {
+            message: format!("Unknown MovieFap search filter key '{key}'"),
+            url: None,
+        },
+        FilterValidationError::InvalidValue {
+            key,
+            value,
+            allowed,
+        } => RdlpError::Extraction {
+            message: format!(
+                "Invalid MovieFap {key} value '{value}'. Valid values: {}",
+                allowed.join(", ")
+            ),
+            url: None,
+        },
+        FilterValidationError::NonNumeric { key, value } => RdlpError::Extraction {
+            message: format!("Invalid MovieFap {key} value '{value}'. Valid values: "),
+            url: None,
+        },
+    })
 }
 
 /// Parse the `.videoleft` element to extract duration and upload date strings.

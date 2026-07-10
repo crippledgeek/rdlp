@@ -81,52 +81,28 @@ fn resolve_sort_by(query: &SearchQuery) -> String {
 /// Return the filter descriptors for XTits search.
 pub(crate) fn search_filter_descriptors() -> Vec<SearchFilterDescriptor> {
     vec![
-        SearchFilterDescriptor {
-            key: "ordering".to_string(),
-            display_name: "Sort By".to_string(),
-            default: Some("relevance".to_string()),
-            allowed_values: vec![
-                SearchFilterValue {
-                    value: "relevance".to_string(),
-                    label: "Relevance".to_string(),
-                },
-                SearchFilterValue {
-                    value: "newest".to_string(),
-                    label: "Newest".to_string(),
-                },
-                SearchFilterValue {
-                    value: "rating".to_string(),
-                    label: "Top Rated".to_string(),
-                },
-                SearchFilterValue {
-                    value: "mostviewed".to_string(),
-                    label: "Most Viewed".to_string(),
-                },
-            ],
-        },
-        SearchFilterDescriptor {
-            key: "period".to_string(),
-            display_name: "Time Period".to_string(),
-            default: Some("alltime".to_string()),
-            allowed_values: vec![
-                SearchFilterValue {
-                    value: "alltime".to_string(),
-                    label: "All Time".to_string(),
-                },
-                SearchFilterValue {
-                    value: "monthly".to_string(),
-                    label: "This Month".to_string(),
-                },
-                SearchFilterValue {
-                    value: "weekly".to_string(),
-                    label: "This Week".to_string(),
-                },
-                SearchFilterValue {
-                    value: "today".to_string(),
-                    label: "Today".to_string(),
-                },
-            ],
-        },
+        SearchFilterDescriptor::new(
+            "ordering",
+            "Sort By",
+            SearchFilterValue::list([
+                ("relevance", "Relevance"),
+                ("newest", "Newest"),
+                ("rating", "Top Rated"),
+                ("mostviewed", "Most Viewed"),
+            ]),
+            Some("relevance"),
+        ),
+        SearchFilterDescriptor::new(
+            "period",
+            "Time Period",
+            SearchFilterValue::list([
+                ("alltime", "All Time"),
+                ("monthly", "This Month"),
+                ("weekly", "This Week"),
+                ("today", "Today"),
+            ]),
+            Some("alltime"),
+        ),
     ]
 }
 

@@ -57,140 +57,71 @@ pub fn build_search_url_page(query: &rdlp_types::SearchQuery, page: usize) -> St
 /// Return the static filter descriptors for xHamster search.
 pub fn search_filter_descriptors() -> Vec<rdlp_types::SearchFilterDescriptor> {
     vec![
-        rdlp_types::SearchFilterDescriptor {
-            key: "quality".to_string(),
-            display_name: "Minimum quality".to_string(),
-            allowed_values: vec![
-                rdlp_types::SearchFilterValue {
-                    value: "720p".to_string(),
-                    label: "720p+".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "1080p".to_string(),
-                    label: "1080p+".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "2160p".to_string(),
-                    label: "4K+".to_string(),
-                },
-            ],
-            default: None,
-        },
-        rdlp_types::SearchFilterDescriptor {
-            key: "sort".to_string(),
-            display_name: "Sort by".to_string(),
-            allowed_values: vec![
-                rdlp_types::SearchFilterValue {
-                    value: "relevance".to_string(),
-                    label: "Relevance".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "newest".to_string(),
-                    label: "Newest".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "views".to_string(),
-                    label: "Most viewed".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "best".to_string(),
-                    label: "Top rated".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "longest".to_string(),
-                    label: "Longest".to_string(),
-                },
-            ],
-            default: Some("relevance".to_string()),
-        },
-        rdlp_types::SearchFilterDescriptor {
-            key: "orientations".to_string(),
-            display_name: "Orientation".to_string(),
-            allowed_values: vec![
-                rdlp_types::SearchFilterValue {
-                    value: "straight".to_string(),
-                    label: "Straight".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "gay".to_string(),
-                    label: "Gay".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "shemale".to_string(),
-                    label: "Transgender".to_string(),
-                },
-            ],
-            default: None,
-        },
-        rdlp_types::SearchFilterDescriptor {
-            key: "date".to_string(),
-            display_name: "Upload date".to_string(),
-            allowed_values: vec![
-                rdlp_types::SearchFilterValue {
-                    value: "daily".to_string(),
-                    label: "Last 24 hours".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "weekly".to_string(),
-                    label: "This week".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "monthly".to_string(),
-                    label: "This month".to_string(),
-                },
-            ],
-            default: None,
-        },
-        rdlp_types::SearchFilterDescriptor {
-            key: "min-duration".to_string(),
-            display_name: "Min duration".to_string(),
-            allowed_values: vec![
-                rdlp_types::SearchFilterValue {
-                    value: "2".to_string(),
-                    label: "2 min".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "5".to_string(),
-                    label: "5 min".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "10".to_string(),
-                    label: "10 min".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "30".to_string(),
-                    label: "30 min".to_string(),
-                },
-            ],
-            default: None,
-        },
-        rdlp_types::SearchFilterDescriptor {
-            key: "max-duration".to_string(),
-            display_name: "Max duration".to_string(),
-            allowed_values: vec![
-                rdlp_types::SearchFilterValue {
-                    value: "2".to_string(),
-                    label: "2 min".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "5".to_string(),
-                    label: "5 min".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "10".to_string(),
-                    label: "10 min".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "30".to_string(),
-                    label: "30 min".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "40".to_string(),
-                    label: "40+ min".to_string(),
-                },
-            ],
-            default: None,
-        },
+        rdlp_types::SearchFilterDescriptor::new(
+            "quality",
+            "Minimum quality",
+            rdlp_types::SearchFilterValue::list([
+                ("720p", "720p+"),
+                ("1080p", "1080p+"),
+                ("2160p", "4K+"),
+            ]),
+            None,
+        ),
+        rdlp_types::SearchFilterDescriptor::new(
+            "sort",
+            "Sort by",
+            rdlp_types::SearchFilterValue::list([
+                ("relevance", "Relevance"),
+                ("newest", "Newest"),
+                ("views", "Most viewed"),
+                ("best", "Top rated"),
+                ("longest", "Longest"),
+            ]),
+            Some("relevance"),
+        ),
+        rdlp_types::SearchFilterDescriptor::new(
+            "orientations",
+            "Orientation",
+            rdlp_types::SearchFilterValue::list([
+                ("straight", "Straight"),
+                ("gay", "Gay"),
+                ("shemale", "Transgender"),
+            ]),
+            None,
+        ),
+        rdlp_types::SearchFilterDescriptor::new(
+            "date",
+            "Upload date",
+            rdlp_types::SearchFilterValue::list([
+                ("daily", "Last 24 hours"),
+                ("weekly", "This week"),
+                ("monthly", "This month"),
+            ]),
+            None,
+        ),
+        rdlp_types::SearchFilterDescriptor::new(
+            "min-duration",
+            "Min duration",
+            rdlp_types::SearchFilterValue::list([
+                ("2", "2 min"),
+                ("5", "5 min"),
+                ("10", "10 min"),
+                ("30", "30 min"),
+            ]),
+            None,
+        ),
+        rdlp_types::SearchFilterDescriptor::new(
+            "max-duration",
+            "Max duration",
+            rdlp_types::SearchFilterValue::list([
+                ("2", "2 min"),
+                ("5", "5 min"),
+                ("10", "10 min"),
+                ("30", "30 min"),
+                ("40", "40+ min"),
+            ]),
+            None,
+        ),
     ]
 }
 

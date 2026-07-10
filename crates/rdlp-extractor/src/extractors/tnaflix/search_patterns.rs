@@ -163,17 +163,6 @@ pub fn build_search_url_page(query: &rdlp_types::SearchQuery, page: usize) -> St
     url
 }
 
-/// Check whether a value is a valid browse section or category slug.
-///
-/// # Arguments
-/// * `value` - The slug to validate.
-///
-/// # Returns
-/// `true` if the value matches a known browse section or category slug.
-pub fn is_valid_category(value: &str) -> bool {
-    BROWSE_SECTIONS.contains(&value) || BROWSE_CATEGORIES.contains(&value)
-}
-
 /// Build a browse URL for page 1 of a section or category for the given base URL.
 ///
 /// # Arguments
@@ -272,42 +261,22 @@ pub fn search_filter_descriptors() -> Vec<rdlp_types::SearchFilterDescriptor> {
     let category_values: Vec<rdlp_types::SearchFilterValue> = BROWSE_SECTIONS
         .iter()
         .chain(BROWSE_CATEGORIES.iter())
-        .map(|&slug| rdlp_types::SearchFilterValue {
-            value: slug.to_string(),
-            label: slug_to_label(slug),
-        })
+        .map(|&slug| rdlp_types::SearchFilterValue::new(slug, slug_to_label(slug)))
         .collect();
 
     vec![
-        rdlp_types::SearchFilterDescriptor {
-            key: "ordering".to_string(),
-            display_name: "Sort by".to_string(),
-            allowed_values: vec![
-                rdlp_types::SearchFilterValue {
-                    value: "featured".to_string(),
-                    label: "Featured".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "newest".to_string(),
-                    label: "Newest".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "duration".to_string(),
-                    label: "Longest".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "rating".to_string(),
-                    label: "Top rated".to_string(),
-                },
-            ],
-            default: Some("featured".to_string()),
-        },
-        rdlp_types::SearchFilterDescriptor {
-            key: "category".to_string(),
-            display_name: "Category".to_string(),
-            allowed_values: category_values,
-            default: None,
-        },
+        rdlp_types::SearchFilterDescriptor::new(
+            "ordering",
+            "Sort by",
+            rdlp_types::SearchFilterValue::list([
+                ("featured", "Featured"),
+                ("newest", "Newest"),
+                ("duration", "Longest"),
+                ("rating", "Top rated"),
+            ]),
+            Some("featured"),
+        ),
+        rdlp_types::SearchFilterDescriptor::new("category", "Category", category_values, None),
     ]
 }
 
@@ -410,30 +379,6 @@ mod tests {
         assert!(values.contains(&"newest"));
         assert!(values.contains(&"duration"));
         assert!(values.contains(&"rating"));
-    }
-
-    #[test]
-    fn test_is_valid_category_sections() {
-        assert!(is_valid_category("new"));
-        assert!(is_valid_category("toprated"));
-        assert!(is_valid_category("featured"));
-    }
-
-    #[test]
-    fn test_is_valid_category_slugs() {
-        assert!(is_valid_category("teen-porn"));
-        assert!(is_valid_category("milf-porn"));
-        assert!(is_valid_category("hd-videos"));
-        assert!(is_valid_category("threesome-sex"));
-        assert!(is_valid_category("webcam-shows"));
-        assert!(is_valid_category("big-boobs"));
-    }
-
-    #[test]
-    fn test_is_valid_category_rejects_unknown() {
-        assert!(!is_valid_category("unknown"));
-        assert!(!is_valid_category(""));
-        assert!(!is_valid_category("not-a-category"));
     }
 
     #[test]
@@ -610,19 +555,6 @@ mod tests {
         let url = build_search_url_for("https://www.empflix.com", &query);
         assert!(url.contains("&ordering=newest"));
         assert!(url.contains("&other=val"));
-    }
-
-    // is_valid_category negative (renamed to avoid duplicate)
-
-    #[test]
-    fn test_is_valid_category_rejects_empty() {
-        assert!(!is_valid_category(""));
-    }
-
-    #[test]
-    fn test_is_valid_category_case_sensitive() {
-        assert!(!is_valid_category("New"));
-        assert!(!is_valid_category("TEEN-PORN"));
     }
 
     // slug_to_label edge cases

@@ -99,60 +99,41 @@ pub fn parse_max_pages(initials: &Value) -> Option<usize> {
 
 /// Validate search filters against the known xHamster filter descriptors.
 pub fn validate_search_filters(filters: &[SearchFilter]) -> Result<()> {
+    use crate::base::common::{FilterValidationError, KeyValidation, validate_against_descriptors};
+
     let descriptors = patterns::search_filter_descriptors();
-
-    for filter in filters {
-        let descriptor = descriptors.iter().find(|d| d.key == filter.key);
-
-        match descriptor {
-            None => {
-                let valid_keys: Vec<&str> = descriptors.iter().map(|d| d.key.as_str()).collect();
-                return Err(RdlpError::Extraction {
-                    message: format!(
-                        "Unknown filter '{}' for XHamster. Available: {}",
-                        filter.key,
-                        valid_keys.join(", ")
-                    ),
-                    url: None,
-                });
-            }
-            Some(desc) => {
-                // Duration min/max are numeric, allow any reasonable value
-                if filter.key == "min-duration" || filter.key == "max-duration" {
-                    if filter.value.parse::<u32>().is_err() {
-                        return Err(RdlpError::Extraction {
-                            message: format!(
-                                "Invalid value '{}' for filter '{}'. Must be a number.",
-                                filter.value, filter.key
-                            ),
-                            url: None,
-                        });
-                    }
-                    continue;
-                }
-
-                let valid = desc.allowed_values.iter().any(|v| v.value == filter.value);
-                if !valid {
-                    let allowed: Vec<&str> = desc
-                        .allowed_values
-                        .iter()
-                        .map(|v| v.value.as_str())
-                        .collect();
-                    return Err(RdlpError::Extraction {
-                        message: format!(
-                            "Invalid value '{}' for filter '{}'. Allowed: {}",
-                            filter.value,
-                            filter.key,
-                            allowed.join(", ")
-                        ),
-                        url: None,
-                    });
-                }
-            }
-        }
-    }
-
-    Ok(())
+    validate_against_descriptors(
+        filters,
+        &descriptors,
+        &[
+            ("min-duration", KeyValidation::NumericU32),
+            ("max-duration", KeyValidation::NumericU32),
+        ],
+    )
+    .map_err(|e| match e {
+        FilterValidationError::UnknownKey { key, available } => RdlpError::Extraction {
+            message: format!(
+                "Unknown filter '{key}' for XHamster. Available: {}",
+                available.join(", ")
+            ),
+            url: None,
+        },
+        FilterValidationError::InvalidValue {
+            key,
+            value,
+            allowed,
+        } => RdlpError::Extraction {
+            message: format!(
+                "Invalid value '{value}' for filter '{key}'. Allowed: {}",
+                allowed.join(", ")
+            ),
+            url: None,
+        },
+        FilterValidationError::NonNumeric { key, value } => RdlpError::Extraction {
+            message: format!("Invalid value '{value}' for filter '{key}'. Must be a number."),
+            url: None,
+        },
+    })
 }
 
 #[cfg(test)]

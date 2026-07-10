@@ -57,7 +57,10 @@ use regex::Regex;
 
 // Re-export selectors, patterns, and constants from submodule
 pub(crate) use protocol::protocol_for_url;
-pub(crate) use search::{PaginatedSearch, Termination, append_search_filters};
+pub(crate) use search::{
+    FilterValidationError, KeyValidation, PaginatedSearch, Termination, append_search_filters,
+    validate_against_descriptors,
+};
 pub(crate) use selectors::*;
 
 /// Maximum URL length to prevent memory exhaustion attacks

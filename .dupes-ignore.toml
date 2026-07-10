@@ -51,10 +51,6 @@ fingerprint = "9b402eaf0837811d"
 reason = "False positive: HLS format-detection and DASH download closures share structural shape but operate on incompatible segment-type streams"
 
 [[ignore]]
-fingerprint = "c280dd2ab56d298f"
-reason = "Initiative #5: InfoExtractorExt — search_filter_descriptors duplicated across PornHub+RedTube (#440)"
-
-[[ignore]]
 fingerprint = "3b98ca18011a1100"
 reason = "Same domain-separation rationale (list_available_audio_codecs vs list_available_codecs for video)"
 
@@ -78,6 +74,3 @@ reason = "False positive: FFmpegRunner::merge and embed_thumbnail wrap the same 
 fingerprint = "40cd6e66253b577b"
 reason = "Acceptable test redundancy; round-trip pattern for two distinct serializable session-state shapes (playlist vs merge_plan)"
 
-[[ignore]]
-fingerprint = "b1f95f057f50ca9e"
-reason = "Initiative #5: InfoExtractorExt — category_values (PornHub) and tag_values (RedTube) share filter-value enumeration scaffold (#440)"

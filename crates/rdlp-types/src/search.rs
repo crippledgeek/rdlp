@@ -46,6 +46,48 @@ pub struct SearchFilterValue {
     pub label: String,
 }
 
+impl SearchFilterValue {
+    /// Construct a filter value from a machine value and human-readable label.
+    #[must_use]
+    pub fn new(value: impl Into<String>, label: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+            label: label.into(),
+        }
+    }
+
+    /// Build a value list from a `(value, label)` pair table.
+    ///
+    /// The per-site *data* stays at the call site; this removes only the
+    /// repeated `SearchFilterValue { value: ….to_string(), … }` construction
+    /// mechanic shared across every site's filter table.
+    #[must_use]
+    pub fn list<'a>(pairs: impl IntoIterator<Item = (&'a str, &'a str)>) -> Vec<Self> {
+        pairs.into_iter().map(|(v, l)| Self::new(v, l)).collect()
+    }
+}
+
+impl SearchFilterDescriptor {
+    /// Construct a filter descriptor.
+    ///
+    /// `default` is `Option<&str>` (not `impl Into<Option<String>>`, which would
+    /// reject `Some("x")` and reintroduce `.to_string()` boilerplate at callers).
+    #[must_use]
+    pub fn new(
+        key: impl Into<String>,
+        display_name: impl Into<String>,
+        allowed_values: Vec<SearchFilterValue>,
+        default: Option<&str>,
+    ) -> Self {
+        Self {
+            key: key.into(),
+            display_name: display_name.into(),
+            allowed_values,
+            default: default.map(str::to_string),
+        }
+    }
+}
+
 /// A lightweight preview of a single search result.
 ///
 /// Does NOT contain full format/download information. Callers that need
@@ -160,5 +202,61 @@ mod tests {
             value: "newest".to_string(),
         };
         assert_eq!(f1, f2);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::indexing_slicing)] // test assertions index short, known-length Vecs
+mod filter_ctor_tests {
+    use super::{SearchFilterDescriptor, SearchFilterValue};
+
+    #[test]
+    fn value_new_from_str_and_string() {
+        let a = SearchFilterValue::new("v", "L");
+        assert_eq!(a.value, "v");
+        assert_eq!(a.label, "L");
+        let b = SearchFilterValue::new(String::from("v2"), String::from("L2"));
+        assert_eq!(
+            b,
+            SearchFilterValue {
+                value: "v2".into(),
+                label: "L2".into()
+            }
+        );
+    }
+
+    #[test]
+    fn value_list_maps_table() {
+        let out = SearchFilterValue::list([("a", "A"), ("b", "B")]);
+        assert_eq!(out.len(), 2);
+        assert_eq!(out[0], SearchFilterValue::new("a", "A"));
+        assert_eq!(out[1].label, "B");
+    }
+
+    #[test]
+    fn value_list_empty_is_empty() {
+        let out = SearchFilterValue::list([]);
+        assert!(out.is_empty());
+    }
+
+    #[test]
+    fn descriptor_new_some_default() {
+        let d = SearchFilterDescriptor::new(
+            "ordering",
+            "Sort by",
+            SearchFilterValue::list([("newest", "Newest")]),
+            Some("newest"),
+        );
+        assert_eq!(d.key, "ordering");
+        assert_eq!(d.display_name, "Sort by");
+        assert_eq!(d.allowed_values.len(), 1);
+        assert_eq!(d.default, Some("newest".to_string()));
+    }
+
+    #[test]
+    fn descriptor_new_none_default() {
+        let d = SearchFilterDescriptor::new("tags", "Tags", vec![], None);
+        assert_eq!(d.default, None);
+        assert!(d.allowed_values.is_empty());
     }
 }
