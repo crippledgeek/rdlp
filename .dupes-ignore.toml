@@ -52,7 +52,7 @@ reason = "False positive: HLS format-detection and DASH download closures share 
 
 [[ignore]]
 fingerprint = "c280dd2ab56d298f"
-reason = "Initiative #5: InfoExtractorExt — search_filter_descriptors duplicated across PornHub+RedTube (tracking issue)"
+reason = "Initiative #5: InfoExtractorExt — search_filter_descriptors duplicated across PornHub+RedTube (#440)"
 
 [[ignore]]
 fingerprint = "3b98ca18011a1100"
@@ -64,7 +64,7 @@ reason = "Same domain-separation rationale (closures inside list_*_codecs helper
 
 [[ignore]]
 fingerprint = "c779eff5aef82766"
-reason = "Initiative #5: InfoExtractorExt — XNXX+SpankBang SearchExtractor::search_page share pagination scaffold (tracking issue)"
+reason = "Initiative #5: InfoExtractorExt — XNXX+SpankBang SearchExtractor::search_page share pagination scaffold (#440)"
 
 [[ignore]]
 fingerprint = "d1fae871b2e72790"
@@ -80,4 +80,4 @@ reason = "Acceptable test redundancy; round-trip pattern for two distinct serial
 
 [[ignore]]
 fingerprint = "b1f95f057f50ca9e"
-reason = "Initiative #5: InfoExtractorExt — category_values (PornHub) and tag_values (RedTube) share filter-value enumeration scaffold (tracking issue)"
+reason = "Initiative #5: InfoExtractorExt — category_values (PornHub) and tag_values (RedTube) share filter-value enumeration scaffold (#440)"
