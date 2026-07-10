@@ -353,14 +353,7 @@ impl SearchExtractor for XHamsterExtractor {
         let page = query.page.unwrap_or(1) as usize;
         let (page_results, termination) = self.fetch_search_page(query, page, ctx).await?;
 
-        // Mirrors `Termination::should_stop` (private to `base::common::search`)
-        // without calling it: a later page exists iff the page count hasn't
-        // been reached yet (`Pages`), or the mode has no total (`UntilEmpty`).
-        let has_more = !page_results.is_empty()
-            && match termination {
-                Termination::Pages(n) => page < n.max(1),
-                Termination::UntilEmpty => true,
-            };
+        let has_more = !page_results.is_empty() && termination.has_more(page);
 
         Ok(SearchPageResponse {
             results: page_results,

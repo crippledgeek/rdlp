@@ -32,7 +32,7 @@ pub(crate) enum Termination {
     /// only wires the enum through the 4 existing `Pages`-only adopters, so
     /// `UntilEmpty` has no production constructor yet; silence the transient
     /// dead-code false positive rather than leaving the gate unclean.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     UntilEmpty,
 }
 
@@ -46,6 +46,14 @@ impl Termination {
             Termination::Pages(n) => page >= n.max(1),
             Termination::UntilEmpty => false,
         }
+    }
+
+    /// True while the loop/caller may fetch a further page after `page`
+    /// (the inverse of `should_stop`). `pub(crate)` so single-page
+    /// `search_page` callers can compute `has_more` without duplicating the
+    /// match; `should_stop` itself stays private.
+    pub(crate) fn has_more(self, page: usize) -> bool {
+        !self.should_stop(page)
     }
 }
 
