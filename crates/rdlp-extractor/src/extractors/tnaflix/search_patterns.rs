@@ -272,42 +272,22 @@ pub fn search_filter_descriptors() -> Vec<rdlp_types::SearchFilterDescriptor> {
     let category_values: Vec<rdlp_types::SearchFilterValue> = BROWSE_SECTIONS
         .iter()
         .chain(BROWSE_CATEGORIES.iter())
-        .map(|&slug| rdlp_types::SearchFilterValue {
-            value: slug.to_string(),
-            label: slug_to_label(slug),
-        })
+        .map(|&slug| rdlp_types::SearchFilterValue::new(slug, slug_to_label(slug)))
         .collect();
 
     vec![
-        rdlp_types::SearchFilterDescriptor {
-            key: "ordering".to_string(),
-            display_name: "Sort by".to_string(),
-            allowed_values: vec![
-                rdlp_types::SearchFilterValue {
-                    value: "featured".to_string(),
-                    label: "Featured".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "newest".to_string(),
-                    label: "Newest".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "duration".to_string(),
-                    label: "Longest".to_string(),
-                },
-                rdlp_types::SearchFilterValue {
-                    value: "rating".to_string(),
-                    label: "Top rated".to_string(),
-                },
-            ],
-            default: Some("featured".to_string()),
-        },
-        rdlp_types::SearchFilterDescriptor {
-            key: "category".to_string(),
-            display_name: "Category".to_string(),
-            allowed_values: category_values,
-            default: None,
-        },
+        rdlp_types::SearchFilterDescriptor::new(
+            "ordering",
+            "Sort by",
+            rdlp_types::SearchFilterValue::list([
+                ("featured", "Featured"),
+                ("newest", "Newest"),
+                ("duration", "Longest"),
+                ("rating", "Top rated"),
+            ]),
+            Some("featured"),
+        ),
+        rdlp_types::SearchFilterDescriptor::new("category", "Category", category_values, None),
     ]
 }
 

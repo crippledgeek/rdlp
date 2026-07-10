@@ -37,33 +37,18 @@ pub fn build_search_url(query: &rdlp_types::SearchQuery, page: usize) -> String 
 /// # Supported Filters
 /// - `ordering` - Sort order (relevance, adddate, viewnum, rate, duration)
 pub fn search_filter_descriptors() -> Vec<rdlp_types::SearchFilterDescriptor> {
-    vec![rdlp_types::SearchFilterDescriptor {
-        key: "ordering".to_string(),
-        display_name: "Sort by".to_string(),
-        allowed_values: vec![
-            rdlp_types::SearchFilterValue {
-                value: "relevance".to_string(),
-                label: "Relevance".to_string(),
-            },
-            rdlp_types::SearchFilterValue {
-                value: "adddate".to_string(),
-                label: "Newest".to_string(),
-            },
-            rdlp_types::SearchFilterValue {
-                value: "viewnum".to_string(),
-                label: "Most Viewed".to_string(),
-            },
-            rdlp_types::SearchFilterValue {
-                value: "rate".to_string(),
-                label: "Top Rated".to_string(),
-            },
-            rdlp_types::SearchFilterValue {
-                value: "duration".to_string(),
-                label: "Duration".to_string(),
-            },
-        ],
-        default: Some("relevance".to_string()),
-    }]
+    vec![rdlp_types::SearchFilterDescriptor::new(
+        "ordering",
+        "Sort by",
+        rdlp_types::SearchFilterValue::list([
+            ("relevance", "Relevance"),
+            ("adddate", "Newest"),
+            ("viewnum", "Most Viewed"),
+            ("rate", "Top Rated"),
+            ("duration", "Duration"),
+        ]),
+        Some("relevance"),
+    )]
 }
 
 #[cfg(test)]

@@ -71,41 +71,20 @@ fn resolve_sort(query: &SearchQuery) -> &str {
 
 /// Return filter descriptors for NineAnime search.
 pub(crate) fn search_filter_descriptors() -> Vec<SearchFilterDescriptor> {
-    vec![SearchFilterDescriptor {
-        key: "ordering".to_string(),
-        display_name: "Sort By".to_string(),
-        default: Some("default".to_string()),
-        allowed_values: vec![
-            SearchFilterValue {
-                value: "default".to_string(),
-                label: "Default".to_string(),
-            },
-            SearchFilterValue {
-                value: "updated".to_string(),
-                label: "Recently Updated".to_string(),
-            },
-            SearchFilterValue {
-                value: "added".to_string(),
-                label: "Recently Added".to_string(),
-            },
-            SearchFilterValue {
-                value: "name".to_string(),
-                label: "Name A-Z".to_string(),
-            },
-            SearchFilterValue {
-                value: "mostwatched".to_string(),
-                label: "Most Watched".to_string(),
-            },
-            SearchFilterValue {
-                value: "score".to_string(),
-                label: "Score".to_string(),
-            },
-            SearchFilterValue {
-                value: "released".to_string(),
-                label: "Released Date".to_string(),
-            },
-        ],
-    }]
+    vec![SearchFilterDescriptor::new(
+        "ordering",
+        "Sort By",
+        SearchFilterValue::list([
+            ("default", "Default"),
+            ("updated", "Recently Updated"),
+            ("added", "Recently Added"),
+            ("name", "Name A-Z"),
+            ("mostwatched", "Most Watched"),
+            ("score", "Score"),
+            ("released", "Released Date"),
+        ]),
+        Some("default"),
+    )]
 }
 
 #[cfg(test)]
