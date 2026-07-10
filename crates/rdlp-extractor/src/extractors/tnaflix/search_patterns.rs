@@ -163,17 +163,6 @@ pub fn build_search_url_page(query: &rdlp_types::SearchQuery, page: usize) -> St
     url
 }
 
-/// Check whether a value is a valid browse section or category slug.
-///
-/// # Arguments
-/// * `value` - The slug to validate.
-///
-/// # Returns
-/// `true` if the value matches a known browse section or category slug.
-pub fn is_valid_category(value: &str) -> bool {
-    BROWSE_SECTIONS.contains(&value) || BROWSE_CATEGORIES.contains(&value)
-}
-
 /// Build a browse URL for page 1 of a section or category for the given base URL.
 ///
 /// # Arguments
@@ -393,30 +382,6 @@ mod tests {
     }
 
     #[test]
-    fn test_is_valid_category_sections() {
-        assert!(is_valid_category("new"));
-        assert!(is_valid_category("toprated"));
-        assert!(is_valid_category("featured"));
-    }
-
-    #[test]
-    fn test_is_valid_category_slugs() {
-        assert!(is_valid_category("teen-porn"));
-        assert!(is_valid_category("milf-porn"));
-        assert!(is_valid_category("hd-videos"));
-        assert!(is_valid_category("threesome-sex"));
-        assert!(is_valid_category("webcam-shows"));
-        assert!(is_valid_category("big-boobs"));
-    }
-
-    #[test]
-    fn test_is_valid_category_rejects_unknown() {
-        assert!(!is_valid_category("unknown"));
-        assert!(!is_valid_category(""));
-        assert!(!is_valid_category("not-a-category"));
-    }
-
-    #[test]
     fn test_build_browse_url() {
         assert_eq!(build_browse_url("new"), "https://www.tnaflix.com/new");
         assert_eq!(
@@ -590,19 +555,6 @@ mod tests {
         let url = build_search_url_for("https://www.empflix.com", &query);
         assert!(url.contains("&ordering=newest"));
         assert!(url.contains("&other=val"));
-    }
-
-    // is_valid_category negative (renamed to avoid duplicate)
-
-    #[test]
-    fn test_is_valid_category_rejects_empty() {
-        assert!(!is_valid_category(""));
-    }
-
-    #[test]
-    fn test_is_valid_category_case_sensitive() {
-        assert!(!is_valid_category("New"));
-        assert!(!is_valid_category("TEEN-PORN"));
     }
 
     // slug_to_label edge cases

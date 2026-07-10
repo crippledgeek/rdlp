@@ -6,9 +6,6 @@
 /// MovieFap base URL.
 pub const MOVIEFAP_BASE_URL: &str = "https://www.moviefap.com";
 
-/// Valid sort options for MovieFap search.
-pub const VALID_ORDERINGS: &[&str] = &["relevance", "adddate", "viewnum", "rate", "duration"];
-
 /// Build a MovieFap search URL for a specific page.
 ///
 /// Format: `https://www.moviefap.com/search/{encoded_query}/{sort}/{page}`
