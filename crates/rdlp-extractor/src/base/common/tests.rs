@@ -459,3 +459,72 @@ async fn fetch_webpage_with_retry_enforces_body_cap() {
     );
     mock.assert_async().await;
 }
+
+#[tokio::test]
+async fn fetch_webpage_with_retry_recovers_after_a_transient_timeout() {
+    // Proves the retry machinery itself recovers a *transient* failure — the
+    // feature the helper is named for. Deterministic (no wall-clock race): a
+    // raw-TCP server accepts the first attempt and never responds, so that
+    // attempt can ONLY end via the client-side timeout (a retryable
+    // `is_timeout()` error); the server's second `accept()` then blocks until
+    // backon actually retries, and serves a 200. mockito can't express this —
+    // a returned HTTP status is not a timeout/connect error, so the retry
+    // predicate would skip it.
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+
+    // Client timeout well below the (unbounded) stall on attempt 1, and the
+    // second attempt responds immediately, so neither bound is timing-fragile.
+    const CLIENT_TIMEOUT_MS: u64 = 400;
+
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind loopback listener");
+    let addr = listener.local_addr().expect("listener addr");
+    let url = format!("http://{addr}/");
+
+    let server = tokio::spawn(async move {
+        let mut scratch = [0u8; 1024];
+
+        // Attempt 1: read the request, then hold the connection WITHOUT
+        // responding. The client's per-request timeout is the only way out.
+        let (mut first, _) = listener.accept().await.expect("accept attempt 1");
+        let _ = first.read(&mut scratch).await;
+
+        // Attempt 2 (the retry): blocks here until backon reconnects, so the
+        // sequencing is driven by the client, not a sleep.
+        let (mut second, _) = listener.accept().await.expect("accept attempt 2");
+        let _ = second.read(&mut scratch).await;
+        second
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nrecovered!!",
+            )
+            .await
+            .expect("write 200 on retry");
+        let _ = second.shutdown().await;
+    });
+
+    // A dedicated client with a short per-request timeout so attempt 1's stall
+    // surfaces as `is_timeout()` (the retry predicate's trigger).
+    let client = wreq::Client::builder()
+        .redirect(wreq::redirect::Policy::none())
+        .timeout(std::time::Duration::from_millis(CLIENT_TIMEOUT_MS))
+        .build()
+        .expect("client build must succeed in tests");
+    let ctx = rdlp_core::ExtractionContext::new(
+        std::sync::Arc::new(client),
+        std::sync::Arc::new(crate::hls::test_support::NoOpJsEngine),
+        std::sync::Arc::new(crate::hls::test_support::NoOpCookieJar),
+        std::sync::Arc::new(rdlp_types::Config {
+            verbose: false,
+            ..rdlp_types::Config::default()
+        }),
+    );
+
+    let body = BaseExtractor::fetch_webpage_with_retry(&url, &ctx)
+        .await
+        .expect("a transient first-attempt timeout must be retried, then succeed");
+
+    assert_eq!(body, "recovered!!");
+    server.await.expect("server task must not panic");
+}
