@@ -5,7 +5,7 @@ use log::debug;
 use rdlp_core::{ExtractionContext, Result, SearchExtractor};
 use rdlp_types::SearchPageResponse;
 
-use crate::base::common::{BaseExtractor, PaginatedSearch};
+use crate::base::common::{BaseExtractor, PaginatedSearch, Termination};
 
 use super::search_patterns;
 use super::tnaflix_search_helpers;
@@ -60,7 +60,7 @@ impl PaginatedSearch for TNAFlixSearchExtractor {
         query: &rdlp_types::SearchQuery,
         page: usize,
         ctx: &ExtractionContext,
-    ) -> Result<(Vec<rdlp_types::SearchResultPreview>, usize)> {
+    ) -> Result<(Vec<rdlp_types::SearchResultPreview>, Termination)> {
         let page_url = Self::build_page_url(query, page);
         debug!(page; "[TNAFlix] Fetching search page: {}", rdlp_security::sanitize_for_logging(&page_url));
 
@@ -75,7 +75,7 @@ impl PaginatedSearch for TNAFlixSearchExtractor {
             page_results.len()
         );
 
-        Ok((page_results, max_pages))
+        Ok((page_results, Termination::Pages(max_pages)))
     }
 }
 
@@ -111,9 +111,16 @@ impl SearchExtractor for TNAFlixSearchExtractor {
         tnaflix_search_helpers::validate_search_filters(&query.filters)?;
 
         let page = query.page.unwrap_or(1) as usize;
-        let (page_results, max_pages) = self.fetch_search_page(query, page, ctx).await?;
+        let (page_results, termination) = self.fetch_search_page(query, page, ctx).await?;
 
-        let has_more = page < max_pages && !page_results.is_empty();
+        // Mirrors `Termination::should_stop` (private to `base::common::search`)
+        // without calling it: a later page exists iff the page count hasn't
+        // been reached yet (`Pages`), or the mode has no total (`UntilEmpty`).
+        let has_more = !page_results.is_empty()
+            && match termination {
+                Termination::Pages(n) => page < n.max(1),
+                Termination::UntilEmpty => true,
+            };
 
         Ok(SearchPageResponse {
             results: page_results,

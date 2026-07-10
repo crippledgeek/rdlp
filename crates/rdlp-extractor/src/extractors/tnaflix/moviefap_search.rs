@@ -8,7 +8,7 @@ use log::debug;
 use rdlp_core::{ExtractionContext, Result};
 
 use super::{moviefap_search_helpers, moviefap_search_patterns};
-use crate::base::common::PaginatedSearch;
+use crate::base::common::{PaginatedSearch, Termination};
 
 /// MovieFap search extractor
 ///
@@ -40,7 +40,7 @@ impl PaginatedSearch for MovieFapSearchExtractor {
         query: &rdlp_types::SearchQuery,
         page: usize,
         ctx: &ExtractionContext,
-    ) -> Result<(Vec<rdlp_types::SearchResultPreview>, usize)> {
+    ) -> Result<(Vec<rdlp_types::SearchResultPreview>, Termination)> {
         let page_url = moviefap_search_patterns::build_search_url(query, page);
         debug!(page; "[MovieFap] Fetching search page: {}", rdlp_security::sanitize_for_logging(&page_url));
 
@@ -55,7 +55,7 @@ impl PaginatedSearch for MovieFapSearchExtractor {
             page_results.len()
         );
 
-        Ok((page_results, max_pages))
+        Ok((page_results, Termination::Pages(max_pages)))
     }
 }
 
@@ -91,9 +91,16 @@ impl rdlp_core::SearchExtractor for MovieFapSearchExtractor {
         moviefap_search_helpers::validate_search_filters(&query.filters)?;
 
         let page = query.page.unwrap_or(1) as usize;
-        let (page_results, max_pages) = self.fetch_search_page(query, page, ctx).await?;
+        let (page_results, termination) = self.fetch_search_page(query, page, ctx).await?;
 
-        let has_more = page < max_pages && !page_results.is_empty();
+        // Mirrors `Termination::should_stop` (private to `base::common::search`)
+        // without calling it: a later page exists iff the page count hasn't
+        // been reached yet (`Pages`), or the mode has no total (`UntilEmpty`).
+        let has_more = !page_results.is_empty()
+            && match termination {
+                Termination::Pages(n) => page < n.max(1),
+                Termination::UntilEmpty => true,
+            };
 
         Ok(rdlp_types::SearchPageResponse {
             results: page_results,

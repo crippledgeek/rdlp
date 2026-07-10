@@ -20,6 +20,35 @@ use super::MAX_PLAYLIST_SIZE;
 /// share the [`PaginatedSearch`] scaffold rate-limit at this interval.
 pub(crate) const PAGE_RATE_LIMIT_MS: u64 = 500;
 
+/// How a paginated search knows when to stop.
+///
+/// `Pages(n)` — the site reports a known page count; stop once `page >= n`.
+/// `UntilEmpty` — no reliable total; stop only when a page comes back empty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Termination {
+    Pages(usize),
+    /// Constructed by `PaginatedSearch` adopters that paginate until an empty
+    /// page (PornHub/RedTube — Tasks 2-3 of this refactor, #436). This task
+    /// only wires the enum through the 4 existing `Pages`-only adopters, so
+    /// `UntilEmpty` has no production constructor yet; silence the transient
+    /// dead-code false positive rather than leaving the gate unclean.
+    #[allow(dead_code)]
+    UntilEmpty,
+}
+
+impl Termination {
+    /// True once the loop should stop, given the 1-based page just fetched.
+    /// `n.max(1)` treats a zero total as one page (`Pages(0)` == `Pages(1)`);
+    /// count==0 is normally caught by the empty-page break first, so do not
+    /// "simplify" away the `.max(1)`.
+    fn should_stop(self, page: usize) -> bool {
+        match self {
+            Termination::Pages(n) => page >= n.max(1),
+            Termination::UntilEmpty => false,
+        }
+    }
+}
+
 /// Append the standard API search filters to an in-progress search URL.
 ///
 /// Recognizes four filter keys; unknown keys are silently ignored (value
@@ -75,8 +104,10 @@ pub(crate) fn append_search_filters(url: &mut String, filters: &[SearchFilter]) 
 /// [`search_all_pages`](Self::search_all_pages) is the shared default and
 /// should not be overridden.
 ///
-/// Sites with a different pagination shape (e.g. PornHub/RedTube, which chain
-/// an HTML-vs-API fallback per page) intentionally do NOT implement this trait.
+/// Sites that report a total page count return `Termination::Pages(n)`; sites
+/// with no reliable total (they paginate until an empty page) return
+/// `Termination::UntilEmpty`. Per-page primary↔fallback fetching is a private
+/// concern of each site's `fetch_search_page` implementation.
 #[async_trait]
 pub(crate) trait PaginatedSearch: Send + Sync {
     /// Bracketed site tag used in log lines, e.g. `"[XHamster]"`.
@@ -85,13 +116,13 @@ pub(crate) trait PaginatedSearch: Send + Sync {
     /// Validate the query's filters against this site's supported filter set.
     fn validate_search_filters(&self, filters: &[SearchFilter]) -> Result<()>;
 
-    /// Fetch a single search page, returning `(results, max_pages)`.
+    /// Fetch a single search page, returning `(results, termination)`.
     async fn fetch_search_page(
         &self,
         query: &SearchQuery,
         page: usize,
         ctx: &ExtractionContext,
-    ) -> Result<(Vec<SearchResultPreview>, usize)>;
+    ) -> Result<(Vec<SearchResultPreview>, Termination)>;
 
     /// Delay between successive page fetches. Defaults to [`PAGE_RATE_LIMIT_MS`].
     fn page_rate_limit(&self) -> Duration {
@@ -113,7 +144,7 @@ pub(crate) trait PaginatedSearch: Send + Sync {
         let mut page = 1usize;
 
         loop {
-            let (page_results, max_pages) = match self.fetch_search_page(query, page, ctx).await {
+            let (page_results, termination) = match self.fetch_search_page(query, page, ctx).await {
                 Ok(result) => result,
                 Err(e) => {
                     debug!(page; "{tag} Failed to fetch search page, returning partial results: {e}");
@@ -133,7 +164,7 @@ pub(crate) trait PaginatedSearch: Send + Sync {
                 break;
             }
 
-            if page >= max_pages {
+            if termination.should_stop(page) {
                 break;
             }
 
@@ -249,7 +280,7 @@ mod tests {
     }
 
     enum Page {
-        Ok(Vec<SearchResultPreview>, usize),
+        Ok(Vec<SearchResultPreview>, Termination),
         Fail,
     }
 
@@ -293,15 +324,15 @@ mod tests {
             _query: &SearchQuery,
             page: usize,
             _ctx: &ExtractionContext,
-        ) -> Result<(Vec<SearchResultPreview>, usize)> {
+        ) -> Result<(Vec<SearchResultPreview>, Termination)> {
             self.fetches.fetch_add(1, Ordering::SeqCst);
             match self.script.get(page - 1) {
-                Some(Page::Ok(results, max_pages)) => Ok((results.clone(), *max_pages)),
+                Some(Page::Ok(results, termination)) => Ok((results.clone(), *termination)),
                 Some(Page::Fail) => Err(RdlpError::extraction(
                     "mock fetch failure",
                     "https://x.test",
                 )),
-                None => Ok((Vec::new(), page)), // past the script → empty page
+                None => Ok((Vec::new(), Termination::UntilEmpty)), // past script → empty page
             }
         }
     }
@@ -326,7 +357,10 @@ mod tests {
     async fn accumulates_across_pages_then_truncates_to_max_results() {
         // page1: 3, page2: 3, cap 4 → extend to 6, truncate to 4.
         let out = run(
-            vec![Page::Ok(previews(3), 10), Page::Ok(previews(3), 10)],
+            vec![
+                Page::Ok(previews(3), Termination::Pages(10)),
+                Page::Ok(previews(3), Termination::Pages(10)),
+            ],
             Some(4),
         )
         .await;
@@ -337,7 +371,10 @@ mod tests {
     async fn stops_at_max_pages_without_fetching_beyond() {
         // page1 reports max_pages=1; page2 (if fetched) would add 5 — must not.
         let out = run(
-            vec![Page::Ok(previews(2), 1), Page::Ok(previews(5), 1)],
+            vec![
+                Page::Ok(previews(2), Termination::Pages(1)),
+                Page::Ok(previews(5), Termination::Pages(1)),
+            ],
             None,
         )
         .await;
@@ -347,7 +384,10 @@ mod tests {
     #[tokio::test]
     async fn stops_on_empty_page() {
         let out = run(
-            vec![Page::Ok(previews(2), 10), Page::Ok(Vec::new(), 10)],
+            vec![
+                Page::Ok(previews(2), Termination::Pages(10)),
+                Page::Ok(Vec::new(), Termination::Pages(10)),
+            ],
             None,
         )
         .await;
@@ -356,13 +396,17 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_error_returns_partial_results() {
-        let out = run(vec![Page::Ok(previews(2), 10), Page::Fail], None).await;
+        let out = run(
+            vec![Page::Ok(previews(2), Termination::Pages(10)), Page::Fail],
+            None,
+        )
+        .await;
         assert_eq!(out.len(), 2);
     }
 
     #[tokio::test]
     async fn truncates_within_a_single_page() {
-        let out = run(vec![Page::Ok(previews(5), 10)], Some(3)).await;
+        let out = run(vec![Page::Ok(previews(5), Termination::Pages(10))], Some(3)).await;
         assert_eq!(out.len(), 3);
     }
 
@@ -371,7 +415,10 @@ mod tests {
         // 2 pages, no result cap; max_pages=2 stops the loop naturally → all 5,
         // no truncation (the one path the other multi-page tests don't cover).
         let out = run(
-            vec![Page::Ok(previews(3), 2), Page::Ok(previews(2), 2)],
+            vec![
+                Page::Ok(previews(3), Termination::Pages(2)),
+                Page::Ok(previews(2), Termination::Pages(2)),
+            ],
             None,
         )
         .await;
@@ -383,7 +430,7 @@ mod tests {
         // The only scaffold path that returns Err (not partial results): a
         // failed filter validation must short-circuit BEFORE any page fetch.
         let mock = MockSearch {
-            script: vec![Page::Ok(previews(3), 10)],
+            script: vec![Page::Ok(previews(3), Termination::Pages(10))],
             validation_fails: true,
             fetches: AtomicUsize::new(0),
         };
@@ -394,5 +441,89 @@ mod tests {
             0,
             "must not fetch any page when validation fails"
         );
+    }
+
+    // ---- Termination::should_stop ----
+
+    #[test]
+    fn should_stop_pages_stops_at_or_past_n() {
+        assert!(
+            !Termination::Pages(3).should_stop(2),
+            "page 2 of 3: keep going"
+        );
+        assert!(Termination::Pages(3).should_stop(3), "page 3 of 3: stop");
+        assert!(Termination::Pages(3).should_stop(4), "past the end: stop");
+    }
+
+    #[test]
+    fn should_stop_pages_one_stops_after_page_1() {
+        // The common single-page case.
+        assert!(Termination::Pages(1).should_stop(1));
+    }
+
+    #[test]
+    fn should_stop_pages_zero_behaves_as_one() {
+        // `n.max(1)`: a zero total is treated as one page (page 1 is still fetched
+        // by the loop before this check; count==0 is normally caught by the
+        // empty-page break first). Documents Pages(0) == Pages(1).
+        assert!(Termination::Pages(0).should_stop(1));
+        assert_eq!(
+            Termination::Pages(0).should_stop(1),
+            Termination::Pages(1).should_stop(1)
+        );
+    }
+
+    #[test]
+    fn should_stop_until_empty_never_stops_on_count() {
+        assert!(!Termination::UntilEmpty.should_stop(1));
+        assert!(!Termination::UntilEmpty.should_stop(9_999));
+    }
+
+    #[tokio::test]
+    async fn until_empty_accumulates_until_empty_page() {
+        // No page-count bound; only the empty page stops it.
+        let out = run(
+            vec![
+                Page::Ok(previews(3), Termination::UntilEmpty),
+                Page::Ok(previews(2), Termination::UntilEmpty),
+                Page::Ok(Vec::new(), Termination::UntilEmpty),
+            ],
+            None,
+        )
+        .await;
+        assert_eq!(out.len(), 5);
+    }
+
+    #[tokio::test]
+    async fn until_empty_respects_max_results() {
+        // max_results caps before any empty page under UntilEmpty (all existing
+        // truncation tests use Pages).
+        let out = run(
+            vec![
+                Page::Ok(previews(4), Termination::UntilEmpty),
+                Page::Ok(previews(4), Termination::UntilEmpty),
+            ],
+            Some(6),
+        )
+        .await;
+        assert_eq!(out.len(), 6);
+    }
+
+    #[tokio::test]
+    async fn pages_recompute_follows_latest_count() {
+        // The §4.1 accepted semantic: a later page reporting a LARGER page count
+        // (live-dataset drift) makes the loop follow the latest total. page-1 says
+        // Pages(2), page-2 says Pages(3) → page 3 IS fetched. Would fail against a
+        // freeze-first loop that locked max_pages=2 from page 1.
+        let out = run(
+            vec![
+                Page::Ok(previews(2), Termination::Pages(2)),
+                Page::Ok(previews(2), Termination::Pages(3)),
+                Page::Ok(previews(2), Termination::Pages(3)),
+            ],
+            None,
+        )
+        .await;
+        assert_eq!(out.len(), 6, "all 3 pages fetched (latest count = 3)");
     }
 }
