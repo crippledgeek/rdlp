@@ -28,8 +28,8 @@ pub(crate) const PAGE_RATE_LIMIT_MS: u64 = 500;
 pub(crate) enum Termination {
     Pages(usize),
     /// Constructed by `PaginatedSearch` adopters that paginate until an empty
-    /// page (PornHub, RedTube once Task 3 lands — #436). No reliable total
-    /// page count is available from these sites' responses.
+    /// page (PornHub, RedTube). No reliable total page count is available from
+    /// these sites' responses.
     UntilEmpty,
 }
 

@@ -34,7 +34,7 @@ impl PaginatedSearch for MovieFapSearchExtractor {
         moviefap_search_helpers::validate_search_filters(filters)
     }
 
-    /// Fetch a single search results page and return `(results, max_page_number)`.
+    /// Fetch a single search results page and return `(results, Termination)`.
     async fn fetch_search_page(
         &self,
         query: &rdlp_types::SearchQuery,

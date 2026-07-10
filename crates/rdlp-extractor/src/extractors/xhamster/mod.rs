@@ -260,7 +260,7 @@ impl PaginatedSearch for XHamsterExtractor {
         search::validate_search_filters(filters)
     }
 
-    /// Fetch a single search page, returning its results and the max page count.
+    /// Fetch a single search page, returning its results and a `Termination`.
     async fn fetch_search_page(
         &self,
         query: &rdlp_types::SearchQuery,
