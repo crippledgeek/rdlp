@@ -10,7 +10,7 @@ use rdlp_types::{SearchFilterDescriptor, SearchFilterValue};
 /// Sourced from the `redtube.Categories.getCategoriesList` API endpoint.
 /// Test/spam entries and non-adult categories are excluded.
 fn category_values() -> Vec<SearchFilterValue> {
-    [
+    SearchFilterValue::list([
         ("Amateur", "Amateur"),
         ("Anal", "Anal"),
         ("Arab", "Arab"),
@@ -94,13 +94,7 @@ fn category_values() -> Vec<SearchFilterValue> {
         ("Virtual Reality", "Virtual Reality"),
         ("Webcam", "Webcam"),
         ("Young and Old", "Young and Old"),
-    ]
-    .into_iter()
-    .map(|(value, label)| SearchFilterValue {
-        value: value.to_string(),
-        label: label.to_string(),
-    })
-    .collect()
+    ])
 }
 
 /// Build the list of common RedTube tag filter values.
@@ -110,7 +104,7 @@ fn category_values() -> Vec<SearchFilterValue> {
 /// non-English text, and overly-specific compound tags are excluded.
 /// Users can still type custom tags not in this list (free-text bypass).
 fn tag_values() -> Vec<SearchFilterValue> {
-    [
+    SearchFilterValue::list([
         ("18 year old", "18 Year Old"),
         ("amateur", "Amateur"),
         ("amateur couple", "Amateur Couple"),
@@ -165,13 +159,7 @@ fn tag_values() -> Vec<SearchFilterValue> {
         ("trans", "Trans"),
         ("vr", "VR"),
         ("yoga", "Yoga"),
-    ]
-    .into_iter()
-    .map(|(value, label)| SearchFilterValue {
-        value: value.to_string(),
-        label: label.to_string(),
-    })
-    .collect()
+    ])
 }
 
 /// Return the static filter descriptors for RedTube search.

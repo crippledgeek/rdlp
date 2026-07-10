@@ -55,7 +55,7 @@ pub(crate) fn build_html_search_url(query: &str, page: u32) -> String {
 /// Only the most common/useful categories are included in the dropdown.
 /// Free-text is also accepted — the API validates server-side.
 fn category_values() -> Vec<SearchFilterValue> {
-    [
+    SearchFilterValue::list([
         ("amateur", "Amateur"),
         ("anal", "Anal"),
         ("arab", "Arab"),
@@ -120,13 +120,7 @@ fn category_values() -> Vec<SearchFilterValue> {
         ("transgender", "Transgender"),
         ("vintage", "Vintage"),
         ("webcam", "Webcam"),
-    ]
-    .into_iter()
-    .map(|(value, label)| SearchFilterValue {
-        value: value.to_string(),
-        label: label.to_string(),
-    })
-    .collect()
+    ])
 }
 
 /// Return the static filter descriptors for PornHub search.
