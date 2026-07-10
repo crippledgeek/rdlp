@@ -62,7 +62,7 @@ static WHITESPACE_PATTERN: Lazy<Regex> = lazy_regex!(r"\s+");
 /// ```
 pub fn debug_print_webpage_sample(webpage: &str, sample_size: usize) {
     trace!("=== WEBPAGE SAMPLE (first {sample_size} chars) ===");
-    trace!("{}", &webpage.chars().take(sample_size).collect::<String>());
+    trace!("{}", webpage.chars().take(sample_size).collect::<String>());
     trace!("=== END SAMPLE ===");
 }
 
@@ -76,10 +76,7 @@ pub fn debug_print_json(label: &str, json: &serde_json::Value, max_length: usize
     trace!("=== {label} ===");
     if let Ok(formatted) = serde_json::to_string_pretty(json) {
         if max_length > 0 && formatted.len() > max_length {
-            trace!(
-                "{}",
-                &formatted.chars().take(max_length).collect::<String>()
-            );
+            trace!("{}", formatted.chars().take(max_length).collect::<String>());
             trace!("... (truncated, {} total chars)", formatted.len());
         } else {
             trace!("{formatted}");

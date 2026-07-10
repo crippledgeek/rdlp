@@ -305,7 +305,7 @@ pub async fn extract_from_media_definition(webpage: &str, ctx: &ExtractionContex
             "RedTube",
             &format!(
                 "Found mediaDefinition array: {}",
-                &media_def_str.as_str().chars().take(200).collect::<String>()
+                media_def_str.as_str().chars().take(200).collect::<String>()
             ),
         );
 
