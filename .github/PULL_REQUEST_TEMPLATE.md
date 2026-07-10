@@ -2,6 +2,21 @@
 
 <!-- 1–3 sentences: what changed and why. -->
 
+## Resolves
+
+<!--
+Link the issue(s) this PR touches. Pick ONE per issue and put the keyword line
+below (GitHub auto-closes `Closes`/`Fixes`/`Resolves #N` on merge to `develop`,
+the default branch). If the PR touches NO issue, say so explicitly.
+-->
+
+- [ ] **Fully resolves** an issue's core acceptance → use `Closes #NNN` (auto-closes on merge)
+- [ ] **Partial / tracking** issue that must stay open → use `Refs #NNN` **and** note what remains + a follow-up issue number
+- [ ] **No issue** — self-directed / trivial (state why below)
+
+<!-- Keyword line(s) — required unless "No issue" is checked: -->
+Closes #
+
 ## Type of change
 
 <!-- Mark with [x] -->
