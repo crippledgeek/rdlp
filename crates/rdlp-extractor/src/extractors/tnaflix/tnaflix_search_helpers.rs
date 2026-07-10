@@ -495,6 +495,25 @@ mod tests {
     }
 
     #[test]
+    fn test_validate_search_filters_category_case_sensitive() {
+        // Category matching is case-sensitive: a differently-cased form of a
+        // valid slug/section must be rejected (regression guard for the removed
+        // is_valid_category case-sensitivity check, now enforced via the
+        // descriptor-driven AllowedValues path).
+        let upper_section = vec![SearchFilter {
+            key: "category".to_string(),
+            value: "New".to_string(), // valid slug is "new"
+        }];
+        assert!(validate_search_filters(&upper_section).is_err());
+
+        let upper_slug = vec![SearchFilter {
+            key: "category".to_string(),
+            value: "TEEN-PORN".to_string(), // valid slug is "teen-porn"
+        }];
+        assert!(validate_search_filters(&upper_slug).is_err());
+    }
+
+    #[test]
     fn test_validate_search_filters_invalid_category() {
         let filters = vec![SearchFilter {
             key: "category".to_string(),
