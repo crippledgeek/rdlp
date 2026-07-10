@@ -12,6 +12,8 @@ pub mod truncate;
 
 pub use column::{Align, ColumnBudget, ColumnDef, all_columns, border_overhead, compute_budget};
 
+use std::borrow::Cow;
+
 use rdlp_types::Format;
 use tabled::{
     builder::Builder,
@@ -30,6 +32,53 @@ pub struct TableOpts {
 /// Detect terminal width, falling back to 120 if unavailable.
 fn detect_width() -> usize {
     terminal_size::terminal_size().map_or(120, |(w, _)| w.0 as usize)
+}
+
+/// Per-call rendering layout shared by every entry point: compact mode, the full
+/// column set, and the fitted column budget for the current width and data.
+struct Layout {
+    compact: bool,
+    columns: Vec<ColumnDef>,
+    budget: ColumnBudget,
+}
+
+/// Resolve the layout (width → compact, columns, fitted budget) shared by all
+/// render entry points. Callers apply their own empty-input guards around this.
+fn resolve_layout(formats: &[&Format], opts: &TableOpts) -> Layout {
+    let width = opts.width_override.unwrap_or_else(detect_width);
+    let compact = opts.compact.unwrap_or(width < 80);
+    let columns = all_columns();
+    let budget = compute_budget(&columns, width, compact, formats);
+    Layout {
+        compact,
+        columns,
+        budget,
+    }
+}
+
+/// Build one table record: for each selected column, take its raw text from
+/// `cell`, then truncate and pad it to that column's budgeted width and alignment.
+///
+/// `cell` yields borrowed text for headers (`col.header`) or owned text for data
+/// rows (`(col.extract)(fmt)`), so both paths share this single implementation.
+// Indexing `columns[col_idx]` / `budget.widths[i]`: `selected_indices` and `widths`
+// are built together with consistent lengths, and `i` comes from `enumerate()` on
+// the same `selected_indices` vec, so both indices are always in bounds.
+#[allow(clippy::indexing_slicing)]
+fn padded_record(
+    columns: &[ColumnDef],
+    budget: &ColumnBudget,
+    cell: impl Fn(&ColumnDef) -> Cow<'_, str>,
+) -> Vec<String> {
+    budget
+        .selected_indices
+        .iter()
+        .enumerate()
+        .map(|(i, &col_idx)| {
+            let col = &columns[col_idx];
+            truncate::pad_to_width(&cell(col), budget.widths[i], col.align == Align::Right)
+        })
+        .collect()
 }
 
 /// Render a responsive format table for terminal display.
@@ -52,10 +101,11 @@ pub fn render_formats_table(formats: &[&Format], opts: &TableOpts) -> String {
         return String::new();
     }
 
-    let width = opts.width_override.unwrap_or_else(detect_width);
-    let compact = opts.compact.unwrap_or(width < 80);
-    let columns = all_columns();
-    let budget = compute_budget(&columns, width, compact, formats);
+    let Layout {
+        compact,
+        columns,
+        budget,
+    } = resolve_layout(formats, opts);
 
     if budget.selected_indices.is_empty() {
         return String::new();
@@ -65,30 +115,15 @@ pub fn render_formats_table(formats: &[&Format], opts: &TableOpts) -> String {
     let mut builder = Builder::new();
 
     // Header row.
-    let headers: Vec<String> = budget
-        .selected_indices
-        .iter()
-        .enumerate()
-        .map(|(i, &col_idx)| {
-            let col = &columns[col_idx];
-            truncate::pad_to_width(col.header, budget.widths[i], col.align == Align::Right)
-        })
-        .collect();
-    builder.push_record(headers);
+    builder.push_record(padded_record(&columns, &budget, |col| {
+        Cow::Borrowed(col.header)
+    }));
 
     // Data rows.
     for fmt in formats {
-        let cells: Vec<String> = budget
-            .selected_indices
-            .iter()
-            .enumerate()
-            .map(|(i, &col_idx)| {
-                let col = &columns[col_idx];
-                let raw = (col.extract)(fmt);
-                truncate::pad_to_width(&raw, budget.widths[i], col.align == Align::Right)
-            })
-            .collect();
-        builder.push_record(cells);
+        builder.push_record(padded_record(&columns, &budget, |col| {
+            Cow::Owned((col.extract)(fmt))
+        }));
     }
 
     let mut table = builder.build();
@@ -120,30 +155,21 @@ pub fn render_formats_table(formats: &[&Format], opts: &TableOpts) -> String {
 /// * `formats` - Format references to render
 /// * `opts` - Same options used for the header table
 #[must_use]
-#[allow(clippy::indexing_slicing)]
 pub fn render_format_rows(formats: &[&Format], opts: &TableOpts) -> Vec<String> {
     if formats.is_empty() {
         return Vec::new();
     }
 
-    let width = opts.width_override.unwrap_or_else(detect_width);
-    let compact = opts.compact.unwrap_or(width < 80);
-    let columns = all_columns();
-    let budget = compute_budget(&columns, width, compact, formats);
+    let Layout {
+        compact,
+        columns,
+        budget,
+    } = resolve_layout(formats, opts);
 
     formats
         .iter()
         .map(|fmt| {
-            let cells: Vec<String> = budget
-                .selected_indices
-                .iter()
-                .enumerate()
-                .map(|(i, &col_idx)| {
-                    let col = &columns[col_idx];
-                    let raw = (col.extract)(fmt);
-                    truncate::pad_to_width(&raw, budget.widths[i], col.align == Align::Right)
-                })
-                .collect();
+            let cells = padded_record(&columns, &budget, |col| Cow::Owned((col.extract)(fmt)));
             if compact {
                 cells.join("  ")
             } else {
@@ -167,16 +193,16 @@ pub fn render_format_rows(formats: &[&Format], opts: &TableOpts) -> Vec<String> 
 /// # Returns
 /// A tuple of (header string, row strings). Both are empty if `formats` is empty.
 #[must_use]
-#[allow(clippy::indexing_slicing)]
 pub fn render_table_and_rows(formats: &[&Format], opts: &TableOpts) -> (String, Vec<String>) {
     if formats.is_empty() {
         return (String::new(), Vec::new());
     }
 
-    let width = opts.width_override.unwrap_or_else(detect_width);
-    let compact = opts.compact.unwrap_or(width < 80);
-    let columns = all_columns();
-    let budget = compute_budget(&columns, width, compact, formats);
+    let Layout {
+        compact,
+        columns,
+        budget,
+    } = resolve_layout(formats, opts);
 
     if budget.selected_indices.is_empty() {
         return (String::new(), Vec::new());
@@ -186,16 +212,7 @@ pub fn render_table_and_rows(formats: &[&Format], opts: &TableOpts) -> (String, 
     let dash_sep = if compact { "  " } else { "─┼─" };
 
     // Header line: column names padded to budget widths.
-    let header_cells: Vec<String> = budget
-        .selected_indices
-        .iter()
-        .enumerate()
-        .map(|(i, &col_idx)| {
-            let col = &columns[col_idx];
-            truncate::pad_to_width(col.header, budget.widths[i], col.align == Align::Right)
-        })
-        .collect();
-    let header_line = header_cells.join(sep);
+    let header_line = padded_record(&columns, &budget, |col| Cow::Borrowed(col.header)).join(sep);
 
     // Separator line: dashes matching each column width.
     let dash_cells: Vec<String> = budget.widths.iter().map(|&w| "─".repeat(w)).collect();
@@ -206,19 +223,7 @@ pub fn render_table_and_rows(formats: &[&Format], opts: &TableOpts) -> (String, 
     // Build row strings using the same budget.
     let rows = formats
         .iter()
-        .map(|fmt| {
-            let cells: Vec<String> = budget
-                .selected_indices
-                .iter()
-                .enumerate()
-                .map(|(i, &col_idx)| {
-                    let col = &columns[col_idx];
-                    let raw = (col.extract)(fmt);
-                    truncate::pad_to_width(&raw, budget.widths[i], col.align == Align::Right)
-                })
-                .collect();
-            cells.join(sep)
-        })
+        .map(|fmt| padded_record(&columns, &budget, |col| Cow::Owned((col.extract)(fmt))).join(sep))
         .collect();
 
     (header_str, rows)
@@ -369,5 +374,110 @@ mod tests {
         };
         let output = render_formats_table(&refs, &opts);
         assert!(output.contains('│') || output.contains('─'));
+    }
+
+    #[test]
+    fn test_format_rows_one_per_format_and_aligned() {
+        let formats = sample_formats();
+        let refs: Vec<&Format> = formats.iter().collect();
+        let opts = TableOpts {
+            width_override: Some(160),
+            compact: None,
+        };
+        let rows = render_format_rows(&refs, &opts);
+        assert_eq!(rows.len(), formats.len());
+        assert!(rows[0].contains("1080p"));
+        assert!(rows[1].contains("720p"));
+        assert!(rows[2].contains("480p"));
+        // Every row is padded to the same display width (column alignment preserved).
+        let w0 = measure_text_width(&rows[0]);
+        for row in &rows {
+            assert_eq!(measure_text_width(row), w0, "row width mismatch: '{row}'");
+        }
+    }
+
+    #[test]
+    fn test_format_rows_separator_normal_vs_compact() {
+        let formats = sample_formats();
+        let refs: Vec<&Format> = formats.iter().collect();
+        let normal = render_format_rows(
+            &refs,
+            &TableOpts {
+                width_override: Some(160),
+                compact: Some(false),
+            },
+        );
+        assert!(normal[0].contains(" │ "), "normal rows use ' │ ' separator");
+        let compact = render_format_rows(
+            &refs,
+            &TableOpts {
+                width_override: Some(60),
+                compact: Some(true),
+            },
+        );
+        assert!(!compact[0].contains('│'), "compact rows have no '│'");
+    }
+
+    #[test]
+    fn test_format_rows_empty() {
+        let opts = TableOpts {
+            width_override: Some(120),
+            compact: None,
+        };
+        assert!(render_format_rows(&[], &opts).is_empty());
+    }
+
+    #[test]
+    fn test_table_and_rows_structure() {
+        let formats = sample_formats();
+        let refs: Vec<&Format> = formats.iter().collect();
+        let opts = TableOpts {
+            width_override: Some(160),
+            compact: Some(false),
+        };
+        let (header, rows) = render_table_and_rows(&refs, &opts);
+        // Header is a name line plus a dash underline.
+        let header_lines: Vec<&str> = header.lines().collect();
+        assert_eq!(header_lines.len(), 2);
+        assert!(header_lines[0].contains("Quality"));
+        assert!(header_lines[1].contains('─'));
+        assert_eq!(rows.len(), formats.len());
+        // Header name line and each row share the same display width.
+        let hw = measure_text_width(header_lines[0]);
+        for row in &rows {
+            assert_eq!(
+                measure_text_width(row),
+                hw,
+                "row/header width mismatch: '{row}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_table_and_rows_empty() {
+        let opts = TableOpts {
+            width_override: Some(120),
+            compact: None,
+        };
+        let (header, rows) = render_table_and_rows(&[], &opts);
+        assert!(header.is_empty());
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn test_format_rows_and_table_rows_agree() {
+        // Both entry points render identical data rows for the same input/width,
+        // since they share the column budget and cell formatting.
+        let formats = sample_formats();
+        let refs: Vec<&Format> = formats.iter().collect();
+        for &(width, compact) in &[(160, false), (60, true)] {
+            let opts = TableOpts {
+                width_override: Some(width),
+                compact: Some(compact),
+            };
+            let rows = render_format_rows(&refs, &opts);
+            let (_, table_rows) = render_table_and_rows(&refs, &opts);
+            assert_eq!(rows, table_rows, "row rendering diverged at width {width}");
+        }
     }
 }
