@@ -88,18 +88,6 @@ impl rdlp_core::SearchExtractor for MovieFapSearchExtractor {
         query: &rdlp_types::SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<rdlp_types::SearchPageResponse> {
-        moviefap_search_helpers::validate_search_filters(&query.filters)?;
-
-        let page = query.page.unwrap_or(1) as usize;
-        let (page_results, termination) = self.fetch_search_page(query, page, ctx).await?;
-
-        let has_more = !page_results.is_empty() && termination.has_more(page);
-
-        Ok(rdlp_types::SearchPageResponse {
-            results: page_results,
-            page: page as u32,
-            has_more,
-            total_estimate: None,
-        })
+        self.search_page_response(query, ctx).await
     }
 }

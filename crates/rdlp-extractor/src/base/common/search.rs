@@ -321,6 +321,36 @@ pub(crate) trait PaginatedSearch: Send + Sync {
 
         Ok(all_results)
     }
+
+    /// Assemble a single-page `SearchPageResponse` from one `fetch_search_page`.
+    ///
+    /// Shared default for `PaginatedSearch` adopters whose per-site
+    /// `SearchExtractor::search_page` was byte-identical (XHamster, TNAFlix,
+    /// MovieFap, EMPFlix): validate filters, derive the 1-based page, fetch it,
+    /// and report `has_more` only when the page was non-empty AND the site's
+    /// `Termination` says another page exists. `total_estimate` is `None` for
+    /// these sites (they report a page count, not a result total). Adopters with
+    /// divergent single-page semantics (PornHub, RedTube) override
+    /// `SearchExtractor::search_page` and do not call this.
+    async fn search_page_response(
+        &self,
+        query: &SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPageResponse> {
+        self.validate_search_filters(&query.filters)?;
+
+        let page = query.page.unwrap_or(1) as usize;
+        let (page_results, termination) = self.fetch_search_page(query, page, ctx).await?;
+
+        let has_more = !page_results.is_empty() && termination.has_more(page);
+
+        Ok(SearchPageResponse {
+            results: page_results,
+            page: page as u32,
+            has_more,
+            total_estimate: None,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -670,6 +700,83 @@ mod tests {
         )
         .await;
         assert_eq!(out.len(), 6, "all 3 pages fetched (latest count = 3)");
+    }
+
+    // ---- PaginatedSearch::search_page_response ----
+
+    fn query_with_page(page: Option<u32>) -> SearchQuery {
+        SearchQuery {
+            query: "q".to_string(),
+            filters: Vec::new(),
+            max_results: None,
+            page,
+        }
+    }
+
+    #[tokio::test]
+    async fn search_page_response_reports_has_more_when_more_pages() {
+        let mock = MockSearch::new(vec![Page::Ok(previews(3), Termination::Pages(5))]);
+        let resp = mock
+            .search_page_response(&query_with_page(None), &test_ctx())
+            .await
+            .expect("ok");
+        assert_eq!(resp.results.len(), 3);
+        assert_eq!(resp.page, 1);
+        assert!(resp.has_more);
+        assert_eq!(resp.total_estimate, None);
+    }
+
+    #[tokio::test]
+    async fn search_page_response_no_more_on_last_page() {
+        let mock = MockSearch::new(vec![Page::Ok(previews(3), Termination::Pages(1))]);
+        let resp = mock
+            .search_page_response(&query_with_page(None), &test_ctx())
+            .await
+            .expect("ok");
+        assert!(!resp.has_more);
+    }
+
+    #[tokio::test]
+    async fn search_page_response_empty_results_forces_has_more_false() {
+        let mock = MockSearch::new(vec![Page::Ok(previews(0), Termination::Pages(5))]);
+        let resp = mock
+            .search_page_response(&query_with_page(None), &test_ctx())
+            .await
+            .expect("ok");
+        assert!(resp.results.is_empty());
+        assert!(!resp.has_more);
+    }
+
+    #[tokio::test]
+    async fn search_page_response_honors_query_page() {
+        let mock = MockSearch::new(vec![
+            Page::Ok(previews(2), Termination::Pages(5)),
+            Page::Ok(previews(4), Termination::Pages(5)),
+        ]);
+        let resp = mock
+            .search_page_response(&query_with_page(Some(2)), &test_ctx())
+            .await
+            .expect("ok");
+        assert_eq!(resp.page, 2);
+        assert_eq!(resp.results.len(), 4);
+    }
+
+    #[tokio::test]
+    async fn search_page_response_validation_error_does_not_fetch() {
+        let mock = MockSearch {
+            script: vec![Page::Ok(previews(3), Termination::Pages(5))],
+            validation_fails: true,
+            fetches: AtomicUsize::new(0),
+        };
+        let result = mock
+            .search_page_response(&query_with_page(None), &test_ctx())
+            .await;
+        assert!(result.is_err(), "validation failure must propagate as Err");
+        assert_eq!(
+            mock.fetches.load(Ordering::SeqCst),
+            0,
+            "must not fetch when validation fails"
+        );
     }
 
     mod validator_tests {
