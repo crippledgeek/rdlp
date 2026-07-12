@@ -97,6 +97,14 @@ impl SearchOrigin {
     }
 
     /// Fallible constructor for runtime/dynamic input (mockito `Server::url()`).
+    ///
+    /// Validation is shape-only (scheme + authority + no path/query/fragment).
+    /// It does NOT reject embedded userinfo credentials or backslashes. All
+    /// current inputs are trusted (compile-time literals and loopback test
+    /// servers), so this is safe today. Any future caller that feeds this from
+    /// operator config or external/attacker-influenced input MUST additionally
+    /// enforce a host allowlist and route the resulting fetch through
+    /// `rdlp-security`'s `validate_url_security` before use.
     pub(crate) fn new(src: &str) -> std::result::Result<Self, InvalidOriginError> {
         Self::validate(src)?;
         Ok(Self(src.to_owned()))
@@ -105,6 +113,7 @@ impl SearchOrigin {
 
 impl TryFrom<&str> for SearchOrigin {
     type Error = InvalidOriginError;
+    /// See the trust/validation caveat on [`SearchOrigin::new`], which this delegates to.
     fn try_from(src: &str) -> std::result::Result<Self, Self::Error> {
         Self::new(src)
     }

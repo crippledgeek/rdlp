@@ -417,7 +417,7 @@ mod origin_golden {
                 "search=x&output=json&thumbsize=large".into(),
             ))
             .with_status(200)
-            .with_body("{\"videos\":[]}") // shape: adjust to parse_api_search_results
+            .with_body("{\"videos\":[]}") // empty result set — this test asserts on which URL was hit, not on parse output
             .expect_at_least(1)
             .create_async()
             .await;
