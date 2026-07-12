@@ -24,7 +24,6 @@ impl MovieFapSearchExtractor {
     }
 }
 
-#[async_trait]
 impl PaginatedSearch for MovieFapSearchExtractor {
     fn search_log_tag(&self) -> &'static str {
         "[MovieFap]"

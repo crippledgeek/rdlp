@@ -38,7 +38,6 @@ impl EMPFlixSearchExtractor {
     }
 }
 
-#[async_trait]
 impl PaginatedSearch for EMPFlixSearchExtractor {
     fn search_log_tag(&self) -> &'static str {
         "[EMPFlix]"

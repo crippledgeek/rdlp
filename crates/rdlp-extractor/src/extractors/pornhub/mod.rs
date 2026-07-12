@@ -108,7 +108,6 @@ impl PornHubExtractor {
     }
 }
 
-#[async_trait]
 impl PaginatedSearch for PornHubExtractor {
     fn search_log_tag(&self) -> &'static str {
         "[PornHub]"

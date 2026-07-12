@@ -44,7 +44,6 @@ impl TNAFlixSearchExtractor {
     }
 }
 
-#[async_trait]
 impl PaginatedSearch for TNAFlixSearchExtractor {
     fn search_log_tag(&self) -> &'static str {
         "[TNAFlix]"
