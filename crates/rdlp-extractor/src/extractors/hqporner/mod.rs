@@ -30,14 +30,14 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use lazy_regex::{Lazy, Regex, lazy_regex};
-use log::{debug, warn};
+use log::warn;
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result, SearchExtractor};
 use rdlp_types::{InfoDict, SearchPageResponse, SearchQuery, SearchResultPreview};
 use scraper::Html;
 use std::sync::LazyLock;
 
 use crate::base::common::{
-    BaseExtractor, MAX_PLAYLIST_SIZE, SearchPageSpec, SearchParse, run_search_page,
+    BaseExtractor, MAX_PLAYLIST_SIZE, PagedSearch, SearchPage, SearchPageSpec,
 };
 use crate::hls::detect_format_sizes_lazy;
 
@@ -342,6 +342,42 @@ impl InfoExtractor for HQPornerExtractor {
     }
 }
 
+impl PagedSearch for HQPornerExtractor {
+    fn search_log_tag(&self) -> &'static str {
+        "[HQPorner]"
+    }
+
+    // HQPorner has no filter validation today; Ok(()) preserves that.
+    fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {
+        Ok(())
+    }
+
+    fn first_page_index(&self) -> u32 {
+        1
+    }
+
+    async fn fetch_page(
+        &self,
+        query: &SearchQuery,
+        page: u32,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPage> {
+        let spec = SearchPageSpec {
+            first_page_index: 1, // struct field exists until 3b-8; fetch_via_spec ignores it
+            headers: &[("Referer", "https://hqporner.com/")],
+            build_url: |query, page| search_patterns::build_search_url(&query.query, page),
+            parse: |body, _query, _page| {
+                Ok(SearchPage {
+                    results: search::parse_search_results(body),
+                    total_estimate: search::extract_total_count(body),
+                    has_more: search::has_next_page(body),
+                })
+            },
+        };
+        self.fetch_via_spec(spec, query, page, ctx).await
+    }
+}
+
 #[async_trait]
 impl SearchExtractor for HQPornerExtractor {
     fn name(&self) -> &str {
@@ -358,47 +394,7 @@ impl SearchExtractor for HQPornerExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<Vec<SearchResultPreview>> {
-        let max_results = query.max_results.unwrap_or(MAX_PLAYLIST_SIZE);
-        let mut all_results = Vec::new();
-        let mut page = 1_u32;
-
-        loop {
-            let page_url = search_patterns::build_search_url(&query.query, page);
-            let sanitized = rdlp_security::sanitize_for_logging(&page_url);
-            debug!("[HQPorner] Fetching search page {page}: {sanitized}");
-
-            let webpage = BaseExtractor::fetch_webpage_with_headers(
-                &page_url,
-                &[("Referer", "https://hqporner.com/")],
-                ctx,
-            )
-            .await?;
-            let page_results = search::parse_search_results(&webpage);
-
-            if page_results.is_empty() {
-                break;
-            }
-
-            all_results.extend(page_results);
-
-            if all_results.len() >= max_results {
-                all_results.truncate(max_results);
-                break;
-            }
-
-            if !search::has_next_page(&webpage) {
-                break;
-            }
-
-            page += 1;
-            tokio::time::sleep(Duration::from_millis(PAGE_RATE_LIMIT_MS)).await;
-        }
-
-        debug!(
-            "[HQPorner] Search complete: {} results across {page} pages",
-            all_results.len()
-        );
-        Ok(all_results)
+        self.search_all_pages(query, ctx).await
     }
 
     async fn search_page(
@@ -406,23 +402,7 @@ impl SearchExtractor for HQPornerExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
-        run_search_page(
-            query,
-            ctx,
-            SearchPageSpec {
-                first_page_index: 1,
-                headers: &[("Referer", "https://hqporner.com/")],
-                build_url: |query, page| search_patterns::build_search_url(&query.query, page),
-                parse: |body, _query, _page| {
-                    Ok(SearchParse {
-                        results: search::parse_search_results(body),
-                        total_estimate: search::extract_total_count(body),
-                        has_more: search::has_next_page(body),
-                    })
-                },
-            },
-        )
-        .await
+        self.search_page_response(query, ctx).await
     }
 }
 
