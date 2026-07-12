@@ -27,6 +27,114 @@ pub(crate) struct SearchPage {
     pub total_estimate: Option<u64>,
 }
 
+/// A search/API base origin: `scheme://authority` (http or https), with no
+/// path, query, fragment, or trailing slash. Concatenated with a path+query
+/// template by the URL builders via `format!("{origin}{PATH}?…")`, so the
+/// no-trailing-slash invariant keeps that concatenation deterministic.
+///
+/// Construction-time and trusted — the value is a compile-time literal in
+/// production and a `mockito::Server::url()` in tests, never attacker-derived
+/// (the SSRF invariant). Validation is shape-only, checked once at construction.
+/// Mirrors `http::HeaderValue::from_static` / `http::Uri::from_static`
+/// (validated, panic-on-bad "known-good constant" entry) paired with a fallible
+/// `TryFrom`/`new` for dynamic input.
+// This foundation type is not yet consumed in production code — the
+// PornHub/RedTube base-URL seam that constructs it lands in issue #457
+// tasks 2-3. `expect` is self-cleaning: once a consumer lands, the
+// now-fulfilled expectation becomes a compile error, forcing cleanup.
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "consumed starting issue #457 tasks 2-3")
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SearchOrigin(String);
+
+/// Why a candidate origin string is not a valid [`SearchOrigin`].
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "consumed starting issue #457 tasks 2-3")
+)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum InvalidOriginError {
+    /// Missing or non-`http(s)` scheme.
+    Scheme,
+    /// Scheme present but no authority (host) follows.
+    MissingAuthority,
+    /// Contains a path, query, fragment, or trailing slash — not a bare origin.
+    NotBareOrigin,
+}
+
+impl std::fmt::Display for InvalidOriginError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let msg = match self {
+            Self::Scheme => "origin must start with http:// or https://",
+            Self::MissingAuthority => "origin has no authority (host)",
+            Self::NotBareOrigin => {
+                "origin must be scheme://authority with no path, query, or trailing slash"
+            }
+        };
+        f.write_str(msg)
+    }
+}
+
+#[cfg_attr(
+    not(test),
+    expect(dead_code, reason = "consumed starting issue #457 tasks 2-3")
+)]
+impl SearchOrigin {
+    /// Validate the shape of a candidate origin. Shared by `from_static` and `new`.
+    fn validate(src: &str) -> std::result::Result<(), InvalidOriginError> {
+        let authority = src
+            .strip_prefix("https://")
+            .or_else(|| src.strip_prefix("http://"))
+            .ok_or(InvalidOriginError::Scheme)?;
+        if authority.is_empty() {
+            return Err(InvalidOriginError::MissingAuthority);
+        }
+        // A bare authority (host[:port]) contains none of these. A trailing
+        // slash is caught by the '/' check.
+        if authority.contains('/') || authority.contains('?') || authority.contains('#') {
+            return Err(InvalidOriginError::NotBareOrigin);
+        }
+        Ok(())
+    }
+
+    /// Known-good compile-time literal. **Panics** on a malformed origin — a
+    /// construction-time contract breach, not a runtime error. The panic
+    /// message names the error kind only (no URL) to satisfy the redaction gate.
+    pub(crate) fn from_static(src: &'static str) -> Self {
+        match Self::validate(src) {
+            Ok(()) => Self(src.to_owned()),
+            Err(e) => panic!("SearchOrigin::from_static: {e}"),
+        }
+    }
+
+    /// Fallible constructor for runtime/dynamic input (mockito `Server::url()`).
+    pub(crate) fn new(src: &str) -> std::result::Result<Self, InvalidOriginError> {
+        Self::validate(src)?;
+        Ok(Self(src.to_owned()))
+    }
+}
+
+impl TryFrom<&str> for SearchOrigin {
+    type Error = InvalidOriginError;
+    fn try_from(src: &str) -> std::result::Result<Self, Self::Error> {
+        Self::new(src)
+    }
+}
+
+impl std::fmt::Display for SearchOrigin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl AsRef<str> for SearchOrigin {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Per-site configuration for the default [`PagedSearch::fetch_page`] (via
 /// [`PagedSearch::fetch_via_spec`]). All behavioral variation is a `fn`
 /// pointer (zero-alloc, `Copy`); config is plain data. Sites pass bare `fn`
@@ -835,6 +943,71 @@ mod tests {
             0,
             "must not fetch when validation fails"
         );
+    }
+
+    // ---- SearchOrigin ----
+
+    #[test]
+    fn search_origin_from_static_accepts_bare_https_origin() {
+        let o = SearchOrigin::from_static("https://www.pornhub.com");
+        assert_eq!(o.as_ref(), "https://www.pornhub.com");
+        assert_eq!(format!("{o}"), "https://www.pornhub.com");
+    }
+
+    #[test]
+    fn search_origin_new_accepts_http_loopback_with_port() {
+        // mockito Server::url() shape
+        let o = SearchOrigin::new("http://127.0.0.1:1234").unwrap();
+        assert_eq!(o.as_ref(), "http://127.0.0.1:1234");
+    }
+
+    #[test]
+    fn search_origin_rejects_non_http_scheme() {
+        assert_eq!(
+            SearchOrigin::new("ftp://x").unwrap_err(),
+            InvalidOriginError::Scheme
+        );
+        assert_eq!(
+            SearchOrigin::new("www.x.com").unwrap_err(),
+            InvalidOriginError::Scheme
+        );
+    }
+
+    #[test]
+    fn search_origin_rejects_missing_authority() {
+        assert_eq!(
+            SearchOrigin::new("https://").unwrap_err(),
+            InvalidOriginError::MissingAuthority
+        );
+    }
+
+    #[test]
+    fn search_origin_rejects_trailing_slash_and_path_and_query() {
+        // trailing slash would double-slash in format!("{origin}{PATH}")
+        assert_eq!(
+            SearchOrigin::new("https://x.com/").unwrap_err(),
+            InvalidOriginError::NotBareOrigin
+        );
+        assert_eq!(
+            SearchOrigin::new("https://x.com/path").unwrap_err(),
+            InvalidOriginError::NotBareOrigin
+        );
+        assert_eq!(
+            SearchOrigin::new("https://x.com?q=1").unwrap_err(),
+            InvalidOriginError::NotBareOrigin
+        );
+    }
+
+    #[test]
+    fn search_origin_try_from_matches_new() {
+        let o: SearchOrigin = "https://api.redtube.com".try_into().unwrap();
+        assert_eq!(o.as_ref(), "https://api.redtube.com");
+    }
+
+    #[test]
+    #[should_panic(expected = "SearchOrigin::from_static")]
+    fn search_origin_from_static_panics_on_trailing_slash() {
+        let _ = SearchOrigin::from_static("https://x.com/");
     }
 
     mod validator_tests {

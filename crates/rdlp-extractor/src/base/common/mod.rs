@@ -61,6 +61,12 @@ pub(crate) use search::{
     FilterValidationError, KeyValidation, PagedSearch, SearchPage, SearchPageSpec, Termination,
     append_search_filters, validate_against_descriptors,
 };
+// SearchOrigin/InvalidOriginError land here ahead of their first production
+// consumer (issue #457, PornHub/RedTube base-URL seam, tasks 2-3); the
+// `expect` is self-cleaning — once a consumer lands, the now-fulfilled
+// expectation becomes a compile error, forcing this to be tidied up.
+#[expect(unused_imports, reason = "consumed starting issue #457 tasks 2-3")]
+pub(crate) use search::{InvalidOriginError, SearchOrigin};
 pub(crate) use selectors::*;
 
 /// Maximum URL length to prevent memory exhaustion attacks
