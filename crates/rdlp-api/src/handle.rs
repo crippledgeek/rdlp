@@ -44,6 +44,17 @@ impl fmt::Display for DownloadId {
     }
 }
 
+/// The shared keep-then-cancel interrupt sequence (#413), used by both
+/// [`DownloadHandle::interrupt`] and [`InterruptHandle::interrupt`].
+///
+/// Ordering is load-bearing: the "keep the resumable partial" disposition MUST
+/// be set *before* the token is cancelled, so the download task cannot observe
+/// cancellation (and discard the partial) before the keep intent is visible.
+fn request_interrupt(disposition: &CancelDisposition, token: &CancellationToken) {
+    disposition.set_keep();
+    token.cancel();
+}
+
 /// Handle to a running download.
 ///
 /// Provides access to the event stream, cancellation, and final result.
@@ -114,8 +125,7 @@ impl DownloadHandle {
     /// Interrupt the download (Ctrl+C / SIGINT semantics): KEEP the resumable
     /// `.rdlp-part` for resume, then cancel. Non-blocking, idempotent. #413.
     pub fn interrupt(&self) {
-        self.cancel_disposition.set_keep();
-        self.cancel_token.cancel();
+        request_interrupt(&self.cancel_disposition, &self.cancel_token);
     }
 
     /// A detachable interrupt trigger that can be moved into a signal-handler
@@ -158,8 +168,7 @@ pub struct InterruptHandle {
 impl InterruptHandle {
     /// Interrupt: KEEP the resumable partial, then cancel. Idempotent.
     pub fn interrupt(&self) {
-        self.disposition.set_keep();
-        self.token.cancel();
+        request_interrupt(&self.disposition, &self.token);
     }
 }
 
@@ -215,6 +224,33 @@ mod tests {
         );
         let ih = handle.interrupt_handle();
         ih.interrupt();
+        assert!(token.is_cancelled(), "interrupt cancels the token");
+        assert!(disposition.should_keep(), "interrupt sets Keep");
+    }
+
+    #[tokio::test]
+    async fn test_download_handle_interrupt_sets_keep_and_cancels() {
+        // Directly exercises DownloadHandle::interrupt (the InterruptHandle path
+        // is covered above); both route through the shared request_interrupt.
+        let (_tx, rx) = tokio::sync::mpsc::channel(1);
+        let token = CancellationToken::new();
+        let disposition = crate::cancel::CancelDisposition::new();
+        let jh = tokio::spawn(async {
+            Ok(crate::result::DownloadResult {
+                id: DownloadId::next(),
+                output_files: vec![],
+                info: rdlp_types::InfoDict::new("id", "title", "ext", "url"),
+                stats: rdlp_core::DownloadStats::new(0, std::time::Duration::ZERO, 0),
+            })
+        });
+        let handle = DownloadHandle::new(
+            DownloadId::next(),
+            rx,
+            token.clone(),
+            disposition.clone(),
+            jh,
+        );
+        handle.interrupt();
         assert!(token.is_cancelled(), "interrupt cancels the token");
         assert!(disposition.should_keep(), "interrupt sets Keep");
     }

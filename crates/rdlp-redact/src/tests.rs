@@ -106,6 +106,16 @@ fn to_value_serializes_redacted_for_log_kv() {
     assert_eq!(r.to_value().to_string(), "u?token=***");
 }
 
+#[cfg(feature = "log-kv")]
+#[test]
+fn buf_to_value_serializes_redacted_for_log_kv() {
+    // Guards the owned wrapper's macro-generated `ToValue`: it MUST redact
+    // (route through `redact_str` via Display), same as the borrowed wrapper.
+    use log::kv::ToValue as _;
+    let r = RedactedUrlBuf::new("u?token=abc");
+    assert_eq!(r.to_value().to_string(), "u?token=***");
+}
+
 #[test]
 fn acceptance_328_presigned_and_oauth_code_redacted_host_preserved() {
     let s = redact_str("https://cdn.example.com/seg.m4s?X-Amz-Signature=DEADBEEF");

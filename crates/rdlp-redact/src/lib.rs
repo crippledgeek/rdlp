@@ -150,6 +150,38 @@ pub fn redact_str(s: &str) -> String {
     result.into_owned()
 }
 
+/// Generate the redacting `Display` / `Debug` / (feature-gated) `ToValue`
+/// impls for a URL wrapper type.
+///
+/// Both wrappers ([`RedactedUrl`], [`RedactedUrlBuf`]) share one source of
+/// truth for the redaction wiring: `Display` always routes the raw value
+/// (`self.expose()`) through [`redact_str`] — no wrapper may bypass redaction —
+/// `Debug` delegates to `Display`, and `ToValue` renders via `from_display`.
+/// The single `expose() -> &str` accessor is what lets one macro cover both the
+/// borrowed (`&str`) and owned (`String`) representations.
+macro_rules! impl_redacting_traits {
+    ($ty:ty) => {
+        impl fmt::Display for $ty {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str(&redact_str(self.expose()))
+            }
+        }
+
+        impl fmt::Debug for $ty {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                fmt::Display::fmt(self, f)
+            }
+        }
+
+        #[cfg(feature = "log-kv")]
+        impl log::kv::ToValue for $ty {
+            fn to_value(&self) -> log::kv::Value<'_> {
+                log::kv::Value::from_display(self)
+            }
+        }
+    };
+}
+
 /// Borrowed wrapper around a URL string whose [`Display`](fmt::Display) and
 /// [`Debug`](fmt::Debug) automatically redact credentials.
 ///
@@ -172,17 +204,7 @@ impl<'a> RedactedUrl<'a> {
     }
 }
 
-impl fmt::Display for RedactedUrl<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&redact_str(self.0))
-    }
-}
-
-impl fmt::Debug for RedactedUrl<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
+impl_redacting_traits!(RedactedUrl<'_>);
 
 /// Owned wrapper around a URL string whose [`Display`](fmt::Display) and
 /// [`Debug`](fmt::Debug) automatically redact credentials.
@@ -215,31 +237,7 @@ impl From<&str> for RedactedUrlBuf {
     }
 }
 
-impl fmt::Display for RedactedUrlBuf {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&redact_str(&self.0))
-    }
-}
-
-impl fmt::Debug for RedactedUrlBuf {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(self, f)
-    }
-}
-
-#[cfg(feature = "log-kv")]
-impl log::kv::ToValue for RedactedUrl<'_> {
-    fn to_value(&self) -> log::kv::Value<'_> {
-        log::kv::Value::from_display(self)
-    }
-}
-
-#[cfg(feature = "log-kv")]
-impl log::kv::ToValue for RedactedUrlBuf {
-    fn to_value(&self) -> log::kv::Value<'_> {
-        log::kv::Value::from_display(self)
-    }
-}
+impl_redacting_traits!(RedactedUrlBuf);
 
 #[cfg(test)]
 mod tests;
