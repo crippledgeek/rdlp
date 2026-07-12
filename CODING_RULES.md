@@ -45,7 +45,7 @@ This document establishes the core coding standards for the rdlp video downloade
 - Prefer `eq_ignore_ascii_case()` over `to_lowercase()` comparisons (avoids allocation)
 
 ### Async Patterns
-- Use `async_trait` for async trait methods
+- Use `async_trait` for async trait methods — **except** a `pub(crate)`/private trait with no `dyn`/`Box<dyn>`/generic-bound use (every call is `self.method().await` on a concrete `Self`), which should use native async-fn-in-trait (AFIT, stable since Rust 1.75) to avoid the per-call `Box<dyn Future>`. Native AFIT is not dyn-compatible and the `async_fn_in_trait` lint fires only on `pub` traits, so this exception is safe exactly for non-`pub`, non-`dyn` traits (e.g. `base::common::PaginatedSearch`).
 - Prefer `tokio::select!` for cancellation handling
 - Use `Arc<AtomicU64>` for shared progress counters
 - Apply `buffer_unordered` for bounded parallelism
