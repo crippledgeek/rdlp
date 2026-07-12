@@ -5,7 +5,7 @@ use log::debug;
 use rdlp_core::{ExtractionContext, Result};
 
 use super::{search_patterns, tnaflix_search_helpers};
-use crate::base::common::{PaginatedSearch, Termination};
+use crate::base::common::{PagedSearch, SearchPage, Termination};
 
 /// EMPFlix search extractor
 ///
@@ -38,7 +38,7 @@ impl EMPFlixSearchExtractor {
     }
 }
 
-impl PaginatedSearch for EMPFlixSearchExtractor {
+impl PagedSearch for EMPFlixSearchExtractor {
     fn search_log_tag(&self) -> &'static str {
         "[EMPFlix]"
     }
@@ -47,14 +47,16 @@ impl PaginatedSearch for EMPFlixSearchExtractor {
         tnaflix_search_helpers::validate_search_filters(filters)
     }
 
-    /// Fetch a single search results page and return `(results, Termination)`.
-    async fn fetch_search_page(
+    /// Fetch + parse ONE search page. `has_more` is computed here from the
+    /// site's reported page count (the `Termination` helper), so the shared
+    /// loop stays conditional-free.
+    async fn fetch_page(
         &self,
         query: &rdlp_types::SearchQuery,
-        page: usize,
+        page: u32,
         ctx: &ExtractionContext,
-    ) -> Result<(Vec<rdlp_types::SearchResultPreview>, Termination)> {
-        let page_url = Self::build_page_url(query, page);
+    ) -> Result<SearchPage> {
+        let page_url = Self::build_page_url(query, page as usize);
         debug!(page; "[EMPFlix] Fetching search page: {}", rdlp_security::sanitize_for_logging(&page_url));
 
         let webpage = crate::base::common::BaseExtractor::fetch_webpage(&page_url, ctx).await?;
@@ -68,7 +70,13 @@ impl PaginatedSearch for EMPFlixSearchExtractor {
             page_results.len()
         );
 
-        Ok((page_results, Termination::Pages(max_pages)))
+        let has_more =
+            !page_results.is_empty() && Termination::Pages(max_pages).has_more(page as usize);
+        Ok(SearchPage {
+            results: page_results,
+            has_more,
+            total_estimate: None,
+        })
     }
 }
 

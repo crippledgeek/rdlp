@@ -18,27 +18,38 @@ use url::form_urlencoded;
 use super::MAX_PLAYLIST_SIZE;
 use crate::base::common::BaseExtractor;
 
-/// One parsed search page: the rows, an optional total-result estimate, and
-/// whether another page exists. Produced by a site's `parse` hook in a single
-/// pass (no re-scan of the body).
-pub(crate) struct SearchParse {
+/// One parsed search page: the rows, whether another page exists, and an
+/// optional total-result estimate. Produced by a site's `parse` hook in a
+/// single pass (no re-scan of the body).
+pub(crate) struct SearchPage {
     pub results: Vec<SearchResultPreview>,
-    pub total_estimate: Option<u64>,
     pub has_more: bool,
+    pub total_estimate: Option<u64>,
 }
 
-/// Per-site configuration for [`run_search_page`]. All behavioral variation is
-/// a `fn` pointer (zero-alloc, `Copy`); config is plain data. Sites pass bare
-/// `fn` items or non-capturing closures (which coerce to `fn`).
+/// Transitional alias for [`SearchPage`], kept only while [`run_search_page`]
+/// and the 7 single-GET `#440` sites that still call it (XNXX, XVideos, XTits,
+/// NineAnime, EPorner, SpankBang, HQPorner) reference the old name. Removed in
+/// sub-PR 3b together with `run_search_page` and `SearchPageSpec::first_page_index`.
+pub(crate) type SearchParse = SearchPage;
+
+/// Per-site configuration for the default [`PagedSearch::fetch_page`] (via
+/// [`PagedSearch::fetch_via_spec`]) and the legacy [`run_search_page`]. All
+/// behavioral variation is a `fn` pointer (zero-alloc, `Copy`); config is plain
+/// data. Sites pass bare `fn` items or non-capturing closures (which coerce to `fn`).
 pub(crate) struct SearchPageSpec {
     /// The page a `None` `SearchQuery::page` defaults to (0 or 1 per site).
+    ///
+    /// Read only by [`run_search_page`]; `fetch_via_spec` takes `page` as an
+    /// argument (the first-page index is [`PagedSearch::first_page_index`] there).
+    /// Transitional — removed in sub-PR 3b with `run_search_page`.
     pub first_page_index: u32,
     /// Extra request headers; `&[]` for none.
     pub headers: &'static [(&'static str, &'static str)],
     /// Build the page URL from the query and the (site-convention) page number.
     pub build_url: fn(&SearchQuery, u32) -> String,
     /// Parse the fetched body into results + pagination in one pass.
-    pub parse: fn(&str, &SearchQuery, u32) -> Result<SearchParse>,
+    pub parse: fn(&str, &SearchQuery, u32) -> Result<SearchPage>,
 }
 
 /// Shared single-GET search-page skeleton: derive the page, build the URL,
@@ -156,7 +167,7 @@ pub(crate) fn validate_against_descriptors(
 }
 
 /// Delay between successive search-page fetches. All API-paginated sites that
-/// share the [`PaginatedSearch`] scaffold rate-limit at this interval.
+/// share the [`PagedSearch`] scaffold rate-limit at this interval.
 pub(crate) const PAGE_RATE_LIMIT_MS: u64 = 500;
 
 /// How a paginated search knows when to stop.
@@ -166,7 +177,7 @@ pub(crate) const PAGE_RATE_LIMIT_MS: u64 = 500;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Termination {
     Pages(usize),
-    /// Constructed by `PaginatedSearch` adopters that paginate until an empty
+    /// Constructed by `PagedSearch` adopters that paginate until an empty
     /// page (PornHub, RedTube). No reliable total page count is available from
     /// these sites' responses.
     UntilEmpty,
@@ -239,41 +250,96 @@ pub(crate) fn append_search_filters(url: &mut String, filters: &[SearchFilter]) 
 
 /// Shared multi-page search pagination for API-style search extractors.
 ///
-/// Sites whose search fetches page N and learns the total page count from the
-/// same response (XHamster, TNAFlix, EMPFlix, MovieFap) share one pagination
-/// loop: fetch pages in order, accumulate previews, and stop at the first of —
-/// `max_results` reached, `max_pages` reached, an empty page, or a fetch error
-/// (returning the partial results gathered so far). Implementors supply only
-/// the per-site pieces (a single-page fetch, a log tag, filter validation);
+/// Sites whose search fetches page N and learns whether another page exists
+/// from the same response share one pagination loop: fetch pages in order,
+/// accumulate previews, and stop at the first of — `max_results` reached, an
+/// empty page, `!has_more`, or a fetch error (returning the partial results
+/// gathered so far). Implementors supply only the per-site pieces (a single
+/// [`fetch_page`](Self::fetch_page), a log tag, filter validation);
 /// [`search_all_pages`](Self::search_all_pages) is the shared default and
 /// should not be overridden.
 ///
-/// Sites that report a total page count return `Termination::Pages(n)`; sites
-/// with no reliable total (they paginate until an empty page) return
-/// `Termination::UntilEmpty`. Per-page primary↔fallback fetching is a private
-/// concern of each site's `fetch_search_page` implementation.
-pub(crate) trait PaginatedSearch: Send + Sync {
+/// Each `fetch_page` computes its own `has_more` (from a site page count via
+/// the [`Termination`] helper, or from result-emptiness). Per-page
+/// primary↔fallback fetching is a private concern of each site's `fetch_page`.
+pub(crate) trait PagedSearch: Send + Sync {
     /// Bracketed site tag used in log lines, e.g. `"[XHamster]"`.
     fn search_log_tag(&self) -> &'static str;
 
     /// Validate the query's filters against this site's supported filter set.
     fn validate_search_filters(&self, filters: &[SearchFilter]) -> Result<()>;
 
-    /// Fetch a single search page, returning `(results, termination)`.
-    async fn fetch_search_page(
+    /// Fetch + parse ONE page — the single behavioral hook. REQUIRED (no default).
+    /// Single-GET sites implement it as a one-liner delegating to [`fetch_via_spec`];
+    /// exotic sites (two-GET fallback, multi-endpoint) implement a custom body.
+    /// Requiring it makes "forgot to implement" a compile error, not a runtime panic —
+    /// which also lets the crate keep `expect_used`/`unwrap_used` clean (no `.expect()`).
+    ///
+    /// [`fetch_via_spec`]: Self::fetch_via_spec
+    async fn fetch_page(
         &self,
         query: &SearchQuery,
-        page: usize,
+        page: u32,
         ctx: &ExtractionContext,
-    ) -> Result<(Vec<SearchResultPreview>, Termination)>;
+    ) -> Result<SearchPage>;
+
+    /// Drive a single-GET [`SearchPageSpec`]: build URL → fetch (± headers) → parse.
+    /// This is today's `run_search_page` body minus the response assembly (which
+    /// lives in [`search_page_response`](Self::search_page_response)). Provided
+    /// method — single-GET sites call `self.fetch_via_spec(SPEC, query, page, ctx)`
+    /// from their `fetch_page`. `SearchPageSpec` is `Copy`, taken by value.
+    ///
+    // No caller yet in sub-PR 3a (the 6 migrated sites implement `fetch_page`
+    // directly). The first callers land in sub-PR 3b (the single-GET #440
+    // sites). `expect` (not `allow`) is deliberate: it is self-cleaning —
+    // the moment 3b adds a caller the lint stops firing and `-D warnings`
+    // turns the now-unfulfilled expectation into an error, forcing this
+    // attribute's removal. See `run_search_page` (deleted in 3b) for today's
+    // equivalent body.
+    #[expect(dead_code, reason = "first caller lands in Stage 3b, #450")]
+    async fn fetch_via_spec(
+        &self,
+        spec: SearchPageSpec,
+        query: &SearchQuery,
+        page: u32,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPage> {
+        let url = (spec.build_url)(query, page);
+        let body = if spec.headers.is_empty() {
+            BaseExtractor::fetch_webpage(&url, ctx).await?
+        } else {
+            BaseExtractor::fetch_webpage_with_headers(&url, spec.headers, ctx).await?
+        };
+        (spec.parse)(&body, query, page)
+    }
+
+    /// The page a `None` `SearchQuery::page` defaults to (0 or 1 per site).
+    fn first_page_index(&self) -> u32 {
+        1
+    }
+
+    /// Clamp the derived single-page number before it is used for BOTH the fetch
+    /// URL and the echoed `SearchPageResponse.page`. Default identity. A site with
+    /// a floor (ABXXX: `page.max(1)`) overrides this; a universal
+    /// `.max(first_page_index())` is WRONG — it would clamp 1-indexed sites at
+    /// `page = Some(0)`, changing their echoed page. Opt-in per site only.
+    fn clamp_page(&self, page: u32) -> u32 {
+        page
+    }
 
     /// Delay between successive page fetches. Defaults to [`PAGE_RATE_LIMIT_MS`].
     fn page_rate_limit(&self) -> Duration {
         Duration::from_millis(PAGE_RATE_LIMIT_MS)
     }
 
-    /// Collect results across pages until `max_results` / `max_pages` / an empty
-    /// page / a fetch error. Shared scaffold — do not override.
+    /// The `max_results` cap when the query does not specify one. Defaults to
+    /// [`MAX_PLAYLIST_SIZE`]; #440 single-GET sites override to their file-local 500.
+    fn max_results_default(&self) -> usize {
+        MAX_PLAYLIST_SIZE
+    }
+
+    /// Collect results across pages until `max_results` / an empty page / `!has_more`
+    /// / a fetch error (returning partials). Shared scaffold — do not override.
     async fn search_all_pages(
         &self,
         query: &SearchQuery,
@@ -282,32 +348,38 @@ pub(crate) trait PaginatedSearch: Send + Sync {
         self.validate_search_filters(&query.filters)?;
 
         let tag = self.search_log_tag();
-        let max_results = query.max_results.unwrap_or(MAX_PLAYLIST_SIZE);
-        let mut all_results = Vec::new();
-        let mut page = 1usize;
+        let max_results = query.max_results.unwrap_or(self.max_results_default());
+        let mut all_results: Vec<SearchResultPreview> = Vec::new();
+        let mut page = self.first_page_index();
 
         loop {
-            let (page_results, termination) = match self.fetch_search_page(query, page, ctx).await {
-                Ok(result) => result,
+            let SearchPage {
+                results, has_more, ..
+            } = match self.fetch_page(query, page, ctx).await {
+                Ok(p) => p,
                 Err(e) => {
                     debug!(page; "{tag} Failed to fetch search page, returning partial results: {e}");
                     break;
                 }
             };
 
-            if page_results.is_empty() {
+            if results.is_empty() {
                 debug!(page; "{tag} No results on page, stopping pagination");
                 break;
             }
 
-            all_results.extend(page_results);
+            if all_results.is_empty() {
+                all_results = results;
+            } else {
+                all_results.extend(results);
+            }
 
             if all_results.len() >= max_results {
                 all_results.truncate(max_results);
                 break;
             }
 
-            if termination.should_stop(page) {
+            if !has_more {
                 break;
             }
 
@@ -320,16 +392,11 @@ pub(crate) trait PaginatedSearch: Send + Sync {
         Ok(all_results)
     }
 
-    /// Assemble a single-page `SearchPageResponse` from one `fetch_search_page`.
+    /// Assemble a single-page `SearchPageResponse` from one [`fetch_page`]. Shared
+    /// default; the fallback pair (PornHub, RedTube) override this to keep their
+    /// divergent single-page API-fallback semantics.
     ///
-    /// Shared default for `PaginatedSearch` adopters whose per-site
-    /// `SearchExtractor::search_page` was byte-identical (XHamster, TNAFlix,
-    /// MovieFap, EMPFlix): validate filters, derive the 1-based page, fetch it,
-    /// and report `has_more` only when the page was non-empty AND the site's
-    /// `Termination` says another page exists. `total_estimate` is `None` for
-    /// these sites (they report a page count, not a result total). Adopters with
-    /// divergent single-page semantics (PornHub, RedTube) override
-    /// `SearchExtractor::search_page` and do not call this.
+    /// [`fetch_page`]: Self::fetch_page
     async fn search_page_response(
         &self,
         query: &SearchQuery,
@@ -337,16 +404,18 @@ pub(crate) trait PaginatedSearch: Send + Sync {
     ) -> Result<SearchPageResponse> {
         self.validate_search_filters(&query.filters)?;
 
-        let page = query.page.unwrap_or(1) as usize;
-        let (page_results, termination) = self.fetch_search_page(query, page, ctx).await?;
-
-        let has_more = !page_results.is_empty() && termination.has_more(page);
+        let page = self.clamp_page(query.page.unwrap_or(self.first_page_index()));
+        let SearchPage {
+            results,
+            has_more,
+            total_estimate,
+        } = self.fetch_page(query, page, ctx).await?;
 
         Ok(SearchPageResponse {
-            results: page_results,
-            page: page as u32,
+            results,
+            page,
             has_more,
-            total_estimate: None,
+            total_estimate,
         })
     }
 }
@@ -473,7 +542,7 @@ mod tests {
         }
     }
 
-    impl PaginatedSearch for MockSearch {
+    impl PagedSearch for MockSearch {
         fn search_log_tag(&self) -> &'static str {
             "[Mock]"
         }
@@ -491,20 +560,31 @@ mod tests {
         fn page_rate_limit(&self) -> Duration {
             Duration::ZERO
         }
-        async fn fetch_search_page(
+        async fn fetch_page(
             &self,
             _query: &SearchQuery,
-            page: usize,
+            page: u32,
             _ctx: &ExtractionContext,
-        ) -> Result<(Vec<SearchResultPreview>, Termination)> {
+        ) -> Result<SearchPage> {
             self.fetches.fetch_add(1, Ordering::SeqCst);
-            match self.script.get(page - 1) {
-                Some(Page::Ok(results, termination)) => Ok((results.clone(), *termination)),
+            match self.script.get((page - 1) as usize) {
+                Some(Page::Ok(results, termination)) => {
+                    let has_more = !results.is_empty() && termination.has_more(page as usize);
+                    Ok(SearchPage {
+                        results: results.clone(),
+                        has_more,
+                        total_estimate: None,
+                    })
+                }
                 Some(Page::Fail) => Err(RdlpError::extraction(
                     "mock fetch failure",
                     "https://x.test",
                 )),
-                None => Ok((Vec::new(), Termination::UntilEmpty)), // past script → empty page
+                None => Ok(SearchPage {
+                    results: Vec::new(),
+                    has_more: false,
+                    total_estimate: None,
+                }), // past script → empty page
             }
         }
     }
@@ -616,10 +696,10 @@ mod tests {
     }
 
     #[test]
-    fn paginated_search_futures_are_send() {
+    fn paged_search_futures_are_send() {
         // Guards the native-AFIT migration's correctness contract: the outer
         // `#[async_trait] SearchExtractor::search` future must be `Send`, which
-        // requires the `PaginatedSearch` futures it awaits at the concrete call
+        // requires the `PagedSearch` futures it awaits at the concrete call
         // site to be `Send`. Under `#[async_trait]` this was guaranteed by the
         // boxed `dyn Future + Send`; under native AFIT it is inferred, so pin it
         // here. If a future ever goes non-`Send`, this fails at compile time
@@ -630,7 +710,7 @@ mod tests {
         let q = query(None);
         let ctx = test_ctx();
 
-        assert_send(mock.fetch_search_page(&q, 1, &ctx));
+        assert_send(mock.fetch_page(&q, 1, &ctx));
         assert_send(mock.search_all_pages(&q, &ctx));
         assert_send(mock.search_page_response(&q, &ctx));
     }
@@ -872,5 +952,140 @@ mod tests {
                 }
             );
         }
+    }
+}
+
+/// Static regression guard for issue #457 (Refs).
+///
+/// PornHub and RedTube each implement `PagedSearch::fetch_page` (loop
+/// semantics) and `PagedSearch::search_page_response` (single-page
+/// semantics) with deliberately DIVERGENT fallback logic — see the doc
+/// comments on those methods in `extractors/pornhub/mod.rs` and
+/// `extractors/redtube/mod.rs`. A real end-to-end behavioral test (mockito
+/// driving `search_page_response`/`fetch_page` and asserting which URLs were
+/// hit) is infeasible today: the per-site URL builders hardcode `https://`
+/// with no injectable base, `mockito` is HTTP-only (cannot terminate TLS),
+/// and `ExtractionContext.http_client` is a concrete `Arc<wreq::Client>`
+/// with no mock seam — a documented, deliberate project limitation (see
+/// `extractors/pornhub/tests/fetch.rs:1-7`, PR #231). A real golden test
+/// needs an injectable base-URL seam, deferred to follow-up issue **#457**.
+///
+/// Until that seam lands, this textual guard is the cheapest deterministic
+/// regression protection available: it `include_str!`s each site's source
+/// (so cargo recompiles this test whenever the extractor file changes — no
+/// runtime `fs` access) and asserts the token that makes each method's
+/// fallback behavior diverge from its sibling. If the two paths were ever
+/// accidentally unified (e.g. `fetch_page` made to page the fallback on
+/// every page, or `search_page_response` stopped paging it), the relevant
+/// token moves into the wrong method span and this test fails.
+///
+/// A future refactor that extracts `fetch_page` / `search_page_response`
+/// into shared helpers must update the anchors below (the `find` calls
+/// `unwrap_or_else`-panic loudly rather than silently no-op'ing), mirroring
+/// `test_extractor_call_order_expand_before_detect` in
+/// `hls/expand_in_place.rs`.
+#[cfg(test)]
+mod fallback_divergence_guard {
+    /// Split `src` into the `fetch_page` and `search_page_response` method
+    /// spans, using the sibling method / trailing `#[async_trait]` as the
+    /// boundary. Panics loudly (naming `label`) if an anchor is missing —
+    /// a rename must fail this test, not silently pass it.
+    fn method_spans<'a>(label: &str, src: &'a str) -> (&'a str, &'a str) {
+        let fetch_start = src
+            .find("async fn fetch_page")
+            .unwrap_or_else(|| panic!("`async fn fetch_page` not found in {label}"));
+        let response_fn_start = src
+            .find("async fn search_page_response")
+            .unwrap_or_else(|| panic!("`async fn search_page_response` not found in {label}"));
+        assert!(
+            fetch_start < response_fn_start,
+            "{label}: expected `fetch_page` to appear before `search_page_response`"
+        );
+
+        // `search_page_response`'s own doc comment sits directly above its
+        // `async fn` line, with no blank line separating them from
+        // `fetch_page`'s closing brace — back up over that doc comment so
+        // its prose (which may itself mention the sibling method's token,
+        // e.g. "has_more" wording) is attributed to the RIGHT span. The
+        // blank line right before the doc comment is the real boundary.
+        let response_start = src[fetch_start..response_fn_start]
+            .rfind("\n\n")
+            .map(|offset| fetch_start + offset + 2)
+            .unwrap_or_else(|| {
+                panic!(
+                    "no blank line found between `fetch_page` and `search_page_response`'s \
+                     doc comment in {label}"
+                )
+            });
+
+        // Search for `#[async_trait]` starting AFTER `search_page_response` —
+        // an earlier `#[async_trait]` (e.g. on a helper trait impl) would
+        // wrongly truncate the span before it began.
+        let trait_boundary = src[response_fn_start..]
+            .find("#[async_trait]")
+            .map(|offset| response_fn_start + offset)
+            .unwrap_or_else(|| panic!("`#[async_trait]` (impl SearchExtractor) not found in {label} after search_page_response"));
+
+        (
+            &src[fetch_start..response_start],
+            &src[response_start..trait_boundary],
+        )
+    }
+
+    /// PornHub: `fetch_page` only falls back to the API on page 1, using the
+    /// BASE url builder (`build_api_search_url`, no `_page` suffix).
+    /// `search_page_response` falls back to the API on ANY page, using the
+    /// PAGED url builder (`build_api_search_url_page`) once `page > 1`. If
+    /// the two paths were unified, `build_api_search_url_page` would appear
+    /// in (or disappear from) the wrong span.
+    #[test]
+    fn pornhub_paged_api_fallback_url_builder_stays_in_search_page_response_only() {
+        let src = include_str!("../../extractors/pornhub/mod.rs");
+        let (fetch_page, search_page_response) = method_spans("extractors/pornhub/mod.rs", src);
+
+        assert!(
+            !fetch_page.contains("build_api_search_url_page"),
+            "PornHub `fetch_page` (loop) must NOT call the paged API url builder — \
+             its API fallback only ever targets page 1 (issue #457). If this fires, the \
+             loop and single-page fallback paths have likely been unified."
+        );
+        assert!(
+            search_page_response.contains("build_api_search_url_page"),
+            "PornHub `search_page_response` (single-page) must call \
+             `build_api_search_url_page` for its any-page API fallback (issue #457)."
+        );
+    }
+
+    /// RedTube: `fetch_page` computes `has_more` via
+    /// `termination_from_count(count).has_more(page)`; `search_page_response`
+    /// instead computes it via the `fetched_through < total` window. If the
+    /// two paths were unified onto one `has_more` strategy, one of these four
+    /// assertions fails.
+    #[test]
+    fn redtube_has_more_strategy_diverges_between_loop_and_single_page() {
+        let src = include_str!("../../extractors/redtube/mod.rs");
+        let (fetch_page, search_page_response) = method_spans("extractors/redtube/mod.rs", src);
+
+        assert!(
+            fetch_page.contains("termination_from_count"),
+            "RedTube `fetch_page` (loop) must compute `has_more` via \
+             `termination_from_count` (issue #457)."
+        );
+        assert!(
+            !fetch_page.contains("fetched_through"),
+            "RedTube `fetch_page` (loop) must NOT use the `fetched_through` window — \
+             that strategy belongs to `search_page_response` only (issue #457)."
+        );
+        assert!(
+            search_page_response.contains("fetched_through"),
+            "RedTube `search_page_response` (single-page) must compute `has_more` via \
+             the `fetched_through < total` window (issue #457)."
+        );
+        assert!(
+            !search_page_response.contains("termination_from_count"),
+            "RedTube `search_page_response` (single-page) must NOT use \
+             `termination_from_count` — that strategy belongs to `fetch_page` only \
+             (issue #457)."
+        );
     }
 }
