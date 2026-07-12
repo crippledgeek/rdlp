@@ -59,10 +59,6 @@ fingerprint = "2171a47deb213f3b"
 reason = "Same domain-separation rationale (closures inside list_*_codecs helpers iterate distinct codec tables)"
 
 [[ignore]]
-fingerprint = "c779eff5aef82766"
-reason = "Initiative #5: InfoExtractorExt — XNXX+SpankBang SearchExtractor::search_page share pagination scaffold (#440)"
-
-[[ignore]]
 fingerprint = "d1fae871b2e72790"
 reason = "Acceptable test redundancy; two related assertions on Orchestrator::select merge-selector behaviour (explicit vs derived merge selection)"
 
