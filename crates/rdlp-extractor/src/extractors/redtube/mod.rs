@@ -333,7 +333,6 @@ impl RedTubeExtractor {
     }
 }
 
-#[async_trait]
 impl PaginatedSearch for RedTubeExtractor {
     fn search_log_tag(&self) -> &'static str {
         "[RedTube]"

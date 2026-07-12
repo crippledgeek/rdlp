@@ -7,7 +7,6 @@
 //! `ordering` / `period` / `category` / `tags[]` filter vocabulary (PornHub,
 //! RedTube) delegate that appending here.
 
-use async_trait::async_trait;
 use log::debug;
 use rdlp_core::{ExtractionContext, Result};
 use rdlp_types::{
@@ -253,7 +252,6 @@ pub(crate) fn append_search_filters(url: &mut String, filters: &[SearchFilter]) 
 /// with no reliable total (they paginate until an empty page) return
 /// `Termination::UntilEmpty`. Per-page primary↔fallback fetching is a private
 /// concern of each site's `fetch_search_page` implementation.
-#[async_trait]
 pub(crate) trait PaginatedSearch: Send + Sync {
     /// Bracketed site tag used in log lines, e.g. `"[XHamster]"`.
     fn search_log_tag(&self) -> &'static str;
@@ -475,7 +473,6 @@ mod tests {
         }
     }
 
-    #[async_trait]
     impl PaginatedSearch for MockSearch {
         fn search_log_tag(&self) -> &'static str {
             "[Mock]"
@@ -616,6 +613,26 @@ mod tests {
             0,
             "must not fetch any page when validation fails"
         );
+    }
+
+    #[test]
+    fn paginated_search_futures_are_send() {
+        // Guards the native-AFIT migration's correctness contract: the outer
+        // `#[async_trait] SearchExtractor::search` future must be `Send`, which
+        // requires the `PaginatedSearch` futures it awaits at the concrete call
+        // site to be `Send`. Under `#[async_trait]` this was guaranteed by the
+        // boxed `dyn Future + Send`; under native AFIT it is inferred, so pin it
+        // here. If a future ever goes non-`Send`, this fails at compile time
+        // instead of cryptically deep inside a site's `SearchExtractor::search`.
+        fn assert_send<T: Send>(_: T) {}
+
+        let mock = MockSearch::new(Vec::new());
+        let q = query(None);
+        let ctx = test_ctx();
+
+        assert_send(mock.fetch_search_page(&q, 1, &ctx));
+        assert_send(mock.search_all_pages(&q, &ctx));
+        assert_send(mock.search_page_response(&q, &ctx));
     }
 
     // ---- Termination::should_stop ----

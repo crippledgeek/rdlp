@@ -250,7 +250,6 @@ impl XHamsterExtractor {
     }
 }
 
-#[async_trait]
 impl PaginatedSearch for XHamsterExtractor {
     fn search_log_tag(&self) -> &'static str {
         "[XHamster]"
