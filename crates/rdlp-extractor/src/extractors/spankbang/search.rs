@@ -19,7 +19,7 @@ use rdlp_types::{
 use super::SpankBangExtractor;
 use super::{metadata, patterns};
 use crate::base::common::BaseExtractor;
-use crate::base::common::{SearchPageSpec, SearchParse, run_search_page};
+use crate::base::common::{PagedSearch, SearchPage, SearchPageSpec};
 
 const SPANKBANG_BASE_URL: &str = "https://spankbang.com";
 const SPANKBANG_NAME_STR: &str = "SpankBang";
@@ -231,6 +231,48 @@ fn has_more_pages(html: &str, query: &SearchQuery, page: u32) -> bool {
     parse_results(html).len() as u64 >= RESULTS_PER_PAGE
 }
 
+impl PagedSearch for SpankBangExtractor {
+    fn search_log_tag(&self) -> &'static str {
+        "[spankbang]"
+    }
+
+    // SpankBang advertises an `ordering` filter but has never validated it
+    // (the pre-refactor `run_search_page` path never checked); `Ok(())` is
+    // the only value that preserves that.
+    fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {
+        Ok(())
+    }
+
+    fn first_page_index(&self) -> u32 {
+        0
+    }
+
+    // NOTE: `max_results_default` is intentionally NOT overridden here — the
+    // 500-result cap lives in the hand-rolled `search()` loop below, which
+    // this trait impl does not drive (only `search_page`/`fetch_page` does).
+
+    async fn fetch_page(
+        &self,
+        query: &SearchQuery,
+        page: u32,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPage> {
+        let spec = SearchPageSpec {
+            first_page_index: 0, // struct field exists until 3b-8; fetch_via_spec ignores it
+            headers: &[("Cookie", "country=US")],
+            build_url: build_search_url,
+            parse: |body, query, page| {
+                Ok(SearchPage {
+                    results: parse_results(body),
+                    total_estimate: Some(RESULTS_PER_PAGE * 100),
+                    has_more: has_more_pages(body, query, page),
+                })
+            },
+        };
+        self.fetch_via_spec(spec, query, page, ctx).await
+    }
+}
+
 #[async_trait]
 impl SearchExtractor for SpankBangExtractor {
     fn name(&self) -> &str {
@@ -372,23 +414,7 @@ impl SearchExtractor for SpankBangExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
-        run_search_page(
-            query,
-            ctx,
-            SearchPageSpec {
-                first_page_index: 0,
-                headers: &[("Cookie", "country=US")],
-                build_url: build_search_url,
-                parse: |body, query, page| {
-                    Ok(SearchParse {
-                        results: parse_results(body),
-                        total_estimate: Some(RESULTS_PER_PAGE * 100),
-                        has_more: has_more_pages(body, query, page),
-                    })
-                },
-            },
-        )
-        .await
+        self.search_page_response(query, ctx).await
     }
 }
 
@@ -603,5 +629,45 @@ mod tests {
         // case-insensitive lookup routes correctly.
         let ext = SpankBangExtractor::new();
         assert_eq!(SearchExtractor::name(&ext), "SpankBang");
+    }
+
+    /// Static regression guard for #450/3b-7: SpankBang's `search()` MUST
+    /// keep its hand-rolled cross-page video-ID dedup loop — it is the one
+    /// #440 site that does NOT fold `search()` onto the shared
+    /// `PagedSearch::search_all_pages` scaffold (that scaffold has no
+    /// cross-page dedup; folding onto it would silently reintroduce
+    /// duplicate rows from SpankBang's recommendation/editor's-pick rails
+    /// that repeat across pages). Only `search_page`/`fetch_page` moved onto
+    /// the trait. Pinned textually (like
+    /// `hls::expand_in_place::test_extractor_call_order_expand_before_detect`)
+    /// because there's no mockito-observable way to distinguish "dedup loop
+    /// present" from "dedup loop silently deleted" — both can return
+    /// duplicate-free results on the small fixture pages used elsewhere in
+    /// this suite.
+    #[test]
+    fn search_keeps_hand_rolled_dedup_loop() {
+        let src = include_str!("search.rs");
+        // Scope the scan to the production code that precedes this test
+        // module, so the guard cannot match against its own assertion
+        // strings below (self-inclusion via `include_str!` embeds the
+        // whole file, tests included).
+        let production_src = src
+            .split("#[cfg(test)]")
+            .next()
+            .expect("file always has a preamble before the first split marker");
+
+        assert!(
+            production_src.contains("let mut seen_ids: HashSet<String> = HashSet::new();"),
+            "SpankBang's search() must keep its cross-page seen_ids HashSet dedup"
+        );
+        assert!(
+            production_src.contains("if !seen_ids.insert(id_seg) {"),
+            "SpankBang's search() must keep de-duplicating by video ID across pages"
+        );
+        assert!(
+            !production_src.contains("search_all_pages("),
+            "SpankBang must NOT fold search() onto the shared PagedSearch::search_all_pages \
+             scaffold — that scaffold has no cross-page dedup"
+        );
     }
 }
