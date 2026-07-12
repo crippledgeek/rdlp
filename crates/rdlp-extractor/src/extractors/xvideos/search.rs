@@ -12,7 +12,7 @@ use rdlp_types::{
 use scraper::Html;
 
 use super::XVideosExtractor;
-use crate::base::common::BaseExtractor;
+use crate::base::common::{BaseExtractor, SearchPageSpec, SearchParse, run_search_page};
 
 const XVIDEOS_BASE_URL: &str = "https://www.xvideos.com";
 
@@ -245,23 +245,28 @@ impl SearchExtractor for XVideosExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
-        // page in SearchQuery is 1-indexed per convention; XVideos uses 0-indexed internally
-        let page_1indexed = query.page.unwrap_or(1);
-        let page_0indexed = page_1indexed.saturating_sub(1);
-
-        let page_url = build_search_url(query, page_0indexed);
-        let webpage = BaseExtractor::fetch_webpage(&page_url, ctx).await?;
-
-        let results = parse_search_results(&webpage);
-        let has_more = has_next_page(&webpage, page_0indexed + 1) && !results.is_empty();
-        let total_estimate = None;
-
-        Ok(SearchPageResponse {
-            results,
-            page: page_1indexed,
-            has_more,
-            total_estimate,
-        })
+        run_search_page(
+            query,
+            ctx,
+            SearchPageSpec {
+                first_page_index: 1,
+                headers: &[],
+                // XVideos is 0-indexed internally; external page is 1-indexed.
+                build_url: |query, page| build_search_url(query, page.saturating_sub(1)),
+                parse: |body, _query, page| {
+                    let results = parse_search_results(body);
+                    // Reproduce the original arg exactly: has_next_page(webpage, page_0indexed + 1),
+                    // where page_0indexed = page.saturating_sub(1). Equal to page for page>=1; correct at page 0.
+                    Ok(SearchParse {
+                        has_more: has_next_page(body, page.saturating_sub(1) + 1)
+                            && !results.is_empty(),
+                        total_estimate: None,
+                        results,
+                    })
+                },
+            },
+        )
+        .await
     }
 }
 
@@ -430,6 +435,30 @@ mod tests {
         // Spot-check: every parsed view count must be > 0
         for v in results.iter().filter_map(|r| r.view_count) {
             assert!(v > 0, "view_count of zero should be None, not Some(0)");
+        }
+    }
+
+    /// Regression: `search_page`'s `parse` closure must reproduce the original
+    /// pre-refactor `has_next_page(webpage, page_0indexed + 1)` call exactly,
+    /// where `page_0indexed = page.saturating_sub(1)`. For `page >= 1` this is
+    /// identical to passing `page` directly, but at the out-of-contract
+    /// `page == 0` boundary the original computes `0.saturating_sub(1) + 1 == 1`,
+    /// NOT `0`. Pin both sides of that boundary directly against `has_next_page`
+    /// (the closure itself is only reachable via `run_search_page`, which
+    /// performs a network fetch, so this exercises the restored arithmetic
+    /// rather than the full search_page path).
+    #[test]
+    fn has_next_page_boundary_matches_original_arg_computation() {
+        let html = "...p=1...";
+        // page == 0: original arg is 0.saturating_sub(1) + 1 == 1, not 0.
+        let page = 0_u32;
+        assert_eq!(page.saturating_sub(1) + 1, 1);
+        assert!(has_next_page(html, page.saturating_sub(1) + 1));
+        assert!(!has_next_page(html, page));
+
+        // page >= 1: the restored computation equals `page` directly.
+        for page in 1_u32..=3 {
+            assert_eq!(page.saturating_sub(1) + 1, page);
         }
     }
 

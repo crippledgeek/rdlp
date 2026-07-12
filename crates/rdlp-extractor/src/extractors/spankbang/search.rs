@@ -19,6 +19,7 @@ use rdlp_types::{
 use super::SpankBangExtractor;
 use super::{metadata, patterns};
 use crate::base::common::BaseExtractor;
+use crate::base::common::{SearchPageSpec, SearchParse, run_search_page};
 
 const SPANKBANG_BASE_URL: &str = "https://spankbang.com";
 const SPANKBANG_NAME_STR: &str = "SpankBang";
@@ -371,22 +372,23 @@ impl SearchExtractor for SpankBangExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
-        let page = query.page.unwrap_or(0);
-        let page_url = build_search_url(query, page);
-
-        let webpage =
-            BaseExtractor::fetch_webpage_with_headers(&page_url, &[("Cookie", "country=US")], ctx)
-                .await?;
-
-        let results = parse_results(&webpage);
-        let more = has_more_pages(&webpage, query, page);
-
-        Ok(SearchPageResponse {
-            results,
-            page,
-            has_more: more,
-            total_estimate: Some(RESULTS_PER_PAGE * 100),
-        })
+        run_search_page(
+            query,
+            ctx,
+            SearchPageSpec {
+                first_page_index: 0,
+                headers: &[("Cookie", "country=US")],
+                build_url: build_search_url,
+                parse: |body, query, page| {
+                    Ok(SearchParse {
+                        results: parse_results(body),
+                        total_estimate: Some(RESULTS_PER_PAGE * 100),
+                        has_more: has_more_pages(body, query, page),
+                    })
+                },
+            },
+        )
+        .await
     }
 }
 

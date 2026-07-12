@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use super::XNXXExtractor;
 use crate::base::common::BaseExtractor;
+use crate::base::common::{SearchPageSpec, SearchParse, run_search_page};
 
 /// Base URL for search requests.
 const XNXX_BASE_URL: &str = "https://www.xnxx.com";
@@ -274,21 +275,23 @@ impl SearchExtractor for XNXXExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
-        // External `page` is 0-indexed; display page in URL is 1-indexed
-        let page = query.page.unwrap_or(0);
-        let page_url = build_search_url(query, page);
-
-        let webpage = BaseExtractor::fetch_webpage(&page_url, ctx).await?;
-
-        let results = parse_results(&webpage);
-        let more = has_more_pages(&webpage, query, page);
-
-        Ok(SearchPageResponse {
-            results,
-            page,
-            has_more: more,
-            total_estimate: Some(RESULTS_PER_PAGE * 100),
-        })
+        run_search_page(
+            query,
+            ctx,
+            SearchPageSpec {
+                first_page_index: 0,
+                headers: &[],
+                build_url: build_search_url,
+                parse: |body, query, page| {
+                    Ok(SearchParse {
+                        results: parse_results(body),
+                        total_estimate: Some(RESULTS_PER_PAGE * 100),
+                        has_more: has_more_pages(body, query, page),
+                    })
+                },
+            },
+        )
+        .await
     }
 }
 
