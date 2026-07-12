@@ -290,6 +290,10 @@ impl SearchExtractor for AbxxxExtractor {
         }]
     }
 
+    // Inherits the shared multi-page loop. Divergence from the old hand-rolled
+    // `search()`: a mid-pagination fetch error now returns `Ok(partial results)`
+    // instead of propagating `Err` (design-sanctioned convergence, #450). The
+    // single-page `search_page` below preserves the old `?`-error behavior exactly.
     async fn search(
         &self,
         query: &SearchQuery,
