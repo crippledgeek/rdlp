@@ -208,7 +208,6 @@ impl PagedSearch for XVideosExtractor {
         ctx: &ExtractionContext,
     ) -> Result<SearchPage> {
         let spec = SearchPageSpec {
-            first_page_index: 1, // struct field still exists until 3b-8; fetch_via_spec ignores it
             headers: &[],
             // XVideos is 0-indexed internally; external page is 1-indexed.
             build_url: |query, page| build_search_url(query, page.saturating_sub(1)),
@@ -437,9 +436,9 @@ mod tests {
     /// identical to passing `page` directly, but at the out-of-contract
     /// `page == 0` boundary the original computes `0.saturating_sub(1) + 1 == 1`,
     /// NOT `0`. Pin both sides of that boundary directly against `has_next_page`
-    /// (the closure itself is only reachable via `run_search_page`, which
-    /// performs a network fetch, so this exercises the restored arithmetic
-    /// rather than the full search_page path).
+    /// (the closure itself is only reachable via `PagedSearch::fetch_via_spec`,
+    /// which performs a network fetch, so this exercises the restored
+    /// arithmetic rather than the full search_page path).
     #[test]
     fn has_next_page_boundary_matches_original_arg_computation() {
         let html = "...p=1...";

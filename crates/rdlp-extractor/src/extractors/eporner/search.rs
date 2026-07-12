@@ -246,7 +246,6 @@ impl PagedSearch for EPornerExtractor {
         ctx: &ExtractionContext,
     ) -> Result<SearchPage> {
         let spec = SearchPageSpec {
-            first_page_index: 0, // struct field exists until 3b-8; fetch_via_spec ignores it
             headers: &[],
             build_url: build_search_url,
             parse: |body, _query, page| {

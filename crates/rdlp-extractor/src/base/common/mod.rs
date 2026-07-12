@@ -61,12 +61,6 @@ pub(crate) use search::{
     FilterValidationError, KeyValidation, PagedSearch, SearchPage, SearchPageSpec, Termination,
     append_search_filters, validate_against_descriptors,
 };
-// Transitional re-export: no site imports these through this path as of
-// sub-PR 3b-7 (spankbang, the last `run_search_page` caller, moved onto
-// `PagedSearch::fetch_via_spec`). Deleted alongside `run_search_page` and
-// `SearchParse` in sub-PR 3b-8; `#[expect]` is self-cleaning.
-#[expect(unused_imports, reason = "deleted in Stage 3b-8, #450")]
-pub(crate) use search::{SearchParse, run_search_page};
 pub(crate) use selectors::*;
 
 /// Maximum URL length to prevent memory exhaustion attacks

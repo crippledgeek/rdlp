@@ -228,7 +228,6 @@ impl PagedSearch for XNXXExtractor {
         ctx: &ExtractionContext,
     ) -> Result<SearchPage> {
         let spec = SearchPageSpec {
-            first_page_index: 0,
             headers: &[],
             build_url: build_search_url,
             parse: |body, query, page| {

@@ -363,7 +363,6 @@ impl PagedSearch for HQPornerExtractor {
         ctx: &ExtractionContext,
     ) -> Result<SearchPage> {
         let spec = SearchPageSpec {
-            first_page_index: 1, // struct field exists until 3b-8; fetch_via_spec ignores it
             headers: &[("Referer", "https://hqporner.com/")],
             build_url: |query, page| search_patterns::build_search_url(&query.query, page),
             parse: |body, _query, _page| {

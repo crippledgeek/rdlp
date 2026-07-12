@@ -93,7 +93,6 @@ impl PagedSearch for XTitsExtractor {
         ctx: &ExtractionContext,
     ) -> Result<SearchPage> {
         let spec = SearchPageSpec {
-            first_page_index: 1, // struct field exists until 3b-8; fetch_via_spec ignores it
             headers: &[
                 ("X-Requested-With", "XMLHttpRequest"),
                 ("Referer", "https://www.xtits.com/search/"),

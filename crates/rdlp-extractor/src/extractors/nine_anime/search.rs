@@ -97,7 +97,6 @@ impl PagedSearch for NineAnimeExtractor {
         ctx: &ExtractionContext,
     ) -> Result<SearchPage> {
         let spec = SearchPageSpec {
-            first_page_index: 1, // struct field exists until 3b-8; fetch_via_spec ignores it
             headers: &[("Referer", "https://9animetv.to/")],
             build_url: |query, page| {
                 let url_page = if page > 0 { page - 1 } else { 0 };

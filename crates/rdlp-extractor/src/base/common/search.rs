@@ -27,67 +27,17 @@ pub(crate) struct SearchPage {
     pub total_estimate: Option<u64>,
 }
 
-/// Transitional alias for [`SearchPage`], kept only until sub-PR 3b-8 deletes
-/// it together with `run_search_page` and `SearchPageSpec::first_page_index`.
-/// As of 3b-7 (spankbang, the last of the 7 single-GET `#440` sites) no site
-/// still calls `run_search_page`, so this is genuinely unused — `#[expect]`
-/// (not `#[allow]`) is deliberate: it is self-cleaning, matching the pattern
-/// used for `PagedSearch::fetch_via_spec` in sub-PR 3a. The moment 3b-8
-/// deletes the alias the expectation is fulfilled and removed alongside it.
-#[expect(dead_code, reason = "deleted in Stage 3b-8, #450")]
-pub(crate) type SearchParse = SearchPage;
-
 /// Per-site configuration for the default [`PagedSearch::fetch_page`] (via
-/// [`PagedSearch::fetch_via_spec`]) and the legacy [`run_search_page`]. All
-/// behavioral variation is a `fn` pointer (zero-alloc, `Copy`); config is plain
-/// data. Sites pass bare `fn` items or non-capturing closures (which coerce to `fn`).
+/// [`PagedSearch::fetch_via_spec`]). All behavioral variation is a `fn`
+/// pointer (zero-alloc, `Copy`); config is plain data. Sites pass bare `fn`
+/// items or non-capturing closures (which coerce to `fn`).
 pub(crate) struct SearchPageSpec {
-    /// The page a `None` `SearchQuery::page` defaults to (0 or 1 per site).
-    ///
-    /// Read only by [`run_search_page`]; `fetch_via_spec` takes `page` as an
-    /// argument (the first-page index is [`PagedSearch::first_page_index`] there).
-    /// Transitional — deleted in sub-PR 3b-8 with `run_search_page`. As of
-    /// 3b-7 no call site reads this field; `#[expect]` is self-cleaning.
-    #[expect(dead_code, reason = "deleted in Stage 3b-8, #450")]
-    pub first_page_index: u32,
     /// Extra request headers; `&[]` for none.
     pub headers: &'static [(&'static str, &'static str)],
     /// Build the page URL from the query and the (site-convention) page number.
     pub build_url: fn(&SearchQuery, u32) -> String,
     /// Parse the fetched body into results + pagination in one pass.
     pub parse: fn(&str, &SearchQuery, u32) -> Result<SearchPage>,
-}
-
-/// Shared single-GET search-page skeleton: derive the page, build the URL,
-/// fetch once (with optional headers), parse, and assemble the response. Sites
-/// with genuinely divergent shapes (two-fetch fallback, termination-based
-/// pagination) keep their own `search_page` and do not use this.
-///
-/// As of sub-PR 3b-7 (spankbang) every former caller has moved onto
-/// [`PagedSearch::fetch_via_spec`]; this function is genuinely unused and
-/// kept only until 3b-8 deletes it. `#[expect]` (not `#[allow]`) so the
-/// unfulfilled-expectation lint forces removal of this attribute the moment
-/// the function is deleted.
-#[expect(dead_code, reason = "deleted in Stage 3b-8, #450")]
-pub(crate) async fn run_search_page(
-    query: &SearchQuery,
-    ctx: &ExtractionContext,
-    spec: SearchPageSpec,
-) -> Result<SearchPageResponse> {
-    let page = query.page.unwrap_or(spec.first_page_index);
-    let url = (spec.build_url)(query, page);
-    let body = if spec.headers.is_empty() {
-        BaseExtractor::fetch_webpage(&url, ctx).await?
-    } else {
-        BaseExtractor::fetch_webpage_with_headers(&url, spec.headers, ctx).await?
-    };
-    let parsed = (spec.parse)(&body, query, page)?;
-    Ok(SearchPageResponse {
-        results: parsed.results,
-        page,
-        has_more: parsed.has_more,
-        total_estimate: parsed.total_estimate,
-    })
 }
 
 /// How one filter key's value is validated by [`validate_against_descriptors`].
@@ -190,9 +140,13 @@ pub(crate) const PAGE_RATE_LIMIT_MS: u64 = 500;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Termination {
     Pages(usize),
-    /// Constructed by `PagedSearch` adopters that paginate until an empty
-    /// page (PornHub, RedTube). No reliable total page count is available from
-    /// these sites' responses.
+    /// Used when no reliable total page count is available from a site's
+    /// response, so pagination stops only on an empty page. RedTube's
+    /// `termination_from_count` constructs this variant (via its `fetch_page`)
+    /// when the API response carries no `count`. PornHub folds the same
+    /// semantic inline in `fetch_page` (`has_more: true` on any non-empty
+    /// page) rather than constructing this variant. Otherwise reachable via
+    /// unit tests in this module.
     UntilEmpty,
 }
 
@@ -297,10 +251,13 @@ pub(crate) trait PagedSearch: Send + Sync {
     ) -> Result<SearchPage>;
 
     /// Drive a single-GET [`SearchPageSpec`]: build URL → fetch (± headers) → parse.
-    /// This is today's `run_search_page` body minus the response assembly (which
-    /// lives in [`search_page_response`](Self::search_page_response)). Provided
-    /// method — single-GET sites call `self.fetch_via_spec(SPEC, query, page, ctx)`
-    /// from their `fetch_page`. `SearchPageSpec` is `Copy`, taken by value.
+    /// Provided method — single-GET sites call
+    /// `self.fetch_via_spec(SPEC, query, page, ctx)` from their `fetch_page`.
+    /// `SearchPageSpec` is `Copy`, taken by value.
+    ///
+    /// 4 params: `spec` is a parameter-object, `ctx` the threaded extraction
+    /// context, `(query, page)` the trait's established pair — no same-type
+    /// ambiguity.
     async fn fetch_via_spec(
         &self,
         spec: SearchPageSpec,
