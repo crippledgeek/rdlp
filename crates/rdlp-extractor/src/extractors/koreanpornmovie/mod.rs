@@ -26,6 +26,7 @@ use rdlp_types::{
 };
 
 use crate::base::common::BaseExtractor;
+use crate::base::common::{PagedSearch, SearchPage};
 
 // ============================================================================
 // Selectors
@@ -244,17 +245,40 @@ impl SearchExtractor for KoreanPornMovieExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<Vec<SearchResultPreview>> {
-        let response = self.search_page(query, ctx).await?;
-        Ok(response.results)
+        // KPM is single-page: opt OUT of the shared multi-page loop (which would
+        // re-run the taxonomy term-lookup per page). Preserves the old single-call
+        // search() exactly.
+        Ok(self.search_page_response(query, ctx).await?.results)
     }
 
-    // Bespoke: multi-endpoint browse dispatch (the single-GET PagedSearch spec path does not fit); folded in Stage 3c. See #450.
     async fn search_page(
         &self,
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
-        let page = query.page.unwrap_or(1);
+        self.search_page_response(query, ctx).await
+    }
+}
+
+impl PagedSearch for KoreanPornMovieExtractor {
+    fn search_log_tag(&self) -> &'static str {
+        "[KoreanPornMovie]"
+    }
+
+    // KPM validates no filters today (the bespoke search_page never validated). Ok(()) preserves that.
+    fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {
+        Ok(())
+    }
+
+    // Custom multi-endpoint hook (no SearchPageSpec): browse-mode dispatch → two concurrent
+    // ctx.http_client fetches + X-WP-TotalPages pagination. Opts out of the loop via the
+    // search() override above, so it is only ever called once per query.
+    async fn fetch_page(
+        &self,
+        query: &SearchQuery,
+        page: u32,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPage> {
         let browse_mode = query
             .filters
             .iter()
@@ -334,7 +358,7 @@ impl KoreanPornMovieExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
         page: u32,
-    ) -> Result<SearchPageResponse> {
+    ) -> Result<SearchPage> {
         let per_page = 20;
         let encoded_query = urlencoding::encode(&query.query);
         let api_url = format!(
@@ -367,9 +391,8 @@ impl KoreanPornMovieExtractor {
             })
             .collect();
 
-        Ok(SearchPageResponse {
+        Ok(SearchPage {
             results,
-            page,
             has_more: page < total_pages,
             total_estimate: None,
         })
@@ -382,7 +405,7 @@ impl KoreanPornMovieExtractor {
         ctx: &ExtractionContext,
         taxonomy: &str,
         page: u32,
-    ) -> Result<SearchPageResponse> {
+    ) -> Result<SearchPage> {
         let slug = query.query.to_lowercase().replace(' ', "-");
 
         // Step 1: Resolve slug to term ID
@@ -444,9 +467,8 @@ impl KoreanPornMovieExtractor {
             })
             .collect();
 
-        Ok(SearchPageResponse {
+        Ok(SearchPage {
             results,
-            page,
             has_more: page < total_pages,
             total_estimate: Some(term.count),
         })
