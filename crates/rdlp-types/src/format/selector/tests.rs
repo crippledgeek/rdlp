@@ -21,6 +21,10 @@ use crate::protocol::DownloadProtocol;
 
 // ---- Test helpers ----
 
+fn make_format(id: &str) -> Format {
+    Format::new(id, "https://example.com", "mp4", DownloadProtocol::Https)
+}
+
 fn make_combined(id: &str, ext: &str, height: u32, quality: i32) -> Format {
     let mut f = Format::new(id, format!("url_{id}"), ext, DownloadProtocol::Https);
     f.vcodec = Codec::Present("h264".to_string());
@@ -4275,12 +4279,6 @@ mod negative_eval_2 {
 
 mod negative_sort_2 {
     use super::*;
-    use crate::format::Format;
-    use crate::protocol::DownloadProtocol;
-
-    fn make_format(id: &str) -> Format {
-        Format::new(id, "https://example.com", "mp4", DownloadProtocol::Https)
-    }
 
     // ---- Missing numeric fields sort as absent (tier -10) ----
 
@@ -4857,12 +4855,6 @@ mod negative_eval_3 {
 
 mod negative_sort_3 {
     use super::*;
-    use crate::format::Format;
-    use crate::protocol::DownloadProtocol;
-
-    fn make_format(id: &str) -> Format {
-        Format::new(id, "https://example.com", "mp4", DownloadProtocol::Https)
-    }
 
     // ---- Empty codec string treated as missing ----
 
