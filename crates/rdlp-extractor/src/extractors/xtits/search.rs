@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use super::XTitsExtractor;
 use super::search_patterns;
-use crate::base::common::BaseExtractor;
+use crate::base::common::{BaseExtractor, SearchPageSpec, SearchParse, run_search_page};
 
 const MAX_PLAYLIST_SIZE: usize = 500;
 
@@ -134,30 +134,28 @@ impl SearchExtractor for XTitsExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
-        let page = query.page.unwrap_or(1);
-        let page_url = search_patterns::build_search_url(query, page);
-
-        let webpage = BaseExtractor::fetch_webpage_with_headers(
-            &page_url,
-            &[
-                ("X-Requested-With", "XMLHttpRequest"),
-                ("Referer", "https://www.xtits.com/search/"),
-            ],
+        run_search_page(
+            query,
             ctx,
+            SearchPageSpec {
+                first_page_index: 1,
+                headers: &[
+                    ("X-Requested-With", "XMLHttpRequest"),
+                    ("Referer", "https://www.xtits.com/search/"),
+                ],
+                build_url: search_patterns::build_search_url,
+                parse: |body, _query, page| {
+                    let results = parse_search_results(body);
+                    let max_page = detect_max_page(body);
+                    Ok(SearchParse {
+                        has_more: page < max_page && !results.is_empty(),
+                        total_estimate: Some(max_page as u64 * search_patterns::RESULTS_PER_PAGE),
+                        results,
+                    })
+                },
+            },
         )
-        .await?;
-
-        let page_results = parse_search_results(&webpage);
-        let max_page = detect_max_page(&webpage);
-        let has_more = page < max_page && !page_results.is_empty();
-        let total_estimate = Some(max_page as u64 * search_patterns::RESULTS_PER_PAGE);
-
-        Ok(SearchPageResponse {
-            results: page_results,
-            page,
-            has_more,
-            total_estimate,
-        })
+        .await
     }
 }
 
