@@ -58,8 +58,8 @@ use regex::Regex;
 // Re-export selectors, patterns, and constants from submodule
 pub(crate) use protocol::protocol_for_url;
 pub(crate) use search::{
-    FilterValidationError, KeyValidation, PaginatedSearch, Termination, append_search_filters,
-    validate_against_descriptors,
+    FilterValidationError, KeyValidation, PaginatedSearch, SearchPageSpec, SearchParse,
+    Termination, append_search_filters, run_search_page, validate_against_descriptors,
 };
 pub(crate) use selectors::*;
 

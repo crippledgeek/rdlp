@@ -10,11 +10,62 @@
 use async_trait::async_trait;
 use log::debug;
 use rdlp_core::{ExtractionContext, Result};
-use rdlp_types::{SearchFilter, SearchFilterDescriptor, SearchQuery, SearchResultPreview};
+use rdlp_types::{
+    SearchFilter, SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchResultPreview,
+};
 use std::time::Duration;
 use url::form_urlencoded;
 
 use super::MAX_PLAYLIST_SIZE;
+use crate::base::common::BaseExtractor;
+
+/// One parsed search page: the rows, an optional total-result estimate, and
+/// whether another page exists. Produced by a site's `parse` hook in a single
+/// pass (no re-scan of the body).
+pub(crate) struct SearchParse {
+    pub results: Vec<SearchResultPreview>,
+    pub total_estimate: Option<u64>,
+    pub has_more: bool,
+}
+
+/// Per-site configuration for [`run_search_page`]. All behavioral variation is
+/// a `fn` pointer (zero-alloc, `Copy`); config is plain data. Sites pass bare
+/// `fn` items or non-capturing closures (which coerce to `fn`).
+pub(crate) struct SearchPageSpec {
+    /// The page a `None` `SearchQuery::page` defaults to (0 or 1 per site).
+    pub first_page_index: u32,
+    /// Extra request headers; `&[]` for none.
+    pub headers: &'static [(&'static str, &'static str)],
+    /// Build the page URL from the query and the (site-convention) page number.
+    pub build_url: fn(&SearchQuery, u32) -> String,
+    /// Parse the fetched body into results + pagination in one pass.
+    pub parse: fn(&str, &SearchQuery, u32) -> Result<SearchParse>,
+}
+
+/// Shared single-GET search-page skeleton: derive the page, build the URL,
+/// fetch once (with optional headers), parse, and assemble the response. Sites
+/// with genuinely divergent shapes (two-fetch fallback, termination-based
+/// pagination) keep their own `search_page` and do not use this.
+pub(crate) async fn run_search_page(
+    query: &SearchQuery,
+    ctx: &ExtractionContext,
+    spec: SearchPageSpec,
+) -> Result<SearchPageResponse> {
+    let page = query.page.unwrap_or(spec.first_page_index);
+    let url = (spec.build_url)(query, page);
+    let body = if spec.headers.is_empty() {
+        BaseExtractor::fetch_webpage(&url, ctx).await?
+    } else {
+        BaseExtractor::fetch_webpage_with_headers(&url, spec.headers, ctx).await?
+    };
+    let parsed = (spec.parse)(&body, query, page)?;
+    Ok(SearchPageResponse {
+        results: parsed.results,
+        page,
+        has_more: parsed.has_more,
+        total_estimate: parsed.total_estimate,
+    })
+}
 
 /// How one filter key's value is validated by [`validate_against_descriptors`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
