@@ -7,9 +7,6 @@ use url::form_urlencoded;
 /// Results per page (XTits KVS default).
 pub(crate) const RESULTS_PER_PAGE: u64 = 100;
 
-/// Rate limit between page fetches (milliseconds).
-pub(crate) const PAGE_RATE_LIMIT_MS: u64 = 500;
-
 /// Regex to extract video items from KVS AJAX response HTML.
 ///
 /// Captures: (1) video URL, (2) title, (3) thumbnail URL.

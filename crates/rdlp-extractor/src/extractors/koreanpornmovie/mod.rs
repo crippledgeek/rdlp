@@ -248,7 +248,7 @@ impl SearchExtractor for KoreanPornMovieExtractor {
         Ok(response.results)
     }
 
-    // Bespoke: multi-endpoint browse dispatch (single-GET run_search_page skeleton does not fit); see #450.
+    // Bespoke: multi-endpoint browse dispatch (the single-GET PagedSearch spec path does not fit); folded in Stage 3c. See #450.
     async fn search_page(
         &self,
         query: &SearchQuery,

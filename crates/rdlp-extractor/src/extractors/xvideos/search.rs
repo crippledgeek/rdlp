@@ -4,7 +4,6 @@
 //! where `p` is 0-indexed. Adding `&top` sorts by most-viewed.
 
 use async_trait::async_trait;
-use log::debug;
 use rdlp_core::{ExtractionContext, Result, SearchExtractor};
 use rdlp_types::{
     SearchFilterDescriptor, SearchFilterValue, SearchPageResponse, SearchQuery, SearchResultPreview,
@@ -12,9 +11,13 @@ use rdlp_types::{
 use scraper::Html;
 
 use super::XVideosExtractor;
-use crate::base::common::{BaseExtractor, SearchPageSpec, SearchParse, run_search_page};
+use crate::base::common::{BaseExtractor, PagedSearch, SearchPage, SearchPageSpec};
 
 const XVIDEOS_BASE_URL: &str = "https://www.xvideos.com";
+
+/// Maximum results cap for a full search (matches the pre-refactor
+/// `unwrap_or(500)`; mirrors the xnxx sibling's named cap).
+const MAX_PLAYLIST_SIZE: usize = 500;
 
 /// Build the search URL for a given query and 0-indexed page number.
 fn build_search_url(query: &SearchQuery, page: u32) -> String {
@@ -179,6 +182,51 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
     results
 }
 
+impl PagedSearch for XVideosExtractor {
+    fn search_log_tag(&self) -> &'static str {
+        "[XVideos]"
+    }
+
+    // XVideos has no filter validation today (the pre-refactor single-GET
+    // search path never validated); `Ok(())` is the only value that preserves that.
+    fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {
+        Ok(())
+    }
+
+    fn first_page_index(&self) -> u32 {
+        1
+    }
+
+    fn max_results_default(&self) -> usize {
+        MAX_PLAYLIST_SIZE
+    }
+
+    async fn fetch_page(
+        &self,
+        query: &SearchQuery,
+        page: u32,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPage> {
+        let spec = SearchPageSpec {
+            headers: &[],
+            // XVideos is 0-indexed internally; external page is 1-indexed.
+            build_url: |query, page| build_search_url(query, page.saturating_sub(1)),
+            parse: |body, _query, page| {
+                let results = parse_search_results(body);
+                // Reproduce the original arg exactly: has_next_page(webpage, page_0indexed + 1),
+                // where page_0indexed = page.saturating_sub(1). Equal to page for page>=1; correct at page 0.
+                Ok(SearchPage {
+                    has_more: has_next_page(body, page.saturating_sub(1) + 1)
+                        && !results.is_empty(),
+                    total_estimate: None,
+                    results,
+                })
+            },
+        };
+        self.fetch_via_spec(spec, query, page, ctx).await
+    }
+}
+
 #[async_trait]
 impl SearchExtractor for XVideosExtractor {
     fn name(&self) -> &str {
@@ -202,42 +250,7 @@ impl SearchExtractor for XVideosExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<Vec<SearchResultPreview>> {
-        let max_results = query.max_results.unwrap_or(500);
-        let mut all_results = Vec::new();
-        let mut page = 0_u32;
-
-        loop {
-            let page_url = build_search_url(query, page);
-            let sanitized = rdlp_security::sanitize_for_logging(&page_url);
-            debug!("[XVideos] Fetching search page {page}: {sanitized}");
-
-            let webpage = BaseExtractor::fetch_webpage(&page_url, ctx).await?;
-            let page_results = parse_search_results(&webpage);
-
-            if page_results.is_empty() {
-                break;
-            }
-
-            let next_page = page + 1;
-            let more = has_next_page(&webpage, next_page);
-            all_results.extend(page_results);
-
-            if all_results.len() >= max_results || !more {
-                all_results.truncate(max_results);
-                break;
-            }
-
-            page = next_page;
-            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        }
-
-        debug!(
-            "[XVideos] Search complete: {} results across {} pages",
-            all_results.len(),
-            page + 1
-        );
-
-        Ok(all_results)
+        self.search_all_pages(query, ctx).await
     }
 
     async fn search_page(
@@ -245,28 +258,7 @@ impl SearchExtractor for XVideosExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
-        run_search_page(
-            query,
-            ctx,
-            SearchPageSpec {
-                first_page_index: 1,
-                headers: &[],
-                // XVideos is 0-indexed internally; external page is 1-indexed.
-                build_url: |query, page| build_search_url(query, page.saturating_sub(1)),
-                parse: |body, _query, page| {
-                    let results = parse_search_results(body);
-                    // Reproduce the original arg exactly: has_next_page(webpage, page_0indexed + 1),
-                    // where page_0indexed = page.saturating_sub(1). Equal to page for page>=1; correct at page 0.
-                    Ok(SearchParse {
-                        has_more: has_next_page(body, page.saturating_sub(1) + 1)
-                            && !results.is_empty(),
-                        total_estimate: None,
-                        results,
-                    })
-                },
-            },
-        )
-        .await
+        self.search_page_response(query, ctx).await
     }
 }
 
@@ -444,9 +436,9 @@ mod tests {
     /// identical to passing `page` directly, but at the out-of-contract
     /// `page == 0` boundary the original computes `0.saturating_sub(1) + 1 == 1`,
     /// NOT `0`. Pin both sides of that boundary directly against `has_next_page`
-    /// (the closure itself is only reachable via `run_search_page`, which
-    /// performs a network fetch, so this exercises the restored arithmetic
-    /// rather than the full search_page path).
+    /// (the closure itself is only reachable via `PagedSearch::fetch_via_spec`,
+    /// which performs a network fetch, so this exercises the restored
+    /// arithmetic rather than the full search_page path).
     #[test]
     fn has_next_page_boundary_matches_original_arg_computation() {
         let html = "...p=1...";
