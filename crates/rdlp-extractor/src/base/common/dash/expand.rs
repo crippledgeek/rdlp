@@ -308,7 +308,6 @@ pub fn expand_dash_representations(
         return Err(DashExpandError::NoUsableReps);
     };
 
-    let mpd_baseurls: Vec<String> = mpd.base_url.iter().map(|b| b.base.clone()).collect();
     let period_duration_seconds = period
         .duration
         .as_ref()
@@ -325,7 +324,6 @@ pub fn expand_dash_representations(
             continue;
         }
 
-        let adapt_baseurls: Vec<String> = adapt.BaseURL.iter().map(|b| b.base.clone()).collect();
         let adapt_lang = adapt.lang.clone();
 
         for (repr_idx, repr) in adapt.representations.iter().enumerate() {
@@ -334,14 +332,15 @@ pub fn expand_dash_representations(
                 continue;
             }
 
-            let repr_baseurls: Vec<String> = repr.BaseURL.iter().map(|b| b.base.clone()).collect();
-
+            // Each level contributes only its first <BaseURL> (CDN-failover
+            // rotation is out of scope); pass borrowed &str so the unused
+            // failover entries are never cloned. See resolve_chain.
             let final_base = resolve_chain(
                 base_url,
                 [
-                    mpd_baseurls.as_slice(),
-                    adapt_baseurls.as_slice(),
-                    repr_baseurls.as_slice(),
+                    mpd.base_url.first().map(|b| b.base.as_str()),
+                    adapt.BaseURL.first().map(|b| b.base.as_str()),
+                    repr.BaseURL.first().map(|b| b.base.as_str()),
                 ],
             );
 

@@ -3,29 +3,28 @@
 use url::Url;
 
 /// Resolve a BaseURL chain. Each level (MPD, AdaptationSet, Representation)
-/// may add zero or more `<BaseURL>` entries. Each is joined against the
-/// previous endpoint via RFC 3986. Returns the final base URL the
-/// segment URLs should be resolved against.
+/// contributes at most one `<BaseURL>` — the first entry, since the DASH spec
+/// lets a level carry several for CDN failover and CDN-rotation is not in
+/// scope. Picking that first entry is the *caller's* responsibility: each
+/// level is passed as an `Option<&str>` (`None` = the level adds no BaseURL),
+/// so no owned copies of the unused failover entries are ever made. Each
+/// present entry is joined against the previous endpoint via RFC 3986.
+/// Returns the final base URL the segment URLs should be resolved against.
 ///
 /// `mpd_url` is the URL the MPD itself was fetched from (the implicit
 /// "level 0" BaseURL).
 pub fn resolve_chain<'a, I>(mpd_url: &Url, levels: I) -> Url
 where
-    I: IntoIterator<Item = &'a [String]>,
+    I: IntoIterator<Item = Option<&'a str>>,
 {
     let mut current = mpd_url.clone();
-    for level in levels {
-        // DASH spec: each level may have multiple <BaseURL> entries
-        // (CDN failover). We pick the first; CDN-rotation is not in scope.
-        if let Some(first) = level.first() {
-            match current.join(first) {
-                Ok(joined) => current = joined,
-                Err(e) => {
-                    log::warn!(
-                        "DASH BaseURL chain: failed to resolve {first:?} against {current}: {e}; skipping this level"
-                    );
-                    continue;
-                }
+    for first in levels.into_iter().flatten() {
+        match current.join(first) {
+            Ok(joined) => current = joined,
+            Err(e) => {
+                log::warn!(
+                    "DASH BaseURL chain: failed to resolve {first:?} against {current}: {e}; skipping this level"
+                );
             }
         }
     }
@@ -39,59 +38,48 @@ mod tests {
     #[test]
     fn empty_chain_returns_mpd_url() {
         let mpd = Url::parse("https://cdn.example.com/manifest.mpd").unwrap();
-        let resolved = resolve_chain(&mpd, std::iter::empty());
+        let resolved = resolve_chain(&mpd, std::iter::empty::<Option<&str>>());
         assert_eq!(resolved.as_str(), "https://cdn.example.com/manifest.mpd");
     }
 
     #[test]
     fn mpd_level_baseurl_replaces() {
         let mpd = Url::parse("https://cdn.example.com/manifest.mpd").unwrap();
-        let mpd_levels: Vec<String> = vec!["https://cdn.example.com/segments/".into()];
-        let resolved = resolve_chain(&mpd, [mpd_levels.as_slice()]);
+        let resolved = resolve_chain(&mpd, [Some("https://cdn.example.com/segments/")]);
         assert_eq!(resolved.as_str(), "https://cdn.example.com/segments/");
     }
 
     #[test]
     fn relative_baseurl_resolves_against_mpd() {
         let mpd = Url::parse("https://cdn.example.com/path/manifest.mpd").unwrap();
-        let mpd_levels: Vec<String> = vec!["segments/".into()];
-        let resolved = resolve_chain(&mpd, [mpd_levels.as_slice()]);
+        let resolved = resolve_chain(&mpd, [Some("segments/")]);
         assert_eq!(resolved.as_str(), "https://cdn.example.com/path/segments/");
     }
 
     #[test]
     fn three_level_chain() {
         let mpd = Url::parse("https://a.com/m.mpd").unwrap();
-        let mpd_lvl: Vec<String> = vec!["base/".into()];
-        let adapt_lvl: Vec<String> = vec!["video/".into()];
-        let repr_lvl: Vec<String> = vec!["1080p/".into()];
-        let resolved = resolve_chain(
-            &mpd,
-            [
-                mpd_lvl.as_slice(),
-                adapt_lvl.as_slice(),
-                repr_lvl.as_slice(),
-            ],
-        );
+        let resolved = resolve_chain(&mpd, [Some("base/"), Some("video/"), Some("1080p/")]);
         assert_eq!(resolved.as_str(), "https://a.com/base/video/1080p/");
     }
 
     #[test]
     fn empty_inner_level_is_skipped() {
         let mpd = Url::parse("https://a.com/m.mpd").unwrap();
-        let empty: Vec<String> = vec![];
-        let with_value: Vec<String> = vec!["video/".into()];
-        let resolved = resolve_chain(&mpd, [empty.as_slice(), with_value.as_slice()]);
-        // Empty level adds nothing; chain proceeds with second level.
+        // `None` level adds nothing; chain proceeds with the next level.
+        let resolved = resolve_chain(&mpd, [None, Some("video/")]);
         assert_eq!(resolved.as_str(), "https://a.com/video/");
     }
 
     #[test]
-    fn multi_entry_level_only_first_consumed() {
+    fn caller_selects_first_entry_of_multi_baseurl_level() {
         let mpd = Url::parse("https://a.com/m.mpd").unwrap();
-        // Two CDN-failover entries; spec lets us pick any, we pick first.
-        let cdn_failover: Vec<String> = vec!["primary/".into(), "fallback/".into()];
-        let resolved = resolve_chain(&mpd, [cdn_failover.as_slice()]);
+        // A level may carry several <BaseURL> entries (CDN failover). The
+        // caller selects the first via `.first()` — mirroring the exact
+        // expression used in expand.rs — and resolve_chain resolves that one;
+        // the fallback entry is never touched (and never cloned).
+        let cdn_failover = ["primary/".to_string(), "fallback/".to_string()];
+        let resolved = resolve_chain(&mpd, [cdn_failover.first().map(String::as_str)]);
         assert_eq!(resolved.as_str(), "https://a.com/primary/");
     }
 }
