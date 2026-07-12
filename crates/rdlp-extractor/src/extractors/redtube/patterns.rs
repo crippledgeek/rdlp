@@ -7,6 +7,14 @@ use lazy_regex::{Lazy, Regex, lazy_regex};
 use rdlp_types::SearchFilter;
 use url::form_urlencoded;
 
+use crate::base::common::SearchOrigin;
+
+/// Default JSON API origin — `api.redtube.com`.
+const DEFAULT_API_ORIGIN: &str = "https://api.redtube.com";
+
+/// Default HTML (web) origin — `www.redtube.com`.
+const DEFAULT_HTML_ORIGIN: &str = "https://www.redtube.com";
+
 /// Static URL pattern regex for RedTube (initialized once at first use)
 ///
 /// Supports:
@@ -45,13 +53,16 @@ pub(crate) const API_RESULTS_PER_PAGE: u32 = 20;
 
 /// Build the API search URL for the first page.
 ///
-/// Format: `https://api.redtube.com/?data=redtube.Videos.searchVideos&output=json
+/// Format: `{api_origin}/?data=redtube.Videos.searchVideos&output=json
 ///          &search={query}&thumbsize=big&{filters}`
-pub(crate) fn build_api_search_url(query: &str, filters: &[SearchFilter]) -> String {
+pub(crate) fn build_api_search_url(
+    api_origin: &SearchOrigin,
+    query: &str,
+    filters: &[SearchFilter],
+) -> String {
     let encoded_query: String = form_urlencoded::byte_serialize(query.as_bytes()).collect();
     let mut url = format!(
-        "https://api.redtube.com/?data=redtube.Videos.searchVideos\
-         &output=json&search={encoded_query}&thumbsize=big"
+        "{api_origin}/?data=redtube.Videos.searchVideos&output=json&search={encoded_query}&thumbsize=big"
     );
     crate::base::common::append_search_filters(&mut url, filters);
     url
@@ -64,21 +75,30 @@ pub(crate) fn build_api_search_url_page(base_url: &str, page: u32) -> String {
 
 /// Build the API URL for fetching video info by ID.
 ///
-/// Format: `https://api.redtube.com/?data=redtube.Videos.getVideoById
+/// Format: `{api_origin}/?data=redtube.Videos.getVideoById
 ///          &video_id={id}&output=json&thumbsize=all`
-pub(crate) fn build_api_video_url(video_id: &str) -> String {
+pub(crate) fn build_api_video_url(api_origin: &SearchOrigin, video_id: &str) -> String {
     format!(
-        "https://api.redtube.com/?data=redtube.Videos.getVideoById\
-         &video_id={video_id}&output=json&thumbsize=all"
+        "{api_origin}/?data=redtube.Videos.getVideoById&video_id={video_id}&output=json&thumbsize=all"
     )
 }
 
 /// Build the HTML search fallback URL.
 ///
-/// Format: `https://www.redtube.com/?search={query}`
-pub(crate) fn build_html_search_url(query: &str) -> String {
+/// Format: `{html_origin}/?search={query}`
+pub(crate) fn build_html_search_url(html_origin: &SearchOrigin, query: &str) -> String {
     let encoded_query: String = form_urlencoded::byte_serialize(query.as_bytes()).collect();
-    format!("https://www.redtube.com/?search={encoded_query}")
+    format!("{html_origin}/?search={encoded_query}")
+}
+
+/// The production JSON API origin (`api.redtube.com`).
+pub(crate) fn default_api_origin() -> SearchOrigin {
+    SearchOrigin::from_static(DEFAULT_API_ORIGIN)
+}
+
+/// The production HTML (web) origin (`www.redtube.com`).
+pub(crate) fn default_html_origin() -> SearchOrigin {
+    SearchOrigin::from_static(DEFAULT_HTML_ORIGIN)
 }
 
 // Re-export filter descriptors from the filters submodule
@@ -127,7 +147,7 @@ mod tests {
 
     #[test]
     fn test_build_api_search_url_basic() {
-        let url = build_api_search_url("test query", &[]);
+        let url = build_api_search_url(&default_api_origin(), "test query", &[]);
         assert!(url.starts_with("https://api.redtube.com/"));
         assert!(url.contains("search=test+query"));
         assert!(url.contains("output=json"));
@@ -140,7 +160,7 @@ mod tests {
             key: "ordering".to_string(),
             value: "newest".to_string(),
         }];
-        let url = build_api_search_url("test", &filters);
+        let url = build_api_search_url(&default_api_origin(), "test", &filters);
         assert!(url.contains("ordering=newest"));
     }
 
@@ -150,7 +170,7 @@ mod tests {
             key: "tags".to_string(),
             value: "tag1,tag2".to_string(),
         }];
-        let url = build_api_search_url("test", &filters);
+        let url = build_api_search_url(&default_api_origin(), "test", &filters);
         assert!(url.contains("tags[]=tag1"));
         assert!(url.contains("tags[]=tag2"));
     }
@@ -161,13 +181,13 @@ mod tests {
             key: "category".to_string(),
             value: "Amateur".to_string(),
         }];
-        let url = build_api_search_url("test", &filters);
+        let url = build_api_search_url(&default_api_origin(), "test", &filters);
         assert!(url.contains("category=Amateur"));
     }
 
     #[test]
     fn test_build_api_search_url_encodes_special_chars() {
-        let url = build_api_search_url("hello world", &[]);
+        let url = build_api_search_url(&default_api_origin(), "hello world", &[]);
         assert!(!url.contains(' '), "URL must not contain raw spaces");
     }
 
@@ -180,13 +200,13 @@ mod tests {
 
     #[test]
     fn test_build_html_search_url() {
-        let url = build_html_search_url("test query");
+        let url = build_html_search_url(&default_html_origin(), "test query");
         assert_eq!(url, "https://www.redtube.com/?search=test+query");
     }
 
     #[test]
     fn test_build_api_video_url() {
-        let url = build_api_video_url("123456");
+        let url = build_api_video_url(&default_api_origin(), "123456");
         assert!(url.starts_with("https://api.redtube.com/"));
         assert!(url.contains("data=redtube.Videos.getVideoById"));
         assert!(url.contains("video_id=123456"));
@@ -196,10 +216,10 @@ mod tests {
 
     #[test]
     fn test_build_api_video_url_different_ids() {
-        let url1 = build_api_video_url("1");
+        let url1 = build_api_video_url(&default_api_origin(), "1");
         assert!(url1.contains("video_id=1"));
 
-        let url2 = build_api_video_url("99999999");
+        let url2 = build_api_video_url(&default_api_origin(), "99999999");
         assert!(url2.contains("video_id=99999999"));
     }
 }
