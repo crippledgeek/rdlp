@@ -2,6 +2,8 @@
 
 Thank you for your interest in contributing to rdlp! We welcome contributions from everyone, whether you're fixing bugs, adding features, improving documentation, or adding support for new sites.
 
+Everyone who contributes is credited in [CONTRIBUTORS.md](CONTRIBUTORS.md).
+
 ## Ways to Contribute
 
 ### Report Bugs
