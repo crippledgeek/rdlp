@@ -13,6 +13,7 @@ use scraper::Html;
 
 use super::XVideosExtractor;
 use crate::base::common::BaseExtractor;
+use crate::base::common::{SearchPageSpec, SearchParse, run_search_page};
 
 const XVIDEOS_BASE_URL: &str = "https://www.xvideos.com";
 
@@ -245,23 +246,26 @@ impl SearchExtractor for XVideosExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
-        // page in SearchQuery is 1-indexed per convention; XVideos uses 0-indexed internally
-        let page_1indexed = query.page.unwrap_or(1);
-        let page_0indexed = page_1indexed.saturating_sub(1);
-
-        let page_url = build_search_url(query, page_0indexed);
-        let webpage = BaseExtractor::fetch_webpage(&page_url, ctx).await?;
-
-        let results = parse_search_results(&webpage);
-        let has_more = has_next_page(&webpage, page_0indexed + 1) && !results.is_empty();
-        let total_estimate = None;
-
-        Ok(SearchPageResponse {
-            results,
-            page: page_1indexed,
-            has_more,
-            total_estimate,
-        })
+        run_search_page(
+            query,
+            ctx,
+            SearchPageSpec {
+                first_page_index: 1,
+                headers: &[],
+                // XVideos is 0-indexed internally; external page is 1-indexed.
+                build_url: |query, page| build_search_url(query, page.saturating_sub(1)),
+                parse: |body, _query, page| {
+                    let results = parse_search_results(body);
+                    // `page` is 1-indexed here == the old `page_0indexed + 1`.
+                    Ok(SearchParse {
+                        has_more: has_next_page(body, page) && !results.is_empty(),
+                        total_estimate: None,
+                        results,
+                    })
+                },
+            },
+        )
+        .await
     }
 }
 
