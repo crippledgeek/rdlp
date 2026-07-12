@@ -720,6 +720,17 @@ async fn download_one(
     }
 }
 
+/// 0-retry `RetryConfig` so failing tests fail immediately rather than
+/// exercising backoff loops. Shared by the `cancel_tests` and
+/// `same_origin_gate_tests` submodules (both reach it via `use super::*`).
+#[cfg(test)]
+fn fast_retry() -> Arc<RetryConfig> {
+    Arc::new(RetryConfig {
+        max_retries: 0,
+        ..RetryConfig::default()
+    })
+}
+
 #[cfg(test)]
 mod cancel_tests {
     //! Issue #347: the DASH static-VoD resume path (`run` → segment fetch →
@@ -728,16 +739,8 @@ mod cancel_tests {
     //! the top of the segment loop). A pre-cancelled token must abort
     //! `download_representation` BEFORE any segment is fetched.
     use super::*;
-    use rdlp_core::RetryConfig;
     use std::sync::atomic::AtomicU64;
     use tokio_util::sync::CancellationToken;
-
-    fn fast_retry() -> Arc<RetryConfig> {
-        Arc::new(RetryConfig {
-            max_retries: 0,
-            ..RetryConfig::default()
-        })
-    }
 
     /// Negative (regression guard for #347): a pre-cancelled token makes
     /// `download_representation` return `RdlpError::Cancelled` WITHOUT fetching
@@ -868,23 +871,12 @@ mod same_origin_gate_tests {
     //! from the MPD URL's origin, operator-set `Format.http_headers` are
     //! stripped to prevent header exfiltration to a redirected CDN.
     use super::*;
-    use rdlp_core::RetryConfig;
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     fn make_downloader_with_header(name: &str, value: &str) -> HttpDownloader {
         let mut headers = HashMap::new();
         headers.insert(name.to_string(), value.to_string());
         HttpDownloader::with_client(wreq::Client::new()).with_extra_headers(Some(&headers))
-    }
-
-    fn fast_retry() -> Arc<RetryConfig> {
-        // 0-retry config so failing tests fail immediately rather than
-        // exercising backoff loops.
-        Arc::new(RetryConfig {
-            max_retries: 0,
-            ..RetryConfig::default()
-        })
     }
 
     /// Positive: same-origin segment URL DOES receive `Format.http_headers`.
