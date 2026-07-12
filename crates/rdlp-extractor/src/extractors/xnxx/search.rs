@@ -207,8 +207,8 @@ impl PagedSearch for XNXXExtractor {
         "[xnxx]"
     }
 
-    // XNXX has no filter validation today (the pre-refactor `run_search_page`
-    // path never validated); `Ok(())` is the only value that preserves that.
+    // XNXX has no filter validation today (the pre-refactor single-GET
+    // search path never validated); `Ok(())` is the only value that preserves that.
     fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {
         Ok(())
     }

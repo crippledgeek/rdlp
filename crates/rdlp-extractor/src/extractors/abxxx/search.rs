@@ -272,8 +272,9 @@ impl SearchExtractor for AbxxxExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
-        // Bespoke: the `.max(1)` clamp is reflected in the returned SearchPageResponse.page,
-        // which run_search_page cannot reproduce (it drives page from an unclamped unwrap_or). See #450.
+        // Bespoke: the `.max(1)` clamp is reflected in the returned SearchPageResponse.page.
+        // The shared PagedSearch skeleton exposes a `clamp_page` hook for exactly this;
+        // ABXXX is folded onto it in Stage 3c. See #450.
         let page = query.page.unwrap_or(1).max(1);
         let sort = resolved_sort(&query.filters);
         let url = kvs_api::videos2_search_endpoint(

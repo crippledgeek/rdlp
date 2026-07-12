@@ -237,7 +237,7 @@ impl PagedSearch for SpankBangExtractor {
     }
 
     // SpankBang advertises an `ordering` filter but has never validated it
-    // (the pre-refactor `run_search_page` path never checked); `Ok(())` is
+    // (the pre-refactor single-GET search path never checked); `Ok(())` is
     // the only value that preserves that.
     fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {
         Ok(())
