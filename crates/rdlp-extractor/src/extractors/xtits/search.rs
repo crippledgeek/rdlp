@@ -4,15 +4,15 @@
 //! from the same async endpoint that returns HTML fragments.
 
 use async_trait::async_trait;
-use log::debug;
 use rdlp_core::{ExtractionContext, Result, SearchExtractor};
 use rdlp_types::{SearchPageResponse, SearchQuery, SearchResultPreview};
-use std::time::Duration;
 
 use super::XTitsExtractor;
 use super::search_patterns;
-use crate::base::common::{BaseExtractor, SearchPageSpec, SearchParse, run_search_page};
+use crate::base::common::{PagedSearch, SearchPage, SearchPageSpec};
 
+/// Maximum results cap for a full search (matches the pre-refactor
+/// `unwrap_or(500)`; mirrors the xnxx/xvideos siblings' named cap).
 const MAX_PLAYLIST_SIZE: usize = 500;
 
 /// Parse search result items from KVS AJAX response HTML.
@@ -67,6 +67,52 @@ pub(crate) fn detect_max_page(html: &str) -> u32 {
         .unwrap_or(1)
 }
 
+impl PagedSearch for XTitsExtractor {
+    fn search_log_tag(&self) -> &'static str {
+        "[XTits]"
+    }
+
+    // XTits has no filter validation today (the pre-refactor `run_search_page`
+    // path never validated); `Ok(())` is the only value that preserves that.
+    fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {
+        Ok(())
+    }
+
+    fn first_page_index(&self) -> u32 {
+        1
+    }
+
+    fn max_results_default(&self) -> usize {
+        MAX_PLAYLIST_SIZE
+    }
+
+    async fn fetch_page(
+        &self,
+        query: &SearchQuery,
+        page: u32,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPage> {
+        let spec = SearchPageSpec {
+            first_page_index: 1, // struct field exists until 3b-8; fetch_via_spec ignores it
+            headers: &[
+                ("X-Requested-With", "XMLHttpRequest"),
+                ("Referer", "https://www.xtits.com/search/"),
+            ],
+            build_url: search_patterns::build_search_url,
+            parse: |body, _query, page| {
+                let results = parse_search_results(body);
+                let max_page = detect_max_page(body);
+                Ok(SearchPage {
+                    has_more: page < max_page && !results.is_empty(),
+                    total_estimate: Some(max_page as u64 * search_patterns::RESULTS_PER_PAGE),
+                    results,
+                })
+            },
+        };
+        self.fetch_via_spec(spec, query, page, ctx).await
+    }
+}
+
 #[async_trait]
 impl SearchExtractor for XTitsExtractor {
     fn name(&self) -> &str {
@@ -82,51 +128,7 @@ impl SearchExtractor for XTitsExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<Vec<SearchResultPreview>> {
-        let max_results = query.max_results.unwrap_or(MAX_PLAYLIST_SIZE);
-        let mut all_results = Vec::new();
-        let mut page = 1_u32;
-
-        loop {
-            let page_url = search_patterns::build_search_url(query, page);
-            let sanitized = rdlp_security::sanitize_for_logging(&page_url);
-            debug!("[XTits] Fetching search page {page}: {sanitized}");
-
-            let webpage = BaseExtractor::fetch_webpage_with_headers(
-                &page_url,
-                &[
-                    ("X-Requested-With", "XMLHttpRequest"),
-                    ("Referer", "https://www.xtits.com/search/"),
-                ],
-                ctx,
-            )
-            .await?;
-
-            let page_results = parse_search_results(&webpage);
-            if page_results.is_empty() {
-                break;
-            }
-
-            let max_page = detect_max_page(&webpage);
-            all_results.extend(page_results);
-
-            if all_results.len() >= max_results {
-                all_results.truncate(max_results);
-                break;
-            }
-
-            if page >= max_page {
-                break;
-            }
-
-            page += 1;
-            tokio::time::sleep(Duration::from_millis(search_patterns::PAGE_RATE_LIMIT_MS)).await;
-        }
-
-        debug!(
-            "[XTits] Search complete: {} results across {page} pages",
-            all_results.len()
-        );
-        Ok(all_results)
+        self.search_all_pages(query, ctx).await
     }
 
     async fn search_page(
@@ -134,28 +136,7 @@ impl SearchExtractor for XTitsExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
-        run_search_page(
-            query,
-            ctx,
-            SearchPageSpec {
-                first_page_index: 1,
-                headers: &[
-                    ("X-Requested-With", "XMLHttpRequest"),
-                    ("Referer", "https://www.xtits.com/search/"),
-                ],
-                build_url: search_patterns::build_search_url,
-                parse: |body, _query, page| {
-                    let results = parse_search_results(body);
-                    let max_page = detect_max_page(body);
-                    Ok(SearchParse {
-                        has_more: page < max_page && !results.is_empty(),
-                        total_estimate: Some(max_page as u64 * search_patterns::RESULTS_PER_PAGE),
-                        results,
-                    })
-                },
-            },
-        )
-        .await
+        self.search_page_response(query, ctx).await
     }
 }
 
