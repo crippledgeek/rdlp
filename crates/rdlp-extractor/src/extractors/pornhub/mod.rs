@@ -35,7 +35,7 @@ use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result, SearchExtra
 use rdlp_types::{InfoDict, SearchPageResponse, SearchQuery, SearchResultPreview};
 use scraper::Html;
 
-use crate::base::common::{BaseExtractor, PagedSearch, SearchPage};
+use crate::base::common::{BaseExtractor, PagedSearch, SearchOrigin, SearchPage};
 use crate::hls::detect_format_sizes_lazy;
 
 pub use patterns::{PORNHUB_PLAYLIST_URL_PATTERN, PORNHUB_VIDEO_URL_PATTERN};
@@ -59,13 +59,25 @@ const API_RESULTS_PER_PAGE: usize = 20;
 /// let extractor = PornHubExtractor::new();
 /// assert!(extractor.suitable("https://www.pornhub.com/view_video.php?viewkey=ph123"));
 /// ```
-pub struct PornHubExtractor;
+pub struct PornHubExtractor {
+    /// Search origin (scheme+authority). Production literal by default;
+    /// test-injected to a mockito origin via `with_origin` (issue #457).
+    origin: SearchOrigin,
+}
 
 impl PornHubExtractor {
     /// Create a new PornHub extractor
     #[must_use]
     pub fn new() -> Self {
-        Self
+        Self {
+            origin: search_patterns::default_origin(),
+        }
+    }
+
+    /// Test-only: point the search builders at a mockito origin.
+    #[cfg(test)]
+    pub(crate) fn with_origin(origin: SearchOrigin) -> Self {
+        Self { origin }
     }
 }
 
@@ -127,7 +139,7 @@ impl PagedSearch for PornHubExtractor {
         page: u32,
         ctx: &ExtractionContext,
     ) -> Result<SearchPage> {
-        let html_url = search_patterns::build_html_search_url(&query.query, page);
+        let html_url = search_patterns::build_html_search_url(&self.origin, &query.query, page);
         match self.fetch_html_search_page(&html_url, ctx).await {
             Ok(results) if !results.is_empty() => Ok(SearchPage {
                 results,
@@ -136,8 +148,11 @@ impl PagedSearch for PornHubExtractor {
             }),
             outcome => {
                 if page == 1 {
-                    let base_url =
-                        search_patterns::build_api_search_url(&query.query, &query.filters);
+                    let base_url = search_patterns::build_api_search_url(
+                        &self.origin,
+                        &query.query,
+                        &query.filters,
+                    );
                     match self.fetch_api_search_page(&base_url, ctx).await {
                         Ok(api_results) => {
                             let has_more = !api_results.is_empty();
@@ -180,7 +195,7 @@ impl PagedSearch for PornHubExtractor {
         search::validate_search_filters(&query.filters)?;
 
         let page = query.page.unwrap_or(1);
-        let html_url = search_patterns::build_html_search_url(&query.query, page);
+        let html_url = search_patterns::build_html_search_url(&self.origin, &query.query, page);
 
         let page_results = match self.fetch_html_search_page(&html_url, ctx).await {
             Ok(results) if !results.is_empty() => results,
@@ -192,7 +207,11 @@ impl PagedSearch for PornHubExtractor {
                 debug!(
                     "[PornHub] HTML search failed/empty on page {page}, falling back to API: {reason}"
                 );
-                let base_url = search_patterns::build_api_search_url(&query.query, &query.filters);
+                let base_url = search_patterns::build_api_search_url(
+                    &self.origin,
+                    &query.query,
+                    &query.filters,
+                );
                 let page_url = if page == 1 {
                     base_url
                 } else {
@@ -364,5 +383,131 @@ impl InfoExtractor for PornHubExtractor {
 
     fn priority(&self) -> i32 {
         0
+    }
+}
+
+/// Golden tests pinning the PornHub HTML→API fallback divergence (loop vs
+/// single-page) against a mockito origin, per issue #457.
+#[cfg(test)]
+mod origin_golden {
+    use super::*;
+    use crate::base::common::SearchOrigin;
+    use crate::hls::test_support::test_ctx;
+    use mockito::Matcher;
+    use rdlp_types::SearchQuery;
+
+    // P1 — loop (search()) API fallback targets the BASE url (no &page=), only on page 1.
+    #[tokio::test]
+    async fn search_loop_api_fallback_uses_base_url_not_paged() {
+        let mut server = mockito::Server::new_async().await;
+        // HTML page 1 returns empty -> loop falls back to API base.
+        let html = server
+            .mock("GET", Matcher::Regex(r"/video/search".into()))
+            .with_status(200)
+            .with_body("<html></html>") // 0 cards -> empty -> triggers fallback
+            .create_async()
+            .await;
+        // API BASE mock: matches the webmasters path WITHOUT a page param.
+        let api_base = server
+            .mock("GET", Matcher::Regex(r"/webmasters/search".into()))
+            // mockito matches the whole query string as one blob (no per-key
+            // presence check), so "no &page=" is expressed as the exact,
+            // deterministic base query (empty filters => fixed param order).
+            .match_query(Matcher::Exact(
+                "search=x&output=json&thumbsize=large".into(),
+            ))
+            .with_status(200)
+            .with_body("{\"videos\":[]}") // empty result set — this test asserts on which URL was hit, not on parse output
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        // Paged API mock: must NEVER be hit by the loop.
+        let api_paged = server
+            .mock("GET", Matcher::Regex(r"/webmasters/search".into()))
+            .match_query(Matcher::UrlEncoded("page".into(), "2".into()))
+            .with_status(200)
+            .with_body("{\"videos\":[]}")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let extractor = PornHubExtractor::with_origin(SearchOrigin::new(&server.url()).unwrap());
+        let query = SearchQuery {
+            query: "x".into(),
+            filters: vec![],
+            page: None,
+            max_results: Some(50),
+        };
+        let _ = extractor.search(&query, &test_ctx()).await;
+
+        html.assert_async().await;
+        api_base.assert_async().await;
+        api_paged.assert_async().await; // expect(0): fails if the loop ever paged the fallback
+    }
+
+    // P3 boundary — single (search_page) API fallback: page 1 -> base, page 2 -> &page=2.
+    #[tokio::test]
+    async fn search_page_api_fallback_pages_beyond_page_one() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", Matcher::Regex(r"/video/search".into()))
+            .with_status(200)
+            .with_body("<html></html>")
+            .create_async()
+            .await;
+        let paged = server
+            .mock("GET", Matcher::Regex(r"/webmasters/search".into()))
+            .match_query(Matcher::UrlEncoded("page".into(), "2".into()))
+            .with_status(200)
+            .with_body("{\"videos\":[]}")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let extractor = PornHubExtractor::with_origin(SearchOrigin::new(&server.url()).unwrap());
+        let query = SearchQuery {
+            query: "x".into(),
+            filters: vec![],
+            page: Some(2),
+            max_results: None,
+        };
+        let _ = extractor.search_page(&query, &test_ctx()).await;
+
+        paged.assert_async().await; // single-page path MUST use the paged builder on page 2
+    }
+
+    #[tokio::test]
+    async fn search_page_api_fallback_page_one_uses_base() {
+        let mut server = mockito::Server::new_async().await;
+        server
+            .mock("GET", Matcher::Regex(r"/video/search".into()))
+            .with_status(200)
+            .with_body("<html></html>")
+            .create_async()
+            .await;
+        let base = server
+            .mock("GET", Matcher::Regex(r"/webmasters/search".into()))
+            // See the loop-fallback test above: "no &page=" is expressed as
+            // the exact deterministic base query, not `Matcher::Missing`
+            // (mockito's Missing requires a fully empty query string).
+            .match_query(Matcher::Exact(
+                "search=x&output=json&thumbsize=large".into(),
+            ))
+            .with_status(200)
+            .with_body("{\"videos\":[]}")
+            .expect(1)
+            .create_async()
+            .await;
+
+        let extractor = PornHubExtractor::with_origin(SearchOrigin::new(&server.url()).unwrap());
+        let query = SearchQuery {
+            query: "x".into(),
+            filters: vec![],
+            page: Some(1),
+            max_results: None,
+        };
+        let _ = extractor.search_page(&query, &test_ctx()).await;
+
+        base.assert_async().await;
     }
 }

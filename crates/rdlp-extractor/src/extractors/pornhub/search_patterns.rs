@@ -3,23 +3,39 @@
 use rdlp_types::{SearchFilter, SearchFilterDescriptor, SearchFilterValue};
 use url::form_urlencoded;
 
-/// PornHub Webmaster API search base URL.
-const API_BASE: &str = "https://www.pornhub.com/webmasters/search";
+use crate::base::common::SearchOrigin;
 
-/// HTML search fallback base URL.
-const HTML_SEARCH_BASE: &str = "https://www.pornhub.com/video/search";
+/// Production origin (scheme+authority). Both PornHub search paths share this host.
+const DEFAULT_ORIGIN: &str = "https://www.pornhub.com";
+/// Webmaster JSON API path.
+const API_PATH: &str = "/webmasters/search";
+/// HTML search fallback path.
+const HTML_PATH: &str = "/video/search";
+
+/// The production PornHub search origin. Test code injects a mockito origin
+/// instead via `PornHubExtractor::with_origin` (issue #457).
+pub(crate) fn default_origin() -> SearchOrigin {
+    SearchOrigin::from_static(DEFAULT_ORIGIN)
+}
 
 /// Build the API search URL for the first page.
 ///
 /// # Arguments
+/// * `api_origin` - Scheme+authority to build the URL against (production host or
+///   a test-injected mockito origin).
 /// * `query` - Search keyword string.
 /// * `filters` - Slice of active search filters.
 ///
 /// # Returns
 /// Full API URL string with query parameters.
-pub(crate) fn build_api_search_url(query: &str, filters: &[SearchFilter]) -> String {
+pub(crate) fn build_api_search_url(
+    api_origin: &SearchOrigin,
+    query: &str,
+    filters: &[SearchFilter],
+) -> String {
     let encoded_query: String = form_urlencoded::byte_serialize(query.as_bytes()).collect();
-    let mut url = format!("{API_BASE}?search={encoded_query}&output=json&thumbsize=large");
+    let mut url =
+        format!("{api_origin}{API_PATH}?search={encoded_query}&output=json&thumbsize=large");
     crate::base::common::append_search_filters(&mut url, filters);
     url
 }
@@ -39,14 +55,16 @@ pub(crate) fn build_api_search_url_page(base_url: &str, page: u32) -> String {
 /// Build the HTML search fallback URL.
 ///
 /// # Arguments
+/// * `html_origin` - Scheme+authority to build the URL against (production host or
+///   a test-injected mockito origin).
 /// * `query` - Search keyword string.
 /// * `page` - 1-based page number.
 ///
 /// # Returns
 /// HTML search URL string.
-pub(crate) fn build_html_search_url(query: &str, page: u32) -> String {
+pub(crate) fn build_html_search_url(html_origin: &SearchOrigin, query: &str, page: u32) -> String {
     let encoded_query: String = form_urlencoded::byte_serialize(query.as_bytes()).collect();
-    format!("{HTML_SEARCH_BASE}?search={encoded_query}&page={page}")
+    format!("{html_origin}{HTML_PATH}?search={encoded_query}&page={page}")
 }
 
 /// Build the list of PornHub category filter values.
@@ -167,7 +185,7 @@ mod tests {
 
     #[test]
     fn test_build_api_search_url_basic() {
-        let url = build_api_search_url("test query", &[]);
+        let url = build_api_search_url(&default_origin(), "test query", &[]);
         assert!(url.starts_with("https://www.pornhub.com/webmasters/search?"));
         assert!(url.contains("search=test+query"));
         assert!(url.contains("output=json"));
@@ -176,7 +194,7 @@ mod tests {
 
     #[test]
     fn test_build_api_search_url_encodes_special_chars() {
-        let url = build_api_search_url("hello world", &[]);
+        let url = build_api_search_url(&default_origin(), "hello world", &[]);
         assert!(!url.contains(' '));
     }
 
@@ -186,7 +204,7 @@ mod tests {
             key: "ordering".to_string(),
             value: "newest".to_string(),
         }];
-        let url = build_api_search_url("test", &filters);
+        let url = build_api_search_url(&default_origin(), "test", &filters);
         assert!(url.contains("&ordering=newest"));
     }
 
@@ -196,7 +214,7 @@ mod tests {
             key: "period".to_string(),
             value: "weekly".to_string(),
         }];
-        let url = build_api_search_url("test", &filters);
+        let url = build_api_search_url(&default_origin(), "test", &filters);
         assert!(url.contains("&period=weekly"));
     }
 
@@ -206,7 +224,7 @@ mod tests {
             key: "category".to_string(),
             value: "amateur".to_string(),
         }];
-        let url = build_api_search_url("test", &filters);
+        let url = build_api_search_url(&default_origin(), "test", &filters);
         assert!(url.contains("&category=amateur"));
     }
 
@@ -216,7 +234,7 @@ mod tests {
             key: "tags".to_string(),
             value: "tag1,tag2".to_string(),
         }];
-        let url = build_api_search_url("test", &filters);
+        let url = build_api_search_url(&default_origin(), "test", &filters);
         assert!(url.contains("tags[]=tag1"));
         assert!(url.contains("tags[]=tag2"));
     }
@@ -231,7 +249,7 @@ mod tests {
 
     #[test]
     fn test_build_html_search_url() {
-        let url = build_html_search_url("test query", 1);
+        let url = build_html_search_url(&default_origin(), "test query", 1);
         assert_eq!(
             url,
             "https://www.pornhub.com/video/search?search=test+query&page=1"

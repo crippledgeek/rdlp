@@ -28,15 +28,23 @@ use regex::Regex;
 use scraper::Html;
 use std::sync::LazyLock;
 
-use crate::base::common::{BaseExtractor, PagedSearch, SearchPage, Termination};
+use crate::base::common::{BaseExtractor, PagedSearch, SearchOrigin, SearchPage, Termination};
 use crate::base::tnaflix_network::TnaFlixNetworkBase;
 use crate::hls::detect_format_sizes_lazy;
 use crate::utils::make_absolute_url;
 use patterns::REDTUBE_URL_PATTERN;
 
+/// The two distinct origins RedTube talks to: the JSON API host and the HTML
+/// (web) host. Grouped because they are one cohesive per-site concern.
+struct RedTubeSearchHosts {
+    api: SearchOrigin,
+    html: SearchOrigin,
+}
+
 /// RedTube extractor
 pub struct RedTubeExtractor {
     base: TnaFlixNetworkBase,
+    hosts: RedTubeSearchHosts,
 }
 
 impl RedTubeExtractor {
@@ -45,6 +53,19 @@ impl RedTubeExtractor {
     pub fn new() -> Self {
         Self {
             base: TnaFlixNetworkBase::new(),
+            hosts: RedTubeSearchHosts {
+                api: patterns::default_api_origin(),
+                html: patterns::default_html_origin(),
+            },
+        }
+    }
+
+    /// Test-only: point the API + HTML builders at (possibly two) mockito origins.
+    #[cfg(test)]
+    pub(crate) fn with_hosts(api: SearchOrigin, html: SearchOrigin) -> Self {
+        Self {
+            base: TnaFlixNetworkBase::new(),
+            hosts: RedTubeSearchHosts { api, html },
         }
     }
 
@@ -62,7 +83,7 @@ impl RedTubeExtractor {
         video_id: &str,
         ctx: &ExtractionContext,
     ) -> Result<formats::ApiVideoMetadata> {
-        let api_url = patterns::build_api_video_url(video_id);
+        let api_url = patterns::build_api_video_url(&self.hosts.api, video_id);
 
         debug!(
             "[RedTube] Fetching API video info: {}",
@@ -353,7 +374,8 @@ impl PagedSearch for RedTubeExtractor {
         page: u32,
         ctx: &ExtractionContext,
     ) -> Result<SearchPage> {
-        let base_url = patterns::build_api_search_url(&query.query, &query.filters);
+        let base_url =
+            patterns::build_api_search_url(&self.hosts.api, &query.query, &query.filters);
         let page_url = if page == 1 {
             base_url
         } else {
@@ -371,7 +393,7 @@ impl PagedSearch for RedTubeExtractor {
             }
             Err(e) => {
                 if page == 1 {
-                    let html_url = patterns::build_html_search_url(&query.query);
+                    let html_url = patterns::build_html_search_url(&self.hosts.html, &query.query);
                     match self.fetch_html_search_page(&html_url, ctx).await {
                         Ok(results) => {
                             let has_more = !results.is_empty(); // UntilEmpty
@@ -405,7 +427,8 @@ impl PagedSearch for RedTubeExtractor {
         search::validate_search_filters(&query.filters, &descriptors)?;
 
         let page = query.page.unwrap_or(1);
-        let base_url = patterns::build_api_search_url(&query.query, &query.filters);
+        let base_url =
+            patterns::build_api_search_url(&self.hosts.api, &query.query, &query.filters);
 
         let page_url = if page == 1 {
             base_url
@@ -418,7 +441,7 @@ impl PagedSearch for RedTubeExtractor {
             Err(e) => {
                 if page == 1 {
                     debug!("[RedTube] API search failed, falling back to HTML: {e}");
-                    let html_url = patterns::build_html_search_url(&query.query);
+                    let html_url = patterns::build_html_search_url(&self.hosts.html, &query.query);
                     let results = self.fetch_html_search_page(&html_url, ctx).await?;
                     (results, None)
                 } else {
@@ -568,5 +591,133 @@ mod tests {
         use super::termination_from_count;
         use crate::base::common::Termination;
         assert_eq!(termination_from_count(None), Termination::UntilEmpty);
+    }
+}
+
+/// Golden tests pinning RedTube's two-host (API + HTML) fallback behaviour
+/// against injectable mockito origins, per issue #457.
+#[cfg(test)]
+mod origin_golden {
+    use super::*;
+    use crate::base::common::SearchOrigin;
+    use crate::hls::test_support::test_ctx;
+    use mockito::Matcher;
+
+    // R1 — the two hosts are independently addressable, and on the
+    // API-succeeds happy path the HTML host is never touched.
+    //
+    // Divergence note (count=Some(total) case): `termination_from_count(total)
+    // .has_more(page)` (the loop predicate, `page < ceil(total/20).max(1)`)
+    // and the single-page `fetched_through(page*20) < total` window are
+    // PROVABLY equivalent for every `total >= 0`/`page >= 1` pair — ceil(a/b)
+    // is defined as the smallest `m` with `m*b >= a`, so `page < m` and
+    // `page*b < a` are logical inverses of the same boundary (see
+    // `termination_from_count`, `redtube/mod.rs`, and `Termination::has_more`,
+    // `base/common/search.rs`). They cannot be made to disagree by choice of
+    // `(count, page)` alone. The two paths genuinely diverge only on the
+    // `None`-count (HTML-fallback) arm, where the loop's `Termination::UntilEmpty`
+    // yields `has_more = !results.is_empty()` but the single-page path hard-codes
+    // `has_more = false` — that divergence is pinned by
+    // `redtube_single_html_fallback_arm_has_no_total_and_no_more` below (R2).
+    #[tokio::test]
+    async fn redtube_two_hosts_are_independently_addressable() {
+        let mut api_server = mockito::Server::new_async().await;
+        let mut html_server = mockito::Server::new_async().await;
+
+        // API succeeds -> HTML must never be hit on the happy path.
+        let api = api_server
+            .mock("GET", Matcher::Any)
+            .with_status(200)
+            .with_body(redtube_api_json_with_count(3, /* total */ 40))
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        let html = html_server
+            .mock("GET", Matcher::Any)
+            .with_status(200)
+            .with_body("<html></html>")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let extractor = RedTubeExtractor::with_hosts(
+            SearchOrigin::new(&api_server.url()).unwrap(),
+            SearchOrigin::new(&html_server.url()).unwrap(),
+        );
+        let query = rdlp_types::SearchQuery {
+            query: "x".into(),
+            filters: vec![],
+            page: Some(1),
+            max_results: None,
+        };
+        let resp = extractor.search_page(&query, &test_ctx()).await.unwrap();
+
+        api.assert_async().await;
+        html.assert_async().await; // expect(0): API-primary means HTML not touched
+        // single-page has_more = fetched_through(20) < total(40) && !empty = true
+        assert!(resp.has_more);
+        assert_eq!(resp.total_estimate, Some(40));
+    }
+
+    // R2 — HTML-fallback arm: single carries total_estimate=None + has_more=false.
+    #[tokio::test]
+    async fn redtube_single_html_fallback_arm_has_no_total_and_no_more() {
+        let mut api_server = mockito::Server::new_async().await;
+        let mut html_server = mockito::Server::new_async().await;
+        api_server
+            .mock("GET", Matcher::Any)
+            .with_status(500)
+            .create_async()
+            .await; // API fails page 1
+        html_server
+            .mock("GET", Matcher::Any)
+            .with_status(200)
+            .with_body(redtube_html_one_card())
+            .expect(1)
+            .create_async()
+            .await;
+
+        let extractor = RedTubeExtractor::with_hosts(
+            SearchOrigin::new(&api_server.url()).unwrap(),
+            SearchOrigin::new(&html_server.url()).unwrap(),
+        );
+        let query = rdlp_types::SearchQuery {
+            query: "x".into(),
+            filters: vec![],
+            page: Some(1),
+            max_results: None,
+        };
+        let resp = extractor.search_page(&query, &test_ctx()).await.unwrap();
+
+        assert_eq!(resp.total_estimate, None); // HTML arm carries None
+        assert!(!resp.has_more); // single HTML arm: total_count=None -> false
+    }
+
+    /// Minimal API search-response JSON matching
+    /// `search::parse_api_search_results`: `n` synthetic video entries and a
+    /// `count` (total) field.
+    fn redtube_api_json_with_count(n: usize, total: u64) -> String {
+        let videos: Vec<String> = (0..n)
+            .map(|i| {
+                format!(
+                    r#"{{"video":{{"video_id":"{i}","title":"Video {i}","url":"https://www.redtube.com/{i}","thumb":"https://thumb{i}.jpg","duration":"1:00","views":100,"publish_date":"2024-01-01","tags":[]}}}}"#
+                )
+            })
+            .collect();
+        format!(r#"{{"count":{total},"videos":[{}]}}"#, videos.join(","))
+    }
+
+    /// Minimal HTML search-results fixture — one card matching
+    /// `patterns::HTML_VIDEO_CARD_PATTERN`.
+    fn redtube_html_one_card() -> String {
+        r#"
+            <li class="video-item">
+                <a href="https://www.redtube.com/111" title="HTML Video One" class="video-thumb">
+                    <img src="https://thumb-html.jpg" />
+                    <span class="duration">5:30</span>
+                </a>
+            </li>
+        "#
+        .to_string()
     }
 }

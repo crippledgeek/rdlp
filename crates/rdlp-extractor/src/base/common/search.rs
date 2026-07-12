@@ -27,6 +27,110 @@ pub(crate) struct SearchPage {
     pub total_estimate: Option<u64>,
 }
 
+/// A search/API base origin: `scheme://authority` (http or https), with no
+/// path, query, fragment, or trailing slash. Concatenated with a path+query
+/// template by the URL builders via `format!("{origin}{PATH}?…")`, so the
+/// no-trailing-slash invariant keeps that concatenation deterministic.
+///
+/// Construction-time and trusted — the value is a compile-time literal in
+/// production and a `mockito::Server::url()` in tests, never attacker-derived
+/// (the SSRF invariant). Validation is shape-only, checked once at construction.
+/// Mirrors `http::HeaderValue::from_static` / `http::Uri::from_static`
+/// (validated, panic-on-bad "known-good constant" entry) paired with a fallible
+/// `TryFrom`/`new` for dynamic input.
+///
+/// Consumed by the PornHub search-URL builders (issue #457 task 2); the
+/// RedTube seam lands in task 3.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SearchOrigin(String);
+
+/// Why a candidate origin string is not a valid [`SearchOrigin`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum InvalidOriginError {
+    /// Missing or non-`http(s)` scheme.
+    Scheme,
+    /// Scheme present but no authority (host) follows.
+    MissingAuthority,
+    /// Contains a path, query, fragment, or trailing slash — not a bare origin.
+    NotBareOrigin,
+}
+
+impl std::fmt::Display for InvalidOriginError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let msg = match self {
+            Self::Scheme => "origin must start with http:// or https://",
+            Self::MissingAuthority => "origin has no authority (host)",
+            Self::NotBareOrigin => {
+                "origin must be scheme://authority with no path, query, or trailing slash"
+            }
+        };
+        f.write_str(msg)
+    }
+}
+
+impl SearchOrigin {
+    /// Validate the shape of a candidate origin. Shared by `from_static` and `new`.
+    fn validate(src: &str) -> std::result::Result<(), InvalidOriginError> {
+        let authority = src
+            .strip_prefix("https://")
+            .or_else(|| src.strip_prefix("http://"))
+            .ok_or(InvalidOriginError::Scheme)?;
+        if authority.is_empty() {
+            return Err(InvalidOriginError::MissingAuthority);
+        }
+        // A bare authority (host[:port]) contains none of these. A trailing
+        // slash is caught by the '/' check.
+        if authority.contains('/') || authority.contains('?') || authority.contains('#') {
+            return Err(InvalidOriginError::NotBareOrigin);
+        }
+        Ok(())
+    }
+
+    /// Known-good compile-time literal. **Panics** on a malformed origin — a
+    /// construction-time contract breach, not a runtime error. The panic
+    /// message names the error kind only (no URL) to satisfy the redaction gate.
+    pub(crate) fn from_static(src: &'static str) -> Self {
+        match Self::validate(src) {
+            Ok(()) => Self(src.to_owned()),
+            Err(e) => panic!("SearchOrigin::from_static: {e}"),
+        }
+    }
+
+    /// Fallible constructor for runtime/dynamic input (mockito `Server::url()`).
+    ///
+    /// Validation is shape-only (scheme + authority + no path/query/fragment).
+    /// It does NOT reject embedded userinfo credentials or backslashes. All
+    /// current inputs are trusted (compile-time literals and loopback test
+    /// servers), so this is safe today. Any future caller that feeds this from
+    /// operator config or external/attacker-influenced input MUST additionally
+    /// enforce a host allowlist and route the resulting fetch through
+    /// `rdlp-security`'s `validate_url_security` before use.
+    pub(crate) fn new(src: &str) -> std::result::Result<Self, InvalidOriginError> {
+        Self::validate(src)?;
+        Ok(Self(src.to_owned()))
+    }
+}
+
+impl TryFrom<&str> for SearchOrigin {
+    type Error = InvalidOriginError;
+    /// See the trust/validation caveat on [`SearchOrigin::new`], which this delegates to.
+    fn try_from(src: &str) -> std::result::Result<Self, Self::Error> {
+        Self::new(src)
+    }
+}
+
+impl std::fmt::Display for SearchOrigin {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl AsRef<str> for SearchOrigin {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
 /// Per-site configuration for the default [`PagedSearch::fetch_page`] (via
 /// [`PagedSearch::fetch_via_spec`]). All behavioral variation is a `fn`
 /// pointer (zero-alloc, `Copy`); config is plain data. Sites pass bare `fn`
@@ -837,6 +941,71 @@ mod tests {
         );
     }
 
+    // ---- SearchOrigin ----
+
+    #[test]
+    fn search_origin_from_static_accepts_bare_https_origin() {
+        let o = SearchOrigin::from_static("https://www.pornhub.com");
+        assert_eq!(o.as_ref(), "https://www.pornhub.com");
+        assert_eq!(format!("{o}"), "https://www.pornhub.com");
+    }
+
+    #[test]
+    fn search_origin_new_accepts_http_loopback_with_port() {
+        // mockito Server::url() shape
+        let o = SearchOrigin::new("http://127.0.0.1:1234").unwrap();
+        assert_eq!(o.as_ref(), "http://127.0.0.1:1234");
+    }
+
+    #[test]
+    fn search_origin_rejects_non_http_scheme() {
+        assert_eq!(
+            SearchOrigin::new("ftp://x").unwrap_err(),
+            InvalidOriginError::Scheme
+        );
+        assert_eq!(
+            SearchOrigin::new("www.x.com").unwrap_err(),
+            InvalidOriginError::Scheme
+        );
+    }
+
+    #[test]
+    fn search_origin_rejects_missing_authority() {
+        assert_eq!(
+            SearchOrigin::new("https://").unwrap_err(),
+            InvalidOriginError::MissingAuthority
+        );
+    }
+
+    #[test]
+    fn search_origin_rejects_trailing_slash_and_path_and_query() {
+        // trailing slash would double-slash in format!("{origin}{PATH}")
+        assert_eq!(
+            SearchOrigin::new("https://x.com/").unwrap_err(),
+            InvalidOriginError::NotBareOrigin
+        );
+        assert_eq!(
+            SearchOrigin::new("https://x.com/path").unwrap_err(),
+            InvalidOriginError::NotBareOrigin
+        );
+        assert_eq!(
+            SearchOrigin::new("https://x.com?q=1").unwrap_err(),
+            InvalidOriginError::NotBareOrigin
+        );
+    }
+
+    #[test]
+    fn search_origin_try_from_matches_new() {
+        let o: SearchOrigin = "https://api.redtube.com".try_into().unwrap();
+        assert_eq!(o.as_ref(), "https://api.redtube.com");
+    }
+
+    #[test]
+    #[should_panic(expected = "SearchOrigin::from_static")]
+    fn search_origin_from_static_panics_on_trailing_slash() {
+        let _ = SearchOrigin::from_static("https://x.com/");
+    }
+
     mod validator_tests {
         use super::super::{FilterValidationError, KeyValidation, validate_against_descriptors};
         use rdlp_types::{SearchFilter, SearchFilterDescriptor, SearchFilterValue};
@@ -913,140 +1082,5 @@ mod tests {
                 }
             );
         }
-    }
-}
-
-/// Static regression guard for issue #457 (Refs).
-///
-/// PornHub and RedTube each implement `PagedSearch::fetch_page` (loop
-/// semantics) and `PagedSearch::search_page_response` (single-page
-/// semantics) with deliberately DIVERGENT fallback logic — see the doc
-/// comments on those methods in `extractors/pornhub/mod.rs` and
-/// `extractors/redtube/mod.rs`. A real end-to-end behavioral test (mockito
-/// driving `search_page_response`/`fetch_page` and asserting which URLs were
-/// hit) is infeasible today: the per-site URL builders hardcode `https://`
-/// with no injectable base, `mockito` is HTTP-only (cannot terminate TLS),
-/// and `ExtractionContext.http_client` is a concrete `Arc<wreq::Client>`
-/// with no mock seam — a documented, deliberate project limitation (see
-/// `extractors/pornhub/tests/fetch.rs:1-7`, PR #231). A real golden test
-/// needs an injectable base-URL seam, deferred to follow-up issue **#457**.
-///
-/// Until that seam lands, this textual guard is the cheapest deterministic
-/// regression protection available: it `include_str!`s each site's source
-/// (so cargo recompiles this test whenever the extractor file changes — no
-/// runtime `fs` access) and asserts the token that makes each method's
-/// fallback behavior diverge from its sibling. If the two paths were ever
-/// accidentally unified (e.g. `fetch_page` made to page the fallback on
-/// every page, or `search_page_response` stopped paging it), the relevant
-/// token moves into the wrong method span and this test fails.
-///
-/// A future refactor that extracts `fetch_page` / `search_page_response`
-/// into shared helpers must update the anchors below (the `find` calls
-/// `unwrap_or_else`-panic loudly rather than silently no-op'ing), mirroring
-/// `test_extractor_call_order_expand_before_detect` in
-/// `hls/expand_in_place.rs`.
-#[cfg(test)]
-mod fallback_divergence_guard {
-    /// Split `src` into the `fetch_page` and `search_page_response` method
-    /// spans, using the sibling method / trailing `#[async_trait]` as the
-    /// boundary. Panics loudly (naming `label`) if an anchor is missing —
-    /// a rename must fail this test, not silently pass it.
-    fn method_spans<'a>(label: &str, src: &'a str) -> (&'a str, &'a str) {
-        let fetch_start = src
-            .find("async fn fetch_page")
-            .unwrap_or_else(|| panic!("`async fn fetch_page` not found in {label}"));
-        let response_fn_start = src
-            .find("async fn search_page_response")
-            .unwrap_or_else(|| panic!("`async fn search_page_response` not found in {label}"));
-        assert!(
-            fetch_start < response_fn_start,
-            "{label}: expected `fetch_page` to appear before `search_page_response`"
-        );
-
-        // `search_page_response`'s own doc comment sits directly above its
-        // `async fn` line, with no blank line separating them from
-        // `fetch_page`'s closing brace — back up over that doc comment so
-        // its prose (which may itself mention the sibling method's token,
-        // e.g. "has_more" wording) is attributed to the RIGHT span. The
-        // blank line right before the doc comment is the real boundary.
-        let response_start = src[fetch_start..response_fn_start]
-            .rfind("\n\n")
-            .map(|offset| fetch_start + offset + 2)
-            .unwrap_or_else(|| {
-                panic!(
-                    "no blank line found between `fetch_page` and `search_page_response`'s \
-                     doc comment in {label}"
-                )
-            });
-
-        // Search for `#[async_trait]` starting AFTER `search_page_response` —
-        // an earlier `#[async_trait]` (e.g. on a helper trait impl) would
-        // wrongly truncate the span before it began.
-        let trait_boundary = src[response_fn_start..]
-            .find("#[async_trait]")
-            .map(|offset| response_fn_start + offset)
-            .unwrap_or_else(|| panic!("`#[async_trait]` (impl SearchExtractor) not found in {label} after search_page_response"));
-
-        (
-            &src[fetch_start..response_start],
-            &src[response_start..trait_boundary],
-        )
-    }
-
-    /// PornHub: `fetch_page` only falls back to the API on page 1, using the
-    /// BASE url builder (`build_api_search_url`, no `_page` suffix).
-    /// `search_page_response` falls back to the API on ANY page, using the
-    /// PAGED url builder (`build_api_search_url_page`) once `page > 1`. If
-    /// the two paths were unified, `build_api_search_url_page` would appear
-    /// in (or disappear from) the wrong span.
-    #[test]
-    fn pornhub_paged_api_fallback_url_builder_stays_in_search_page_response_only() {
-        let src = include_str!("../../extractors/pornhub/mod.rs");
-        let (fetch_page, search_page_response) = method_spans("extractors/pornhub/mod.rs", src);
-
-        assert!(
-            !fetch_page.contains("build_api_search_url_page"),
-            "PornHub `fetch_page` (loop) must NOT call the paged API url builder — \
-             its API fallback only ever targets page 1 (issue #457). If this fires, the \
-             loop and single-page fallback paths have likely been unified."
-        );
-        assert!(
-            search_page_response.contains("build_api_search_url_page"),
-            "PornHub `search_page_response` (single-page) must call \
-             `build_api_search_url_page` for its any-page API fallback (issue #457)."
-        );
-    }
-
-    /// RedTube: `fetch_page` computes `has_more` via
-    /// `termination_from_count(count).has_more(page)`; `search_page_response`
-    /// instead computes it via the `fetched_through < total` window. If the
-    /// two paths were unified onto one `has_more` strategy, one of these four
-    /// assertions fails.
-    #[test]
-    fn redtube_has_more_strategy_diverges_between_loop_and_single_page() {
-        let src = include_str!("../../extractors/redtube/mod.rs");
-        let (fetch_page, search_page_response) = method_spans("extractors/redtube/mod.rs", src);
-
-        assert!(
-            fetch_page.contains("termination_from_count"),
-            "RedTube `fetch_page` (loop) must compute `has_more` via \
-             `termination_from_count` (issue #457)."
-        );
-        assert!(
-            !fetch_page.contains("fetched_through"),
-            "RedTube `fetch_page` (loop) must NOT use the `fetched_through` window — \
-             that strategy belongs to `search_page_response` only (issue #457)."
-        );
-        assert!(
-            search_page_response.contains("fetched_through"),
-            "RedTube `search_page_response` (single-page) must compute `has_more` via \
-             the `fetched_through < total` window (issue #457)."
-        );
-        assert!(
-            !search_page_response.contains("termination_from_count"),
-            "RedTube `search_page_response` (single-page) must NOT use \
-             `termination_from_count` — that strategy belongs to `fetch_page` only \
-             (issue #457)."
-        );
     }
 }
