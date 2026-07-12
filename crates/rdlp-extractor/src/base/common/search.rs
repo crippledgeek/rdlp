@@ -38,22 +38,13 @@ pub(crate) struct SearchPage {
 /// Mirrors `http::HeaderValue::from_static` / `http::Uri::from_static`
 /// (validated, panic-on-bad "known-good constant" entry) paired with a fallible
 /// `TryFrom`/`new` for dynamic input.
-// This foundation type is not yet consumed in production code — the
-// PornHub/RedTube base-URL seam that constructs it lands in issue #457
-// tasks 2-3. `expect` is self-cleaning: once a consumer lands, the
-// now-fulfilled expectation becomes a compile error, forcing cleanup.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumed starting issue #457 tasks 2-3")
-)]
+///
+/// Consumed by the PornHub search-URL builders (issue #457 task 2); the
+/// RedTube seam lands in task 3.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SearchOrigin(String);
 
 /// Why a candidate origin string is not a valid [`SearchOrigin`].
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumed starting issue #457 tasks 2-3")
-)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum InvalidOriginError {
     /// Missing or non-`http(s)` scheme.
@@ -77,10 +68,6 @@ impl std::fmt::Display for InvalidOriginError {
     }
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "consumed starting issue #457 tasks 2-3")
-)]
 impl SearchOrigin {
     /// Validate the shape of a candidate origin. Shared by `from_static` and `new`.
     fn validate(src: &str) -> std::result::Result<(), InvalidOriginError> {
