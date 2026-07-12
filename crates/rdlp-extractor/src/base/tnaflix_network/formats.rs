@@ -47,34 +47,30 @@ pub(crate) static CONFIG_URL_PATTERNS: [Lazy<Regex>; 3] = [
 ///
 /// Looks for: `<source src="..." type="video/mp4" size="720">`
 pub(crate) fn parse_video_sources(html: &Html) -> Vec<VideoMetadata> {
-    let mut video_data = Vec::new();
+    html.select(&SOURCE_SELECTOR)
+        .filter_map(|source_elem| {
+            let video_url = source_elem.value().attr("src")?;
 
-    for source_elem in html.select(&SOURCE_SELECTOR) {
-        let Some(video_url) = source_elem.value().attr("src") else {
-            continue;
-        };
+            let quality_str = source_elem.value().attr("size").unwrap_or("unknown");
+            let height = quality_str.parse::<u32>().ok();
+            let width = height.map(|h| (h * 16) / 9);
+            let ext = extract_extension_from_url(video_url);
 
-        let quality_str = source_elem.value().attr("size").unwrap_or("unknown");
-        let height = quality_str.parse::<u32>().ok();
-        let width = height.map(|h| (h * 16) / 9);
-        let ext = extract_extension_from_url(video_url);
+            let format_id = if quality_str != "unknown" {
+                format!("http-{quality_str}")
+            } else {
+                "http-default".into()
+            };
 
-        let format_id = if quality_str != "unknown" {
-            format!("http-{quality_str}")
-        } else {
-            "http-default".into()
-        };
-
-        video_data.push((
-            format_id,
-            video_url.to_owned(),
-            ext.to_owned(),
-            height,
-            width,
-        ));
-    }
-
-    video_data
+            Some((
+                format_id,
+                video_url.to_owned(),
+                ext.to_owned(),
+                height,
+                width,
+            ))
+        })
+        .collect()
 }
 
 /// Extract config URL from HTML using multiple fallback patterns
@@ -98,31 +94,30 @@ pub(crate) fn extract_cdn_url(webpage: &str) -> Option<String> {
 
 /// Parse MovieFap XML response to extract video sources
 pub(crate) fn parse_moviefap_xml(xml_text: &str) -> Vec<VideoMetadata> {
-    let mut video_data = Vec::new();
+    MOVIEFAP_XML_REGEX
+        .captures_iter(xml_text)
+        .filter_map(|cap| {
+            let quality_str = cap.get(1).map(|m| m.as_str().trim()).unwrap_or("unknown");
+            let video_url = cap.get(2).map(|m| m.as_str().trim()).unwrap_or("");
 
-    for cap in MOVIEFAP_XML_REGEX.captures_iter(xml_text) {
-        let quality_str = cap.get(1).map(|m| m.as_str().trim()).unwrap_or("unknown");
-        let video_url = cap.get(2).map(|m| m.as_str().trim()).unwrap_or("");
+            if video_url.is_empty() {
+                return None;
+            }
 
-        if video_url.is_empty() {
-            continue;
-        }
+            let video_url = video_url.replace("&amp;", "&");
+            let height = quality_str.trim_end_matches('p').parse::<u32>().ok();
+            let width = height.map(|h| (h * 16) / 9);
+            let ext = extract_extension_from_url(&video_url);
 
-        let video_url = video_url.replace("&amp;", "&");
-        let height = quality_str.trim_end_matches('p').parse::<u32>().ok();
-        let width = height.map(|h| (h * 16) / 9);
-        let ext = extract_extension_from_url(&video_url);
+            let format_id = if let Some(h) = height {
+                format!("http-{h}")
+            } else {
+                "http-default".into()
+            };
 
-        let format_id = if let Some(h) = height {
-            format!("http-{h}")
-        } else {
-            "http-default".into()
-        };
-
-        video_data.push((format_id, video_url, ext.to_owned(), height, width));
-    }
-
-    video_data
+            Some((format_id, video_url, ext.to_owned(), height, width))
+        })
+        .collect()
 }
 
 // ============================================================================
