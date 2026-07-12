@@ -13,8 +13,10 @@
 //! a `videos[]` array with full metadata (title, duration `MM:SS`, view count,
 //! thumbnail, models, post date, …) so no per-result page fetch is needed.
 
+use std::time::Duration;
+
 use async_trait::async_trait;
-use log::{debug, warn};
+use log::warn;
 use rdlp_core::{ExtractionContext, Result, SearchExtractor};
 use rdlp_types::{
     SearchFilter, SearchFilterDescriptor, SearchFilterValue, SearchPageResponse, SearchQuery,
@@ -23,7 +25,7 @@ use rdlp_types::{
 use serde_json::Value;
 
 use super::{ABXXX_BASE_URL, AbxxxExtractor};
-use crate::base::common::BaseExtractor;
+use crate::base::common::{PagedSearch, SearchPage, SearchPageSpec};
 use crate::base::kvs::api as kvs_api;
 
 const SEARCH_REFERER: &str = "https://abxxx.com/";
@@ -198,6 +200,75 @@ fn parse_response(body: &str) -> Result<(Vec<SearchResultPreview>, Option<u64>, 
     Ok((previews, total, max_page))
 }
 
+impl PagedSearch for AbxxxExtractor {
+    fn search_log_tag(&self) -> &'static str {
+        "[ABXXX]"
+    }
+
+    // ABXXX has no filter validation today: the bespoke search()/search_page() never
+    // validated — resolved_sort tolerates any value (falls back to "relevance"), no reject
+    // path. Ok(()) is the only value that preserves that.
+    fn validate_search_filters(&self, _filters: &[SearchFilter]) -> Result<()> {
+        Ok(())
+    }
+
+    fn first_page_index(&self) -> u32 {
+        1
+    }
+
+    // The `.max(1)` clamp from the old search_page: one clamped value feeds BOTH the URL
+    // page and the echoed SearchPageResponse.page. Diverges from identity only at
+    // page=Some(0)->1. Opt-in per site (a universal .max(first_page_index()) would break
+    // 1-indexed sites at Some(0)).
+    fn clamp_page(&self, page: u32) -> u32 {
+        page.max(1)
+    }
+
+    // The old search() loop has NO inter-page sleep; inheriting the default 500ms would
+    // add latency (a behavior change). Preserve zero throttle.
+    fn page_rate_limit(&self) -> Duration {
+        Duration::ZERO
+    }
+
+    fn max_results_default(&self) -> usize {
+        MAX_PLAYLIST_SIZE
+    }
+
+    async fn fetch_page(
+        &self,
+        query: &SearchQuery,
+        page: u32,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPage> {
+        let spec = SearchPageSpec {
+            headers: &[
+                ("X-Requested-With", "XMLHttpRequest"),
+                ("Accept", "application/json"),
+                ("Referer", SEARCH_REFERER),
+            ],
+            build_url: |query, page| {
+                let sort = resolved_sort(&query.filters);
+                kvs_api::videos2_search_endpoint(
+                    ABXXX_BASE_URL,
+                    &query.query,
+                    sort,
+                    page,
+                    kvs_api::KVS_VIDEOS2_DEFAULT_PAGE_SIZE,
+                )
+            },
+            parse: |body, _query, page| {
+                let (results, total_estimate, max_page) = parse_response(body)?;
+                Ok(SearchPage {
+                    results,
+                    has_more: page < max_page,
+                    total_estimate,
+                })
+            },
+        };
+        self.fetch_via_spec(spec, query, page, ctx).await
+    }
+}
+
 #[async_trait]
 impl SearchExtractor for AbxxxExtractor {
     fn name(&self) -> &str {
@@ -224,47 +295,7 @@ impl SearchExtractor for AbxxxExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<Vec<SearchResultPreview>> {
-        let cap = query.max_results.unwrap_or(MAX_PLAYLIST_SIZE);
-        let sort = resolved_sort(&query.filters);
-        let mut out: Vec<SearchResultPreview> = Vec::new();
-        let mut page: u32 = 1;
-
-        while out.len() < cap {
-            let url = kvs_api::videos2_search_endpoint(
-                ABXXX_BASE_URL,
-                &query.query,
-                sort,
-                page,
-                kvs_api::KVS_VIDEOS2_DEFAULT_PAGE_SIZE,
-            );
-            debug!(
-                "[ABXXX] search page {page}: {}",
-                rdlp_security::sanitize_for_logging(&url)
-            );
-            let body = BaseExtractor::fetch_webpage_with_headers(
-                &url,
-                &[
-                    ("X-Requested-With", "XMLHttpRequest"),
-                    ("Accept", "application/json"),
-                    ("Referer", SEARCH_REFERER),
-                ],
-                ctx,
-            )
-            .await?;
-
-            let (mut previews, _total, max_page) = parse_response(&body)?;
-            if previews.is_empty() {
-                break;
-            }
-            out.append(&mut previews);
-            if page >= max_page {
-                break;
-            }
-            page += 1;
-        }
-
-        out.truncate(cap);
-        Ok(out)
+        self.search_all_pages(query, ctx).await
     }
 
     async fn search_page(
@@ -272,39 +303,7 @@ impl SearchExtractor for AbxxxExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
-        // Bespoke: the `.max(1)` clamp is reflected in the returned SearchPageResponse.page.
-        // The shared PagedSearch skeleton exposes a `clamp_page` hook for exactly this;
-        // ABXXX is folded onto it in Stage 3c. See #450.
-        let page = query.page.unwrap_or(1).max(1);
-        let sort = resolved_sort(&query.filters);
-        let url = kvs_api::videos2_search_endpoint(
-            ABXXX_BASE_URL,
-            &query.query,
-            sort,
-            page,
-            kvs_api::KVS_VIDEOS2_DEFAULT_PAGE_SIZE,
-        );
-        debug!(
-            "[ABXXX] search_page page {page}: {}",
-            rdlp_security::sanitize_for_logging(&url)
-        );
-        let body = BaseExtractor::fetch_webpage_with_headers(
-            &url,
-            &[
-                ("X-Requested-With", "XMLHttpRequest"),
-                ("Accept", "application/json"),
-                ("Referer", SEARCH_REFERER),
-            ],
-            ctx,
-        )
-        .await?;
-        let (results, total_estimate, max_page) = parse_response(&body)?;
-        Ok(SearchPageResponse {
-            results,
-            page,
-            has_more: page < max_page,
-            total_estimate,
-        })
+        self.search_page_response(query, ctx).await
     }
 }
 
