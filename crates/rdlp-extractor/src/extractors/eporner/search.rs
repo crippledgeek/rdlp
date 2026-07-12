@@ -12,7 +12,7 @@ use scraper::{Html, Selector};
 use std::sync::LazyLock;
 
 use super::EPornerExtractor;
-use crate::base::common::{BaseExtractor, SearchPageSpec, SearchParse, run_search_page};
+use crate::base::common::{BaseExtractor, PagedSearch, SearchPage, SearchPageSpec};
 
 const EPORNER_ROOT: &str = "https://www.eporner.com";
 
@@ -225,6 +225,44 @@ fn parse_results(html: &str) -> Vec<SearchResultPreview> {
     out
 }
 
+impl PagedSearch for EPornerExtractor {
+    fn search_log_tag(&self) -> &'static str {
+        "[EPorner]"
+    }
+
+    // EPorner has no filter validation today; Ok(()) preserves that.
+    fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {
+        Ok(())
+    }
+
+    fn first_page_index(&self) -> u32 {
+        0
+    }
+
+    async fn fetch_page(
+        &self,
+        query: &SearchQuery,
+        page: u32,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPage> {
+        let spec = SearchPageSpec {
+            first_page_index: 0, // struct field exists until 3b-8; fetch_via_spec ignores it
+            headers: &[],
+            build_url: build_search_url,
+            parse: |body, _query, page| {
+                let results = parse_results(body);
+                let has_more = body.contains(&format!("/{}/", page + 2));
+                Ok(SearchPage {
+                    results,
+                    total_estimate: None,
+                    has_more,
+                })
+            },
+        };
+        self.fetch_via_spec(spec, query, page, ctx).await
+    }
+}
+
 #[async_trait]
 impl SearchExtractor for EPornerExtractor {
     fn name(&self) -> &str {
@@ -254,8 +292,7 @@ impl SearchExtractor for EPornerExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<Vec<SearchResultPreview>> {
-        let page_resp = self.search_page(query, ctx).await?;
-        Ok(page_resp.results)
+        Ok(self.search_page_response(query, ctx).await?.results)
     }
 
     async fn search_page(
@@ -263,26 +300,7 @@ impl SearchExtractor for EPornerExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
-        run_search_page(
-            query,
-            ctx,
-            SearchPageSpec {
-                first_page_index: 0,
-                headers: &[],
-                build_url: build_search_url,
-                parse: |body, _query, page| {
-                    let results = parse_results(body);
-                    // next-page probe: a "/{page+2}/" link in the pagination
-                    let has_more = body.contains(&format!("/{}/", page + 2));
-                    Ok(SearchParse {
-                        results,
-                        total_estimate: None,
-                        has_more,
-                    })
-                },
-            },
-        )
-        .await
+        self.search_page_response(query, ctx).await
     }
 }
 
