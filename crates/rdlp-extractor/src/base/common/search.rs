@@ -288,15 +288,6 @@ pub(crate) trait PagedSearch: Send + Sync {
     /// lives in [`search_page_response`](Self::search_page_response)). Provided
     /// method — single-GET sites call `self.fetch_via_spec(SPEC, query, page, ctx)`
     /// from their `fetch_page`. `SearchPageSpec` is `Copy`, taken by value.
-    ///
-    // No caller yet in sub-PR 3a (the 6 migrated sites implement `fetch_page`
-    // directly). The first callers land in sub-PR 3b (the single-GET #440
-    // sites). `expect` (not `allow`) is deliberate: it is self-cleaning —
-    // the moment 3b adds a caller the lint stops firing and `-D warnings`
-    // turns the now-unfulfilled expectation into an error, forcing this
-    // attribute's removal. See `run_search_page` (deleted in 3b) for today's
-    // equivalent body.
-    #[expect(dead_code, reason = "first caller lands in Stage 3b, #450")]
     async fn fetch_via_spec(
         &self,
         spec: SearchPageSpec,

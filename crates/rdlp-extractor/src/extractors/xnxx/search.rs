@@ -4,26 +4,21 @@
 //! is **1-indexed** (page 0 externally → path segment `1`).
 
 use async_trait::async_trait;
-use log::debug;
 use rdlp_core::{ExtractionContext, Result, SearchExtractor};
 use rdlp_types::{
     SearchFilterDescriptor, SearchFilterValue, SearchPageResponse, SearchQuery, SearchResultPreview,
 };
 use scraper::Html;
-use std::time::Duration;
 
 use super::XNXXExtractor;
 use crate::base::common::BaseExtractor;
-use crate::base::common::{SearchPageSpec, SearchParse, run_search_page};
+use crate::base::common::{PagedSearch, SearchPage, SearchPageSpec};
 
 /// Base URL for search requests.
 const XNXX_BASE_URL: &str = "https://www.xnxx.com";
 
 /// Number of results per page (XNXX default).
 const RESULTS_PER_PAGE: u64 = 36;
-
-/// Delay between paginated requests (ms).
-const PAGE_RATE_LIMIT_MS: u64 = 500;
 
 /// Maximum results cap for a full search.
 const MAX_PLAYLIST_SIZE: usize = 500;
@@ -207,6 +202,47 @@ pub(crate) fn has_more_pages(html: &str, query: &SearchQuery, page: u32) -> bool
     html.contains(&needle)
 }
 
+impl PagedSearch for XNXXExtractor {
+    fn search_log_tag(&self) -> &'static str {
+        "[xnxx]"
+    }
+
+    // XNXX has no filter validation today (the pre-refactor `run_search_page`
+    // path never validated); `Ok(())` is the only value that preserves that.
+    fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {
+        Ok(())
+    }
+
+    fn first_page_index(&self) -> u32 {
+        0
+    }
+
+    fn max_results_default(&self) -> usize {
+        MAX_PLAYLIST_SIZE
+    }
+
+    async fn fetch_page(
+        &self,
+        query: &SearchQuery,
+        page: u32,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPage> {
+        let spec = SearchPageSpec {
+            first_page_index: 0,
+            headers: &[],
+            build_url: build_search_url,
+            parse: |body, query, page| {
+                Ok(SearchPage {
+                    results: parse_results(body),
+                    has_more: has_more_pages(body, query, page),
+                    total_estimate: Some(RESULTS_PER_PAGE * 100),
+                })
+            },
+        };
+        self.fetch_via_spec(spec, query, page, ctx).await
+    }
+}
+
 #[async_trait]
 impl SearchExtractor for XNXXExtractor {
     fn name(&self) -> &str {
@@ -230,44 +266,7 @@ impl SearchExtractor for XNXXExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<Vec<SearchResultPreview>> {
-        let max_results = query.max_results.unwrap_or(MAX_PLAYLIST_SIZE);
-        let mut all_results = Vec::new();
-        let mut page = 0_u32;
-
-        loop {
-            let page_url = build_search_url(query, page);
-            let sanitized = rdlp_security::sanitize_for_logging(&page_url);
-            debug!("[xnxx] Fetching search page {}: {sanitized}", page + 1);
-
-            let webpage = BaseExtractor::fetch_webpage(&page_url, ctx).await?;
-
-            let page_results = parse_results(&webpage);
-            if page_results.is_empty() {
-                break;
-            }
-
-            let more = has_more_pages(&webpage, query, page);
-            all_results.extend(page_results);
-
-            if all_results.len() >= max_results {
-                all_results.truncate(max_results);
-                break;
-            }
-
-            if !more {
-                break;
-            }
-
-            page += 1;
-            tokio::time::sleep(Duration::from_millis(PAGE_RATE_LIMIT_MS)).await;
-        }
-
-        debug!(
-            "[xnxx] Search complete: {} results across {} pages",
-            all_results.len(),
-            page + 1
-        );
-        Ok(all_results)
+        self.search_all_pages(query, ctx).await
     }
 
     async fn search_page(
@@ -275,23 +274,7 @@ impl SearchExtractor for XNXXExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
-        run_search_page(
-            query,
-            ctx,
-            SearchPageSpec {
-                first_page_index: 0,
-                headers: &[],
-                build_url: build_search_url,
-                parse: |body, query, page| {
-                    Ok(SearchParse {
-                        results: parse_results(body),
-                        total_estimate: Some(RESULTS_PER_PAGE * 100),
-                        has_more: has_more_pages(body, query, page),
-                    })
-                },
-            },
-        )
-        .await
+        self.search_page_response(query, ctx).await
     }
 }
 
