@@ -4,6 +4,7 @@ People who have contributed to rdlp.
 Listed in order of first contribution.
 
 - @crippledgeek — Project author and primary maintainer
+- @kingrubic — Deduplicated the make_format format-selector test helper (#468)
 
 ---
 
