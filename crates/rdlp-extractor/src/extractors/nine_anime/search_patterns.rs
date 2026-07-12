@@ -9,9 +9,6 @@ const BASE_URL: &str = "https://9animetv.to";
 /// Approximate results per page.
 pub(crate) const RESULTS_PER_PAGE: u64 = 30;
 
-/// Rate limit between page fetches (milliseconds).
-pub(crate) const PAGE_RATE_LIMIT_MS: u64 = 500;
-
 /// Extract film-name links from 9anime search results.
 /// Captures: (1) href, (2) title.
 pub(crate) static FILM_NAME_PATTERN: Lazy<Regex> = lazy_regex!(

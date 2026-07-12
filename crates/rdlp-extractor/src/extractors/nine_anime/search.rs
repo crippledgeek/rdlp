@@ -4,16 +4,16 @@
 //! (`?page=N`, 0-based). No AJAX needed — standard HTML scraping.
 
 use async_trait::async_trait;
-use log::debug;
 use rdlp_core::{ExtractionContext, Result, SearchExtractor};
 use rdlp_types::{SearchPageResponse, SearchQuery, SearchResultPreview};
-use std::time::Duration;
 
 use super::NineAnimeExtractor;
 use super::search_patterns;
-use crate::base::common::{BaseExtractor, SearchPageSpec, SearchParse, run_search_page};
+use crate::base::common::{PagedSearch, SearchPage, SearchPageSpec};
 
 const BASE_URL: &str = "https://9animetv.to";
+
+/// Maximum results cap for a full search (matches the pre-refactor loop's cap).
 const MAX_PLAYLIST_SIZE: usize = 500;
 
 /// Parse search result items from 9anime search page HTML.
@@ -72,6 +72,52 @@ pub(crate) fn extract_total_pages(html: &str) -> Option<u32> {
         .and_then(|m| m.as_str().parse().ok())
 }
 
+impl PagedSearch for NineAnimeExtractor {
+    fn search_log_tag(&self) -> &'static str {
+        "[NineAnime]"
+    }
+
+    // NineAnime has no filter validation today; Ok(()) preserves that.
+    fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {
+        Ok(())
+    }
+
+    fn first_page_index(&self) -> u32 {
+        1
+    }
+
+    fn max_results_default(&self) -> usize {
+        MAX_PLAYLIST_SIZE
+    }
+
+    async fn fetch_page(
+        &self,
+        query: &SearchQuery,
+        page: u32,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPage> {
+        let spec = SearchPageSpec {
+            first_page_index: 1, // struct field exists until 3b-8; fetch_via_spec ignores it
+            headers: &[("Referer", "https://9animetv.to/")],
+            build_url: |query, page| {
+                let url_page = if page > 0 { page - 1 } else { 0 };
+                search_patterns::build_search_url(query, url_page)
+            },
+            parse: |body, _query, _page| {
+                let results = parse_search_results(body);
+                let total_estimate = extract_total_pages(body)
+                    .map(|tp| tp as u64 * search_patterns::RESULTS_PER_PAGE);
+                Ok(SearchPage {
+                    has_more: has_next_page(body) && !results.is_empty(),
+                    total_estimate,
+                    results,
+                })
+            },
+        };
+        self.fetch_via_spec(spec, query, page, ctx).await
+    }
+}
+
 #[async_trait]
 impl SearchExtractor for NineAnimeExtractor {
     fn name(&self) -> &str {
@@ -87,48 +133,7 @@ impl SearchExtractor for NineAnimeExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<Vec<SearchResultPreview>> {
-        let max_results = query.max_results.unwrap_or(MAX_PLAYLIST_SIZE);
-        let mut all_results = Vec::new();
-        let mut page = 0_u32; // 0-based pagination
-
-        loop {
-            let page_url = search_patterns::build_search_url(query, page);
-            let sanitized = rdlp_security::sanitize_for_logging(&page_url);
-            debug!("[NineAnime] Fetching search page {}: {sanitized}", page + 1);
-
-            let webpage = BaseExtractor::fetch_webpage_with_headers(
-                &page_url,
-                &[("Referer", "https://9animetv.to/")],
-                ctx,
-            )
-            .await?;
-
-            let page_results = parse_search_results(&webpage);
-            if page_results.is_empty() {
-                break;
-            }
-
-            all_results.extend(page_results);
-
-            if all_results.len() >= max_results {
-                all_results.truncate(max_results);
-                break;
-            }
-
-            if !has_next_page(&webpage) {
-                break;
-            }
-
-            page += 1;
-            tokio::time::sleep(Duration::from_millis(search_patterns::PAGE_RATE_LIMIT_MS)).await;
-        }
-
-        debug!(
-            "[NineAnime] Search complete: {} results across {} pages",
-            all_results.len(),
-            page + 1
-        );
-        Ok(all_results)
+        self.search_all_pages(query, ctx).await
     }
 
     async fn search_page(
@@ -136,29 +141,7 @@ impl SearchExtractor for NineAnimeExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
-        run_search_page(
-            query,
-            ctx,
-            SearchPageSpec {
-                first_page_index: 1,
-                headers: &[("Referer", "https://9animetv.to/")],
-                build_url: |query, page| {
-                    let url_page = if page > 0 { page - 1 } else { 0 };
-                    search_patterns::build_search_url(query, url_page)
-                },
-                parse: |body, _query, _page| {
-                    let results = parse_search_results(body);
-                    let total_estimate = extract_total_pages(body)
-                        .map(|tp| tp as u64 * search_patterns::RESULTS_PER_PAGE);
-                    Ok(SearchParse {
-                        has_more: has_next_page(body) && !results.is_empty(),
-                        total_estimate,
-                        results,
-                    })
-                },
-            },
-        )
-        .await
+        self.search_page_response(query, ctx).await
     }
 }
 
