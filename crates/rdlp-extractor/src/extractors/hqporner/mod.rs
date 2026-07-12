@@ -36,7 +36,9 @@ use rdlp_types::{InfoDict, SearchPageResponse, SearchQuery, SearchResultPreview}
 use scraper::Html;
 use std::sync::LazyLock;
 
-use crate::base::common::{BaseExtractor, MAX_PLAYLIST_SIZE};
+use crate::base::common::{
+    BaseExtractor, MAX_PLAYLIST_SIZE, SearchPageSpec, SearchParse, run_search_page,
+};
 use crate::hls::detect_format_sizes_lazy;
 
 pub use patterns::HQPORNER_VIDEO_PATTERN;
@@ -404,25 +406,23 @@ impl SearchExtractor for HQPornerExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
-        let page = query.page.unwrap_or(1);
-        let page_url = search_patterns::build_search_url(&query.query, page);
-
-        let webpage = BaseExtractor::fetch_webpage_with_headers(
-            &page_url,
-            &[("Referer", "https://hqporner.com/")],
+        run_search_page(
+            query,
             ctx,
+            SearchPageSpec {
+                first_page_index: 1,
+                headers: &[("Referer", "https://hqporner.com/")],
+                build_url: |query, page| search_patterns::build_search_url(&query.query, page),
+                parse: |body, _query, _page| {
+                    Ok(SearchParse {
+                        results: search::parse_search_results(body),
+                        total_estimate: search::extract_total_count(body),
+                        has_more: search::has_next_page(body),
+                    })
+                },
+            },
         )
-        .await?;
-        let page_results = search::parse_search_results(&webpage);
-        let has_more = search::has_next_page(&webpage);
-        let total_estimate = search::extract_total_count(&webpage);
-
-        Ok(SearchPageResponse {
-            results: page_results,
-            page,
-            has_more,
-            total_estimate,
-        })
+        .await
     }
 }
 
