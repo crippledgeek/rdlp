@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use super::NineAnimeExtractor;
 use super::search_patterns;
-use crate::base::common::BaseExtractor;
+use crate::base::common::{BaseExtractor, SearchPageSpec, SearchParse, run_search_page};
 
 const BASE_URL: &str = "https://9animetv.to";
 const MAX_PLAYLIST_SIZE: usize = 500;
@@ -136,30 +136,29 @@ impl SearchExtractor for NineAnimeExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
-        // Convert 1-based user page to 0-based URL page
-        let user_page = query.page.unwrap_or(1);
-        let url_page = if user_page > 0 { user_page - 1 } else { 0 };
-
-        let page_url = search_patterns::build_search_url(query, url_page);
-
-        let webpage = BaseExtractor::fetch_webpage_with_headers(
-            &page_url,
-            &[("Referer", "https://9animetv.to/")],
+        run_search_page(
+            query,
             ctx,
+            SearchPageSpec {
+                first_page_index: 1,
+                headers: &[("Referer", "https://9animetv.to/")],
+                build_url: |query, page| {
+                    let url_page = if page > 0 { page - 1 } else { 0 };
+                    search_patterns::build_search_url(query, url_page)
+                },
+                parse: |body, _query, _page| {
+                    let results = parse_search_results(body);
+                    let total_estimate = extract_total_pages(body)
+                        .map(|tp| tp as u64 * search_patterns::RESULTS_PER_PAGE);
+                    Ok(SearchParse {
+                        has_more: has_next_page(body) && !results.is_empty(),
+                        total_estimate,
+                        results,
+                    })
+                },
+            },
         )
-        .await?;
-
-        let page_results = parse_search_results(&webpage);
-        let has_more = has_next_page(&webpage) && !page_results.is_empty();
-        let total_pages = extract_total_pages(&webpage);
-        let total_estimate = total_pages.map(|tp| tp as u64 * search_patterns::RESULTS_PER_PAGE);
-
-        Ok(SearchPageResponse {
-            results: page_results,
-            page: user_page,
-            has_more,
-            total_estimate,
-        })
+        .await
     }
 }
 
