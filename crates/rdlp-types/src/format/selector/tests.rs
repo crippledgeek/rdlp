@@ -4281,7 +4281,6 @@ mod negative_eval_2 {
 
 mod negative_sort_2 {
     use super::*;
-    use crate::format::Format;
 
     // ---- Missing numeric fields sort as absent (tier -10) ----
 
@@ -4858,7 +4857,6 @@ mod negative_eval_3 {
 
 mod negative_sort_3 {
     use super::*;
-    use crate::format::Format;
 
     // ---- Empty codec string treated as missing ----
 
