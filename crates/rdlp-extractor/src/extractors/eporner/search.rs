@@ -4,7 +4,7 @@
 //! Filter key: `sort` ∈ {`top-rated`, `longest`}.
 
 use async_trait::async_trait;
-use rdlp_core::{ExtractionContext, RdlpError, Result, SearchExtractor};
+use rdlp_core::{ExtractionContext, Result, SearchExtractor};
 use rdlp_types::{
     SearchFilterDescriptor, SearchFilterValue, SearchPageResponse, SearchQuery, SearchResultPreview,
 };
@@ -12,7 +12,7 @@ use scraper::{Html, Selector};
 use std::sync::LazyLock;
 
 use super::EPornerExtractor;
-use crate::base::common::BaseExtractor;
+use crate::base::common::{BaseExtractor, SearchPageSpec, SearchParse, run_search_page};
 
 const EPORNER_ROOT: &str = "https://www.eporner.com";
 
@@ -263,25 +263,26 @@ impl SearchExtractor for EPornerExtractor {
         query: &SearchQuery,
         ctx: &ExtractionContext,
     ) -> Result<SearchPageResponse> {
-        let page = query.page.unwrap_or(0);
-        let url = build_search_url(query, page);
-        let html =
-            BaseExtractor::fetch_webpage(&url, ctx)
-                .await
-                .map_err(|e| RdlpError::Network {
-                    message: format!("eporner search: fetch failed: {e:#}"),
-                    url: Some(url.clone().into()),
-                })?;
-        let results = parse_results(&html);
-        // Detect if a next page exists by checking for a page+2 link in pagination
-        let next_page_str = format!("/{}/", page + 2);
-        let has_more = html.contains(&next_page_str);
-        Ok(SearchPageResponse {
-            results,
-            page,
-            has_more,
-            total_estimate: None,
-        })
+        run_search_page(
+            query,
+            ctx,
+            SearchPageSpec {
+                first_page_index: 0,
+                headers: &[],
+                build_url: build_search_url,
+                parse: |body, _query, page| {
+                    let results = parse_results(body);
+                    // next-page probe: a "/{page+2}/" link in the pagination
+                    let has_more = body.contains(&format!("/{}/", page + 2));
+                    Ok(SearchParse {
+                        results,
+                        total_estimate: None,
+                        has_more,
+                    })
+                },
+            },
+        )
+        .await
     }
 }
 
