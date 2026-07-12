@@ -32,7 +32,7 @@ use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result, SearchExtra
 use rdlp_types::{InfoDict, SearchPageResponse};
 use std::time::Duration;
 
-use crate::base::common::{BaseExtractor, PaginatedSearch, Termination};
+use crate::base::common::{BaseExtractor, PagedSearch, SearchPage, Termination};
 use crate::hls::detect_format_sizes_lazy;
 
 pub use patterns::{XHAMSTER_EMBED_PATTERN, XHAMSTER_VIDEO_PATTERN};
@@ -41,7 +41,7 @@ pub use patterns::{XHAMSTER_EMBED_PATTERN, XHAMSTER_VIDEO_PATTERN};
 const VIDEO_EXTRACTION_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Rate limit delay between playlist page fetches (500ms). Search pagination
-/// uses the shared `PaginatedSearch` default instead.
+/// uses the shared `PagedSearch` default instead.
 const PAGE_RATE_LIMIT_MS: u64 = 500;
 
 /// Number of concurrent video extractions
@@ -250,7 +250,7 @@ impl XHamsterExtractor {
     }
 }
 
-impl PaginatedSearch for XHamsterExtractor {
+impl PagedSearch for XHamsterExtractor {
     fn search_log_tag(&self) -> &'static str {
         "[XHamster]"
     }
@@ -259,17 +259,19 @@ impl PaginatedSearch for XHamsterExtractor {
         search::validate_search_filters(filters)
     }
 
-    /// Fetch a single search page, returning its results and a `Termination`.
-    async fn fetch_search_page(
+    /// Fetch + parse ONE search page. `has_more` is computed here from the
+    /// site's reported page count (the `Termination` helper), so the shared
+    /// loop stays conditional-free.
+    async fn fetch_page(
         &self,
         query: &rdlp_types::SearchQuery,
-        page: usize,
+        page: u32,
         ctx: &ExtractionContext,
-    ) -> Result<(Vec<rdlp_types::SearchResultPreview>, Termination)> {
+    ) -> Result<SearchPage> {
         let page_url = if page == 1 {
             patterns::build_search_url(query)
         } else {
-            patterns::build_search_url_page(query, page)
+            patterns::build_search_url_page(query, page as usize)
         };
 
         debug!(page, url:? = rdlp_security::sanitize_for_logging(&page_url); "[XHamster] Fetching search page");
@@ -279,7 +281,13 @@ impl PaginatedSearch for XHamsterExtractor {
         let page_results = search::parse_search_results_json(&initials)?;
         let max_pages = search::parse_max_pages(&initials).unwrap_or(1);
 
-        Ok((page_results, Termination::Pages(max_pages)))
+        let has_more =
+            !page_results.is_empty() && Termination::Pages(max_pages).has_more(page as usize);
+        Ok(SearchPage {
+            results: page_results,
+            has_more,
+            total_estimate: None,
+        })
     }
 }
 

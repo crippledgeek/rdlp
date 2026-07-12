@@ -35,7 +35,7 @@ use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result, SearchExtra
 use rdlp_types::{InfoDict, SearchPageResponse, SearchQuery, SearchResultPreview};
 use scraper::Html;
 
-use crate::base::common::{BaseExtractor, PaginatedSearch, Termination};
+use crate::base::common::{BaseExtractor, PagedSearch, SearchPage};
 use crate::hls::detect_format_sizes_lazy;
 
 pub use patterns::{PORNHUB_PLAYLIST_URL_PATTERN, PORNHUB_VIDEO_URL_PATTERN};
@@ -108,7 +108,7 @@ impl PornHubExtractor {
     }
 }
 
-impl PaginatedSearch for PornHubExtractor {
+impl PagedSearch for PornHubExtractor {
     fn search_log_tag(&self) -> &'static str {
         "[PornHub]"
     }
@@ -117,21 +117,36 @@ impl PaginatedSearch for PornHubExtractor {
         search::validate_search_filters(filters)
     }
 
-    async fn fetch_search_page(
+    /// Fetch + parse ONE search page (loop semantics): HTML-primary, with an
+    /// API fallback ONLY on page 1. `has_more` folds the old
+    /// `Termination::UntilEmpty` — a non-empty page keeps the loop going; an
+    /// empty page breaks in the shared loop before `has_more` is consulted.
+    async fn fetch_page(
         &self,
         query: &SearchQuery,
-        page: usize,
+        page: u32,
         ctx: &ExtractionContext,
-    ) -> Result<(Vec<SearchResultPreview>, Termination)> {
-        let html_url = search_patterns::build_html_search_url(&query.query, page as u32);
+    ) -> Result<SearchPage> {
+        let html_url = search_patterns::build_html_search_url(&query.query, page);
         match self.fetch_html_search_page(&html_url, ctx).await {
-            Ok(results) if !results.is_empty() => Ok((results, Termination::UntilEmpty)),
+            Ok(results) if !results.is_empty() => Ok(SearchPage {
+                results,
+                has_more: true,
+                total_estimate: None,
+            }),
             outcome => {
                 if page == 1 {
                     let base_url =
                         search_patterns::build_api_search_url(&query.query, &query.filters);
                     match self.fetch_api_search_page(&base_url, ctx).await {
-                        Ok(api_results) => Ok((api_results, Termination::UntilEmpty)),
+                        Ok(api_results) => {
+                            let has_more = !api_results.is_empty();
+                            Ok(SearchPage {
+                                results: api_results,
+                                has_more,
+                                total_estimate: None,
+                            })
+                        }
                         Err(api_err) => {
                             // Preserve the operator-visible WARN (never downgrade
                             // to the shared loop's DEBUG). Then propagate → the
@@ -142,34 +157,22 @@ impl PaginatedSearch for PornHubExtractor {
                     }
                 } else {
                     match outcome {
-                        Ok(empty) => Ok((empty, Termination::UntilEmpty)),
+                        Ok(empty) => Ok(SearchPage {
+                            results: empty,
+                            has_more: false,
+                            total_estimate: None,
+                        }),
                         Err(e) => Err(e),
                     }
                 }
             }
         }
     }
-}
 
-#[async_trait]
-impl SearchExtractor for PornHubExtractor {
-    fn name(&self) -> &str {
-        "PornHub"
-    }
-
-    fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
-        search_patterns::search_filter_descriptors()
-    }
-
-    async fn search(
-        &self,
-        query: &SearchQuery,
-        ctx: &ExtractionContext,
-    ) -> Result<Vec<SearchResultPreview>> {
-        self.search_all_pages(query, ctx).await
-    }
-
-    async fn search_page(
+    /// Single-page semantics differ from the loop: the API fallback runs on
+    /// ANY page (with a paged API URL), and `has_more` derives from the API
+    /// page-size heuristic. Overrides the shared assembler to preserve this.
+    async fn search_page_response(
         &self,
         query: &SearchQuery,
         ctx: &ExtractionContext,
@@ -206,6 +209,33 @@ impl SearchExtractor for PornHubExtractor {
             has_more,
             total_estimate: None,
         })
+    }
+}
+
+#[async_trait]
+impl SearchExtractor for PornHubExtractor {
+    fn name(&self) -> &str {
+        "PornHub"
+    }
+
+    fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
+        search_patterns::search_filter_descriptors()
+    }
+
+    async fn search(
+        &self,
+        query: &SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<Vec<SearchResultPreview>> {
+        self.search_all_pages(query, ctx).await
+    }
+
+    async fn search_page(
+        &self,
+        query: &SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPageResponse> {
+        self.search_page_response(query, ctx).await
     }
 }
 

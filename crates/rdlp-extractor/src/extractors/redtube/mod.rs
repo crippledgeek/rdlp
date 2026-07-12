@@ -28,7 +28,7 @@ use regex::Regex;
 use scraper::Html;
 use std::sync::LazyLock;
 
-use crate::base::common::{BaseExtractor, PaginatedSearch, Termination};
+use crate::base::common::{BaseExtractor, PagedSearch, SearchPage, Termination};
 use crate::base::tnaflix_network::TnaFlixNetworkBase;
 use crate::hls::detect_format_sizes_lazy;
 use crate::utils::make_absolute_url;
@@ -333,7 +333,7 @@ impl RedTubeExtractor {
     }
 }
 
-impl PaginatedSearch for RedTubeExtractor {
+impl PagedSearch for RedTubeExtractor {
     fn search_log_tag(&self) -> &'static str {
         "[RedTube]"
     }
@@ -343,25 +343,44 @@ impl PaginatedSearch for RedTubeExtractor {
         search::validate_search_filters(filters, &descriptors)
     }
 
-    async fn fetch_search_page(
+    /// Fetch + parse ONE search page (loop semantics): API-primary, with an
+    /// HTML fallback ONLY on page 1. `has_more` folds `termination_from_count`
+    /// (the count-derived predicate, byte-identical to the old loop) on the API
+    /// path, and the old `Termination::UntilEmpty` (result-emptiness) on HTML.
+    async fn fetch_page(
         &self,
         query: &rdlp_types::SearchQuery,
-        page: usize,
+        page: u32,
         ctx: &ExtractionContext,
-    ) -> Result<(Vec<rdlp_types::SearchResultPreview>, Termination)> {
+    ) -> Result<SearchPage> {
         let base_url = patterns::build_api_search_url(&query.query, &query.filters);
         let page_url = if page == 1 {
             base_url
         } else {
-            patterns::build_api_search_url_page(&base_url, page as u32)
+            patterns::build_api_search_url_page(&base_url, page)
         };
         match self.fetch_api_search_page(&page_url, ctx).await {
-            Ok((results, count)) => Ok((results, termination_from_count(count))),
+            Ok((results, count)) => {
+                let has_more =
+                    !results.is_empty() && termination_from_count(count).has_more(page as usize);
+                Ok(SearchPage {
+                    results,
+                    has_more,
+                    total_estimate: count,
+                })
+            }
             Err(e) => {
                 if page == 1 {
                     let html_url = patterns::build_html_search_url(&query.query);
                     match self.fetch_html_search_page(&html_url, ctx).await {
-                        Ok(results) => Ok((results, Termination::UntilEmpty)),
+                        Ok(results) => {
+                            let has_more = !results.is_empty(); // UntilEmpty
+                            Ok(SearchPage {
+                                results,
+                                has_more,
+                                total_estimate: None,
+                            })
+                        }
                         Err(html_err) => {
                             warn!("[RedTube] HTML fallback also failed: {html_err}");
                             Err(html_err)
@@ -373,27 +392,11 @@ impl PaginatedSearch for RedTubeExtractor {
             }
         }
     }
-}
 
-#[async_trait]
-impl SearchExtractor for RedTubeExtractor {
-    fn name(&self) -> &str {
-        "RedTube"
-    }
-
-    fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
-        patterns::search_filter_descriptors()
-    }
-
-    async fn search(
-        &self,
-        query: &rdlp_types::SearchQuery,
-        ctx: &ExtractionContext,
-    ) -> Result<Vec<rdlp_types::SearchResultPreview>> {
-        self.search_all_pages(query, ctx).await
-    }
-
-    async fn search_page(
+    /// Single-page semantics diverge: the HTML fallback carries `None` for
+    /// `total_estimate`, and `has_more` uses the `fetched_through < total`
+    /// window. Overrides the shared assembler verbatim to preserve this.
+    async fn search_page_response(
         &self,
         query: &rdlp_types::SearchQuery,
         ctx: &ExtractionContext,
@@ -437,6 +440,33 @@ impl SearchExtractor for RedTubeExtractor {
             has_more,
             total_estimate: total_count,
         })
+    }
+}
+
+#[async_trait]
+impl SearchExtractor for RedTubeExtractor {
+    fn name(&self) -> &str {
+        "RedTube"
+    }
+
+    fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
+        patterns::search_filter_descriptors()
+    }
+
+    async fn search(
+        &self,
+        query: &rdlp_types::SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<Vec<rdlp_types::SearchResultPreview>> {
+        self.search_all_pages(query, ctx).await
+    }
+
+    async fn search_page(
+        &self,
+        query: &rdlp_types::SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPageResponse> {
+        self.search_page_response(query, ctx).await
     }
 }
 
