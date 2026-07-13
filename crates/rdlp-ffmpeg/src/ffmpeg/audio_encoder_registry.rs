@@ -245,19 +245,15 @@ pub fn resolve_audio_encoder(input: &str) -> Option<&'static str> {
         return Some(enc);
     }
 
-    // Otherwise treat as a direct encoder name — find matching static str
-    for entry in AUDIO_CODEC_PREFERENCES {
-        for (enc, _) in entry.encoders {
-            if enc.eq_ignore_ascii_case(input) {
-                if is_audio_encoder_available(enc) {
-                    return Some(enc);
-                }
-                return None;
-            }
-        }
-    }
-
-    None
+    // Otherwise treat as a direct encoder name — find the matching static str,
+    // then gate on availability. Short-circuits on the first name match exactly
+    // like the prior nested-loop search (duplicate names occur only across
+    // byte-identical codec-alias rows), so the verdict is unchanged.
+    AUDIO_CODEC_PREFERENCES
+        .iter()
+        .flat_map(|entry| entry.encoders)
+        .find(|(enc, _)| enc.eq_ignore_ascii_case(input))
+        .and_then(|(enc, _)| is_audio_encoder_available(enc).then_some(*enc))
 }
 
 /// Returns all available encoders for a given audio codec name, in preference order.
@@ -512,5 +508,19 @@ mod tests {
     #[test]
     fn unknown_codec_resolve_returns_none() {
         assert!(resolve_audio_encoder("nonexistent_codec_xyz").is_none());
+    }
+
+    #[test]
+    fn registered_but_unavailable_encoder_resolves_none() {
+        // `libfdk_aac` is registered in AUDIO_CODEC_PREFERENCES but is a nonfree
+        // encoder usually absent from a stock ffmpeg build. When present it
+        // resolves to itself; when absent the name matches yet the availability
+        // gate rejects it → None. Pins the `.and_then(is_available.then_some(..))`
+        // unavailable branch of the iterator chain.
+        if is_audio_encoder_available("libfdk_aac") {
+            assert_eq!(resolve_audio_encoder("libfdk_aac"), Some("libfdk_aac"));
+        } else {
+            assert_eq!(resolve_audio_encoder("libfdk_aac"), None);
+        }
     }
 }

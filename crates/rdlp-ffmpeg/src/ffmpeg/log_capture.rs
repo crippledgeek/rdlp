@@ -405,17 +405,32 @@ unsafe extern "C" fn capture_callback(
         .to_string_lossy()
         .to_string();
 
-    if has_capture {
+    let push_to_capture = |line: String| {
         CAPTURE_STACK.with(|stack| {
             if let Some(top) = stack.borrow().last()
                 && let Ok(mut v) = top.lock()
             {
-                v.push(msg.clone());
+                v.push(line);
             }
         });
-    }
-    if let Some(forwarder) = forwarder {
-        forwarder(level, msg);
+    };
+
+    // Clone only when BOTH sinks are live (the message is consumed twice). On
+    // the common capture-only path — the integrity scan and loudnorm capture
+    // run with no forwarder — move `msg` into the buffer instead of cloning,
+    // saving one allocation per captured log line.
+    match forwarder {
+        Some(forwarder) => {
+            if has_capture {
+                push_to_capture(msg.clone());
+            }
+            forwarder(level, msg);
+        }
+        None => {
+            if has_capture {
+                push_to_capture(msg);
+            }
+        }
     }
 }
 
