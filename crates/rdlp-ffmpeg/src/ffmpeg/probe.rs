@@ -147,10 +147,13 @@ impl FFmpegRunner {
             m.ok().map(|m| m.len())
         };
 
-        // Format-level metadata
-        for (key, value) in ictx.metadata().iter() {
-            info.metadata.insert(key.to_lowercase(), value.to_string());
-        }
+        // Format-level metadata. `collect` into the fresh default map keeps
+        // last-wins on duplicate keys exactly as repeated `insert` would.
+        info.metadata = ictx
+            .metadata()
+            .iter()
+            .map(|(key, value)| (key.to_lowercase(), value.to_string()))
+            .collect();
 
         // Parse streams
         info.stream_count = ictx.streams().count();
@@ -168,23 +171,23 @@ impl FFmpegRunner {
                 _ => "unknown",
             };
 
+            // Stream-level metadata, built directly into the struct below.
+            let stream_metadata = stream
+                .metadata()
+                .iter()
+                .map(|(key, value)| (key.to_lowercase(), value.to_string()))
+                .collect();
+
             let mut stream_info = StreamInfo {
                 index: stream.index(),
                 codec_type: codec_type_str.to_string(),
                 codec_name: Some(codec_name),
-                metadata: HashMap::new(),
+                metadata: stream_metadata,
                 duration: None,
                 sar_num: None,
                 sar_den: None,
                 nb_frames: None,
             };
-
-            // Stream-level metadata
-            for (key, value) in stream.metadata().iter() {
-                stream_info
-                    .metadata
-                    .insert(key.to_lowercase(), value.to_string());
-            }
 
             // Per-stream duration
             let stream_duration_ts = stream.duration();

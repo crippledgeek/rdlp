@@ -435,20 +435,16 @@ pub fn resolve_encoder(input: &str) -> Option<&'static str> {
         return Some(enc);
     }
 
-    // Otherwise treat as a direct encoder name — check if it's available
-    // and find the matching static str in our table
-    for entry in CODEC_PREFERENCES {
-        for (enc, _) in entry.encoders {
-            if enc.eq_ignore_ascii_case(input) {
-                if is_encoder_available(enc) {
-                    return Some(enc);
-                }
-                return None;
-            }
-        }
-    }
-
-    None
+    // Otherwise treat as a direct encoder name — find the matching static str
+    // in our table, then gate on availability. Short-circuits on the first
+    // name match exactly like the prior nested-loop search: duplicate encoder
+    // names occur only across byte-identical codec-alias rows, so the verdict
+    // (available → Some, unavailable → None) is unchanged.
+    CODEC_PREFERENCES
+        .iter()
+        .flat_map(|entry| entry.encoders)
+        .find(|(enc, _)| enc.eq_ignore_ascii_case(input))
+        .and_then(|(enc, _)| is_encoder_available(enc).then_some(*enc))
 }
 
 /// Returns all available encoders for a given codec name, in preference order.
@@ -558,9 +554,16 @@ mod tests {
         if is_encoder_available("libxeve") {
             assert_eq!(resolve_encoder("evc"), Some("libxeve"));
             assert_eq!(resolve_encoder("libxeve"), Some("libxeve"));
+        } else {
+            // Registered in the table but not built into this ffmpeg: the
+            // name matches yet the availability gate rejects it → None. Pins
+            // the `.and_then(is_available.then_some(..))` unavailable branch.
+            assert_eq!(resolve_encoder("libxeve"), None);
         }
         if is_encoder_available("libxavs2") {
             assert_eq!(resolve_encoder("avs2"), Some("libxavs2"));
+        } else {
+            assert_eq!(resolve_encoder("libxavs2"), None);
         }
         // APV must NOT be registered (intentionally excluded).
         assert_eq!(resolve_encoder("apv"), None);

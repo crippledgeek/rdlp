@@ -142,6 +142,32 @@ pub fn check_matroska_integrity(input: &Path) -> Result<()> {
     }
 }
 
+/// Maximum number of `.salvageN.` disambiguation slots probed before giving up.
+///
+/// Bounds the collision search so a directory already full of salvage files
+/// cannot spin unbounded; when every slot is occupied the last slot is reused
+/// (matching the historical `attempt >= 99` cap).
+const MAX_SALVAGE_ATTEMPTS: u32 = 99;
+
+/// Pick the salvage output path for `input`, avoiding collisions with existing
+/// files so a previous partial salvage is never overwritten.
+///
+/// Returns `stem.salvage.ext` when that slot is free; otherwise the first free
+/// `stem.salvageN.ext` for `N` in `1..=MAX_SALVAGE_ATTEMPTS`. If every slot is
+/// occupied, falls back to the last slot (`MAX_SALVAGE_ATTEMPTS`).
+fn next_salvage_path(input: &Path, stem: &str, ext: &str) -> PathBuf {
+    let base = input.with_file_name(format!("{stem}.salvage.{ext}"));
+    if !base.exists() {
+        return base;
+    }
+    (1..=MAX_SALVAGE_ATTEMPTS)
+        .map(|n| input.with_file_name(format!("{stem}.salvage{n}.{ext}")))
+        .find(|candidate| !candidate.exists())
+        .unwrap_or_else(|| {
+            input.with_file_name(format!("{stem}.salvage{MAX_SALVAGE_ATTEMPTS}.{ext}"))
+        })
+}
+
 /// Salvage a corrupt Matroska/WebM container by remuxing with stream copy.
 ///
 /// Reads all recoverable packets from the corrupt input and writes them into
@@ -161,22 +187,7 @@ pub fn salvage_remux_sync(input: &Path) -> anyhow::Result<PathBuf> {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("salvage");
-    let salvage_path = {
-        let base = input.with_file_name(format!("{stem}.salvage.{ext}"));
-        if base.exists() {
-            // Find unique path to avoid reusing partially written files
-            let mut attempt = 1u32;
-            loop {
-                let candidate = input.with_file_name(format!("{stem}.salvage{attempt}.{ext}"));
-                if !candidate.exists() || attempt >= 99 {
-                    break candidate;
-                }
-                attempt += 1;
-            }
-        } else {
-            base
-        }
-    };
+    let salvage_path = next_salvage_path(input, stem, ext);
 
     info!(
         "Salvage remuxing corrupt input: {} -> {}",
@@ -408,5 +419,52 @@ mod tests {
         }
         let result = check_matroska_integrity(Path::new("/nonexistent/file.mkv"));
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn next_salvage_path_uses_base_when_free() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let input = dir.path().join("movie.mkv");
+        // Nothing occupies the base slot yet → the un-numbered path is chosen.
+        assert_eq!(
+            next_salvage_path(&input, "movie", "mkv"),
+            dir.path().join("movie.salvage.mkv")
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // test fixture: create sync files to occupy salvage slots
+    fn next_salvage_path_skips_occupied_slots() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let input = dir.path().join("movie.mkv");
+        // Base + first numbered slot are already taken by prior salvage runs;
+        // the next free slot is salvage2 — a previous partial file is never reused.
+        for name in ["movie.salvage.mkv", "movie.salvage1.mkv"] {
+            std::fs::File::create(dir.path().join(name)).expect("create fixture");
+        }
+        assert_eq!(
+            next_salvage_path(&input, "movie", "mkv"),
+            dir.path().join("movie.salvage2.mkv")
+        );
+    }
+
+    #[test]
+    #[allow(clippy::disallowed_methods)] // test fixture: occupy every salvage slot
+    fn next_salvage_path_reuses_last_slot_when_all_occupied() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let input = dir.path().join("movie.mkv");
+        // Occupy the base slot and every numbered slot 1..=MAX.
+        std::fs::File::create(dir.path().join("movie.salvage.mkv")).expect("create base");
+        for n in 1..=MAX_SALVAGE_ATTEMPTS {
+            std::fs::File::create(dir.path().join(format!("movie.salvage{n}.mkv")))
+                .expect("create slot");
+        }
+        // No free slot remains → fall back to the last slot, matching the old
+        // loop's `attempt >= 99` cap that returned salvage99 even when occupied.
+        assert_eq!(
+            next_salvage_path(&input, "movie", "mkv"),
+            dir.path()
+                .join(format!("movie.salvage{MAX_SALVAGE_ATTEMPTS}.mkv"))
+        );
     }
 }

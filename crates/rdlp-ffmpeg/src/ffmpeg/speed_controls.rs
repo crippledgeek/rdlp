@@ -86,7 +86,7 @@ pub enum SpeedControlError {
 
 fn check_knob(
     field: KnobField,
-    value: Option<String>,
+    value: Option<&str>,
     encoder: &str,
 ) -> Result<(), SpeedControlError> {
     let Some(val) = value else {
@@ -101,12 +101,12 @@ fn check_knob(
         })?;
     match def.kind {
         KnobKindDef::Choice { choices, .. } => {
-            if choices.contains(&val.as_str()) {
+            if choices.contains(&val) {
                 Ok(())
             } else {
                 Err(SpeedControlError::NotInChoices {
                     knob: field,
-                    value: val,
+                    value: val.to_string(),
                     choices: choices.iter().map(|s| (*s).to_string()).collect(),
                 })
             }
@@ -114,7 +114,7 @@ fn check_knob(
         KnobKindDef::Int { min, max, .. } => {
             let n: i32 = val.parse().map_err(|_| SpeedControlError::NotInteger {
                 knob: field,
-                value: val.clone(),
+                value: val.to_string(),
             })?;
             if (min..=max).contains(&n) {
                 Ok(())
@@ -150,14 +150,15 @@ pub fn validate_speed_controls(
     let Some(enc) = encoder else {
         return Ok(());
     };
-    check_knob(KnobField::Preset, preset.map(str::to_string), enc)?;
-    check_knob(KnobField::Deadline, deadline.map(str::to_string), enc)?;
-    check_knob(KnobField::CpuUsed, cpu_used.map(|n| n.to_string()), enc)?;
-    check_knob(
-        KnobField::SpeedLevel,
-        speed_level.map(|n| i32::try_from(n).unwrap_or(i32::MAX).to_string()),
-        enc,
-    )?;
+    // The numeric knobs bind their owned strings first so `.as_deref()` can
+    // borrow them; `preset`/`deadline` are already `&str` and pass through with
+    // no allocation on the happy path.
+    let cpu = cpu_used.map(|n| n.to_string());
+    let spd = speed_level.map(|n| i32::try_from(n).unwrap_or(i32::MAX).to_string());
+    check_knob(KnobField::Preset, preset, enc)?;
+    check_knob(KnobField::Deadline, deadline, enc)?;
+    check_knob(KnobField::CpuUsed, cpu.as_deref(), enc)?;
+    check_knob(KnobField::SpeedLevel, spd.as_deref(), enc)?;
     Ok(())
 }
 
