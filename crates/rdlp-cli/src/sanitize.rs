@@ -1,12 +1,19 @@
-//! Neutralize terminal control sequences in extractor-sourced text.
+//! Neutralize hostile control/format characters in extractor-sourced text.
 //!
 //! Titles, uploader names, and other strings sourced from a remote site are
-//! attacker-controlled. Written **raw** to a TTY or a log they can smuggle in
-//! ANSI/terminal control sequences — a title containing an `ESC [ 2 J` clears
-//! the user's screen, `ESC ]` (OSC) can retitle the window, and a bare `CR`
-//! overwrites the current line to spoof output. Since #481 the full WHATWG
-//! entity set is decodable (`&#27;` → `ESC`) at more extractor call sites, so
-//! this boundary must be guarded.
+//! attacker-controlled. Written **raw** to a TTY or a log they can abuse two
+//! distinct Unicode-based vectors:
+//!
+//! 1. **Terminal escape injection** (CWE-150, category `Cc`) — a title
+//!    containing `ESC [ 2 J` clears the user's screen, `ESC ]` (OSC) retitles
+//!    the window, and a bare `CR` overwrites the current line to spoof output.
+//!    Since #481 the full WHATWG entity set is decodable (`&#27;` → `ESC`) at
+//!    more extractor call sites, so this boundary must be guarded.
+//! 2. **Bidirectional-override spoofing** ("Trojan Source", CVE-2021-42574) —
+//!    bidi formatting controls such as `U+202E` RIGHT-TO-LEFT OVERRIDE reorder
+//!    how text renders, so `"invoice\u{202e}gpj.exe"` displays as
+//!    `"invoiceexe.jpg"`. These are category `Cf`, not `Cc`, so the
+//!    escape-injection filter does not catch them (#485).
 //!
 //! This mirrors `rdlp_api`'s `Orchestrator::sanitize_filename`, which already
 //! strips control characters at the filesystem boundary — here we guard the
@@ -28,31 +35,44 @@
 //! cannot. CWE-150 endorses this "restrict to printable" approach over matching
 //! known-bad sequences. (Verdict from a cited multi-source survey, 2026-07-14.)
 
-/// Return a copy of `s` with all Unicode control characters removed, rendering
-/// any embedded terminal escape sequence inert before the text is written to a
-/// TTY or log.
+/// Return a copy of `s` with hostile control and bidi-formatting characters
+/// removed, rendering any embedded terminal escape sequence or visual-reorder
+/// spoof inert before the text is written to a TTY or log.
 ///
-/// [`char::is_control`] is the Unicode general-category `Cc` set, i.e. the C0
-/// range `U+0000..=U+001F` (including `ESC` `U+001B`, `CR`, `BEL`, `BS`), the
-/// `DEL` `U+007F`, and the C1 range `U+0080..=U+009F` (which includes the
-/// single-byte `CSI` `U+009B` / `OSC` `U+009D` introducers). Stripping the
-/// introducer leaves the remaining bytes as harmless literal text
-/// (`"\x1b[31mX"` → `"[31mX"`). Ordinary printable text — including non-ASCII
-/// letters and spaces — passes through unchanged.
+/// Two independent filters run in one pass:
 ///
-/// # Scope
+/// - **[`char::is_control`]** — the Unicode general-category `Cc` set: the C0
+///   range `U+0000..=U+001F` (including `ESC` `U+001B`, `CR`, `BEL`, `BS`),
+///   `DEL` `U+007F`, and the C1 range `U+0080..=U+009F` (which includes the
+///   single-byte `CSI` `U+009B` / `OSC` `U+009D` introducers). Stripping the
+///   introducer leaves the remaining bytes as harmless literal text
+///   (`"\x1b[31mX"` → `"[31mX"`).
+/// - **`is_bidi_control`** — the bidi embedding/override/isolate controls
+///   (`U+202A..=U+202E`, `U+2066..=U+2069`) that drive the Trojan-Source
+///   visual-reordering attack.
 ///
-/// This targets the ANSI/terminal-escape-injection threat (category `Cc`). It
-/// deliberately does **not** strip Unicode category `Cf` "format" characters
-/// such as `U+202E` RIGHT-TO-LEFT OVERRIDE or zero-width joiners — those are a
-/// separate display-spoofing class ("Trojan Source", CVE-2021-42574) outside
-/// this function's remit — tracked as a dedicated bidi-control pass in #485.
-/// Note that pass must target the bidi-control block only (`U+202A..=U+202E`,
-/// `U+2066..=U+2069`), NOT the whole `Cf` category, since `Cf` includes the
-/// zero-width joiner `U+200D` that legitimate emoji sequences depend on.
+/// Ordinary printable text — including non-ASCII letters, spaces, and the
+/// zero-width joiner `U+200D` that legitimate emoji sequences depend on —
+/// passes through unchanged.
 #[must_use]
 pub fn sanitize_for_terminal(s: &str) -> String {
-    s.chars().filter(|c| !c.is_control()).collect()
+    s.chars()
+        .filter(|&c| !c.is_control() && !is_bidi_control(c))
+        .collect()
+}
+
+/// The Unicode bidirectional formatting controls that enable "Trojan Source"
+/// (CVE-2021-42574) visual-reordering spoofing: the embeddings/overrides
+/// `U+202A..=U+202E` (LRE, RLE, PDF, LRO, RLO) and the isolates
+/// `U+2066..=U+2069` (LRI, RLI, FSI, PDI) — the same set `rustc`'s
+/// `text_direction_codepoint_in_literal` lint denies.
+///
+/// This is deliberately **not** the whole `Cf` category: `Cf` also contains the
+/// zero-width joiner `U+200D`, which is load-bearing for legitimate emoji
+/// sequences (a family emoji is person-ZWJ-person-ZWJ-child). Stripping all of
+/// `Cf` would corrupt real titles, so only this bidi-control block is removed.
+const fn is_bidi_control(c: char) -> bool {
+    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
 #[cfg(test)]
@@ -117,5 +137,38 @@ mod tests {
         // future range refactor sliding the ceiling from 0x9F to 0xA0.
         let out = sanitize_for_terminal("a\u{9f}\u{a0}b");
         assert_eq!(out, "a\u{a0}b");
+    }
+
+    #[test]
+    fn bidi_rlo_override_is_stripped() {
+        // The canonical "Trojan Source" vector: RIGHT-TO-LEFT OVERRIDE (U+202E)
+        // reorders the visual rendering of the following text. It must not
+        // survive to the terminal.
+        let out = sanitize_for_terminal("invoice\u{202e}gpj.exe");
+        assert!(!out.contains('\u{202e}'), "RLO must be stripped: {out:?}");
+        assert_eq!(out, "invoicegpj.exe");
+    }
+
+    #[test]
+    fn zwj_emoji_sequence_is_preserved() {
+        // U+200D ZERO WIDTH JOINER is category `Cf` like the bidi controls, but
+        // it is load-bearing for legitimate emoji (a family emoji is
+        // person-ZWJ-person-ZWJ-child). Stripping the whole `Cf` category would
+        // corrupt real titles; only the bidi-control block may be removed.
+        let family = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}";
+        assert_eq!(sanitize_for_terminal(family), family);
+    }
+
+    #[test]
+    fn bidi_embedding_isolate_block_stripped_boundaries_preserved() {
+        // First range U+202A..=U+202E (LRE,RLE,PDF,LRO,RLO): pin both edges —
+        // U+2029 (below) and U+202F NARROW NO-BREAK SPACE (above) are kept.
+        let out = sanitize_for_terminal("\u{2029}\u{202a}\u{202e}\u{202f}");
+        assert_eq!(out, "\u{2029}\u{202f}");
+
+        // Second range U+2066..=U+2069 (LRI,RLI,FSI,PDI): U+2065 (below) and
+        // U+206A (above, a distinct `Cf` char we intentionally keep) preserved.
+        let out = sanitize_for_terminal("\u{2065}\u{2066}\u{2069}\u{206a}");
+        assert_eq!(out, "\u{2065}\u{206a}");
     }
 }
