@@ -39,15 +39,21 @@ pub fn fixup_formats(formats: &mut [Format]) {
 ///
 /// Returns a map of quality label (e.g. `"720p"`) to byte size.
 fn collect_download_sizes(sources: &serde_json::Map<String, Value>) -> HashMap<String, f64> {
-    let mut format_sizes: HashMap<String, f64> = HashMap::new();
-    if let Some(download) = sources.get("download").and_then(|v| v.as_object()) {
-        for (quality, format_dict) in download {
-            if let Some(size) = format_dict.get("size").and_then(|v| v.as_f64()) {
-                format_sizes.insert(quality.clone(), size);
-            }
-        }
-    }
-    format_sizes
+    sources
+        .get("download")
+        .and_then(|v| v.as_object())
+        .map(|download| {
+            download
+                .iter()
+                .filter_map(|(quality, format_dict)| {
+                    format_dict
+                        .get("size")
+                        .and_then(Value::as_f64)
+                        .map(|size| (quality.clone(), size))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// Collect HLS formats from `xplayerSettings.sources.hls` (encrypted URLs).

@@ -155,13 +155,9 @@ fn extract_info_bar_text(html: &Html, icon_class: &str) -> Option<String> {
     let item_selector = scraper::Selector::parse(".buttons-info .item").ok()?;
     let icon_selector = scraper::Selector::parse(icon_class).ok()?;
 
-    for item in html.select(&item_selector) {
-        if item.select(&icon_selector).next().is_some() {
-            return Some(item.text().collect());
-        }
-    }
-
-    None
+    html.select(&item_selector)
+        .find(|item| item.select(&icon_selector).next().is_some())
+        .map(|item| item.text().collect())
 }
 
 /// Extract view count from the page
@@ -428,5 +424,34 @@ mod tests {
             extract_model_url(&html),
             Some("https://www.xtits.com/models/jenni-lee/".to_string())
         );
+    }
+
+    #[test]
+    fn extract_info_bar_text_reads_matching_icon_item() {
+        let html_str = r#"
+        <div class="buttons-info">
+            <div class="item"><span class="icon-clock"></span> 12:34</div>
+            <div class="item"><span class="icon-eye"></span> 1 234</div>
+        </div>
+        "#;
+        let html = Html::parse_document(html_str);
+        // Returns the text of the `.item` whose icon matches, not the first item.
+        assert_eq!(
+            extract_info_bar_text(&html, ".icon-eye")
+                .as_deref()
+                .map(str::trim),
+            Some("1 234")
+        );
+    }
+
+    #[test]
+    fn extract_info_bar_text_returns_none_without_matching_icon() {
+        let html_str = r#"
+        <div class="buttons-info">
+            <div class="item"><span class="icon-clock"></span> 12:34</div>
+        </div>
+        "#;
+        let html = Html::parse_document(html_str);
+        assert_eq!(extract_info_bar_text(&html, ".icon-eye"), None);
     }
 }

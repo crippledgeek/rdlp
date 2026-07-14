@@ -183,12 +183,13 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
             else {
                 continue;
             };
-            if let Some(m) = re.captures(&html) {
-                for i in 1..m.len() {
-                    if let Some(g) = m.get(i) {
-                        return Some(html_escape::decode_html_entities(g.as_str()).into_owned());
-                    }
-                }
+            if let Some(m) = re.captures(&html)
+                && let Some(s) = (1..m.len()).find_map(|i| {
+                    m.get(i)
+                        .map(|g| html_escape::decode_html_entities(g.as_str()).into_owned())
+                })
+            {
+                return Some(s);
             }
         }
         None

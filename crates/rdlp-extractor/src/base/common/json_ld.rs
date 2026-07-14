@@ -249,13 +249,8 @@ pub enum JsonLdGenre {
 /// `VideoObject`, including inside `@graph` arrays.
 #[must_use]
 pub fn extract_json_ld(html: &Html) -> Option<JsonLdVideo> {
-    for script_elem in html.select(&JSONLD_SELECTOR) {
-        let json_text = script_elem.text().collect::<String>();
-        if let Some(video) = parse_video_object(&json_text) {
-            return Some(video);
-        }
-    }
-    None
+    html.select(&JSONLD_SELECTOR)
+        .find_map(|script_elem| parse_video_object(&script_elem.text().collect::<String>()))
 }
 
 /// Parse a JSON-LD text block and extract the first `VideoObject`.
@@ -266,11 +261,10 @@ fn parse_video_object(json_text: &str) -> Option<JsonLdVideo> {
                 return Some(obj);
             }
             JsonLdRoot::Graph(graph) => {
-                for obj in graph.graph {
-                    if obj.json_type.as_ref().is_some_and(|t| t.is_video()) {
-                        return Some(obj);
-                    }
-                }
+                return graph
+                    .graph
+                    .into_iter()
+                    .find(|obj| obj.json_type.as_ref().is_some_and(|t| t.is_video()));
             }
             _ => {}
         }

@@ -199,16 +199,17 @@ impl Orchestrator {
         }
 
         // Map selected indices back to (lang, best_subtitle) pairs
-        let mut result = Vec::new();
-        for &idx in &selected_indices {
-            #[allow(clippy::indexing_slicing)]
-            // idx comes from interactive selection bounded by items.len()
-            let item = &items[idx];
-            // Find the best subtitle entry for this language
-            if let Some(sub) = self.pick_best_subtitle_for_lang(info, &item.lang, item.is_auto) {
-                result.push((item.lang.clone(), sub));
-            }
-        }
+        let result: Vec<_> = selected_indices
+            .iter()
+            .filter_map(|&idx| {
+                #[allow(clippy::indexing_slicing)]
+                // idx comes from interactive selection bounded by items.len()
+                let item = &items[idx];
+                // Find the best subtitle entry for this language
+                self.pick_best_subtitle_for_lang(info, &item.lang, item.is_auto)
+                    .map(|sub| (item.lang.clone(), sub))
+            })
+            .collect();
 
         info!(
             "Selected {} subtitle language(s): {}",

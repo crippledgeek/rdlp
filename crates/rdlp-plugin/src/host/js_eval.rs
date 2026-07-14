@@ -108,10 +108,10 @@ impl JsEvalCtx {
         // Build a JSON object from the string key-value pairs so we can use
         // eval_with_context, which injects each top-level key as a global.
         let ctx_json: serde_json::Value = {
-            let mut map = serde_json::Map::with_capacity(sandbox_globals.len());
-            for (k, v) in sandbox_globals {
-                map.insert(k.clone(), serde_json::Value::String(v.clone()));
-            }
+            let map: serde_json::Map<String, serde_json::Value> = sandbox_globals
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect();
             serde_json::Value::Object(map)
         };
 
