@@ -15,14 +15,18 @@ use crate::state::AppState;
 
 /// Sanitize a user-provided query string.
 ///
-/// Trims whitespace, strips control characters, and limits length to
-/// 500 characters to prevent oversized or malformed queries from
+/// Trims whitespace, strips control and bidi-control characters, and limits
+/// length to 500 characters to prevent oversized or malformed queries from
 /// reaching the backend.
+///
+/// Bidi-control stripping ([`rdlp_security::text::is_bidi_control`]) keeps this
+/// boundary consistent with the terminal and filesystem sanitizers; the
+/// zero-width joiner `U+200D` that legitimate emoji depend on is preserved.
 fn sanitize_query(input: &str) -> String {
     input
         .trim()
         .chars()
-        .filter(|c| !c.is_control())
+        .filter(|c| !c.is_control() && !rdlp_security::text::is_bidi_control(*c))
         .take(500)
         .collect()
 }
@@ -203,6 +207,21 @@ mod tests {
     fn test_sanitize_query_strips_control_chars() {
         assert_eq!(sanitize_query("hello\x00\x01world"), "helloworld");
         assert_eq!(sanitize_query("tab\there"), "tabhere");
+    }
+
+    #[test]
+    fn test_sanitize_query_strips_bidi_control() {
+        // Consistency with the other sanitization boundaries (#490): bidi-control
+        // chars are category `Cf`, not `Cc`, so the control-char filter does not
+        // catch U+202E RIGHT-TO-LEFT OVERRIDE. Fails against the pre-#490 code,
+        // which left it intact.
+        assert_eq!(sanitize_query("a\u{202e}b\u{2066}c"), "abc");
+        // The zero-width joiner U+200D (also `Cf`) must survive — legitimate
+        // emoji depend on it.
+        assert_eq!(
+            sanitize_query("\u{1f468}\u{200d}\u{1f469}"),
+            "\u{1f468}\u{200d}\u{1f469}"
+        );
     }
 
     #[test]

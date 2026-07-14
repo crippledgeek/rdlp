@@ -102,21 +102,4 @@ impl BaseExtractor {
             .take(max)
             .collect()
     }
-
-    /// Sanitize a string for safe logging (redact sensitive data)
-    ///
-    /// **Note**: This function delegates to [`rdlp_security::sanitize_for_logging`].
-    ///
-    /// Redacts common sensitive patterns like tokens, keys, passwords.
-    ///
-    /// # Arguments
-    /// * `s` - String to sanitize
-    ///
-    /// # Returns
-    /// Sanitized string with sensitive data redacted
-    #[must_use]
-    #[allow(dead_code)]
-    pub(crate) fn sanitize_for_logging(s: &str) -> String {
-        rdlp_security::sanitize_for_logging(s)
-    }
 }

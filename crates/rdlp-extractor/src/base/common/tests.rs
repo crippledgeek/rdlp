@@ -279,18 +279,6 @@ fn test_truncate_string() {
     );
 }
 
-#[test]
-fn test_sanitize_for_logging() {
-    assert_eq!(
-        BaseExtractor::sanitize_for_logging("url?token=secret123&other=value"),
-        "url?token=***&other=value"
-    );
-    assert_eq!(
-        BaseExtractor::sanitize_for_logging("url?key=abc&password=xyz"),
-        "url?key=***&password=***"
-    );
-}
-
 // ========================================================================
 // Format Building Tests
 // ========================================================================
