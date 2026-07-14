@@ -11,6 +11,22 @@
 //! This mirrors `rdlp_api`'s `Orchestrator::sanitize_filename`, which already
 //! strips control characters at the filesystem boundary — here we guard the
 //! terminal/log boundary the same way.
+//!
+//! ## Why the stdlib `char::is_control()` filter and not an ANSI-strip crate
+//!
+//! No Rust crate is designed as a *security* sanitizer for this — `console`
+//! (`strip_ansi_codes`), `strip-ansi-escapes`, `anstream`, and `vte` are all
+//! *rendering* helpers (strip color codes for width calculation / dumb-terminal
+//! fallback), by their own documentation. Each leaves gaps against this threat
+//! model: `console` doesn't touch OSC, bare `CR`, `BEL`, `BS`, or `DEL`;
+//! `anstream` keeps `CR` (its "whitespace" exemption) — the line-overwrite
+//! spoofing vector. More fundamentally, every one is byte/regex-based and keys
+//! C1 detection off the raw byte `0x9B`, which **cannot occur in valid UTF-8**;
+//! a C1 introducer arriving as the encoded scalar `U+009B` (`0xC2 0x9B`) sails
+//! straight through them. Filtering the Unicode `Cc` category operates on the
+//! *decoded scalar value*, so it neutralizes that vector where the crates
+//! cannot. CWE-150 endorses this "restrict to printable" approach over matching
+//! known-bad sequences. (Verdict from a cited multi-source survey, 2026-07-14.)
 
 /// Return a copy of `s` with all Unicode control characters removed, rendering
 /// any embedded terminal escape sequence inert before the text is written to a
@@ -29,8 +45,11 @@
 /// This targets the ANSI/terminal-escape-injection threat (category `Cc`). It
 /// deliberately does **not** strip Unicode category `Cf` "format" characters
 /// such as `U+202E` RIGHT-TO-LEFT OVERRIDE or zero-width joiners — those are a
-/// separate display-spoofing class ("Trojan Source") outside this function's
-/// remit; add a dedicated pass if that threat model is ever brought in scope.
+/// separate display-spoofing class ("Trojan Source", CVE-2021-42574) outside
+/// this function's remit — tracked as a dedicated bidi-control pass in #485.
+/// Note that pass must target the bidi-control block only (`U+202A..=U+202E`,
+/// `U+2066..=U+2069`), NOT the whole `Cf` category, since `Cf` includes the
+/// zero-width joiner `U+200D` that legitimate emoji sequences depend on.
 #[must_use]
 pub fn sanitize_for_terminal(s: &str) -> String {
     s.chars().filter(|c| !c.is_control()).collect()
