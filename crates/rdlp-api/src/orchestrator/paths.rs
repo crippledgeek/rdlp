@@ -136,6 +136,13 @@ impl Orchestrator {
                 if c == '\0' || (c.is_control() && c != ' ') {
                     return None;
                 }
+                // Normalize non-ASCII whitespace (e.g. U+00A0 NO-BREAK SPACE from
+                // a decoded `&nbsp;`, or other Unicode Zs/Zl/Zp separators) to a
+                // plain ASCII space, so it renders and trims like ordinary
+                // whitespace instead of persisting as an invisible non-space.
+                if c.is_whitespace() {
+                    return Some(' ');
+                }
                 // Replace invalid filesystem characters with underscore
                 Some(match c {
                     '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|' => '_',
@@ -230,6 +237,26 @@ mod sanitize_marker_tests {
         assert_eq!(
             Orchestrator::sanitize_filename("Normal Title"),
             "Normal Title"
+        );
+    }
+
+    /// A non-breaking space (U+00A0) — e.g. from a decoded `&nbsp;` title — is
+    /// normalized to a plain ASCII space so it renders and trims like ordinary
+    /// whitespace. Fails against the old code, which preserved U+00A0 verbatim
+    /// (it is category Zs, not a control char, and the trim only matched 0x20).
+    #[test]
+    fn normalizes_non_breaking_space_to_ascii_space() {
+        assert_eq!(Orchestrator::sanitize_filename("a\u{00A0}b"), "a b");
+    }
+
+    /// Leading/trailing Unicode whitespace is normalized first, so the existing
+    /// dot/space trim then strips it. Fails against the old code, which left the
+    /// U+00A0 padding in place.
+    #[test]
+    fn trims_leading_trailing_unicode_whitespace() {
+        assert_eq!(
+            Orchestrator::sanitize_filename("\u{00A0}Title\u{00A0}"),
+            "Title"
         );
     }
 

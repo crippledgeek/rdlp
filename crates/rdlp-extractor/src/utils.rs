@@ -22,9 +22,6 @@ use log::trace;
 // Static Patterns for Utility Functions
 // ============================================================================
 
-/// Pattern for HTML entity references (e.g., &amp; &#39; &#x27;)
-static HTML_ENTITY_PATTERN: Lazy<Regex> = lazy_regex!(r"&(#?[a-zA-Z0-9]+);");
-
 /// Pattern for whitespace normalization
 static WHITESPACE_PATTERN: Lazy<Regex> = lazy_regex!(r"\s+");
 
@@ -127,12 +124,16 @@ pub fn clean_html_text(text: &str) -> String {
         .to_string()
 }
 
-/// Decode common HTML entities
+/// Decode HTML entities in a single left-to-right pass.
 ///
-/// Handles:
-/// - Named entities: `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;`, `&nbsp;`
-/// - Numeric entities: `&#39;`, `&#34;`
-/// - Hex entities: `&#x27;`, `&#x22;`
+/// Delegates to [`html_escape::decode_html_entities`], which decodes the full
+/// WHATWG named-character-reference set plus decimal (`&#39;`) and hex
+/// (`&#x3C;`) numeric references. Decoding is single-pass, so an already-escaped
+/// input like `&amp;lt;` stays the literal `&lt;` rather than collapsing to `<`
+/// — matching yt-dlp / CPython `html.unescape` and avoiding the OWASP
+/// double-encoding class. `&nbsp;` decodes to U+00A0 (NO-BREAK SPACE); any
+/// ASCII-space normalization for filenames is the sanitizer's concern, not the
+/// decoder's.
 ///
 /// # Arguments
 /// * `text` - Text containing HTML entities
@@ -148,46 +149,9 @@ pub fn clean_html_text(text: &str) -> String {
 /// let decoded = decode_html_entities("Tom &amp; Jerry");
 /// assert_eq!(decoded, "Tom & Jerry");
 /// ```
+#[must_use]
 pub fn decode_html_entities(text: &str) -> String {
-    let mut result = text.to_string();
-
-    // Common named entities
-    result = result.replace("&amp;", "&");
-    result = result.replace("&lt;", "<");
-    result = result.replace("&gt;", ">");
-    result = result.replace("&quot;", "\"");
-    result = result.replace("&apos;", "'");
-    result = result.replace("&#39;", "'");
-    result = result.replace("&#34;", "\"");
-    result = result.replace("&nbsp;", " ");
-
-    // Handle numeric/hex entities
-    HTML_ENTITY_PATTERN
-        .replace_all(&result, |caps: &regex::Captures| {
-            let entity = &caps[1];
-            if let Some(stripped) = entity.strip_prefix('#') {
-                // Numeric entity
-                let code = if let Some(hex) = stripped
-                    .strip_prefix('x')
-                    .or_else(|| stripped.strip_prefix('X'))
-                {
-                    // Hex entity
-                    u32::from_str_radix(hex, 16).ok()
-                } else {
-                    // Decimal entity
-                    stripped.parse::<u32>().ok()
-                };
-
-                if let Some(code) = code
-                    && let Some(ch) = char::from_u32(code)
-                {
-                    return ch.to_string();
-                }
-            }
-            // Return original if can't decode
-            caps[0].to_string()
-        })
-        .to_string()
+    html_escape::decode_html_entities(text).into_owned()
 }
 
 // ============================================================================
@@ -415,6 +379,42 @@ mod tests {
         assert_eq!(decode_html_entities("it&#39;s"), "it's");
         assert_eq!(decode_html_entities("&#60;"), "<");
         assert_eq!(decode_html_entities("&#x3C;"), "<");
+    }
+
+    /// Regression: entities must be decoded in a single pass. An already-escaped
+    /// input like `&amp;lt;` (literal text `&lt;`) must NOT be recursively
+    /// re-decoded into `<` — that is the OWASP double-encoding class and diverges
+    /// from yt-dlp / CPython `html.unescape`. Fails against the old sequential
+    /// `.replace()` decoder, which yielded `<`.
+    #[test]
+    fn test_decode_html_entities_no_double_decode() {
+        assert_eq!(decode_html_entities("&amp;lt;"), "&lt;");
+        assert_eq!(decode_html_entities("&amp;amp;"), "&amp;");
+        assert_eq!(decode_html_entities("&amp;#39;"), "&#39;");
+    }
+
+    /// `&nbsp;` decodes to U+00A0 NO-BREAK SPACE (WHATWG / yt-dlp parity), not an
+    /// ASCII space. Fails against the old decoder, which emitted `0x20`.
+    #[test]
+    fn test_decode_html_entities_nbsp_is_no_break_space() {
+        assert_eq!(decode_html_entities("a&nbsp;b"), "a\u{00A0}b");
+    }
+
+    /// The full WHATWG named-entity set is decoded, not just the old 8-entity
+    /// subset. Fails against the old decoder, which left `&mdash;`/`&hellip;`
+    /// untouched.
+    #[test]
+    fn test_decode_html_entities_full_named_set() {
+        assert_eq!(decode_html_entities("a &mdash; b"), "a \u{2014} b");
+        assert_eq!(decode_html_entities("wait&hellip;"), "wait\u{2026}");
+    }
+
+    /// Unknown/malformed entities are left verbatim (no decode, no panic) — pins
+    /// passthrough behavior against a future decoder swap.
+    #[test]
+    fn test_decode_html_entities_unknown_left_verbatim() {
+        assert_eq!(decode_html_entities("a &bogus; b"), "a &bogus; b");
+        assert_eq!(decode_html_entities("bare & amp"), "bare & amp");
     }
 
     // ========================================================================
