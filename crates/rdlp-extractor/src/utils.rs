@@ -409,6 +409,14 @@ mod tests {
         assert_eq!(decode_html_entities("wait&hellip;"), "wait\u{2026}");
     }
 
+    /// Unknown/malformed entities are left verbatim (no decode, no panic) — pins
+    /// passthrough behavior against a future decoder swap.
+    #[test]
+    fn test_decode_html_entities_unknown_left_verbatim() {
+        assert_eq!(decode_html_entities("a &bogus; b"), "a &bogus; b");
+        assert_eq!(decode_html_entities("bare & amp"), "bare & amp");
+    }
+
     // ========================================================================
     // URL Handling Tests
     // ========================================================================

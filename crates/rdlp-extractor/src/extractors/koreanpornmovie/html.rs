@@ -107,6 +107,7 @@ pub(super) fn scrape_durations_from_html(
 /// numeric/hex references), so entities like `&#8211;` → `–` and `&#8217;` →
 /// `’` decode to their true code points without the double-decoding the former
 /// hand-rolled sequential `.replace()` chain was prone to.
+#[must_use]
 pub(super) fn html_entities_decode(s: &str) -> String {
     html_escape::decode_html_entities(s).into_owned()
 }

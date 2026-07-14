@@ -60,6 +60,9 @@ tokio = { version = "1.49", features = ["macros", "rt-multi-thread", "fs", "proc
 tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = "0.1"
 
+# HTML entity decoding (single-pass, WHATWG-complete) — shared by rdlp-extractor + rdlp-plugin
+html-escape = "0.2.13"
+
 # HTTP and networking
 # wreq features:
 # - cookies, json, stream: 1:1 with reqwest's feature set pre-migration

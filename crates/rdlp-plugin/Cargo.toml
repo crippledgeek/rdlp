@@ -48,7 +48,7 @@ hex = { workspace = true }
 base64 = { workspace = true }
 url = { workspace = true }
 percent-encoding = "2"
-html-escape = "0.2.13"
+html-escape = { workspace = true }
 rdlp-extractor = { version = "0.1.0", path = "../rdlp-extractor" }
 rdlp-redact = { workspace = true }
 
