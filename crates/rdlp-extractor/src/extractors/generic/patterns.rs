@@ -25,26 +25,78 @@ pub(crate) fn has_media_extension(url: &str) -> bool {
     }
 }
 
+/// ASCII-case-insensitive prefix test that borrows instead of allocating.
+///
+/// Media type and subtype names are case-insensitive (RFC 6838 §4.2, RFC 9110
+/// §8.3.1), so comparisons must case-fold — but `to_lowercase` would allocate a
+/// `String` on every call. Mirrors the `eq_ignore_ascii_case` idiom already used
+/// by `PrefetchedResponse::is_dash_content_type`.
+fn starts_with_ignore_ascii_case(haystack: &str, prefix: &str) -> bool {
+    haystack
+        .as_bytes()
+        .get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(prefix.as_bytes()))
+}
+
+/// ASCII-case-insensitive substring test that borrows instead of allocating.
+///
+/// `needle` must be non-empty — `<[u8]>::windows` panics on a zero width. Every
+/// call site passes a non-empty literal.
+fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
+    debug_assert!(!needle.is_empty(), "windows(0) panics");
+    haystack
+        .as_bytes()
+        .windows(needle.len())
+        .any(|w| w.eq_ignore_ascii_case(needle.as_bytes()))
+}
+
 /// Check if a Content-Type header indicates direct media.
+///
+/// Also the gate for the OpenGraph `og:video:type` / `og:audio:type` hint, which
+/// distinguishes a real stream from an embed/player page (issue #493). Parameters
+/// (`; codecs=…`) need no stripping here: every test is a prefix or substring
+/// match against the type/subtype, which precedes the first `;`.
 pub(crate) fn is_media_content_type(content_type: &str) -> bool {
-    let ct = content_type.to_lowercase();
-    ct.starts_with("video/")
-        || ct.starts_with("audio/")
-        || ct.contains("mpegurl")
-        || ct.contains("dash+xml")
-        || ct.contains("x-flv")
-        || ct.contains("mp2t")
+    starts_with_ignore_ascii_case(content_type, "video/")
+        || starts_with_ignore_ascii_case(content_type, "audio/")
+        || contains_ignore_ascii_case(content_type, "mpegurl")
+        || contains_ignore_ascii_case(content_type, "dash+xml")
+        || contains_ignore_ascii_case(content_type, "x-flv")
+        || contains_ignore_ascii_case(content_type, "mp2t")
 }
 
 /// Check if a Content-Type header indicates HTML.
 pub(crate) fn is_html_content_type(content_type: &str) -> bool {
-    let ct = content_type.to_lowercase();
-    ct.contains("text/html") || ct.contains("application/xhtml")
+    contains_ignore_ascii_case(content_type, "text/html")
+        || contains_ignore_ascii_case(content_type, "application/xhtml")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Type/subtype names are case-insensitive (RFC 6838 §4.2, RFC 9110 §8.3.1).
+    /// The zero-alloc rewrite must keep case-folding — a regression here would
+    /// silently drop real streams served with an uppercase Content-Type.
+    #[test]
+    fn media_content_type_is_case_insensitive() {
+        assert!(is_media_content_type("VIDEO/MP4"));
+        assert!(is_media_content_type("Video/MP4; codecs=avc1.64001f"));
+        assert!(is_media_content_type("Application/X-MPEGURL"));
+        assert!(is_media_content_type("APPLICATION/DASH+XML"));
+        assert!(is_html_content_type("TEXT/HTML; charset=UTF-8"));
+    }
+
+    /// Non-media types must not pass — `text/html` is the embed-page marker the
+    /// OpenGraph gate keys on (issue #493).
+    #[test]
+    fn non_media_content_type_rejected() {
+        assert!(!is_media_content_type("text/html"));
+        assert!(!is_media_content_type("text/html; charset=UTF-8"));
+        assert!(!is_media_content_type("application/x-shockwave-flash"));
+        assert!(!is_media_content_type("application/json"));
+        assert!(!is_media_content_type(""));
+    }
 
     #[test]
     fn media_extension_detected() {
