@@ -19,6 +19,7 @@ use rdlp_api::TempRegistry;
 use rdlp_api::{RdlpApiError, RdlpClient};
 use rdlp_cli::event_handler::CliEventHandler;
 use rdlp_cli::interactive::DialoguerCallback;
+use rdlp_cli::sanitize::sanitize_for_terminal;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use tracing::{debug, info, warn};
@@ -280,8 +281,8 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
                     };
                     eprintln!("Found {} results{}:\n", response.results.len(), page_info);
                     for (i, r) in response.results.iter().enumerate() {
-                        eprintln!("{:>3}. {}", i + 1, r.title);
-                        eprintln!("     {}", r.video_url);
+                        eprintln!("{:>3}. {}", i + 1, sanitize_for_terminal(&r.title));
+                        eprintln!("     {}", sanitize_for_terminal(&r.video_url));
                         if let Some(d) = r.duration {
                             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                             // d is a non-negative duration in seconds; values up to ~136 years fit u32
@@ -294,7 +295,7 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
                             eprint!("  Views: {views}");
                         }
                         if let Some(uploader) = &r.uploader {
-                            eprint!("  Uploader: {uploader}");
+                            eprint!("  Uploader: {}", sanitize_for_terminal(uploader));
                         }
                         eprintln!();
                     }
@@ -360,7 +361,7 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
                 let refs: Vec<&rdlp_api::Format> = info.formats.iter().collect();
                 let table =
                     rdlp_table::render_formats_table(&refs, &rdlp_table::TableOpts::default());
-                println!("{}", info.title);
+                println!("{}", sanitize_for_terminal(&info.title));
                 println!("{table}");
             }
         }
@@ -375,8 +376,8 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
             for info in &infos {
                 debug!(
                     "[Simulate] {} | id={} | extractor={} | {} format(s)",
-                    info.title,
-                    info.id,
+                    sanitize_for_terminal(&info.title),
+                    sanitize_for_terminal(&info.id),
                     info.extractor,
                     info.formats.len()
                 );
