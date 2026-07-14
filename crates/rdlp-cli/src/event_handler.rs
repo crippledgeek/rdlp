@@ -49,7 +49,11 @@ impl CliEventHandler {
             }
             Event::MetadataReady { info, .. } => {
                 if !self.quiet {
-                    info!("{} | {} format(s)", info.title, info.formats.len());
+                    info!(
+                        "{} | {} format(s)",
+                        crate::sanitize::sanitize_for_terminal(&info.title),
+                        info.formats.len()
+                    );
                 }
             }
             Event::FormatSelected {

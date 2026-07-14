@@ -21,5 +21,8 @@ pub mod interactive;
 /// drive them without going through `clap`'s argument parsing.
 #[path = "plugin_cmd.rs"]
 pub mod plugin_cmd;
+/// Neutralize terminal control sequences in extractor-sourced text before it
+/// is written to a TTY or log (#482).
+pub mod sanitize;
 /// Cross-platform shutdown-signal handling and escalation state machine (#413).
 pub mod signal;

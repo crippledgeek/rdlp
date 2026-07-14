@@ -68,7 +68,9 @@ pub fn print_fields(info: &InfoDict, fields: &str) -> Result<()> {
             continue;
         }
         match map.get(field) {
-            Some(serde_json::Value::String(s)) => println!("{field}: {s}"),
+            Some(serde_json::Value::String(s)) => {
+                println!("{field}: {}", rdlp_cli::sanitize::sanitize_for_terminal(s));
+            }
             Some(serde_json::Value::Null) => println!("{field}:"),
             Some(v) => println!("{field}: {v}"),
             None => {
