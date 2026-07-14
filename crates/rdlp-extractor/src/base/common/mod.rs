@@ -429,15 +429,12 @@ impl BaseExtractor {
         group_indices: &[usize],
     ) -> Option<String> {
         pattern.captures(url).and_then(|cap| {
-            for &idx in group_indices {
-                if let Some(m) = cap.get(idx) {
-                    let value = m.as_str();
-                    if !value.is_empty() {
-                        return Some(value.to_string());
-                    }
-                }
-            }
-            None
+            group_indices.iter().find_map(|&idx| {
+                cap.get(idx)
+                    .map(|m| m.as_str())
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            })
         })
     }
 

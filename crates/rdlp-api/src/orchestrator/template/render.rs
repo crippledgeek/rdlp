@@ -75,10 +75,11 @@ impl OutputTemplate {
         ctx: &RenderContext,
     ) -> Result<String, TemplateError> {
         // Try each field in the fallback chain
-        for field_ref in &spec.names {
-            if let Some(val) = Self::lookup_field(field_ref, info_json, format_json, ext, ctx) {
-                return Ok(Self::format_value(&val, &spec.format));
-            }
+        if let Some(rendered) = spec.names.iter().find_map(|field_ref| {
+            Self::lookup_field(field_ref, info_json, format_json, ext, ctx)
+                .map(|val| Self::format_value(&val, &spec.format))
+        }) {
+            return Ok(rendered);
         }
 
         // All fields missed — try conditional replacement

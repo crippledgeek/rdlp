@@ -234,15 +234,11 @@ pub(super) fn decode_player_iframe(iframe_src: &str) -> Option<String> {
         base64::Engine::decode(&base64::engine::general_purpose::STANDARD, q.as_bytes()).ok()?;
     let decoded = String::from_utf8(decoded_bytes).ok()?;
 
-    // URL-decode the tag parameter
-    let params: Vec<(String, String)> = url::form_urlencoded::parse(decoded.as_bytes())
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect();
-
-    params
-        .iter()
+    // URL-decode the tag parameter — read the first `tag` pair directly instead
+    // of collecting every param into a Vec<(String, String)> just to scan it.
+    url::form_urlencoded::parse(decoded.as_bytes())
         .find(|(k, _)| k == "tag")
-        .map(|(_, v)| v.clone())
+        .map(|(_, v)| v.into_owned())
 }
 
 /// Extract media URLs from the decoded player tag HTML.

@@ -50,22 +50,21 @@ impl ThumbnailStage {
         let parent = media_file.parent()?;
 
         // Try original_stem first (most accurate after UUID renames).
-        for ext in THUMBNAIL_EXTENSIONS {
-            let path = parent.join(format!("{original_stem}.{ext}"));
-            if path.exists() {
-                return Some(path);
-            }
+        if let Some(path) = THUMBNAIL_EXTENSIONS
+            .iter()
+            .map(|ext| parent.join(format!("{original_stem}.{ext}")))
+            .find(|path| path.exists())
+        {
+            return Some(path);
         }
 
         // Fallback: try current file stem.
         let current_stem = media_file.file_stem()?.to_str()?;
         if current_stem != original_stem {
-            for ext in THUMBNAIL_EXTENSIONS {
-                let path = parent.join(format!("{current_stem}.{ext}"));
-                if path.exists() {
-                    return Some(path);
-                }
-            }
+            return THUMBNAIL_EXTENSIONS
+                .iter()
+                .map(|ext| parent.join(format!("{current_stem}.{ext}")))
+                .find(|path| path.exists());
         }
 
         None

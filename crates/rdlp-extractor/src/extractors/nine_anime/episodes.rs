@@ -123,33 +123,27 @@ fn parse_episode_info(html: &str, episode_data_id: &str) -> Option<EpisodeInfo> 
 /// Returns every `ep-item` block as an `EpisodeListEntry` with data-id,
 /// episode number, and title.
 pub fn parse_all_episodes(html: &str) -> Vec<EpisodeListEntry> {
-    let mut entries = Vec::new();
+    EP_ITEM_BLOCK
+        .find_iter(html)
+        .filter_map(|block_match| {
+            let block = block_match.as_str();
+            let id_caps = EP_ITEM_DATA_ID.captures(block)?;
+            let num_caps = EP_DATA_NUMBER.captures(block)?;
 
-    for block_match in EP_ITEM_BLOCK.find_iter(html) {
-        let block = block_match.as_str();
+            let title = EP_TITLE_ATTR
+                .captures(block)
+                .map(|c| decode_html_entities(&c[1]))
+                .filter(|t| !t.is_empty());
 
-        let Some(id_caps) = EP_ITEM_DATA_ID.captures(block) else {
-            continue;
-        };
-        let Some(num_caps) = EP_DATA_NUMBER.captures(block) else {
-            continue;
-        };
-
-        let title = EP_TITLE_ATTR
-            .captures(block)
-            .map(|c| decode_html_entities(&c[1]))
-            .filter(|t| !t.is_empty());
-
-        entries.push(EpisodeListEntry {
-            data_id: id_caps[1].to_string(),
-            info: EpisodeInfo {
-                number: num_caps[1].to_string(),
-                title,
-            },
-        });
-    }
-
-    entries
+            Some(EpisodeListEntry {
+                data_id: id_caps[1].to_string(),
+                info: EpisodeInfo {
+                    number: num_caps[1].to_string(),
+                    title,
+                },
+            })
+        })
+        .collect()
 }
 
 /// Fetch the full episode list for an anime.

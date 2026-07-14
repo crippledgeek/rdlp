@@ -132,25 +132,17 @@ pub fn parse_mpd(body: &str, base_url: &Url) -> Result<ParsedManifest, DashError
 /// Returns true if any `ContentProtection` element appears at MPD, Period,
 /// AdaptationSet, or Representation scope.
 fn mpd_has_drm(mpd: &dash_mpd::MPD) -> bool {
-    if !mpd.ContentProtection.is_empty() {
-        return true;
-    }
-    for period in &mpd.periods {
-        if !period.ContentProtection.is_empty() {
-            return true;
-        }
-        for aset in &period.adaptations {
-            if !aset.ContentProtection.is_empty() {
-                return true;
-            }
-            for repr in &aset.representations {
-                if !repr.ContentProtection.is_empty() {
-                    return true;
-                }
-            }
-        }
-    }
-    false
+    !mpd.ContentProtection.is_empty()
+        || mpd.periods.iter().any(|period| {
+            !period.ContentProtection.is_empty()
+                || period.adaptations.iter().any(|aset| {
+                    !aset.ContentProtection.is_empty()
+                        || aset
+                            .representations
+                            .iter()
+                            .any(|repr| !repr.ContentProtection.is_empty())
+                })
+        })
 }
 
 /// Resolve a list of `<BaseURL>` elements against a parent URL. When the
