@@ -6165,6 +6165,7 @@ dependencies = [
  "dash-mpd",
  "futures",
  "hex",
+ "html-escape",
  "inventory",
  "lazy-regex",
  "log",
