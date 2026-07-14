@@ -136,6 +136,15 @@ impl Orchestrator {
                 if c == '\0' || (c.is_control() && c != ' ') {
                     return None;
                 }
+                // Filter out bidi-control characters (Trojan Source, CVE-2021-42574):
+                // a U+202E RIGHT-TO-LEFT OVERRIDE in a title would otherwise persist
+                // to a real filename and reorder how it renders (`...gpj.exe` shown as
+                // `...exe.jpg`). These are category `Cf`, not `Cc`, so the control
+                // filter above does not catch them (#487). The zero-width joiner
+                // U+200D — also `Cf`, load-bearing for emoji — is intentionally kept.
+                if rdlp_security::text::is_bidi_control(c) {
+                    return None;
+                }
                 // Normalize non-ASCII whitespace (e.g. U+00A0 NO-BREAK SPACE from
                 // a decoded `&nbsp;`, or other Unicode Zs/Zl/Zp separators) to a
                 // plain ASCII space, so it renders and trims like ordinary
@@ -286,5 +295,55 @@ mod sanitize_marker_tests {
         let part = part_path(&clean);
         assert_eq!(part, PathBuf::from("/v/foo_rdlp-part.rdlp-part.mp4"));
         assert_eq!(finalize_to_clean(&part), Some(clean));
+    }
+}
+
+/// Filesystem "Trojan Source" (CVE-2021-42574) coverage: `sanitize_filename`
+/// must strip bidi-control characters so an extractor-sourced title cannot
+/// persist a right-to-left-override to a real filename on disk. The original
+/// Trojan Source attack embeds `U+202E` so a name whose bytes end `...gpj.exe`
+/// renders as `...exe.jpg`. #485 fixed only the terminal boundary; this pins
+/// the higher-value persistent filesystem boundary (#487).
+#[cfg(test)]
+mod sanitize_bidi_tests {
+    use crate::orchestrator::Orchestrator;
+
+    #[test]
+    fn strips_rlo_override_from_filename() {
+        // The canonical Trojan Source vector: U+202E RIGHT-TO-LEFT OVERRIDE
+        // reorders how the filename renders. It must never reach the filesystem.
+        // Fails against the pre-#487 code, which only filtered `Cc` controls
+        // and left this `Cf` bidi-control intact.
+        let out = Orchestrator::sanitize_filename("invoice\u{202e}gpj.exe");
+        assert!(!out.contains('\u{202e}'), "RLO must be stripped: {out}");
+        assert_eq!(out, "invoicegpj.exe");
+    }
+
+    #[test]
+    fn strips_full_bidi_block_and_preserves_boundaries() {
+        // First range U+202A..=U+202E (LRE,RLE,PDF,LRO,RLO): pin both edges.
+        // U+2029 (below) is a Zp separator normalized to ASCII space, and
+        // U+202F NARROW NO-BREAK SPACE (above) is a Zs also normalized to a
+        // space; both survive as (interior) spaces while the whole override
+        // block between them is stripped — so a slide of either edge into the
+        // strip range would drop a space and fail this assertion.
+        let out = Orchestrator::sanitize_filename("a\u{2029}\u{202a}\u{202e}\u{202f}b");
+        assert_eq!(out, "a  b");
+
+        // Second range U+2066..=U+2069 (LRI,RLI,FSI,PDI): U+2065 (below,
+        // unassigned) and U+206A (above, a distinct `Cf` char we keep) survive
+        // while the isolate block is removed.
+        let out = Orchestrator::sanitize_filename("\u{2065}\u{2066}\u{2069}\u{206a}");
+        assert_eq!(out, "\u{2065}\u{206a}");
+    }
+
+    #[test]
+    fn preserves_zwj_emoji_sequence() {
+        // U+200D ZERO WIDTH JOINER is category `Cf` like the bidi controls, but
+        // it is load-bearing for legitimate emoji (a family emoji is
+        // person-ZWJ-person-ZWJ-child). Only the bidi-control block may be
+        // stripped — the whole `Cf` category must NOT be, or real titles break.
+        let family = "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}";
+        assert_eq!(Orchestrator::sanitize_filename(family), family);
     }
 }

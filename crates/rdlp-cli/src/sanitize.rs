@@ -47,9 +47,11 @@
 ///   single-byte `CSI` `U+009B` / `OSC` `U+009D` introducers). Stripping the
 ///   introducer leaves the remaining bytes as harmless literal text
 ///   (`"\x1b[31mX"` → `"[31mX"`).
-/// - **`is_bidi_control`** — the bidi embedding/override/isolate controls
-///   (`U+202A..=U+202E`, `U+2066..=U+2069`) that drive the Trojan-Source
-///   visual-reordering attack.
+/// - [`rdlp_security::text::is_bidi_control`] — the bidi embedding/override/
+///   isolate controls (`U+202A..=U+202E`, `U+2066..=U+2069`) that drive the
+///   Trojan-Source visual-reordering attack. This predicate is shared with the
+///   filesystem boundary (`rdlp-api`'s `sanitize_filename`) so both sites
+///   classify the same 9 code points (#487).
 ///
 /// Ordinary printable text — including non-ASCII letters, spaces, and the
 /// zero-width joiner `U+200D` that legitimate emoji sequences depend on —
@@ -57,22 +59,8 @@
 #[must_use]
 pub fn sanitize_for_terminal(s: &str) -> String {
     s.chars()
-        .filter(|&c| !c.is_control() && !is_bidi_control(c))
+        .filter(|&c| !c.is_control() && !rdlp_security::text::is_bidi_control(c))
         .collect()
-}
-
-/// The Unicode bidirectional formatting controls that enable "Trojan Source"
-/// (CVE-2021-42574) visual-reordering spoofing: the embeddings/overrides
-/// `U+202A..=U+202E` (LRE, RLE, PDF, LRO, RLO) and the isolates
-/// `U+2066..=U+2069` (LRI, RLI, FSI, PDI) — the same set `rustc`'s
-/// `text_direction_codepoint_in_literal` lint denies.
-///
-/// This is deliberately **not** the whole `Cf` category: `Cf` also contains the
-/// zero-width joiner `U+200D`, which is load-bearing for legitimate emoji
-/// sequences (a family emoji is person-ZWJ-person-ZWJ-child). Stripping all of
-/// `Cf` would corrupt real titles, so only this bidi-control block is removed.
-const fn is_bidi_control(c: char) -> bool {
-    matches!(c, '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}')
 }
 
 #[cfg(test)]
