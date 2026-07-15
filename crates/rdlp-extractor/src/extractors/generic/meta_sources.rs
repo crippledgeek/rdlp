@@ -32,11 +32,11 @@ static TWITTER_PLAYER_STREAM_SELECTOR: LazyLock<Selector> = crate::static_select
 /// binds to the *most recently declared* root — never to the document at large.
 enum OgTag {
     /// A root tag: begins a new entry.
-    Root(&'static str),
-    /// The HTTPS alternate of the current root's resource — not a new entry.
-    SecureUrl(&'static str),
-    /// The current root's MIME type.
-    Type,
+    Root(OgKind),
+    /// The HTTPS alternate of the open root's resource — not a new entry.
+    SecureUrl(OgKind),
+    /// The open root's MIME type.
+    Type(OgKind),
 }
 
 impl OgTag {
@@ -44,12 +44,34 @@ impl OgTag {
     /// URL or type (`og:video:width`, `:height`, `:duration`, …).
     fn classify(property: &str) -> Option<Self> {
         match property {
-            "og:video" | "og:video:url" => Some(Self::Root("og:video")),
-            "og:audio" | "og:audio:url" => Some(Self::Root("og:audio")),
-            "og:video:secure_url" => Some(Self::SecureUrl("og:video")),
-            "og:audio:secure_url" => Some(Self::SecureUrl("og:audio")),
-            "og:video:type" | "og:audio:type" => Some(Self::Type),
+            "og:video" | "og:video:url" => Some(Self::Root(OgKind::Video)),
+            "og:audio" | "og:audio:url" => Some(Self::Root(OgKind::Audio)),
+            "og:video:secure_url" => Some(Self::SecureUrl(OgKind::Video)),
+            "og:audio:secure_url" => Some(Self::SecureUrl(OgKind::Audio)),
+            "og:video:type" => Some(Self::Type(OgKind::Video)),
+            "og:audio:type" => Some(Self::Type(OgKind::Audio)),
             _ => None,
+        }
+    }
+}
+
+/// Which OpenGraph media namespace a tag belongs to.
+///
+/// Load-bearing: a structured property binds to a root of its *own* namespace.
+/// `og:video:type` describes an `og:video` — never a neighbouring `og:audio`
+/// that merely happens to be the most recent tag.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum OgKind {
+    Video,
+    Audio,
+}
+
+impl OgKind {
+    /// The `DetectedFormat::source` tag, which feeds the emitted `format_id`.
+    const fn source(self) -> &'static str {
+        match self {
+            Self::Video => "og:video",
+            Self::Audio => "og:audio",
         }
     }
 }
@@ -57,7 +79,7 @@ impl OgTag {
 /// One OpenGraph media entry: a root URL plus any `secure_url` alternate for the
 /// same resource, and the MIME type declared for it.
 struct OgEntry<'a> {
-    source: &'static str,
+    kind: OgKind,
     /// Root URL first, `secure_url` alternate (if any) after. Both are surfaced
     /// as candidates; pipeline dedup collapses them when identical.
     urls: Vec<&'a str>,
@@ -65,9 +87,9 @@ struct OgEntry<'a> {
 }
 
 impl<'a> OgEntry<'a> {
-    fn new(source: &'static str, url: &'a str) -> Self {
+    fn new(kind: OgKind, url: &'a str) -> Self {
         Self {
-            source,
+            kind,
             urls: vec![url],
             mime: None,
         }
@@ -86,6 +108,17 @@ impl<'a> OgEntry<'a> {
 
 pub(crate) struct OpenGraphStrategy;
 
+impl OpenGraphStrategy {
+    /// The entry a structured property binds to: the most recently declared root
+    /// **of the same kind**, per the OGP spec's document-order rule.
+    fn open_root<'e, 'a>(
+        entries: &'e mut [OgEntry<'a>],
+        kind: OgKind,
+    ) -> Option<&'e mut OgEntry<'a>> {
+        entries.iter_mut().rev().find(|entry| entry.kind == kind)
+    }
+}
+
 impl DetectionStrategy for OpenGraphStrategy {
     fn name(&self) -> &'static str {
         "OpenGraph"
@@ -103,21 +136,29 @@ impl DetectionStrategy for OpenGraphStrategy {
                 continue;
             };
 
-            match OgTag::classify(property) {
-                Some(OgTag::Root(source)) => entries.push(OgEntry::new(source, content)),
-                // A `secure_url` belongs to the open root. Should a page declare
-                // one with no preceding root, treat it as a root itself rather
-                // than discarding a usable URL.
-                Some(OgTag::SecureUrl(source)) => match entries.last_mut() {
+            let Some(tag) = OgTag::classify(property) else {
+                continue;
+            };
+
+            match tag {
+                OgTag::Root(kind) => entries.push(OgEntry::new(kind, content)),
+                // A `secure_url` belongs to its kind's open root. A page may also
+                // declare one before any root (or with none at all) — keep the URL
+                // as its own entry rather than discarding it.
+                OgTag::SecureUrl(kind) => match Self::open_root(&mut entries, kind) {
                     Some(entry) => entry.urls.push(content),
-                    None => entries.push(OgEntry::new(source, content)),
+                    None => entries.push(OgEntry::new(kind, content)),
                 },
-                Some(OgTag::Type) => {
-                    if let Some(entry) = entries.last_mut() {
+                // An empty `content` leaves the type unspecified rather than
+                // declaring a non-media one — real meta soup carries these, and
+                // they must not drop a legitimate stream.
+                OgTag::Type(kind) => {
+                    if !content.trim().is_empty()
+                        && let Some(entry) = Self::open_root(&mut entries, kind)
+                    {
                         entry.mime = Some(content);
                     }
                 }
-                None => {}
             }
         }
 
@@ -137,7 +178,7 @@ impl DetectionStrategy for OpenGraphStrategy {
                         ext,
                         quality: None,
                         confidence: Confidence::High,
-                        source: entry.source,
+                        source: entry.kind.source(),
                     })
                 })
             })
@@ -376,6 +417,86 @@ mod tests {
         let ctx = make_ctx(&html, raw, &url);
 
         assert_eq!(OpenGraphStrategy.detect(&ctx).len(), 1);
+    }
+
+    /// `og:video:type` binds to the most recent `og:video` root — not to whatever
+    /// entry happens to be last.
+    ///
+    /// With a bare "last entry" rule the `text/html` here would bind to the
+    /// *audio* entry, dropping the real mp3 and letting the video embed page ship
+    /// as a format — reintroducing issue #493.
+    #[test]
+    fn og_type_binds_to_root_of_matching_kind() {
+        let raw = r#"<html><head>
+            <meta property="og:video" content="https://example.com/embed/1">
+            <meta property="og:audio" content="https://cdn.example.com/song.mp3">
+            <meta property="og:video:type" content="text/html">
+        </head></html>"#;
+        let html = Html::parse_document(raw);
+        let url = Url::parse("https://example.com/page").unwrap();
+        let ctx = make_ctx(&html, raw, &url);
+
+        let formats = OpenGraphStrategy.detect(&ctx);
+        assert_eq!(formats.len(), 1, "the video embed is dropped, audio kept");
+        assert_eq!(formats[0].url, "https://cdn.example.com/song.mp3");
+        assert_eq!(formats[0].source, "og:audio");
+    }
+
+    /// A `secure_url` attaches to its own kind's root, never to an unrelated one.
+    #[test]
+    fn og_secure_url_attaches_to_root_of_matching_kind() {
+        let raw = r#"<html><head>
+            <meta property="og:audio" content="https://cdn.example.com/song.mp3">
+            <meta property="og:video:secure_url" content="https://cdn.example.com/movie.mp4">
+        </head></html>"#;
+        let html = Html::parse_document(raw);
+        let url = Url::parse("https://example.com/page").unwrap();
+        let ctx = make_ctx(&html, raw, &url);
+
+        let formats = OpenGraphStrategy.detect(&ctx);
+        let movie = formats
+            .iter()
+            .find(|f| f.url == "https://cdn.example.com/movie.mp4")
+            .expect("video secure_url is still surfaced");
+        assert_eq!(
+            movie.source, "og:video",
+            "a video URL must not be labelled og:audio"
+        );
+    }
+
+    /// An empty `content=""` means the type is unspecified, not non-media — real
+    /// meta soup carries these, and they must not drop a legitimate stream.
+    #[test]
+    fn og_empty_type_treated_as_unspecified() {
+        let raw = r#"<html><head>
+            <meta property="og:video" content="https://cdn.example.com/video.mp4">
+            <meta property="og:video:type" content="">
+        </head></html>"#;
+        let html = Html::parse_document(raw);
+        let url = Url::parse("https://example.com/page").unwrap();
+        let ctx = make_ctx(&html, raw, &url);
+
+        assert_eq!(OpenGraphStrategy.detect(&ctx).len(), 1);
+    }
+
+    /// Canonical OGP order (root → secure_url → type): the type gates both URLs
+    /// of the entry, and the `secure_url` collapses into the open root rather
+    /// than starting a new entry.
+    #[test]
+    fn og_secure_url_in_canonical_order_shares_entry_type() {
+        let raw = r#"<html><head>
+            <meta property="og:video" content="http://cdn.example.com/embed/1">
+            <meta property="og:video:secure_url" content="https://cdn.example.com/embed/1">
+            <meta property="og:video:type" content="text/html">
+        </head></html>"#;
+        let html = Html::parse_document(raw);
+        let url = Url::parse("https://example.com/page").unwrap();
+        let ctx = make_ctx(&html, raw, &url);
+
+        assert!(
+            OpenGraphStrategy.detect(&ctx).is_empty(),
+            "the entry's text/html type gates its root AND its secure_url"
+        );
     }
 
     /// `og:audio` carries the same structured `type` property and the same defect.
