@@ -75,19 +75,29 @@ impl DetectionStrategy for JsonLdStrategy {
                     source: "json-ld:contentUrl",
                 });
             }
+            // `embedUrl` is advisory only — never a format.
+            //
+            // schema.org defines it as "A URL pointing to a player for a specific
+            // video" (the `src` of an embed tag), against `contentUrl` = "Actual
+            // bytes of the media object". A player page is not a downloadable
+            // stream, so emitting it as one produced an HTML page labelled `mp4`
+            // (issue #493). It was previously demoted to `Confidence::Low` in the
+            // belief that suppressed it, but confidence only orders dedup
+            // candidates (see `detection::run_detection_pipeline`) and never
+            // filters — the entry shipped regardless.
+            //
+            // Mirrors `IframeEmbedStrategy`, which logs embedded players without
+            // emitting formats. yt-dlp's shared JSON-LD parser likewise reads only
+            // `contentUrl`; every upstream use of `embedUrl` is a recursion target.
             if let Some(url) = video
                 .embed_url
                 .as_deref()
                 .and_then(|u| resolve_url(ctx.base_url, u))
             {
-                // embedUrl is often an iframe, not a direct media link
-                formats.push(DetectedFormat {
-                    ext: ext_from_url(&url),
-                    url,
-                    quality: None,
-                    confidence: Confidence::Low,
-                    source: "json-ld:embedUrl",
-                });
+                log::info!(
+                    "JSON-LD declares an embedded player — try that URL directly (embedUrl: {})",
+                    rdlp_redact::RedactedUrl::new(&url)
+                );
             }
         }
 
@@ -130,8 +140,20 @@ mod tests {
         assert_eq!(formats[0].source, "json-ld:contentUrl");
     }
 
+    /// `embedUrl` is a player page, never media, so it yields no format.
+    ///
+    /// This previously asserted `embedUrl` became a `Confidence::Low` format —
+    /// encoding the same defect as the OpenGraph Flash branch: `Confidence` only
+    /// orders dedup candidates and never filters, so the "low confidence" entry
+    /// was emitted as a real downloadable format with a guessed `mp4` extension
+    /// (issue #493).
+    ///
+    /// schema.org defines `embedUrl` as "A URL pointing to a player for a
+    /// specific video", against `contentUrl` = "Actual bytes of the media
+    /// object". yt-dlp's shared JSON-LD parser reads `contentUrl` only and never
+    /// reads `embedUrl` at all.
     #[test]
-    fn json_ld_embed_url_fallback() {
+    fn json_ld_embed_url_is_advisory_only() {
         let raw = r#"<html><head><script type="application/ld+json">
         {
             "@type": "VideoObject",
@@ -143,10 +165,33 @@ mod tests {
         let url = Url::parse("https://example.com/page").unwrap();
         let ctx = make_ctx(&html, raw, &url);
 
+        assert!(
+            JsonLdStrategy.detect(&ctx).is_empty(),
+            "embedUrl is a player page, not a downloadable stream"
+        );
+    }
+
+    /// When both are present, only the real media bytes become a format.
+    /// Mirrors yt-dlp's CI-enforced eporner fixture, which asserts `contentUrl`
+    /// wins and `embedUrl` never surfaces.
+    #[test]
+    fn json_ld_content_url_wins_over_embed_url() {
+        let raw = r#"<html><head><script type="application/ld+json">
+        {
+            "@type": "VideoObject",
+            "name": "Test Video",
+            "contentUrl": "https://cdn.example.com/real.mp4",
+            "embedUrl": "https://example.com/embed/123"
+        }
+        </script></head></html>"#;
+        let html = Html::parse_document(raw);
+        let url = Url::parse("https://example.com/page").unwrap();
+        let ctx = make_ctx(&html, raw, &url);
+
         let formats = JsonLdStrategy.detect(&ctx);
         assert_eq!(formats.len(), 1);
-        assert_eq!(formats[0].url, "https://example.com/embed/123");
-        assert_eq!(formats[0].confidence, Confidence::Low);
+        assert_eq!(formats[0].url, "https://cdn.example.com/real.mp4");
+        assert_eq!(formats[0].source, "json-ld:contentUrl");
     }
 
     #[test]
