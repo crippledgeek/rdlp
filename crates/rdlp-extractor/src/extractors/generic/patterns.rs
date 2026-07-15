@@ -40,10 +40,10 @@ fn starts_with_ignore_ascii_case(haystack: &str, prefix: &str) -> bool {
 
 /// ASCII-case-insensitive substring test that borrows instead of allocating.
 ///
-/// `needle` must be a non-empty literal — `<[u8]>::windows` panics on a zero
-/// width, and a panic in an extractor is a denial of service. The guard is a
-/// full `assert!`, not `debug_assert!`: the latter compiles out of release
-/// builds, which is exactly where such a panic would matter.
+/// `needle` must be non-empty — `<[u8]>::windows` panics on a zero width. That is
+/// unreachable by construction: every call site passes a non-empty literal, and
+/// the attacker-controlled string is always the `haystack`. The `assert!`
+/// documents the precondition and costs nothing for literal needles.
 fn contains_ignore_ascii_case(haystack: &str, needle: &str) -> bool {
     assert!(!needle.is_empty(), "windows(0) panics");
     haystack
