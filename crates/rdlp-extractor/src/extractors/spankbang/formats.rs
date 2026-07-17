@@ -55,6 +55,12 @@ pub(super) fn build_formats(data: &Value) -> Vec<Format> {
         return formats;
     };
 
+    // `main` and `mpd` are deliberately NOT in this allow-list. `main` is an
+    // alias for the highest available progressive rendition (verified via
+    // live probe: byte-identical to the top MP4 rendition modulo the
+    // per-request `secure=` token) — including it would duplicate that row.
+    // `mpd` is SpankBang's (always-empty, in every observed fixture) DASH
+    // key; there is no DASH path for this site today.
     // Direct MP4 progressive.
     for label in ["240p", "320p", "480p", "720p", "1080p", "4k"] {
         if let Some(arr) = map.get(label).and_then(Value::as_array)
@@ -166,5 +172,102 @@ mod tests {
         assert!(!formats.is_empty(), "API path also produces formats");
         assert!(formats.iter().any(|f| f.format_id == "1080p"));
         assert!(formats.iter().any(|f| f.format_id == "hls"));
+    }
+
+    // `main` is an alias for the highest-available progressive rendition
+    // (verified live: byte-identical URL to the top MP4 rendition, modulo
+    // the per-request `secure=` token). It is deliberately skipped by
+    // `build_formats` — including it would emit a duplicate row. The
+    // fixture MUST keep `main` populated, or this test would pass
+    // vacuously; assert the precondition alongside the behaviour.
+    #[test]
+    fn main_key_populated_but_produces_no_row() {
+        let data = parse_inline_stream_data(PAGE).expect("inline parse");
+        let main = data
+            .get("main")
+            .and_then(Value::as_array)
+            .expect("fixture precondition: 'main' key must be a populated array");
+        assert!(
+            !main.is_empty(),
+            "fixture precondition: 'main' must be non-empty for this test to be meaningful"
+        );
+
+        let formats = build_formats(&data);
+        assert!(
+            formats.iter().all(|f| f.format_id != "main"),
+            "'main' is an alias for the top progressive rendition; must not produce its own row"
+        );
+    }
+
+    // `mpd` is SpankBang's DASH key; it is empty in every observed fixture
+    // and there is no DASH path for this site. Cover both fixture shapes:
+    // the HTML page has `'mpd': []`, the API JSON omits the key entirely.
+    #[test]
+    fn mpd_key_produces_no_row_on_either_fixture() {
+        let inline = parse_inline_stream_data(PAGE).expect("inline parse");
+        let inline_formats = build_formats(&inline);
+        assert!(
+            inline_formats.iter().all(|f| f.format_id != "mpd"),
+            "empty 'mpd' array in HTML fixture must not produce a row"
+        );
+
+        let api: Value = serde_json::from_str(API).expect("API JSON parse");
+        let api_formats = build_formats(&api);
+        assert!(
+            api_formats.iter().all(|f| f.format_id != "mpd"),
+            "absent 'mpd' key in API fixture must not produce a row"
+        );
+    }
+
+    #[test]
+    fn no_duplicate_format_ids_on_either_fixture() {
+        for (label, data) in [
+            (
+                "inline",
+                parse_inline_stream_data(PAGE).expect("inline parse"),
+            ),
+            ("api", serde_json::from_str(API).expect("API JSON parse")),
+        ] {
+            let formats = build_formats(&data);
+            let mut ids: Vec<&str> = formats.iter().map(|f| f.format_id.as_str()).collect();
+            let before = ids.len();
+            ids.sort_unstable();
+            ids.dedup();
+            assert_eq!(
+                ids.len(),
+                before,
+                "{label} fixture: duplicate format_id among emitted rows"
+            );
+        }
+    }
+
+    // Height legitimately repeats ACROSS protocols today (a progressive MP4
+    // row and its HLS-variant sibling both carry `height = Some(1080)`), so
+    // this only pins uniqueness WITHIN the progressive (Https) rows — the
+    // failure mode a widened `main`/`mpd` allow-list would introduce.
+    #[test]
+    fn no_duplicate_height_among_progressive_rows() {
+        for (label, data) in [
+            (
+                "inline",
+                parse_inline_stream_data(PAGE).expect("inline parse"),
+            ),
+            ("api", serde_json::from_str(API).expect("API JSON parse")),
+        ] {
+            let formats = build_formats(&data);
+            let mut heights: Vec<Option<u32>> = formats
+                .iter()
+                .filter(|f| f.protocol == DownloadProtocol::Https)
+                .map(|f| f.height)
+                .collect();
+            let before = heights.len();
+            heights.sort_unstable();
+            heights.dedup();
+            assert_eq!(
+                heights.len(),
+                before,
+                "{label} fixture: duplicate height among progressive (Https) rows"
+            );
+        }
     }
 }
