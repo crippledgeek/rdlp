@@ -95,12 +95,17 @@ pub fn find_player_script_urls(webpage: &str) -> Vec<String> {
 /// on-CPU extraction cost when done through boa (issue #510): the boa path
 /// evaluates the site's ~656 KB player bundle once per encrypted URL.
 ///
-/// Only when native decryption returns `None` (an unknown/rotated algorithm ID
-/// or malformed input) does it fall back to boa via [`decipher_url_via_boa`],
-/// which evaluates the site's live player JS (self-healing if xHamster adds a
-/// new algorithm) and then the bundled `decrypt.js`. The native port is
-/// cross-validated against that bundled JS for all 7 algorithms (see the parity
-/// tests), so the fast path is result-identical for the algorithms it handles.
+/// When native decryption returns `None`, boa is used as a fallback via
+/// [`decipher_url_via_boa`] — but only if the input is still *structurally*
+/// plausible ciphertext (`rdlp_crypto::xhamster::could_be_ciphertext`): a
+/// full-length unknown/rotated-algorithm URL boa might self-heal by evaluating
+/// the site's live player JS, then the bundled `decrypt.js`. Inputs too short to
+/// carry the algo+seed header (e.g. the malformed sub-header `fallback` fields
+/// in `xplayerSettings.sources`) are rejected without invoking boa — no
+/// algorithm could decrypt them, so a bundle eval would be pure wasted work
+/// (issue #514). The native port is cross-validated against the bundled JS for
+/// all 7 algorithms (see the parity tests), so the fast path is result-identical
+/// for the algorithms it handles.
 pub async fn decipher_url(
     encrypted_url: &str,
     js_engine: &dyn JsEngine,
@@ -108,6 +113,17 @@ pub async fn decipher_url(
 ) -> Option<String> {
     if let Some(decrypted) = rdlp_crypto::xhamster::decipher_format_url(encrypted_url) {
         return Some(decrypted);
+    }
+    // Native returned None. Only fall back to the expensive boa path (which
+    // evaluates the ~656 KB player bundle) when the input is *structurally*
+    // plausible ciphertext for some algorithm — i.e. a rotated/unknown-algorithm
+    // URL boa might self-heal. Inputs too short to carry the algo+seed header —
+    // e.g. the malformed `fallback` fields in `xplayerSettings.sources` — cannot
+    // decrypt under any algorithm, so boa would only waste a bundle eval on them
+    // (issue #514). Skipping them is behavior-preserving for the output.
+    if !rdlp_crypto::xhamster::could_be_ciphertext(encrypted_url) {
+        debug!("[XHamster] Input too short to be ciphertext; skipping boa fallback");
+        return None;
     }
     debug!("[XHamster] Native decrypt returned None; falling back to boa");
     // Only here — the rare unknown/rotated algorithm — is the player bundle
@@ -651,6 +667,37 @@ mod tests {
             result.as_deref(),
             Some("https://cdn.example.com/media=hls4/v.m3u8")
         );
+        // expect(0): the player-JS endpoint must not have been requested.
+        player_endpoint.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn test_decipher_url_short_fallback_field_skips_boa() {
+        // Issue #514: xplayerSettings.sources carries malformed `fallback` fields
+        // shorter than the 6-byte algo+seed header (e.g. "02e7b7d11b" = 5 bytes).
+        // Native decrypt returns None on these, but so would boa — they aren't
+        // valid ciphertext for any algorithm. The gate must skip the boa fallback
+        // entirely, so neither the ~656 KB player-JS fetch nor an eval happens.
+        let mut server = mockito::Server::new_async().await;
+        let player_endpoint = server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(200)
+            .with_body("charCodeAt 1664525")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let client = wreq::Client::new();
+        let script_url = format!("{}/xplayer.js", server.url());
+        let player_js =
+            PlayerJsSource::lazy(&client, "https://xhamster.com/videos/x", vec![script_url]);
+
+        // NeverEvalEngine errors on any eval, so reaching boa would also be
+        // observable as a failure — but the expect(0) fetch guard is the load-
+        // bearing proof the boa path was never entered.
+        let result = decipher_url("02e7b7d11b", &NeverEvalEngine, &player_js).await;
+
+        assert_eq!(result, None, "sub-header-length field must not decrypt");
         // expect(0): the player-JS endpoint must not have been requested.
         player_endpoint.assert_async().await;
     }
