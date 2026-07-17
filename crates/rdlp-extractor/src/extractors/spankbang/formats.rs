@@ -49,18 +49,23 @@ pub(super) fn parse_streamkey(html: &str) -> Option<String> {
 /// Convert a SpankBang `stream_data` / API JSON object to `Vec<Format>`.
 /// Skips empty arrays. Sets `vcodec=h264`, `acodec=aac`, `container=mp4`
 /// for direct MP4s; HLS rows get `protocol = M3u8`.
+///
+/// Rows are built from explicit label allow-lists. Two `stream_data` keys are
+/// deliberately excluded, and the allow-lists are what make that correct:
+///
+/// - **`main`** aliases the highest available progressive rendition — live
+///   probing (n=5, 2026-07-17) found it byte-identical to the top MP4 modulo
+///   the per-request `secure=` token. Emitting it would duplicate that row.
+/// - **`mpd`** is the DASH manifest key. It was empty in every video sampled
+///   and in both fixtures; wiring an unexercised DASH path would contradict
+///   the project's no-dead-code-for-future stance. Deferred until a video
+///   with a populated `mpd` turns up (issue #500).
 pub(super) fn build_formats(data: &Value) -> Vec<Format> {
     let mut formats = Vec::new();
     let Value::Object(map) = data else {
         return formats;
     };
 
-    // `main` and `mpd` are deliberately NOT in this allow-list. `main` is an
-    // alias for the highest available progressive rendition (verified via
-    // live probe: byte-identical to the top MP4 rendition modulo the
-    // per-request `secure=` token) — including it would duplicate that row.
-    // `mpd` is SpankBang's (always-empty, in every observed fixture) DASH
-    // key; there is no DASH path for this site today.
     // Direct MP4 progressive.
     for label in ["240p", "320p", "480p", "720p", "1080p", "4k"] {
         if let Some(arr) = map.get(label).and_then(Value::as_array)
@@ -199,23 +204,32 @@ mod tests {
         );
     }
 
-    // `mpd` is SpankBang's DASH key; it is empty in every observed fixture
-    // and there is no DASH path for this site. Cover both fixture shapes:
-    // the HTML page has `'mpd': []`, the API JSON omits the key entirely.
+    // `mpd` (DASH) is deliberately unwired for SpankBang: it was empty in all
+    // 5 videos sampled live and in BOTH fixtures, and building an unexercised
+    // code path contradicts the no-dead-code-for-future stance (issue #500).
+    //
+    // The fixtures cannot pin that decision. An empty array is dropped by the
+    // `arr.first()` guard no matter what the allow-list says, so a
+    // fixture-driven `mpd` assertion passes even with `mpd` in the allow-list
+    // — it would test the empty-array skip (already covered by the 320p/4k
+    // assertions above) while appearing to test the DASH decision. Feed a
+    // synthetic POPULATED `mpd` instead, so the test actually fails if someone
+    // starts emitting DASH rows without a real fixture to justify them.
     #[test]
-    fn mpd_key_produces_no_row_on_either_fixture() {
-        let inline = parse_inline_stream_data(PAGE).expect("inline parse");
-        let inline_formats = build_formats(&inline);
-        assert!(
-            inline_formats.iter().all(|f| f.format_id != "mpd"),
-            "empty 'mpd' array in HTML fixture must not produce a row"
-        );
+    fn populated_mpd_still_produces_no_row() {
+        let data = serde_json::json!({
+            "1080p": ["https://example.invalid/v-1080p.mp4"],
+            "mpd": ["https://example.invalid/v.mpd"],
+        });
 
-        let api: Value = serde_json::from_str(API).expect("API JSON parse");
-        let api_formats = build_formats(&api);
+        let formats = build_formats(&data);
         assert!(
-            api_formats.iter().all(|f| f.format_id != "mpd"),
-            "absent 'mpd' key in API fixture must not produce a row"
+            !formats.is_empty(),
+            "guard: the synthetic 1080p row must still be built, or this test proves nothing"
+        );
+        assert!(
+            formats.iter().all(|f| f.format_id != "mpd"),
+            "DASH is deliberately unwired; a populated 'mpd' must not produce a row"
         );
     }
 
@@ -243,8 +257,13 @@ mod tests {
 
     // Height legitimately repeats ACROSS protocols today (a progressive MP4
     // row and its HLS-variant sibling both carry `height = Some(1080)`), so
-    // this only pins uniqueness WITHIN the progressive (Https) rows — the
-    // failure mode a widened `main`/`mpd` allow-list would introduce.
+    // uniqueness is pinned only WITHIN the progressive (Https) rows — i.e.
+    // that `height_for_label` stays injective over the allow-list.
+    //
+    // Scope note: this does NOT catch a bare `main` added to the allow-list
+    // (`height_for_label("main")` is `None`, which is unique among the real
+    // heights) — `main_key_populated_but_produces_no_row` is what catches
+    // that. This one catches an alias mapped ONTO an existing height.
     #[test]
     fn no_duplicate_height_among_progressive_rows() {
         for (label, data) in [
