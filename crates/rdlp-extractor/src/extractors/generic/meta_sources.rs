@@ -3,6 +3,7 @@
 use scraper::Selector;
 use std::collections::HashMap;
 use std::sync::LazyLock;
+use url::Url;
 
 use super::detection::{Confidence, DetectedFormat, DetectionStrategy, PageContext, resolve_url};
 
@@ -107,11 +108,22 @@ impl<'a> OgEntry<'a> {
         }
     }
 
-    /// The single URL this entry contributes as a candidate: `secure_url`
-    /// when declared (ogp.me: "use this if you need HTTPS" — and HTTPS is
-    /// the better default besides), else `root`. Never both.
-    fn url(&self) -> &'a str {
-        self.secure_url.unwrap_or(self.root)
+    /// The single URL this entry contributes as a candidate, resolved against
+    /// the page's base: `secure_url` when declared *and usable* (ogp.me: "use
+    /// this if you need HTTPS" — and HTTPS is the better default besides),
+    /// else `root`. Never both.
+    ///
+    /// The preference is resolution-aware on purpose. `resolve_url` rejects
+    /// empty, `data:`, and `javascript:` values, and real meta soup carries all
+    /// three — so preferring `secure_url` *blindly* would let a malformed
+    /// alternate take a legitimate stream down with it, turning a recoverable
+    /// bad tag into total extraction failure. That is the same rule the
+    /// `OgTag::Type` branch already states for an empty `content`: a malformed
+    /// sibling tag must not drop a real stream.
+    fn resolve(&self, base: &Url) -> Option<String> {
+        self.secure_url
+            .and_then(|raw| resolve_url(base, raw))
+            .or_else(|| resolve_url(base, self.root))
     }
 
     /// Whether this entry denotes a downloadable stream.
@@ -210,7 +222,7 @@ impl DetectionStrategy for OpenGraphStrategy {
                 // A declared media type names the container even when the URL has
                 // no extension to sniff — better than guessing downstream.
                 let ext_from_mime = entry.mime.and_then(super::content_type_to_ext);
-                let url = resolve_url(ctx.base_url, entry.url())?;
+                let url = entry.resolve(ctx.base_url)?;
                 let ext = super::detection::ext_from_url(&url)
                     .or_else(|| ext_from_mime.map(str::to_owned));
                 Some(DetectedFormat {
@@ -312,6 +324,41 @@ mod tests {
         let formats = OpenGraphStrategy.detect(&ctx);
         assert_eq!(formats.len(), 1, "root + secure_url is one asset, not two");
         assert_eq!(formats[0].url, "https://cdn.example.com/video.mp4");
+    }
+
+    /// A `secure_url` that cannot resolve must fall back to the entry's root
+    /// rather than taking the whole entry down with it.
+    ///
+    /// `resolve_url` rejects empty, `data:`, and `javascript:` values, and real
+    /// meta soup carries all three. Preferring `secure_url` *blindly* turned a
+    /// recoverable bad tag into total extraction failure on an otherwise-fine
+    /// page — the preference has to be resolution-aware. This is the same rule
+    /// the `OgTag::Type` branch already states for an empty `content`: a
+    /// malformed sibling tag must not drop a legitimate stream.
+    #[test]
+    fn og_unresolvable_secure_url_falls_back_to_root() {
+        for bad in ["", "javascript:void(0)", "data:text/html,x"] {
+            let raw = format!(
+                r#"<html><head>
+                <meta property="og:video:url" content="http://cdn.example.com/video.mp4">
+                <meta property="og:video:secure_url" content="{bad}">
+                </head></html>"#
+            );
+            let html = Html::parse_document(&raw);
+            let url = Url::parse("https://example.com/page").unwrap();
+            let ctx = make_ctx(&html, &raw, &url);
+
+            let formats = OpenGraphStrategy.detect(&ctx);
+            assert_eq!(
+                formats.len(),
+                1,
+                "secure_url={bad:?} is unusable; the root must still be emitted"
+            );
+            assert_eq!(
+                formats[0].url, "http://cdn.example.com/video.mp4",
+                "secure_url={bad:?} is unusable; the candidate must fall back to the root"
+            );
+        }
     }
 
     /// A `secure_url` declared with no preceding root of its kind keeps
