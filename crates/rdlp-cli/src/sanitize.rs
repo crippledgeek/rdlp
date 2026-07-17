@@ -35,9 +35,10 @@
 //! cannot. CWE-150 endorses this "restrict to printable" approach over matching
 //! known-bad sequences. (Verdict from a cited multi-source survey, 2026-07-14.)
 
-/// Return a copy of `s` with hostile control and bidi-formatting characters
-/// removed, rendering any embedded terminal escape sequence or visual-reorder
-/// spoof inert before the text is written to a TTY or log.
+/// Return a copy of `s` with hostile control and bidi-formatting characters removed.
+///
+/// This renders any embedded terminal escape sequence or visual-reorder spoof
+/// inert before the text is written to a TTY or log.
 ///
 /// Two independent filters run in one pass:
 ///
