@@ -49,6 +49,17 @@ pub(super) fn parse_streamkey(html: &str) -> Option<String> {
 /// Convert a SpankBang `stream_data` / API JSON object to `Vec<Format>`.
 /// Skips empty arrays. Sets `vcodec=h264`, `acodec=aac`, `container=mp4`
 /// for direct MP4s; HLS rows get `protocol = M3u8`.
+///
+/// Rows are built from explicit label allow-lists. Two `stream_data` keys are
+/// deliberately excluded, and the allow-lists are what make that correct:
+///
+/// - **`main`** aliases the highest available progressive rendition — live
+///   probing (n=5, 2026-07-17) found it byte-identical to the top MP4 modulo
+///   the per-request `secure=` token. Emitting it would duplicate that row.
+/// - **`mpd`** is the DASH manifest key. It was empty in every video sampled
+///   and in both fixtures; wiring an unexercised DASH path would contradict
+///   the project's no-dead-code-for-future stance. Deferred until a video
+///   with a populated `mpd` turns up (issue #500).
 pub(super) fn build_formats(data: &Value) -> Vec<Format> {
     let mut formats = Vec::new();
     let Value::Object(map) = data else {
@@ -166,5 +177,116 @@ mod tests {
         assert!(!formats.is_empty(), "API path also produces formats");
         assert!(formats.iter().any(|f| f.format_id == "1080p"));
         assert!(formats.iter().any(|f| f.format_id == "hls"));
+    }
+
+    // `main` is an alias for the highest-available progressive rendition
+    // (verified live: byte-identical URL to the top MP4 rendition, modulo
+    // the per-request `secure=` token). It is deliberately skipped by
+    // `build_formats` — including it would emit a duplicate row. The
+    // fixture MUST keep `main` populated, or this test would pass
+    // vacuously; assert the precondition alongside the behaviour.
+    #[test]
+    fn main_key_populated_but_produces_no_row() {
+        let data = parse_inline_stream_data(PAGE).expect("inline parse");
+        let main = data
+            .get("main")
+            .and_then(Value::as_array)
+            .expect("fixture precondition: 'main' key must be a populated array");
+        assert!(
+            !main.is_empty(),
+            "fixture precondition: 'main' must be non-empty for this test to be meaningful"
+        );
+
+        let formats = build_formats(&data);
+        assert!(
+            formats.iter().all(|f| f.format_id != "main"),
+            "'main' is an alias for the top progressive rendition; must not produce its own row"
+        );
+    }
+
+    // `mpd` (DASH) is deliberately unwired for SpankBang: it was empty in all
+    // 5 videos sampled live and in BOTH fixtures, and building an unexercised
+    // code path contradicts the no-dead-code-for-future stance (issue #500).
+    //
+    // The fixtures cannot pin that decision. An empty array is dropped by the
+    // `arr.first()` guard no matter what the allow-list says, so a
+    // fixture-driven `mpd` assertion passes even with `mpd` in the allow-list
+    // — it would test the empty-array skip (already covered by the 320p/4k
+    // assertions above) while appearing to test the DASH decision. Feed a
+    // synthetic POPULATED `mpd` instead, so the test actually fails if someone
+    // starts emitting DASH rows without a real fixture to justify them.
+    #[test]
+    fn populated_mpd_still_produces_no_row() {
+        let data = serde_json::json!({
+            "1080p": ["https://example.invalid/v-1080p.mp4"],
+            "mpd": ["https://example.invalid/v.mpd"],
+        });
+
+        let formats = build_formats(&data);
+        assert!(
+            !formats.is_empty(),
+            "guard: the synthetic 1080p row must still be built, or this test proves nothing"
+        );
+        assert!(
+            formats.iter().all(|f| f.format_id != "mpd"),
+            "DASH is deliberately unwired; a populated 'mpd' must not produce a row"
+        );
+    }
+
+    #[test]
+    fn no_duplicate_format_ids_on_either_fixture() {
+        for (label, data) in [
+            (
+                "inline",
+                parse_inline_stream_data(PAGE).expect("inline parse"),
+            ),
+            ("api", serde_json::from_str(API).expect("API JSON parse")),
+        ] {
+            let formats = build_formats(&data);
+            let mut ids: Vec<&str> = formats.iter().map(|f| f.format_id.as_str()).collect();
+            let before = ids.len();
+            ids.sort_unstable();
+            ids.dedup();
+            assert_eq!(
+                ids.len(),
+                before,
+                "{label} fixture: duplicate format_id among emitted rows"
+            );
+        }
+    }
+
+    // Height legitimately repeats ACROSS protocols today (a progressive MP4
+    // row and its HLS-variant sibling both carry `height = Some(1080)`), so
+    // uniqueness is pinned only WITHIN the progressive (Https) rows — i.e.
+    // that `height_for_label` stays injective over the allow-list.
+    //
+    // Scope note: this does NOT catch a bare `main` added to the allow-list
+    // (`height_for_label("main")` is `None`, which is unique among the real
+    // heights) — `main_key_populated_but_produces_no_row` is what catches
+    // that. This one catches an alias mapped ONTO an existing height.
+    #[test]
+    fn no_duplicate_height_among_progressive_rows() {
+        for (label, data) in [
+            (
+                "inline",
+                parse_inline_stream_data(PAGE).expect("inline parse"),
+            ),
+            ("api", serde_json::from_str(API).expect("API JSON parse")),
+        ] {
+            let formats = build_formats(&data);
+            let mut heights: Vec<Option<u32>> = formats
+                .iter()
+                .filter(|f| f.protocol == DownloadProtocol::Https)
+                .map(|f| f.height)
+                .collect();
+            let before = heights.len();
+            heights.sort_unstable();
+            heights.dedup();
+            assert_eq!(
+                heights.len(),
+                before,
+                "{label} fixture: duplicate height among progressive (Https) rows"
+            );
+        }
     }
 }
