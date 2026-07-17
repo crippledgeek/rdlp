@@ -101,13 +101,13 @@ impl XHamsterExtractor {
         // Extract age limit
         let age_limit = utils::extract_age_limit(&webpage);
 
-        // Try boa-based initials extraction first, fall back to regex
-        let boa_initials =
-            js_extract::extract_initials_via_boa(&webpage, ctx.js_engine.as_ref()).await;
-        let initials = match boa_initials {
+        // Parse window.initials (serde fast path, boa fallback), then regex
+        let structured_initials =
+            js_extract::extract_initials(&webpage, ctx.js_engine.as_ref()).await;
+        let initials = match structured_initials {
             Some(val) => Some(val),
             None => {
-                debug!("[XHamster] Boa initials extraction failed, trying regex fallback");
+                debug!("[XHamster] window.initials extraction failed, trying regex fallback");
                 parse_initials_json(&webpage)
             }
         };
