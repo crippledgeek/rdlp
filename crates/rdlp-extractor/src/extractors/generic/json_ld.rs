@@ -67,8 +67,28 @@ impl DetectionStrategy for JsonLdStrategy {
                 .as_deref()
                 .and_then(|u| resolve_url(ctx.base_url, u))
             {
+                // URL extension wins; `encodingFormat` is only a fallback for an
+                // extensionless URL (mirrors #494's OpenGraph precedence and
+                // yt-dlp's `_parse_jwplayer_formats` idiom:
+                // `determine_ext(url, default_ext=mimetype2ext(type))`).
+                //
+                // This deliberately diverges from yt-dlp's own
+                // `extract_video_object`, which is `encodingFormat`-only with no
+                // URL fallback and whose `mimetype2ext` falls through to a
+                // garbage subtype string (`application/octet-stream` ->
+                // `"octet-stream"`) instead of `None` on no match — that is
+                // upstream's weaker outlier. Our `content_type_to_ext` returns
+                // `Option` and yields `None` on no match, so an unrecognized
+                // `encodingFormat` leaves ext unset rather than inventing one.
+                let ext = ext_from_url(&url).or_else(|| {
+                    video
+                        .encoding_format
+                        .as_deref()
+                        .and_then(super::content_type_to_ext)
+                        .map(str::to_owned)
+                });
                 formats.push(DetectedFormat {
-                    ext: ext_from_url(&url),
+                    ext,
                     url,
                     quality: None,
                     confidence: Confidence::High,
@@ -250,5 +270,90 @@ mod tests {
         let ctx = make_ctx(&html, raw, &url);
 
         assert!(JsonLdStrategy.detect(&ctx).is_empty());
+    }
+
+    /// #496: an extensionless `contentUrl` should fall back to `encodingFormat`
+    /// rather than defaulting to `mp4` downstream.
+    #[test]
+    fn json_ld_extensionless_url_uses_encoding_format() {
+        let raw = r#"<html><head><script type="application/ld+json">
+        {
+            "@type": "VideoObject",
+            "name": "Test Video",
+            "contentUrl": "https://cdn.example.com/video/stream",
+            "encodingFormat": "video/webm"
+        }
+        </script></head></html>"#;
+        let html = Html::parse_document(raw);
+        let url = Url::parse("https://example.com/page").unwrap();
+        let ctx = make_ctx(&html, raw, &url);
+
+        let formats = JsonLdStrategy.detect(&ctx);
+        assert_eq!(formats.len(), 1);
+        assert_eq!(formats[0].ext.as_deref(), Some("webm"));
+    }
+
+    /// A recognizable URL extension always wins over `encodingFormat`, mirroring
+    /// #494's OpenGraph precedence.
+    #[test]
+    fn json_ld_url_extension_wins_over_encoding_format() {
+        let raw = r#"<html><head><script type="application/ld+json">
+        {
+            "@type": "VideoObject",
+            "name": "Test Video",
+            "contentUrl": "https://cdn.example.com/video.mp4",
+            "encodingFormat": "video/webm"
+        }
+        </script></head></html>"#;
+        let html = Html::parse_document(raw);
+        let url = Url::parse("https://example.com/page").unwrap();
+        let ctx = make_ctx(&html, raw, &url);
+
+        let formats = JsonLdStrategy.detect(&ctx);
+        assert_eq!(formats.len(), 1);
+        assert_eq!(formats[0].ext.as_deref(), Some("mp4"));
+    }
+
+    /// No `encodingFormat` present — unchanged behavior (ext derived from URL
+    /// alone, `None` when the URL has no recognizable extension).
+    #[test]
+    fn json_ld_no_encoding_format_unchanged() {
+        let raw = r#"<html><head><script type="application/ld+json">
+        {
+            "@type": "VideoObject",
+            "name": "Test Video",
+            "contentUrl": "https://cdn.example.com/video/stream"
+        }
+        </script></head></html>"#;
+        let html = Html::parse_document(raw);
+        let url = Url::parse("https://example.com/page").unwrap();
+        let ctx = make_ctx(&html, raw, &url);
+
+        let formats = JsonLdStrategy.detect(&ctx);
+        assert_eq!(formats.len(), 1);
+        assert_eq!(formats[0].ext, None);
+    }
+
+    /// An unrecognized `encodingFormat` must leave ext unset rather than invent
+    /// one — `content_type_to_ext` returns `None` on no match, deliberately
+    /// diverging from yt-dlp's `mimetype2ext`, which falls through to a garbage
+    /// subtype string (`application/octet-stream` -> `"octet-stream"`).
+    #[test]
+    fn json_ld_unrecognized_encoding_format_leaves_ext_unset() {
+        let raw = r#"<html><head><script type="application/ld+json">
+        {
+            "@type": "VideoObject",
+            "name": "Test Video",
+            "contentUrl": "https://cdn.example.com/video/stream",
+            "encodingFormat": "application/octet-stream"
+        }
+        </script></head></html>"#;
+        let html = Html::parse_document(raw);
+        let url = Url::parse("https://example.com/page").unwrap();
+        let ctx = make_ctx(&html, raw, &url);
+
+        let formats = JsonLdStrategy.detect(&ctx);
+        assert_eq!(formats.len(), 1);
+        assert_eq!(formats[0].ext, None);
     }
 }

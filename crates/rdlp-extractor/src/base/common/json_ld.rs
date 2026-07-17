@@ -63,6 +63,13 @@ pub struct JsonLdVideo {
     #[serde(rename = "contentUrl")]
     pub content_url: Option<String>,
 
+    /// MIME type of `contentUrl` (e.g. `"video/webm"`).
+    ///
+    /// Used as a fallback to derive the file extension when `contentUrl`
+    /// itself has no recognizable extension (issue #496).
+    #[serde(rename = "encodingFormat")]
+    pub encoding_format: Option<String>,
+
     /// Embed/player URL (often an iframe, not direct media)
     #[serde(rename = "embedUrl")]
     pub embed_url: Option<String>,

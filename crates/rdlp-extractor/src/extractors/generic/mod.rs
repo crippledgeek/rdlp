@@ -358,21 +358,31 @@ fn protocol_from_url(url: &str, ext: Option<&str>) -> DownloadProtocol {
 }
 
 /// Map Content-Type to a file extension.
+///
+/// Media type/subtype names are case-insensitive (RFC 6838 §4.2, RFC 9110
+/// §8.3.1). Comparisons case-fold via `eq_ignore_ascii_case` — mirroring the
+/// zero-allocation idiom in `generic::patterns` — rather than `to_lowercase`,
+/// which would allocate a `String` on every call (PR #494 deliberately removed
+/// those allocations).
 fn content_type_to_ext(ct: &str) -> Option<&'static str> {
     let ct = ct.split(';').next().unwrap_or(ct).trim();
-    match ct {
-        "video/mp4" => Some("mp4"),
-        "video/webm" => Some("webm"),
-        "video/x-flv" => Some("flv"),
-        "video/quicktime" => Some("mov"),
-        "video/x-matroska" => Some("mkv"),
-        "audio/mpeg" => Some("mp3"),
-        "audio/mp4" => Some("m4a"),
-        "audio/ogg" => Some("ogg"),
-        "application/vnd.apple.mpegurl" | "application/x-mpegurl" => Some("m3u8"),
-        "application/dash+xml" => Some("mpd"),
-        _ => None,
-    }
+    const TABLE: &[(&str, &str)] = &[
+        ("video/mp4", "mp4"),
+        ("video/webm", "webm"),
+        ("video/x-flv", "flv"),
+        ("video/quicktime", "mov"),
+        ("video/x-matroska", "mkv"),
+        ("audio/mpeg", "mp3"),
+        ("audio/mp4", "m4a"),
+        ("audio/ogg", "ogg"),
+        ("application/vnd.apple.mpegurl", "m3u8"),
+        ("application/x-mpegurl", "m3u8"),
+        ("application/dash+xml", "mpd"),
+    ];
+    TABLE
+        .iter()
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(ct))
+        .map(|(_, ext)| *ext)
 }
 
 #[cfg(test)]
@@ -443,6 +453,15 @@ mod tests {
             Some("m3u8")
         );
         assert_eq!(content_type_to_ext("text/html"), None);
+    }
+
+    /// Media type/subtype names are case-insensitive (RFC 6838 §4.2, RFC 9110
+    /// §8.3.1) — a publisher-authored `encodingFormat` or `og:video:type` value
+    /// with unconventional casing must still resolve.
+    #[test]
+    fn content_type_to_ext_is_case_insensitive() {
+        assert_eq!(content_type_to_ext("VIDEO/WEBM"), Some("webm"));
+        assert_eq!(content_type_to_ext("Video/MP4; codecs=avc1"), Some("mp4"));
     }
 
     #[test]
