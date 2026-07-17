@@ -105,8 +105,14 @@ clap = { version = "4.5", features = ["derive", "cargo"] }
 indicatif = "0.18.3"
 inquire = "0.9"
 
-# Table rendering
-tabled = "0.20"
+# Table rendering.
+# default-features = false drops the `derive` feature (the `Tabled` proc-macro),
+# which is the sole path pulling in `tabled_derive` -> the archived, unmaintained
+# `proc-macro-error2` crate (future-incompat E0365, rust-lang/rust#127909).
+# rdlp-table builds tables at runtime via `Builder` and never uses `#[derive(Tabled)]`,
+# so only the `std` feature is needed (Builder + settings::{Style,Alignment,Columns}).
+# Revisit if a future tabled release drops proc-macro-error2 upstream (zhiburt/tabled#584).
+tabled = { version = "0.20", default-features = false, features = ["std"] }
 console = "0.16"
 terminal_size = "0.4"
 
