@@ -61,7 +61,7 @@ pub(crate) use protocol::protocol_for_url;
 pub(crate) use search::SearchOrigin;
 pub(crate) use search::{
     FilterValidationError, KeyValidation, PagedSearch, SearchPage, SearchPageSpec, Termination,
-    append_search_filters, validate_against_descriptors,
+    append_search_filters, format_std_filter_error, validate_against_descriptors,
 };
 pub(crate) use selectors::*;
 

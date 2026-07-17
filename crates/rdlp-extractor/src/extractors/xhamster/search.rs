@@ -99,7 +99,9 @@ pub fn parse_max_pages(initials: &Value) -> Option<usize> {
 
 /// Validate search filters against the known xHamster filter descriptors.
 pub fn validate_search_filters(filters: &[SearchFilter]) -> Result<()> {
-    use crate::base::common::{FilterValidationError, KeyValidation, validate_against_descriptors};
+    use crate::base::common::{
+        KeyValidation, format_std_filter_error, validate_against_descriptors,
+    };
 
     let descriptors = patterns::search_filter_descriptors();
     validate_against_descriptors(
@@ -110,30 +112,7 @@ pub fn validate_search_filters(filters: &[SearchFilter]) -> Result<()> {
             ("max-duration", KeyValidation::NumericU32),
         ],
     )
-    .map_err(|e| match e {
-        FilterValidationError::UnknownKey { key, available } => RdlpError::Extraction {
-            message: format!(
-                "Unknown filter '{key}' for XHamster. Available: {}",
-                available.join(", ")
-            ),
-            url: None,
-        },
-        FilterValidationError::InvalidValue {
-            key,
-            value,
-            allowed,
-        } => RdlpError::Extraction {
-            message: format!(
-                "Invalid value '{value}' for filter '{key}'. Allowed: {}",
-                allowed.join(", ")
-            ),
-            url: None,
-        },
-        FilterValidationError::NonNumeric { key, value } => RdlpError::Extraction {
-            message: format!("Invalid value '{value}' for filter '{key}'. Must be a number."),
-            url: None,
-        },
-    })
+    .map_err(|e| format_std_filter_error("XHamster", e))
 }
 
 #[cfg(test)]
