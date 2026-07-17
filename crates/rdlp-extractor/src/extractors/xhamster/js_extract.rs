@@ -1,7 +1,7 @@
 //! Boa-based JS extraction module for XHamster.
 //!
 //! Provides three public functions for boa-based extraction:
-//! - [`extract_initials_via_boa`] — evaluates `window.initials` via boa
+//! - [`extract_initials`] — parses `window.initials` (serde-first, boa fallback)
 //! - [`find_player_script_urls`] — discovers player JS URLs from HTML
 //! - [`decipher_url_via_boa`] — decrypts an encrypted URL using boa
 //!
@@ -15,9 +15,10 @@ use rdlp_core::JsEngine;
 /// Bundled JS decryption code (port of rdlp-crypto PRNG algorithms).
 const BUNDLED_DECRYPT_JS: &str = include_str!("decrypt.js");
 
-/// Pattern to find script blocks that assign window.initials.
+/// Pattern to find script blocks that assign `window.initials`; capture group 1
+/// is the object literal (`{...}`) alone, so it can be parsed directly as JSON.
 static INITIALS_SCRIPT_PATTERN: Lazy<Regex> =
-    lazy_regex!(r"(?s)<script[^>]*>\s*(window\.initials\s*=\s*\{.+?\})\s*;?\s*</script>");
+    lazy_regex!(r"(?s)<script[^>]*>\s*window\.initials\s*=\s*(\{.+?\})\s*;?\s*</script>");
 
 /// Pattern to find player script URLs (matches xplayer or player in src).
 static PLAYER_SCRIPT_PATTERN: Lazy<Regex> =
@@ -28,35 +29,47 @@ pub(crate) static DECRYPT_FUNC_PATTERN: Lazy<Regex> = lazy_regex!(
     r"(?s)function\s+(\w+)\s*\([^)]*\)\s*\{[^}]*(?:1664525|0x85ebca77|charCodeAt)[^}]*\}"
 );
 
-/// Evaluate `window.initials` from the page HTML using boa.
+/// Extract `window.initials` from the page HTML.
 ///
-/// Finds the `<script>` block containing `window.initials =`, evaluates it
-/// in boa with `JSON.stringify(window.initials)` appended, and parses the
-/// resulting JSON back in Rust.
+/// xHamster emits `window.initials` as a JSON data blob, so the captured object
+/// literal is parsed directly with `serde_json` — this fast path skips the boa
+/// JS engine entirely, which is the dominant on-CPU cost of extraction
+/// (issue #510). yt-dlp parses the same blob as JSON with no JS sanitization.
 ///
-/// Returns `None` if the script block is not found or boa eval fails.
-pub async fn extract_initials_via_boa(
+/// If strict-JSON parsing fails (a JS-only construct such as unquoted keys,
+/// single-quoted strings, trailing commas, or `\xHH` escapes), extraction falls
+/// back to evaluating the assignment in boa and `JSON.stringify`-ing the result.
+/// Neither path decodes HTML entities (`&amp;` stays literal), so the fast path
+/// is behavior-preserving for the fields the extractor consumes.
+///
+/// Returns `None` if the script block is absent or both parse paths fail.
+pub async fn extract_initials(
     webpage: &str,
     js_engine: &dyn JsEngine,
 ) -> Option<serde_json::Value> {
-    let script_body = INITIALS_SCRIPT_PATTERN
+    let object_literal = INITIALS_SCRIPT_PATTERN
         .captures(webpage)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str())?;
 
-    // Wrap: execute the assignment, then stringify the result
-    let code = format!("{script_body};\nJSON.stringify(window.initials)");
+    // Fast path: the blob is JSON — parse it directly and skip boa (issue #510).
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(object_literal) {
+        return Some(value);
+    }
 
+    // Fallback: a JS-only object literal that serde rejected. Assign it in boa
+    // and stringify the result back to JSON.
+    let code = format!("window.initials = {object_literal};\nJSON.stringify(window.initials)");
     match js_engine.eval(&code).await {
         Ok(json_val) => {
-            // boa returns the JSON.stringify result as a JSON string value
+            // boa returns the JSON.stringify result as a JSON string value.
             let json_str = json_val.as_str()?;
             serde_json::from_str(json_str)
                 .inspect_err(|e| debug!("[XHamster] Boa initials JSON parse failed: {e}"))
                 .ok()
         }
         Err(e) => {
-            debug!("[XHamster] Boa eval failed for window.initials: {e}");
+            debug!("[XHamster] Boa eval fallback failed for window.initials: {e}");
             None
         }
     }
@@ -326,7 +339,7 @@ mod tests {
     async fn test_boa_initials_extraction() {
         let engine = BoaJsEngine::new();
         let html = r#"<script>window.initials = {"videoModel": {"title": "Test"}};</script>"#;
-        let result = extract_initials_via_boa(html, &engine).await;
+        let result = extract_initials(html, &engine).await;
         assert!(result.is_some());
         let val = result.unwrap();
         assert_eq!(
@@ -339,7 +352,7 @@ mod tests {
     async fn test_boa_initials_extraction_minified() {
         let engine = BoaJsEngine::new();
         let html = r#"<script>window.initials={"videoModel":{"title":"Minified","sources":{"mp4":{"720p":"url"}}}};</script>"#;
-        let result = extract_initials_via_boa(html, &engine).await;
+        let result = extract_initials(html, &engine).await;
         assert!(result.is_some());
     }
 
@@ -347,8 +360,118 @@ mod tests {
     async fn test_boa_initials_missing() {
         let engine = BoaJsEngine::new();
         let html = "<html><body>No initials</body></html>";
-        let result = extract_initials_via_boa(html, &engine).await;
+        let result = extract_initials(html, &engine).await;
         assert!(result.is_none());
+    }
+
+    // =========================================================================
+    // serde-first fast path (issue #510)
+    // =========================================================================
+
+    /// Test engine whose `eval` always fails. Proves the `serde_json` fast path
+    /// in [`extract_initials`] never invokes boa for a JSON-parseable
+    /// `window.initials` blob (issue #510): if control reaches boa, `eval`
+    /// errors and extraction returns `None`, failing the assertion below.
+    struct NeverEvalEngine;
+
+    #[async_trait::async_trait]
+    impl rdlp_core::JsEngine for NeverEvalEngine {
+        async fn eval(&self, _code: &str) -> rdlp_core::Result<serde_json::Value> {
+            Err(rdlp_core::RdlpError::JavaScript(
+                "boa must not be invoked for a JSON-parseable window.initials".to_string(),
+            ))
+        }
+
+        async fn eval_with_context(
+            &self,
+            _code: &str,
+            _context: &serde_json::Value,
+        ) -> rdlp_core::Result<serde_json::Value> {
+            unreachable!("extract_initials does not call eval_with_context")
+        }
+
+        async fn call_function(
+            &self,
+            _function_name: &str,
+            _args: &[serde_json::Value],
+        ) -> rdlp_core::Result<serde_json::Value> {
+            unreachable!("extract_initials does not call call_function")
+        }
+    }
+
+    #[tokio::test]
+    async fn test_initials_json_uses_serde_fast_path_not_boa() {
+        // Valid JSON blob + an engine that fails on every eval. If the serde
+        // fast path is taken, boa is never called and extraction succeeds.
+        let html = r#"<script>window.initials = {"videoModel": {"title": "Fast"}};</script>"#;
+        let result = extract_initials(html, &NeverEvalEngine).await;
+        assert!(
+            result.is_some(),
+            "valid-JSON window.initials must parse via serde without invoking boa"
+        );
+        assert_eq!(
+            result
+                .unwrap()
+                .pointer("/videoModel/title")
+                .and_then(|v| v.as_str()),
+            Some("Fast")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_initials_html_entities_preserved_not_decoded() {
+        // HTML entities inside a string value must survive verbatim through the
+        // serde fast path — neither serde_json nor boa decodes HTML entities, so
+        // switching parsers must not change this. Entity decoding happens later,
+        // at the dedicated decode_html_entities/sanitize layer.
+        let engine = BoaJsEngine::new();
+        let html = r#"<script>window.initials = {"videoModel": {"title": "A &amp; B &#39;q&#39;"}};</script>"#;
+        let result = extract_initials(html, &engine).await;
+        assert_eq!(
+            result.and_then(|v| v
+                .pointer("/videoModel/title")
+                .and_then(|t| t.as_str())
+                .map(str::to_owned)),
+            Some("A &amp; B &#39;q&#39;".to_string()),
+            "HTML entities must be preserved literally, not decoded"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_initials_js_only_literal_falls_back_to_boa() {
+        // Unquoted keys + single quotes + trailing comma are valid JS object
+        // literals but invalid strict JSON: serde rejects them, so extraction
+        // must fall back to boa. Guards that the fallback branch stays wired.
+        let engine = BoaJsEngine::new();
+        let html = r#"<script>window.initials = {videoModel: {title: 'Legacy',},};</script>"#;
+        let result = extract_initials(html, &engine).await;
+        assert_eq!(
+            result.and_then(|v| v
+                .pointer("/videoModel/title")
+                .and_then(|t| t.as_str())
+                .map(str::to_owned)),
+            Some("Legacy".to_string()),
+            "JS-only object literal must be recovered via the boa fallback"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_initials_boa_fallback_preserves_html_entities() {
+        // Unquoted keys force the boa fallback; the string value carries an HTML
+        // entity. The fallback path must also leave entities literal, so the
+        // "neither path decodes HTML entities" invariant holds on BOTH branches,
+        // not just the serde fast path.
+        let engine = BoaJsEngine::new();
+        let html = r#"<script>window.initials = {videoModel: {title: "A &amp; B"}};</script>"#;
+        let result = extract_initials(html, &engine).await;
+        assert_eq!(
+            result.and_then(|v| v
+                .pointer("/videoModel/title")
+                .and_then(|t| t.as_str())
+                .map(str::to_owned)),
+            Some("A &amp; B".to_string()),
+            "boa fallback must preserve HTML entities literally"
+        );
     }
 
     // =========================================================================
@@ -584,7 +707,7 @@ mod tests {
     async fn test_boa_malformed_js() {
         let engine = BoaJsEngine::new();
         let html = "<script>window.initials = {invalid json here</script>";
-        let result = extract_initials_via_boa(html, &engine).await;
+        let result = extract_initials(html, &engine).await;
         assert!(result.is_none(), "Malformed JS should return None");
     }
 
@@ -660,7 +783,7 @@ mod tests {
         let html = format!(
             r#"<script>window.initials = {{"videoModel": {{"title": "{large_value}"}}}};</script>"#
         );
-        let result = extract_initials_via_boa(&html, &engine).await;
+        let result = extract_initials(&html, &engine).await;
         assert!(result.is_some(), "Should handle large scripts");
     }
 }
