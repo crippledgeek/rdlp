@@ -39,6 +39,14 @@ use url::Url;
 
 use crate::prng::ByteGenerator;
 
+/// Minimum decoded length of a valid ciphertext payload: a 1-byte algorithm ID
+/// plus a 4-byte little-endian seed (the header) plus at least one ciphertext
+/// byte. Inputs that hex-decode to fewer bytes cannot be valid ciphertext for
+/// *any* algorithm — there is no room for the header — so decryption rejects
+/// them before an algorithm is ever selected. A bare-hex string therefore needs
+/// at least `MIN_CIPHERTEXT_BYTES * 2` hex characters.
+const MIN_CIPHERTEXT_BYTES: usize = 6;
+
 /// Pattern to extract hex-encoded ciphertext and remainder from URL path.
 ///
 /// The path starts with `/{hex}{remainder}` where hex is 12+ hex chars
@@ -84,6 +92,35 @@ pub fn decipher_format_url(format_url: &str) -> Option<String> {
     decipher_bare_hex(format_url)
 }
 
+/// Returns `true` if `format_url` is *structurally* capable of being valid
+/// `XHamster` ciphertext.
+///
+/// Plausible means it carries a hex payload that decodes to at least
+/// [`MIN_CIPHERTEXT_BYTES`] bytes (algorithm ID + seed + ≥1 ciphertext byte),
+/// via either accepted input form (full URL with hex path, or bare hex).
+///
+/// This is deliberately weaker than [`decipher_format_url`]: it does **not**
+/// inspect the algorithm ID, so a genuinely-rotated ciphertext whose algorithm
+/// this port does not yet know still returns `true`. It exists so callers can
+/// cheaply skip an expensive JS-engine decrypt fallback for inputs too short to
+/// be ciphertext under *any* algorithm — e.g. the malformed sub-header
+/// `fallback` fields in `xplayerSettings.sources` (issue #514) — where the JS
+/// path would only fail after evaluating a large player bundle.
+#[must_use]
+pub fn could_be_ciphertext(format_url: &str) -> bool {
+    // Path 1: a full URL whose path carries a hex segment (12+ hex chars, i.e.
+    // ≥ MIN_CIPHERTEXT_BYTES bytes) — the rotated-algorithm URL a JS fallback
+    // could still self-heal.
+    if let Ok(parsed) = Url::parse(format_url)
+        && HEX_PATH_PATTERN.is_match(parsed.path())
+    {
+        return true;
+    }
+
+    // Path 2: a bare hex string long enough to carry the algo+seed header.
+    is_plausible_bare_hex(format_url)
+}
+
 /// Decipher a full URL that contains a hex-encoded path segment.
 ///
 /// The URL path has the form `/{hex_string}/{remainder}` where the hex portion
@@ -110,11 +147,7 @@ fn decipher_url_with_hex_path(parsed: &Url) -> Option<String> {
 /// The entire string is hex, and the deciphered plaintext is returned directly
 /// (typically a full URL).
 fn decipher_bare_hex(hex_str: &str) -> Option<String> {
-    // Quick check: must be all hex chars and even length
-    if hex_str.len() < 12 || !hex_str.len().is_multiple_of(2) {
-        return None;
-    }
-    if !hex_str.bytes().all(|b| b.is_ascii_hexdigit()) {
+    if !is_plausible_bare_hex(hex_str) {
         return None;
     }
 
@@ -124,13 +157,24 @@ fn decipher_bare_hex(hex_str: &str) -> Option<String> {
     Some(deciphered)
 }
 
+/// Structural check for a bare hex ciphertext string: long enough to carry the
+/// algo+seed header ([`MIN_CIPHERTEXT_BYTES`]), even length (whole bytes), and
+/// all ASCII hex digits. Shared by [`decipher_bare_hex`] (the decrypt path) and
+/// [`could_be_ciphertext`] (the plausibility gate) so both agree on exactly what
+/// counts as a decodable bare-hex payload.
+fn is_plausible_bare_hex(hex_str: &str) -> bool {
+    hex_str.len() >= MIN_CIPHERTEXT_BYTES * 2
+        && hex_str.len().is_multiple_of(2)
+        && hex_str.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
 /// Core decryption: decode hex to bytes, extract algorithm + seed, XOR with PRNG stream.
-// The `byte_data.len() < 6` guard above each index/slice makes these infallible;
-// `indexing_slicing` cannot see through the early-return guard.
+// The `byte_data.len() < MIN_CIPHERTEXT_BYTES` guard above each index/slice makes
+// these infallible; `indexing_slicing` cannot see through the early-return guard.
 #[allow(clippy::indexing_slicing)]
 fn decipher_hex_bytes(hex_str: &str) -> Option<String> {
     let byte_data = hex::decode(hex_str).ok()?;
-    if byte_data.len() < 6 {
+    if byte_data.len() < MIN_CIPHERTEXT_BYTES {
         trace!("[XHamster] Hex data too short: {} bytes", byte_data.len());
         return None;
     }
@@ -199,5 +243,51 @@ mod tests {
         assert!(HEX_PATH_PATTERN.is_match("/ABCDEF123456789012/path,extra"));
         assert!(!HEX_PATH_PATTERN.is_match("/abc/something")); // Too short
         assert!(!HEX_PATH_PATTERN.is_match("/abcdef12345g/something")); // Non-hex char
+    }
+
+    // =========================================================================
+    // could_be_ciphertext — plausibility gate for the JS decrypt fallback (#514)
+    // =========================================================================
+
+    #[test]
+    fn test_could_be_ciphertext_rejects_sub_header_fallback_field() {
+        // The real malformed `fallback` field this gate targets: 10 hex chars =
+        // 5 bytes, one short of the 6-byte algo+seed+cipher minimum. No algorithm
+        // can decrypt it, so the JS fallback must be skipped.
+        assert!(!could_be_ciphertext("02e7b7d11b"));
+    }
+
+    #[test]
+    fn test_could_be_ciphertext_boundary_five_vs_six_bytes() {
+        // Boundary of MIN_CIPHERTEXT_BYTES (6). 5 bytes (10 hex) is rejected;
+        // exactly 6 bytes (12 hex) is accepted — a `>=`/`>` off-by-one flips one.
+        assert!(!could_be_ciphertext("0011223344")); // 10 hex chars = 5 bytes
+        assert!(could_be_ciphertext("001122334455")); // 12 hex chars = 6 bytes
+    }
+
+    #[test]
+    fn test_could_be_ciphertext_unknown_algo_still_plausible() {
+        // Algorithm ID 0 is unknown to this port, so decipher_format_url returns
+        // None — but the input IS structurally valid ciphertext (9 bytes), so the
+        // gate keeps the JS self-heal path open. Fallback must stay intact.
+        assert!(decipher_format_url("000000000041424344").is_none());
+        assert!(could_be_ciphertext("000000000041424344"));
+    }
+
+    #[test]
+    fn test_could_be_ciphertext_rejects_odd_length_and_non_hex() {
+        assert!(!could_be_ciphertext("00112233445")); // 11 chars = odd, not whole bytes
+        assert!(!could_be_ciphertext("001122334z55")); // non-hex digit
+        assert!(!could_be_ciphertext("")); // empty
+    }
+
+    #[test]
+    fn test_could_be_ciphertext_full_url_with_hex_path() {
+        // A rotated-algorithm URL form (12+ hex path segment) stays plausible.
+        assert!(could_be_ciphertext(
+            "https://cdn.example.com/000000000041424344/,720p.mp4"
+        ));
+        // A plain URL with no hex path segment is not ciphertext.
+        assert!(!could_be_ciphertext("https://example.com/video.mp4"));
     }
 }
