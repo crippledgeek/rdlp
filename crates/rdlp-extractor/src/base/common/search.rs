@@ -8,7 +8,7 @@
 //! RedTube) delegate that appending here.
 
 use log::debug;
-use rdlp_core::{ExtractionContext, Result};
+use rdlp_core::{ExtractionContext, RdlpError, Result};
 use rdlp_types::{
     SearchFilter, SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchResultPreview,
 };
@@ -231,6 +231,35 @@ pub(crate) fn validate_against_descriptors(
         }
     }
     Ok(())
+}
+
+/// Format a [`FilterValidationError`] into an `RdlpError::Extraction` using the
+/// shared "Family-1" wording, where the site name is the **only** per-site
+/// variant. Used by PornHub / RedTube / XHamster, whose three validator error
+/// arms are byte-identical apart from that literal.
+///
+/// Family-2 sites (TNAFlix / MovieFap) phrase these errors differently
+/// (`Unknown {Site} search filter key '{key}'`, etc.) and MUST NOT use this
+/// helper — their wording legitimately diverges (see #442).
+pub(crate) fn format_std_filter_error(site: &str, error: FilterValidationError) -> RdlpError {
+    let message = match error {
+        FilterValidationError::UnknownKey { key, available } => format!(
+            "Unknown filter '{key}' for {site}. Available: {}",
+            available.join(", ")
+        ),
+        FilterValidationError::InvalidValue {
+            key,
+            value,
+            allowed,
+        } => format!(
+            "Invalid value '{value}' for filter '{key}'. Allowed: {}",
+            allowed.join(", ")
+        ),
+        FilterValidationError::NonNumeric { key, value } => {
+            format!("Invalid value '{value}' for filter '{key}'. Must be a number.")
+        }
+    };
+    RdlpError::Extraction { message, url: None }
 }
 
 /// Delay between successive search-page fetches. All API-paginated sites that
@@ -1080,6 +1109,89 @@ mod tests {
                     key: "dur".into(),
                     value: "x".into()
                 }
+            );
+        }
+    }
+
+    /// Byte-exact wording guard for the shared Family-1 formatter. The per-site
+    /// validator tests only assert `.contains(substr)`, so these exact-string
+    /// checks are the sole guard that PornHub / RedTube / XHamster error
+    /// messages are reproduced verbatim across the dedup.
+    mod format_std_filter_error_tests {
+        use super::super::{FilterValidationError, format_std_filter_error};
+        use rdlp_core::RdlpError;
+
+        fn extraction_message(site: &str, error: FilterValidationError) -> String {
+            match format_std_filter_error(site, error) {
+                RdlpError::Extraction { message, url } => {
+                    assert!(url.is_none(), "Family-1 filter errors carry no URL");
+                    message
+                }
+                other => panic!("expected RdlpError::Extraction, got {other:?}"),
+            }
+        }
+
+        #[test]
+        fn unknown_key_arm_exact_wording() {
+            let error = FilterValidationError::UnknownKey {
+                key: "bogus".into(),
+                available: vec!["ordering".into(), "category".into()],
+            };
+            assert_eq!(
+                extraction_message("PornHub", error),
+                "Unknown filter 'bogus' for PornHub. Available: ordering, category"
+            );
+        }
+
+        #[test]
+        fn invalid_value_arm_exact_wording() {
+            let error = FilterValidationError::InvalidValue {
+                key: "ordering".into(),
+                value: "nope".into(),
+                allowed: vec!["newest".into(), "rating".into()],
+            };
+            assert_eq!(
+                extraction_message("RedTube", error),
+                "Invalid value 'nope' for filter 'ordering'. Allowed: newest, rating"
+            );
+        }
+
+        #[test]
+        fn non_numeric_arm_exact_wording() {
+            let error = FilterValidationError::NonNumeric {
+                key: "dur".into(),
+                value: "x".into(),
+            };
+            assert_eq!(
+                extraction_message("XHamster", error),
+                "Invalid value 'x' for filter 'dur'. Must be a number."
+            );
+        }
+
+        /// The site name is the ONLY per-site variant: the same `UnknownKey`
+        /// input yields wording that differs only in the interpolated site.
+        #[test]
+        fn site_name_is_the_only_variant() {
+            let mk = |site| {
+                extraction_message(
+                    site,
+                    FilterValidationError::UnknownKey {
+                        key: "k".into(),
+                        available: vec!["a".into()],
+                    },
+                )
+            };
+            assert_eq!(
+                mk("PornHub"),
+                "Unknown filter 'k' for PornHub. Available: a"
+            );
+            assert_eq!(
+                mk("RedTube"),
+                "Unknown filter 'k' for RedTube. Available: a"
+            );
+            assert_eq!(
+                mk("XHamster"),
+                "Unknown filter 'k' for XHamster. Available: a"
             );
         }
     }

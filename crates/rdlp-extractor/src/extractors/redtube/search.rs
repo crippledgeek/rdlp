@@ -226,7 +226,9 @@ pub(crate) fn validate_search_filters(
     filters: &[SearchFilter],
     descriptors: &[SearchFilterDescriptor],
 ) -> Result<()> {
-    use crate::base::common::{FilterValidationError, KeyValidation, validate_against_descriptors};
+    use crate::base::common::{
+        KeyValidation, format_std_filter_error, validate_against_descriptors,
+    };
 
     validate_against_descriptors(
         filters,
@@ -236,30 +238,7 @@ pub(crate) fn validate_search_filters(
             ("tags", KeyValidation::FreeText),
         ],
     )
-    .map_err(|e| match e {
-        FilterValidationError::UnknownKey { key, available } => RdlpError::Extraction {
-            message: format!(
-                "Unknown filter '{key}' for RedTube. Available: {}",
-                available.join(", ")
-            ),
-            url: None,
-        },
-        FilterValidationError::InvalidValue {
-            key,
-            value,
-            allowed,
-        } => RdlpError::Extraction {
-            message: format!(
-                "Invalid value '{value}' for filter '{key}'. Allowed: {}",
-                allowed.join(", ")
-            ),
-            url: None,
-        },
-        FilterValidationError::NonNumeric { key, value } => RdlpError::Extraction {
-            message: format!("Invalid value '{value}' for filter '{key}'. Must be a number."),
-            url: None,
-        },
-    })
+    .map_err(|e| format_std_filter_error("RedTube", e))
 }
 
 #[cfg(test)]
