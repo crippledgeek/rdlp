@@ -1,6 +1,7 @@
 //! OpenGraph and Twitter meta tag detection strategies.
 
 use scraper::Selector;
+use std::collections::HashMap;
 use std::sync::LazyLock;
 
 use super::detection::{Confidence, DetectedFormat, DetectionStrategy, PageContext, resolve_url};
@@ -60,7 +61,7 @@ impl OgTag {
 /// Load-bearing: a structured property binds to a root of its *own* namespace.
 /// `og:video:type` describes an `og:video` — never a neighbouring `og:audio`
 /// that merely happens to be the most recent tag.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum OgKind {
     Video,
     Audio,
@@ -76,13 +77,23 @@ impl OgKind {
     }
 }
 
-/// One OpenGraph media entry: a root URL plus any `secure_url` alternate for the
-/// same resource, and the MIME type declared for it.
+/// One OpenGraph media entry: a single asset (never two — see [`OgEntry::url`])
+/// plus the MIME type declared for it.
+///
+/// `root` is never optional: an [`OgEntry`] cannot exist without one, since it
+/// is only ever constructed from a `Root` tag or a fallback orphan `SecureUrl`
+/// (see [`OgTag::SecureUrl`]) — both of which supply a URL up front. Making the
+/// no-URL state unrepresentable removes the need for any later "does this
+/// entry have a URL" check.
 struct OgEntry<'a> {
     kind: OgKind,
-    /// Root URL first, `secure_url` alternate (if any) after. Both are surfaced
-    /// as candidates; pipeline dedup collapses them when identical.
-    urls: Vec<&'a str>,
+    /// The tag's own URL.
+    root: &'a str,
+    /// The HTTPS alternate for the *same* resource, if declared. Per ogp.me,
+    /// `og:video:secure_url` is "an alternate url to use if the webpage
+    /// requires HTTPS" — not a second asset — so it replaces `root` as the
+    /// emitted candidate rather than joining it (issue #495).
+    secure_url: Option<&'a str>,
     mime: Option<&'a str>,
 }
 
@@ -90,9 +101,17 @@ impl<'a> OgEntry<'a> {
     fn new(kind: OgKind, url: &'a str) -> Self {
         Self {
             kind,
-            urls: vec![url],
+            root: url,
+            secure_url: None,
             mime: None,
         }
+    }
+
+    /// The single URL this entry contributes as a candidate: `secure_url`
+    /// when declared (ogp.me: "use this if you need HTTPS" — and HTTPS is
+    /// the better default besides), else `root`. Never both.
+    fn url(&self) -> &'a str {
+        self.secure_url.unwrap_or(self.root)
     }
 
     /// Whether this entry denotes a downloadable stream.
@@ -129,6 +148,16 @@ impl DetectionStrategy for OpenGraphStrategy {
         // that precedes it, per the OGP spec's array/structured-property rules.
         let mut entries: Vec<OgEntry<'_>> = Vec::new();
 
+        // A `:type` seen before any root of its kind has no entry to bind to
+        // yet. ogp.me (<https://ogp.me>) carries no RFC 2119 language and
+        // leaves out-of-order authoring undefined, so rather than discard it
+        // (which let a `text/html` embed ship as a format — issue #498, the
+        // #493 defect via malformed ordering) we hold it here and apply it,
+        // after the walk, to that kind's *first* root — fill-if-absent, so an
+        // explicit in-block type always wins. A later same-kind orphan
+        // overwrites an earlier one: the orphan nearest its eventual root wins.
+        let mut orphan_types: HashMap<OgKind, &str> = HashMap::new();
+
         for elem in ctx.html.select(&OG_MEDIA_SELECTOR) {
             let (Some(property), Some(content)) =
                 (elem.value().attr("property"), elem.value().attr("content"))
@@ -146,40 +175,50 @@ impl DetectionStrategy for OpenGraphStrategy {
                 // declare one before any root (or with none at all) — keep the URL
                 // as its own entry rather than discarding it.
                 OgTag::SecureUrl(kind) => match Self::open_root(&mut entries, kind) {
-                    Some(entry) => entry.urls.push(content),
+                    Some(entry) => entry.secure_url = Some(content),
                     None => entries.push(OgEntry::new(kind, content)),
                 },
                 // An empty `content` leaves the type unspecified rather than
                 // declaring a non-media one — real meta soup carries these, and
                 // they must not drop a legitimate stream.
                 OgTag::Type(kind) => {
-                    if !content.trim().is_empty()
-                        && let Some(entry) = Self::open_root(&mut entries, kind)
-                    {
-                        entry.mime = Some(content);
+                    if content.trim().is_empty() {
+                        continue;
+                    }
+                    match Self::open_root(&mut entries, kind) {
+                        Some(entry) => entry.mime = Some(content),
+                        None => {
+                            orphan_types.insert(kind, content);
+                        }
                     }
                 }
+            }
+        }
+
+        for (kind, mime) in orphan_types {
+            if let Some(entry) = entries.iter_mut().find(|entry| entry.kind == kind)
+                && entry.mime.is_none()
+            {
+                entry.mime = Some(mime);
             }
         }
 
         entries
             .into_iter()
             .filter(OgEntry::is_media)
-            .flat_map(|entry| {
+            .filter_map(|entry| {
                 // A declared media type names the container even when the URL has
                 // no extension to sniff — better than guessing downstream.
                 let ext_from_mime = entry.mime.and_then(super::content_type_to_ext);
-                entry.urls.into_iter().filter_map(move |raw| {
-                    let url = resolve_url(ctx.base_url, raw)?;
-                    let ext = super::detection::ext_from_url(&url)
-                        .or_else(|| ext_from_mime.map(str::to_owned));
-                    Some(DetectedFormat {
-                        url,
-                        ext,
-                        quality: None,
-                        confidence: Confidence::High,
-                        source: entry.kind.source(),
-                    })
+                let url = resolve_url(ctx.base_url, entry.url())?;
+                let ext = super::detection::ext_from_url(&url)
+                    .or_else(|| ext_from_mime.map(str::to_owned));
+                Some(DetectedFormat {
+                    url,
+                    ext,
+                    quality: None,
+                    confidence: Confidence::High,
+                    source: entry.kind.source(),
                 })
             })
             .collect()
@@ -249,24 +288,116 @@ mod tests {
         assert_eq!(formats[0].confidence, Confidence::High);
     }
 
+    /// Canonical order (root → secure_url): ogp.me defines `secure_url` as
+    /// "an alternate url to use if the webpage requires HTTPS" for the SAME
+    /// asset, not a second asset — so the entry yields exactly one candidate,
+    /// and it is the HTTPS one.
+    ///
+    /// This test previously asserted `formats.len() == 2`, which encoded the
+    /// #495 defect (both URLs surfaced as separate formats for one video),
+    /// and it declared the tags in *reverse* order — secure_url before root —
+    /// so it actually exercised the orphan-secure_url fallback path (see
+    /// `og_video_secure_url_without_root_becomes_own_entry` below) rather
+    /// than the canonical root-then-secure_url path it claimed to test.
     #[test]
-    fn og_video_secure_url_extracted() {
+    fn og_video_secure_url_shares_entry_with_root() {
         let raw = r#"<html><head>
-            <meta property="og:video:secure_url" content="https://cdn.example.com/secure.mp4">
             <meta property="og:video:url" content="http://cdn.example.com/video.mp4">
+            <meta property="og:video:secure_url" content="https://cdn.example.com/video.mp4">
         </head></html>"#;
         let html = Html::parse_document(raw);
         let url = Url::parse("https://example.com/page").unwrap();
         let ctx = make_ctx(&html, raw, &url);
 
         let formats = OpenGraphStrategy.detect(&ctx);
-        assert_eq!(formats.len(), 2);
-        // Both are extracted; dedup happens at pipeline level
+        assert_eq!(formats.len(), 1, "root + secure_url is one asset, not two");
+        assert_eq!(formats[0].url, "https://cdn.example.com/video.mp4");
+    }
+
+    /// A `secure_url` declared with no preceding root of its kind keeps
+    /// today's fallback: it becomes its own entry rather than being dropped.
+    #[test]
+    fn og_video_secure_url_without_root_becomes_own_entry() {
+        let raw = r#"<html><head>
+            <meta property="og:video:secure_url" content="https://cdn.example.com/secure.mp4">
+        </head></html>"#;
+        let html = Html::parse_document(raw);
+        let url = Url::parse("https://example.com/page").unwrap();
+        let ctx = make_ctx(&html, raw, &url);
+
+        let formats = OpenGraphStrategy.detect(&ctx);
+        assert_eq!(formats.len(), 1);
+        assert_eq!(formats[0].url, "https://cdn.example.com/secure.mp4");
+    }
+
+    /// Two distinct roots each with their own `secure_url` yield two
+    /// candidates — one per asset — not four.
+    #[test]
+    fn og_video_multiple_entries_each_collapse_secure_url() {
+        let raw = r#"<html><head>
+            <meta property="og:video:url" content="http://cdn.example.com/a.mp4">
+            <meta property="og:video:secure_url" content="https://cdn.example.com/a.mp4">
+            <meta property="og:video:url" content="http://cdn.example.com/b.mp4">
+            <meta property="og:video:secure_url" content="https://cdn.example.com/b.mp4">
+        </head></html>"#;
+        let html = Html::parse_document(raw);
+        let url = Url::parse("https://example.com/page").unwrap();
+        let ctx = make_ctx(&html, raw, &url);
+
+        let formats = OpenGraphStrategy.detect(&ctx);
+        assert_eq!(formats.len(), 2, "one candidate per asset, not per URL tag");
         assert!(
             formats
                 .iter()
-                .any(|f| f.url == "https://cdn.example.com/secure.mp4")
+                .any(|f| f.url == "https://cdn.example.com/a.mp4")
         );
+        assert!(
+            formats
+                .iter()
+                .any(|f| f.url == "https://cdn.example.com/b.mp4")
+        );
+    }
+
+    /// `og:video:type` declared *before* any `og:video` root: ogp.me
+    /// (<https://ogp.me>) carries no RFC 2119 language and leaves out-of-order
+    /// authoring undefined, so an orphaned type binds to the kind's first
+    /// root (fill-if-absent) rather than being discarded — matching yt-dlp's
+    /// whole-document first-match regex and open-graph-scraper's
+    /// collect-then-zip, both of which would catch this ordering. Pre-fix
+    /// this dropped the type and let a `text/html` embed page ship as a
+    /// format (issue #498, the #493 defect via malformed ordering).
+    #[test]
+    fn og_video_type_before_root_still_gates() {
+        let raw = r#"<html><head>
+            <meta property="og:video:type" content="text/html">
+            <meta property="og:video" content="https://example.com/embed/353006/">
+        </head></html>"#;
+        let html = Html::parse_document(raw);
+        let url = Url::parse("https://example.com/page").unwrap();
+        let ctx = make_ctx(&html, raw, &url);
+
+        assert!(
+            OpenGraphStrategy.detect(&ctx).is_empty(),
+            "an orphaned :type binds to the kind's first root"
+        );
+    }
+
+    /// An orphaned type binds only when the root it lands on has no type of
+    /// its own — an explicit in-block type always wins over an orphan.
+    #[test]
+    fn og_video_orphan_type_does_not_clobber_explicit_type() {
+        let raw = r#"<html><head>
+            <meta property="og:video:type" content="text/html">
+            <meta property="og:video" content="https://cdn.example.com/real.mp4">
+            <meta property="og:video:type" content="video/mp4">
+        </head></html>"#;
+        let html = Html::parse_document(raw);
+        let url = Url::parse("https://example.com/page").unwrap();
+        let ctx = make_ctx(&html, raw, &url);
+
+        let formats = OpenGraphStrategy.detect(&ctx);
+        assert_eq!(formats.len(), 1, "explicit video/mp4 type wins over orphan");
+        assert_eq!(formats[0].url, "https://cdn.example.com/real.mp4");
     }
 
     /// A Flash object is a plugin embed, not a stream, so it is dropped.
