@@ -36,10 +36,7 @@ pub async fn parse_empflix_ajax(
 
     check_http_response(&response)?;
 
-    let json_text = response.text().await.map_err(|e| RdlpError::Network {
-        message: format!("Failed to read AJAX response: {e}"),
-        url: Some(ajax_url.clone().into()),
-    })?;
+    let json_text = crate::base::common::fetch_capped_text(response, &ajax_url).await?;
 
     BaseExtractor::log_content_if_verbose(ctx, "EMPFlix", "AJAX Response", &json_text, 500);
 
@@ -96,10 +93,7 @@ pub async fn parse_moviefap_xml(
 
     check_http_response(&response)?;
 
-    let xml_text = response.text().await.map_err(|e| RdlpError::Network {
-        message: format!("Failed to read XML response: {e}"),
-        url: Some(cdn_url.to_string().into()),
-    })?;
+    let xml_text = crate::base::common::fetch_capped_text(response, cdn_url).await?;
 
     BaseExtractor::log_content_if_verbose(ctx, "MovieFap", "XML Response", &xml_text, 1000);
 

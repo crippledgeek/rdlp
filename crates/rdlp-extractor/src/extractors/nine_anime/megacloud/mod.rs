@@ -246,10 +246,7 @@ async fn fetch_get_sources(
         })?;
 
     let status = response.status();
-    let body = response.text().await.map_err(|e| RdlpError::Network {
-        message: format!("Failed to read getSources body: {e}"),
-        url: Some(url.to_string().into()),
-    })?;
+    let body = crate::base::common::fetch_capped_text(response, url).await?;
 
     if !status.is_success() {
         return Err(RdlpError::Extraction {

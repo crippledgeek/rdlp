@@ -438,7 +438,7 @@ async fn fetch_formats_from_endpoint(
         return None;
     }
 
-    let json_text = match response.text().await {
+    let json_text = match crate::base::common::fetch_capped_text(response, &absolute_url).await {
         Ok(t) => t,
         Err(e) => {
             BaseExtractor::log_if_verbose(

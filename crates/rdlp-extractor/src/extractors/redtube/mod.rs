@@ -102,10 +102,7 @@ impl RedTubeExtractor {
 
         rdlp_core::check_http_response(&response)?;
 
-        let body = response.text().await.map_err(|e| RdlpError::Network {
-            message: format!("Failed to read RedTube video API response: {e}"),
-            url: Some(api_url.into()),
-        })?;
+        let body = crate::base::common::fetch_capped_text(response, &api_url).await?;
 
         BaseExtractor::log_content_if_verbose(ctx, "RedTube", "API video response", &body, 500);
 

@@ -122,7 +122,7 @@ pub struct BaseExtractor;
 /// bytes exceed `MAX_WEBPAGE_BYTES`. The previous `response.text()` path
 /// buffered the entire response before any check, allowing an
 /// adversarial server to OOM the host with a 10 GB body.
-async fn fetch_capped_text(response: wreq::Response, url: &str) -> Result<String> {
+pub(crate) async fn fetch_capped_text(response: wreq::Response, url: &str) -> Result<String> {
     use futures::StreamExt;
     let mut stream = response.bytes_stream();
     let mut buf: Vec<u8> = Vec::new();

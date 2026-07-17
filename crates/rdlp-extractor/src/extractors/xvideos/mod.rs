@@ -298,10 +298,10 @@ mod tests {
             .get(format!("{}/video.ooumovia9b7/slug", server.url()))
             .send()
             .await
-            .unwrap()
-            .text()
+            .expect("mock video request should succeed")
+            .text() // uncapped-ok: mockito loopback test body (trusted, small)
             .await
-            .unwrap();
+            .expect("mock video body should read as UTF-8");
 
         let info = XVideosExtractor::build_info(
             &html,

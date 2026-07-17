@@ -61,9 +61,11 @@ async fn extract_client_key_impl(
             format!("failed to fetch megacloud v3 embed page for source_id={source_id}")
         })?;
 
-    let html = response.text().await.with_context(|| {
-        format!("failed to read megacloud v3 embed body for source_id={source_id}")
-    })?;
+    let html = crate::base::common::fetch_capped_text(response, &url)
+        .await
+        .map_err(|e| {
+            anyhow::anyhow!("failed to read megacloud v3 embed body for source_id={source_id}: {e}")
+        })?;
 
     parse_client_key(&html)
 }
