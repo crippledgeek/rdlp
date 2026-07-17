@@ -196,36 +196,9 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
     }
 
     async fn rta_search(&mut self, html: String) -> Option<u8> {
-        // Mirrors yt-dlp's `_rta_search` (common.py:1525-1543).
-        let official = regex::RegexBuilder::new(
-            r#"<meta\s+name="rating"\s+content="RTA-5042-1996-1400-1577-RTA""#,
-        )
-        .case_insensitive(true)
-        .ignore_whitespace(true)
-        .build()
-        .ok()?;
-        if official.is_match(&html) {
-            return Some(18);
-        }
-        let markers = [
-            r#"Proudly Labeled <a href="http://www\.rtalabel\.org/" title="Restricted to Adults">RTA</a>"#,
-            r">[^<]*you acknowledge you are at least (\d+) years old",
-            r">\s*(?:18\s+U(?:\.S\.C\.|SC)\s+)?(?:§+\s*)?2257\b",
-        ];
-        let mut age_limit: Option<u8> = None;
-        for m in markers {
-            let Some(re) = regex::Regex::new(m).ok() else {
-                continue;
-            };
-            if let Some(cap) = re.captures(&html) {
-                let val: u8 = cap
-                    .get(1)
-                    .and_then(|g| g.as_str().parse().ok())
-                    .unwrap_or(18);
-                age_limit = Some(age_limit.map_or(val, |x| x.max(val)));
-            }
-        }
-        age_limit
+        // Delegates to the shared host+generic-extractor RTA detector (#497)
+        // — mirrors yt-dlp's `_rta_search` (common.py:1520-1539).
+        rdlp_extractor::base::common::age_rating::rta_search(&html)
     }
 
     async fn search_json(

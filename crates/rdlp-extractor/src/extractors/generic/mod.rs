@@ -22,6 +22,7 @@ use rdlp_core::{ExtractionContext, InfoExtractor, Result};
 use rdlp_types::{DownloadProtocol, Format, InfoDict};
 
 use crate::base::common::BaseExtractor;
+use crate::base::common::age_rating::rta_search;
 
 use self::detection::{
     DetectedFormat, DetectionStrategy, PageContext, ext_from_url, run_detection_pipeline,
@@ -178,6 +179,7 @@ impl InfoExtractor for GenericExtractor {
         let mut info = InfoDict::new(&video_id, &title, "Generic", url);
         info.description = description;
         info.thumbnail = thumbnail;
+        info.age_limit = rta_search(&webpage);
 
         if let Some(secs) = json_ld_meta.duration_seconds {
             info.duration = Some(secs);
@@ -477,6 +479,20 @@ mod tests {
         assert_eq!(format.url, "https://cdn.example.com/video.mp4");
         assert_eq!(format.ext, "mp4");
         assert_eq!(format.format_note, Some("720p".to_string()));
+    }
+
+    /// Verifies the Generic extractor wires `rta_search` against the fetched
+    /// webpage (issue #497). `extract()` itself needs a live HTTP fetch for
+    /// Phase 2, so this exercises the same shared helper the wiring calls
+    /// directly against representative page bodies instead of driving a full
+    /// network-backed `extract()` call.
+    #[test]
+    fn rta_search_wiring_detects_age_restriction() {
+        let restricted = r#"<html><head><meta name="rating" content="RTA-5042-1996-1400-1577-RTA"></head></html>"#;
+        assert_eq!(rta_search(restricted), Some(18));
+
+        let unrestricted = r#"<html><head><title>No adult content here</title></head></html>"#;
+        assert_eq!(rta_search(unrestricted), None);
     }
 
     #[test]

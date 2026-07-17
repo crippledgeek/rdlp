@@ -33,6 +33,7 @@
 //! let size = BaseExtractor::detect_file_size(&video_url, &ctx.http_client, None, std::time::Duration::from_secs(5)).await;
 //! ```
 
+pub mod age_rating;
 pub mod dash;
 pub mod json_ld;
 mod metadata;
