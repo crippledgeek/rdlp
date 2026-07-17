@@ -28,6 +28,15 @@ jobs:
       - name: Check no CLI FFmpeg usage
         run: bash scripts/check-no-cli.sh
 
+      - name: Check no uncapped response.text() reads
+        # Fails if any HTTP response body in rdlp-extractor is read via a bare,
+        # uncapped `.text().await` instead of the 50 MiB streaming cap
+        # `fetch_capped_text` — an adversarial/compromised CDN could otherwise
+        # OOM the host with an unbounded body (#438). Multiline-aware; a
+        # genuinely-safe test-only loopback read carries an inline
+        # `// uncapped-ok: <reason>` marker.
+        run: bash scripts/check-no-bare-response-text.sh
+
       - name: Check URL log redaction
         # Fails if any raw URL is interpolated into an operator-visible string in
         # rdlp-extractor (RdlpError message/reason fields, ctor message-args, log

@@ -498,10 +498,10 @@ mod async_tests {
             .get(format!("{}/search?what=test&tab=&page=1", server.url()))
             .send()
             .await
-            .unwrap()
-            .text()
+            .expect("mock search request should succeed")
+            .text() // uncapped-ok: mockito loopback test body (trusted, small)
             .await
-            .unwrap();
+            .expect("mock search body should read as UTF-8");
         let results = tnaflix_search_helpers::parse_search_results(&webpage);
 
         assert_eq!(results.len(), 1);

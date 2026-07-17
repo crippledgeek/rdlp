@@ -381,7 +381,7 @@ impl KoreanPornMovieExtractor {
         })?;
 
         // Parse HTML for durations (best-effort, non-fatal)
-        let durations = scrape_durations_from_html_response(html_result).await;
+        let durations = scrape_durations_from_html_response(html_result, &html_url).await;
 
         let results = posts
             .into_iter()
@@ -457,7 +457,7 @@ impl KoreanPornMovieExtractor {
             .await
             .map_err(|e| RdlpError::extraction(format!("failed to parse posts: {e}"), &api_url))?;
 
-        let durations = scrape_durations_from_html_response(html_result).await;
+        let durations = scrape_durations_from_html_response(html_result, &html_url).await;
 
         let results = posts
             .into_iter()

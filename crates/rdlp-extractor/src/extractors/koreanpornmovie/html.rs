@@ -61,9 +61,12 @@ pub(super) fn extract_total_pages(response: &wreq::Response) -> u32 {
 /// Scrape durations from an HTML listing response (best-effort, non-fatal).
 pub(super) async fn scrape_durations_from_html_response(
     result: std::result::Result<wreq::Response, wreq::Error>,
+    url: &str,
 ) -> std::collections::HashMap<String, f64> {
     let text = match result {
-        Ok(resp) => resp.text().await.unwrap_or_default(),
+        Ok(resp) => crate::base::common::fetch_capped_text(resp, url)
+            .await
+            .unwrap_or_default(),
         Err(e) => {
             // Network failure was previously indistinguishable from "page
             // had no durations" — surface it at debug so investigators

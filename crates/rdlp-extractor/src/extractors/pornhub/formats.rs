@@ -141,7 +141,9 @@ async fn fetch_media_formats(
         return None;
     }
 
-    let json_text = response.text().await.ok()?;
+    let json_text = crate::base::common::fetch_capped_text(response, url)
+        .await
+        .ok()?;
     let media_array: Value = serde_json::from_str(&json_text).ok()?;
 
     let mut formats = Vec::new();

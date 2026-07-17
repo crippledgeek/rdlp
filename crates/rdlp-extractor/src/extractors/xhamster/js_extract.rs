@@ -129,7 +129,7 @@ pub async fn fetch_player_js(
             .await
         {
             Ok(resp) if resp.status().is_success() => {
-                if let Ok(body) = resp.text().await {
+                if let Ok(body) = crate::base::common::fetch_capped_text(resp, &full_url).await {
                     // Verify it contains decryption-related code
                     if body.contains("1664525")
                         || body.contains("0x85ebca77")

@@ -75,10 +75,7 @@ pub async fn extract_playlist(
 
     check_http_response(&response)?;
 
-    let webpage = response.text().await.map_err(|e| RdlpError::Network {
-        message: format!("Failed to read response: {e}"),
-        url: Some(url.to_string().into()),
-    })?;
+    let webpage = crate::base::common::fetch_capped_text(response, url).await?;
 
     // Extract metadata
     let (playlist_title, pagination_info, mut all_video_urls) = {
@@ -352,10 +349,7 @@ async fn download_page(
 
     check_http_response(&response)?;
 
-    response.text().await.map_err(|e| RdlpError::Network {
-        message: format!("Failed to read page {page_num}: {e}"),
-        url: Some(url.into()),
-    })
+    crate::base::common::fetch_capped_text(response, &url).await
 }
 
 #[cfg(test)]
