@@ -16,6 +16,7 @@ use rdlp_core::JsEngine;
 
 use crate::base::common::BaseExtractor;
 
+use super::js_extract::PlayerJsSource;
 use super::patterns;
 
 /// Detect vcodec from URL by checking for `.av1.` or `.h264.` in the path.
@@ -67,7 +68,7 @@ async fn collect_hls_formats(
     hls: &serde_json::Map<String, Value>,
     page_url: &str,
     js_engine: &dyn JsEngine,
-    player_decrypt_js: Option<&str>,
+    player_js: &PlayerJsSource<'_>,
     seen_urls: &mut HashSet<String>,
 ) -> Vec<Format> {
     let mut formats = Vec::new();
@@ -107,7 +108,7 @@ async fn collect_hls_formats(
 
     for (format_id, hls_url) in hls_urls {
         let Some(deciphered) =
-            super::js_extract::decipher_url_via_boa(&hls_url, js_engine, player_decrypt_js).await
+            super::js_extract::decipher_url(&hls_url, js_engine, player_js).await
         else {
             debug!(format_id:?; "[XHamster] Failed to decipher HLS URL");
             continue;
@@ -137,7 +138,7 @@ async fn collect_standard_formats(
     standard: &serde_json::Map<String, Value>,
     page_url: &str,
     js_engine: &dyn JsEngine,
-    player_decrypt_js: Option<&str>,
+    player_js: &PlayerJsSource<'_>,
     seen_urls: &mut HashSet<String>,
 ) -> Vec<Format> {
     let mut formats = Vec::new();
@@ -182,8 +183,7 @@ async fn collect_standard_formats(
                 };
 
                 let Some(deciphered) =
-                    super::js_extract::decipher_url_via_boa(std_url, js_engine, player_decrypt_js)
-                        .await
+                    super::js_extract::decipher_url(std_url, js_engine, player_js).await
                 else {
                     debug!(format_id:?; "[XHamster] Failed to decipher standard URL");
                     continue;
@@ -251,7 +251,7 @@ pub async fn extract_from_initials(
     initials: &Value,
     page_url: &str,
     js_engine: &dyn JsEngine,
-    player_decrypt_js: Option<&str>,
+    player_js: &PlayerJsSource<'_>,
 ) -> Vec<Format> {
     let mut formats = Vec::new();
     let mut seen_urls: HashSet<String> = HashSet::new();
@@ -297,21 +297,15 @@ pub async fn extract_from_initials(
         // Phase 2: HLS sources (encrypted)
         if let Some(hls) = xplayer_sources.get("hls").and_then(|v| v.as_object()) {
             let hls_formats =
-                collect_hls_formats(hls, page_url, js_engine, player_decrypt_js, &mut seen_urls)
-                    .await;
+                collect_hls_formats(hls, page_url, js_engine, player_js, &mut seen_urls).await;
             formats.extend(hls_formats);
         }
 
         // Phase 3: Standard sources (encrypted)
         if let Some(standard) = xplayer_sources.get("standard").and_then(|v| v.as_object()) {
-            let std_formats = collect_standard_formats(
-                standard,
-                page_url,
-                js_engine,
-                player_decrypt_js,
-                &mut seen_urls,
-            )
-            .await;
+            let std_formats =
+                collect_standard_formats(standard, page_url, js_engine, player_js, &mut seen_urls)
+                    .await;
             formats.extend(std_formats);
         }
     } else {
@@ -475,7 +469,7 @@ mod tests {
             &initials,
             "https://xhamster.com/videos/test-123",
             &engine,
-            None,
+            &PlayerJsSource::Resolved(None),
         )
         .await;
         assert_eq!(formats.len(), 2);
@@ -529,7 +523,7 @@ mod tests {
             &initials,
             "https://xhamster.com/videos/test-123",
             &engine,
-            None,
+            &PlayerJsSource::Resolved(None),
         )
         .await;
         // Same URL should be deduped
@@ -568,7 +562,7 @@ mod tests {
             &initials,
             "https://xhamster.com/videos/test-123",
             &engine,
-            None,
+            &PlayerJsSource::Resolved(None),
         )
         .await;
         assert_eq!(formats.len(), 2);
@@ -612,7 +606,7 @@ mod tests {
             &initials,
             "https://xhamster.com/videos/test-123",
             &engine,
-            None,
+            &PlayerJsSource::Resolved(None),
         )
         .await;
         assert_eq!(

@@ -112,10 +112,12 @@ impl XHamsterExtractor {
             }
         };
 
-        // Discover and fetch player JS for decryption
+        // Discover player-JS script URLs. The ~656 KB bundle itself is fetched
+        // lazily — only if native decryption fails for some URL (rare rotated
+        // algorithm), so the common path pays no fetch cost (issue #510).
         let player_script_urls = js_extract::find_player_script_urls(&webpage);
         let player_js =
-            js_extract::fetch_player_js(&player_script_urls, &ctx.http_client, &url).await;
+            js_extract::PlayerJsSource::lazy(&ctx.http_client, &url, player_script_urls);
 
         // Try modern layout: window.initials JSON
         let (mut info, formats) = if let Some(initials) = initials {
@@ -142,13 +144,9 @@ impl XHamsterExtractor {
                 )
             };
 
-            let formats = formats::extract_from_initials(
-                &initials,
-                &url,
-                ctx.js_engine.as_ref(),
-                player_js.as_deref(),
-            )
-            .await;
+            let formats =
+                formats::extract_from_initials(&initials, &url, ctx.js_engine.as_ref(), &player_js)
+                    .await;
             (info, formats)
         } else {
             // Legacy fallback

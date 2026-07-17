@@ -1,16 +1,18 @@
-//! Boa-based JS extraction module for XHamster.
+//! JS extraction module for XHamster.
 //!
-//! Provides three public functions for boa-based extraction:
+//! Public entry points:
 //! - [`extract_initials`] — parses `window.initials` (serde-first, boa fallback)
 //! - [`find_player_script_urls`] — discovers player JS URLs from HTML
-//! - [`decipher_url_via_boa`] — decrypts an encrypted URL using boa
+//! - [`decipher_url`] — decrypts a format URL (native fast-path, boa fallback)
+//! - [`PlayerJsSource`] — lazily fetches the player-JS decrypt bundle on demand
 //!
-//! And one async helper:
-//! - [`fetch_player_js`] — downloads player JS bundle from discovered URLs
+//! Crate-internal helpers (reached only via the entry points above):
+//! [`decipher_url_via_boa`] and [`fetch_player_js`].
 
 use lazy_regex::{Lazy, Regex, lazy_regex};
 use log::debug;
 use rdlp_core::JsEngine;
+use tokio::sync::OnceCell;
 
 /// Bundled JS decryption code (port of rdlp-crypto PRNG algorithms).
 const BUNDLED_DECRYPT_JS: &str = include_str!("decrypt.js");
@@ -85,12 +87,94 @@ pub fn find_player_script_urls(webpage: &str) -> Vec<String> {
         .collect()
 }
 
+/// Decipher an encrypted xHamster format URL.
+///
+/// Fast path: the native Rust PRNG port (`rdlp_crypto::xhamster`) decrypts
+/// algorithms 1–7 — the current, stable algorithm set, unchanged since
+/// 2025-11-08 — in microseconds without any JS engine. This is the dominant
+/// on-CPU extraction cost when done through boa (issue #510): the boa path
+/// evaluates the site's ~656 KB player bundle once per encrypted URL.
+///
+/// Only when native decryption returns `None` (an unknown/rotated algorithm ID
+/// or malformed input) does it fall back to boa via [`decipher_url_via_boa`],
+/// which evaluates the site's live player JS (self-healing if xHamster adds a
+/// new algorithm) and then the bundled `decrypt.js`. The native port is
+/// cross-validated against that bundled JS for all 7 algorithms (see the parity
+/// tests), so the fast path is result-identical for the algorithms it handles.
+pub async fn decipher_url(
+    encrypted_url: &str,
+    js_engine: &dyn JsEngine,
+    player_js: &PlayerJsSource<'_>,
+) -> Option<String> {
+    if let Some(decrypted) = rdlp_crypto::xhamster::decipher_format_url(encrypted_url) {
+        return Some(decrypted);
+    }
+    debug!("[XHamster] Native decrypt returned None; falling back to boa");
+    // Only here — the rare unknown/rotated algorithm — is the player bundle
+    // actually needed, so this is where the lazy fetch is triggered (once).
+    decipher_url_via_boa(encrypted_url, js_engine, player_js.get().await).await
+}
+
+/// Source of the site's player-JS decrypt bundle, resolved lazily.
+///
+/// With native-first decryption ([`decipher_url`]) the ~656 KB player bundle is
+/// only needed when the native port cannot handle an algorithm — the rare
+/// rotation case. This defers (and caches) the fetch so the common path pays no
+/// network cost for a bundle it never evaluates (issue #510).
+pub enum PlayerJsSource<'a> {
+    /// Already-resolved bundle (or none). Test-only constructor — production
+    /// always resolves lazily via [`PlayerJsSource::lazy`].
+    #[cfg(test)]
+    Resolved(Option<&'a str>),
+    /// Fetched from the page's player-script URLs on first need, then cached.
+    Lazy {
+        http_client: &'a wreq::Client,
+        page_url: &'a str,
+        script_urls: Vec<String>,
+        cache: OnceCell<Option<String>>,
+    },
+}
+
+impl<'a> PlayerJsSource<'a> {
+    /// Build a lazy source from discovered player-script URLs (no fetch yet).
+    #[must_use]
+    pub fn lazy(
+        http_client: &'a wreq::Client,
+        page_url: &'a str,
+        script_urls: Vec<String>,
+    ) -> Self {
+        Self::Lazy {
+            http_client,
+            page_url,
+            script_urls,
+            cache: OnceCell::new(),
+        }
+    }
+
+    /// Resolve the player JS, fetching (and caching) once on first need.
+    async fn get(&self) -> Option<&str> {
+        match self {
+            #[cfg(test)]
+            Self::Resolved(v) => *v,
+            Self::Lazy {
+                http_client,
+                page_url,
+                script_urls,
+                cache,
+            } => cache
+                .get_or_init(|| fetch_player_js(script_urls, http_client, page_url))
+                .await
+                .as_deref(),
+        }
+    }
+}
+
 /// Decipher an encrypted XHamster URL using boa.
 ///
 /// If `player_decrypt_js` is provided, tries to find and call the site's own
 /// decryption function first. Falls back to the bundled `decrypt.js` (loaded
 /// via `include_str!`). Returns the decrypted URL or `None`.
-pub async fn decipher_url_via_boa(
+pub(crate) async fn decipher_url_via_boa(
     encrypted_url: &str,
     js_engine: &dyn JsEngine,
     player_decrypt_js: Option<&str>,
@@ -111,7 +195,7 @@ pub async fn decipher_url_via_boa(
 ///
 /// Tries each URL in order, returning the first response body that contains
 /// known decryption-related constants. Returns `None` if no suitable JS is found.
-pub async fn fetch_player_js(
+pub(crate) async fn fetch_player_js(
     script_urls: &[String],
     http_client: &wreq::Client,
     page_url: &str,
@@ -475,6 +559,103 @@ mod tests {
     }
 
     // =========================================================================
+    // native-first decrypt fast path (issue #510, Finding B)
+    // =========================================================================
+
+    /// Test engine returning a fixed sentinel from every eval — proves the boa
+    /// fallback path was actually reached (native decrypt returned `None`).
+    struct SentinelEngine;
+
+    #[async_trait::async_trait]
+    impl rdlp_core::JsEngine for SentinelEngine {
+        async fn eval(&self, _code: &str) -> rdlp_core::Result<serde_json::Value> {
+            Ok(serde_json::Value::String(
+                "SENTINEL://decrypted".to_string(),
+            ))
+        }
+
+        async fn eval_with_context(
+            &self,
+            _code: &str,
+            _context: &serde_json::Value,
+        ) -> rdlp_core::Result<serde_json::Value> {
+            unreachable!("decipher_url does not call eval_with_context")
+        }
+
+        async fn call_function(
+            &self,
+            _function_name: &str,
+            _args: &[serde_json::Value],
+        ) -> rdlp_core::Result<serde_json::Value> {
+            unreachable!("decipher_url does not call call_function")
+        }
+    }
+
+    #[tokio::test]
+    async fn test_decipher_url_native_fast_path_skips_boa() {
+        // A known-algorithm (1-7) ciphertext must decrypt via the native Rust
+        // port WITHOUT invoking boa. NeverEvalEngine errors on any eval, so if
+        // control reaches boa the result is None and this assertion fails.
+        let hex = encrypt_test_vector(1, 42, "https://cdn.example.com/media=hls4/video.m3u8");
+        let result = decipher_url(&hex, &NeverEvalEngine, &PlayerJsSource::Resolved(None)).await;
+        assert_eq!(
+            result.as_deref(),
+            Some("https://cdn.example.com/media=hls4/video.m3u8"),
+            "native port must decrypt algo 1-7 without touching boa"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_decipher_url_unknown_algo_falls_back_to_boa() {
+        // Algorithm id 0 is unknown to the native port (returns None) — control
+        // must fall back to boa. SentinelEngine returns a fixed string from
+        // eval, proving the boa fallback was actually reached.
+        let result = decipher_url(
+            "000000000041424344",
+            &SentinelEngine,
+            &PlayerJsSource::Resolved(None),
+        )
+        .await;
+        assert_eq!(
+            result.as_deref(),
+            Some("SENTINEL://decrypted"),
+            "unknown algorithm must fall back to the boa path"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_decipher_url_native_success_skips_lazy_fetch() {
+        // The core #510 invariant: when native decryption succeeds, the ~656 KB
+        // player-JS bundle must NOT be fetched. Uses a real `Lazy` source (not
+        // `Resolved`) so a future refactor that eagerly fetches would fail here.
+        let mut server = mockito::Server::new_async().await;
+        let player_endpoint = server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(200)
+            .with_body("charCodeAt 1664525")
+            .expect(0)
+            .create_async()
+            .await;
+
+        let client = wreq::Client::new();
+        let script_url = format!("{}/xplayer.js", server.url());
+        let player_js =
+            PlayerJsSource::lazy(&client, "https://xhamster.com/videos/x", vec![script_url]);
+
+        // Valid algo-1 ciphertext: native decrypts it, so neither boa nor the
+        // lazy fetch is reached.
+        let hex = encrypt_test_vector(1, 42, "https://cdn.example.com/media=hls4/v.m3u8");
+        let result = decipher_url(&hex, &NeverEvalEngine, &player_js).await;
+
+        assert_eq!(
+            result.as_deref(),
+            Some("https://cdn.example.com/media=hls4/v.m3u8")
+        );
+        // expect(0): the player-JS endpoint must not have been requested.
+        player_endpoint.assert_async().await;
+    }
+
+    // =========================================================================
     // Bundled JS unit tests
     // =========================================================================
 
@@ -598,7 +779,7 @@ mod tests {
             &initials,
             "https://xhamster.com/videos/test-123",
             &engine,
-            None,
+            &PlayerJsSource::Resolved(None),
         )
         .await;
 
@@ -638,7 +819,7 @@ mod tests {
             &initials,
             "https://xhamster.com/videos/test-123",
             &engine,
-            None,
+            &PlayerJsSource::Resolved(None),
         )
         .await;
 
@@ -677,7 +858,7 @@ mod tests {
             &initials,
             "https://xhamster.com/videos/test-123",
             &engine,
-            None,
+            &PlayerJsSource::Resolved(None),
         )
         .await;
 
