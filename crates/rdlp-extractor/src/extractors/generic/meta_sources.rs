@@ -1,7 +1,6 @@
 //! OpenGraph and Twitter meta tag detection strategies.
 
 use scraper::Selector;
-use std::collections::HashMap;
 use std::sync::LazyLock;
 use url::Url;
 
@@ -62,13 +61,23 @@ impl OgTag {
 /// Load-bearing: a structured property binds to a root of its *own* namespace.
 /// `og:video:type` describes an `og:video` — never a neighbouring `og:audio`
 /// that merely happens to be the most recent tag.
-#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum OgKind {
     Video,
     Audio,
 }
 
 impl OgKind {
+    /// Dense index into the fixed-size orphan-type table — there are exactly
+    /// two kinds, so a two-slot array indexed by this beats a `HashMap` (no
+    /// heap alloc, no hashing, no `Hash` derive) while staying just as clear.
+    const fn index(self) -> usize {
+        match self {
+            Self::Video => 0,
+            Self::Audio => 1,
+        }
+    }
+
     /// The `DetectedFormat::source` tag, which feeds the emitted `format_id`.
     const fn source(self) -> &'static str {
         match self {
@@ -78,7 +87,7 @@ impl OgKind {
     }
 }
 
-/// One OpenGraph media entry: a single asset (never two — see [`OgEntry::url`])
+/// One OpenGraph media entry: a single asset (never two — see [`OgEntry::resolve`])
 /// plus the MIME type declared for it.
 ///
 /// `root` is never optional: an [`OgEntry`] cannot exist without one, since it
@@ -168,7 +177,8 @@ impl DetectionStrategy for OpenGraphStrategy {
         // after the walk, to that kind's *first* root — fill-if-absent, so an
         // explicit in-block type always wins. A later same-kind orphan
         // overwrites an earlier one: the orphan nearest its eventual root wins.
-        let mut orphan_types: HashMap<OgKind, &str> = HashMap::new();
+        // Indexed by `OgKind::index` — two kinds, so a two-slot array suffices.
+        let mut orphan_types: [Option<&str>; 2] = [None, None];
 
         for elem in ctx.html.select(&OG_MEDIA_SELECTOR) {
             let (Some(property), Some(content)) =
@@ -199,15 +209,16 @@ impl DetectionStrategy for OpenGraphStrategy {
                     }
                     match Self::open_root(&mut entries, kind) {
                         Some(entry) => entry.mime = Some(content),
-                        None => {
-                            orphan_types.insert(kind, content);
-                        }
+                        None => orphan_types[kind.index()] = Some(content),
                     }
                 }
             }
         }
 
-        for (kind, mime) in orphan_types {
+        for kind in [OgKind::Video, OgKind::Audio] {
+            let Some(mime) = orphan_types[kind.index()] else {
+                continue;
+            };
             if let Some(entry) = entries.iter_mut().find(|entry| entry.kind == kind)
                 && entry.mime.is_none()
             {

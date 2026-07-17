@@ -481,18 +481,76 @@ mod tests {
         assert_eq!(format.format_note, Some("720p".to_string()));
     }
 
-    /// Verifies the Generic extractor wires `rta_search` against the fetched
-    /// webpage (issue #497). `extract()` itself needs a live HTTP fetch for
-    /// Phase 2, so this exercises the same shared helper the wiring calls
-    /// directly against representative page bodies instead of driving a full
-    /// network-backed `extract()` call.
-    #[test]
-    fn rta_search_wiring_detects_age_restriction() {
-        let restricted = r#"<html><head><meta name="rating" content="RTA-5042-1996-1400-1577-RTA"></head></html>"#;
-        assert_eq!(rta_search(restricted), Some(18));
+    /// End-to-end guard for the #497 wiring: the Generic extractor must set
+    /// `InfoDict::age_limit` from an RTA label on the *fetched* page.
+    ///
+    /// This drives the full `extract()` path on purpose. `rta_search`'s own
+    /// behaviour is already covered exhaustively in `base::common::age_rating`;
+    /// what a helper-only test cannot pin is the single wiring line
+    /// (`info.age_limit = rta_search(&webpage)`). Deleting that line leaves
+    /// every `age_rating` test green while age-gated sites silently lose their
+    /// rating — so the guard has to observe `age_limit` coming out of
+    /// `extract()`, not out of the helper.
+    ///
+    /// Feasible without a real network because `prefetch`/`fetch_webpage` issue
+    /// a plain `ctx.http_client.get(url)` with no SSRF/loopback gate, so a
+    /// mockito loopback URL is fetched directly. The `og:video` tag is present
+    /// only so `formats` is non-empty (an empty page is an `Err`, which would
+    /// mask the assertion); its plain-mp4 URL is never fetched.
+    #[tokio::test]
+    async fn extract_sets_age_limit_from_rta_label() {
+        let mut server = mockito::Server::new_async().await;
+        let page = r#"<html><head>
+            <meta name="rating" content="RTA-5042-1996-1400-1577-RTA">
+            <meta property="og:video" content="https://cdn.example.com/v.mp4">
+            </head><body></body></html>"#;
+        let _m = server
+            .mock("GET", "/watch")
+            .with_header("content-type", "text/html")
+            .with_body(page)
+            .create_async()
+            .await;
 
-        let unrestricted = r#"<html><head><title>No adult content here</title></head></html>"#;
-        assert_eq!(rta_search(unrestricted), None);
+        let url = format!("{}/watch", server.url());
+        let ctx = crate::hls::test_support::test_ctx();
+        let info = GenericExtractor::new().extract(&url, &ctx).await.unwrap();
+
+        assert!(
+            !info.formats.is_empty(),
+            "the og:video must yield a format — an empty page would Err and mask the age_limit check"
+        );
+        assert_eq!(
+            info.age_limit,
+            Some(18),
+            "an RTA label on the fetched page must set age_limit via the extract() wiring"
+        );
+    }
+
+    /// Negative companion to [`extract_sets_age_limit_from_rta_label`]: a page
+    /// with no age signal must leave `age_limit` unset (not defaulted to 18).
+    #[tokio::test]
+    async fn extract_leaves_age_limit_unset_without_rta_label() {
+        let mut server = mockito::Server::new_async().await;
+        let page = r#"<html><head>
+            <title>All ages</title>
+            <meta property="og:video" content="https://cdn.example.com/v.mp4">
+            </head><body></body></html>"#;
+        let _m = server
+            .mock("GET", "/watch")
+            .with_header("content-type", "text/html")
+            .with_body(page)
+            .create_async()
+            .await;
+
+        let url = format!("{}/watch", server.url());
+        let ctx = crate::hls::test_support::test_ctx();
+        let info = GenericExtractor::new().extract(&url, &ctx).await.unwrap();
+
+        assert!(!info.formats.is_empty(), "the og:video must yield a format");
+        assert_eq!(
+            info.age_limit, None,
+            "a page with no RTA/age signal must not set age_limit"
+        );
     }
 
     #[test]
