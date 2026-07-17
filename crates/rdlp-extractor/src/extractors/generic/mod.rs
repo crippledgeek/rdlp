@@ -22,6 +22,7 @@ use rdlp_core::{ExtractionContext, InfoExtractor, Result};
 use rdlp_types::{DownloadProtocol, Format, InfoDict};
 
 use crate::base::common::BaseExtractor;
+use crate::base::common::age_rating::rta_search;
 
 use self::detection::{
     DetectedFormat, DetectionStrategy, PageContext, ext_from_url, run_detection_pipeline,
@@ -178,6 +179,7 @@ impl InfoExtractor for GenericExtractor {
         let mut info = InfoDict::new(&video_id, &title, "Generic", url);
         info.description = description;
         info.thumbnail = thumbnail;
+        info.age_limit = rta_search(&webpage);
 
         if let Some(secs) = json_ld_meta.duration_seconds {
             info.duration = Some(secs);
@@ -358,21 +360,31 @@ fn protocol_from_url(url: &str, ext: Option<&str>) -> DownloadProtocol {
 }
 
 /// Map Content-Type to a file extension.
+///
+/// Media type/subtype names are case-insensitive (RFC 6838 §4.2, RFC 9110
+/// §8.3.1). Comparisons case-fold via `eq_ignore_ascii_case` — mirroring the
+/// zero-allocation idiom in `generic::patterns` — rather than `to_lowercase`,
+/// which would allocate a `String` on every call (PR #494 deliberately removed
+/// those allocations).
 fn content_type_to_ext(ct: &str) -> Option<&'static str> {
     let ct = ct.split(';').next().unwrap_or(ct).trim();
-    match ct {
-        "video/mp4" => Some("mp4"),
-        "video/webm" => Some("webm"),
-        "video/x-flv" => Some("flv"),
-        "video/quicktime" => Some("mov"),
-        "video/x-matroska" => Some("mkv"),
-        "audio/mpeg" => Some("mp3"),
-        "audio/mp4" => Some("m4a"),
-        "audio/ogg" => Some("ogg"),
-        "application/vnd.apple.mpegurl" | "application/x-mpegurl" => Some("m3u8"),
-        "application/dash+xml" => Some("mpd"),
-        _ => None,
-    }
+    const TABLE: &[(&str, &str)] = &[
+        ("video/mp4", "mp4"),
+        ("video/webm", "webm"),
+        ("video/x-flv", "flv"),
+        ("video/quicktime", "mov"),
+        ("video/x-matroska", "mkv"),
+        ("audio/mpeg", "mp3"),
+        ("audio/mp4", "m4a"),
+        ("audio/ogg", "ogg"),
+        ("application/vnd.apple.mpegurl", "m3u8"),
+        ("application/x-mpegurl", "m3u8"),
+        ("application/dash+xml", "mpd"),
+    ];
+    TABLE
+        .iter()
+        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(ct))
+        .map(|(_, ext)| *ext)
 }
 
 #[cfg(test)]
@@ -445,6 +457,15 @@ mod tests {
         assert_eq!(content_type_to_ext("text/html"), None);
     }
 
+    /// Media type/subtype names are case-insensitive (RFC 6838 §4.2, RFC 9110
+    /// §8.3.1) — a publisher-authored `encodingFormat` or `og:video:type` value
+    /// with unconventional casing must still resolve.
+    #[test]
+    fn content_type_to_ext_is_case_insensitive() {
+        assert_eq!(content_type_to_ext("VIDEO/WEBM"), Some("webm"));
+        assert_eq!(content_type_to_ext("Video/MP4; codecs=avc1"), Some("mp4"));
+    }
+
     #[test]
     fn detected_to_format_conversion() {
         let df = DetectedFormat {
@@ -458,6 +479,78 @@ mod tests {
         assert_eq!(format.url, "https://cdn.example.com/video.mp4");
         assert_eq!(format.ext, "mp4");
         assert_eq!(format.format_note, Some("720p".to_string()));
+    }
+
+    /// End-to-end guard for the #497 wiring: the Generic extractor must set
+    /// `InfoDict::age_limit` from an RTA label on the *fetched* page.
+    ///
+    /// This drives the full `extract()` path on purpose. `rta_search`'s own
+    /// behaviour is already covered exhaustively in `base::common::age_rating`;
+    /// what a helper-only test cannot pin is the single wiring line
+    /// (`info.age_limit = rta_search(&webpage)`). Deleting that line leaves
+    /// every `age_rating` test green while age-gated sites silently lose their
+    /// rating — so the guard has to observe `age_limit` coming out of
+    /// `extract()`, not out of the helper.
+    ///
+    /// Feasible without a real network because `prefetch`/`fetch_webpage` issue
+    /// a plain `ctx.http_client.get(url)` with no SSRF/loopback gate, so a
+    /// mockito loopback URL is fetched directly. The `og:video` tag is present
+    /// only so `formats` is non-empty (an empty page is an `Err`, which would
+    /// mask the assertion); its plain-mp4 URL is never fetched.
+    #[tokio::test]
+    async fn extract_sets_age_limit_from_rta_label() {
+        let mut server = mockito::Server::new_async().await;
+        let page = r#"<html><head>
+            <meta name="rating" content="RTA-5042-1996-1400-1577-RTA">
+            <meta property="og:video" content="https://cdn.example.com/v.mp4">
+            </head><body></body></html>"#;
+        let _m = server
+            .mock("GET", "/watch")
+            .with_header("content-type", "text/html")
+            .with_body(page)
+            .create_async()
+            .await;
+
+        let url = format!("{}/watch", server.url());
+        let ctx = crate::hls::test_support::test_ctx();
+        let info = GenericExtractor::new().extract(&url, &ctx).await.unwrap();
+
+        assert!(
+            !info.formats.is_empty(),
+            "the og:video must yield a format — an empty page would Err and mask the age_limit check"
+        );
+        assert_eq!(
+            info.age_limit,
+            Some(18),
+            "an RTA label on the fetched page must set age_limit via the extract() wiring"
+        );
+    }
+
+    /// Negative companion to [`extract_sets_age_limit_from_rta_label`]: a page
+    /// with no age signal must leave `age_limit` unset (not defaulted to 18).
+    #[tokio::test]
+    async fn extract_leaves_age_limit_unset_without_rta_label() {
+        let mut server = mockito::Server::new_async().await;
+        let page = r#"<html><head>
+            <title>All ages</title>
+            <meta property="og:video" content="https://cdn.example.com/v.mp4">
+            </head><body></body></html>"#;
+        let _m = server
+            .mock("GET", "/watch")
+            .with_header("content-type", "text/html")
+            .with_body(page)
+            .create_async()
+            .await;
+
+        let url = format!("{}/watch", server.url());
+        let ctx = crate::hls::test_support::test_ctx();
+        let info = GenericExtractor::new().extract(&url, &ctx).await.unwrap();
+
+        assert!(!info.formats.is_empty(), "the og:video must yield a format");
+        assert_eq!(
+            info.age_limit, None,
+            "a page with no RTA/age signal must not set age_limit"
+        );
     }
 
     #[test]
