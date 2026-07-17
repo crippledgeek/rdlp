@@ -50,11 +50,18 @@ const MIN_CIPHERTEXT_BYTES: usize = 6;
 /// Pattern to extract hex-encoded ciphertext and remainder from URL path.
 ///
 /// The path starts with `/{hex}{remainder}` where hex is 12+ hex chars
-/// and remainder starts with `/` or `,`.
+/// and remainder starts with `/` or `,`. The `{12,}` minimum is
+/// `MIN_CIPHERTEXT_BYTES * 2` (a regex literal cannot reference the const);
+/// the static assertion below keeps the two in lock-step so the URL-path and
+/// bare-hex arms of [`could_be_ciphertext`] stay a faithful mirror.
 #[allow(clippy::expect_used)] // LazyLock<Regex>: hardcoded literal, panic = programming error caught at first use
 static HEX_PATH_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^/(?P<hex>[0-9a-fA-F]{12,})(?P<rem>[/,].+)$").expect("Valid hex path pattern")
 });
+
+// If MIN_CIPHERTEXT_BYTES changes, the `{12,}` in HEX_PATH_PATTERN above must
+// change with it — this trips a compile error to force that.
+const _: () = assert!(MIN_CIPHERTEXT_BYTES * 2 == 12);
 
 /// Decipher an encrypted `XHamster` format URL.
 ///
@@ -289,5 +296,18 @@ mod tests {
         ));
         // A plain URL with no hex path segment is not ciphertext.
         assert!(!could_be_ciphertext("https://example.com/video.mp4"));
+    }
+
+    #[test]
+    fn test_could_be_ciphertext_url_hex_path_boundary() {
+        // Same MIN_CIPHERTEXT_BYTES boundary via the URL-path arm: an 11-hex
+        // segment (< 12 = < 6 bytes) fails HEX_PATH_PATTERN and is rejected;
+        // exactly 12 hex chars is accepted.
+        assert!(!could_be_ciphertext(
+            "https://cdn.example.com/0011223344a/,720p.mp4" // 11 hex chars
+        ));
+        assert!(could_be_ciphertext(
+            "https://cdn.example.com/001122334455/,720p.mp4" // 12 hex chars
+        ));
     }
 }
