@@ -17,7 +17,7 @@ anyhow = { workspace = true }
 async-trait = { workspace = true }
 dash-mpd = { workspace = true, default-features = false }
 log = { workspace = true }
-tokio = { workspace = true }
+tokio = { workspace = true, features = ["sync"] }
 wreq = { workspace = true }
 scraper = { workspace = true }
 serde = { workspace = true }
