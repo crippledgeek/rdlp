@@ -8,6 +8,33 @@ use log::{debug, info, warn};
 use rdlp_redact::RedactedUrl;
 use std::path::{Path, PathBuf};
 
+/// Derive the on-disk sidecar extension for a downloaded thumbnail from its URL.
+///
+/// Preserves the URL's trailing extension only when it is a recognized raster
+/// thumbnail format (see [`rdlp_types::THUMBNAIL_EXTENSIONS`]); any query string
+/// is stripped first. An unrecognized or absent extension defaults to `jpg`,
+/// matching yt-dlp's behavior for extensionless thumbnail URLs.
+///
+/// This whitelist MUST stay aligned with the post-process discovery gate (both
+/// draw from `THUMBNAIL_EXTENSIONS`): a format saved here that discovery does not
+/// look for — or vice versa — silently drops the thumbnail.
+fn thumbnail_extension_from_url(thumbnail_url: &str) -> String {
+    thumbnail_url
+        .rsplit('/')
+        .next()
+        .and_then(|filename| {
+            // Strip query string, then take the trailing extension token.
+            let filename = filename.split('?').next().unwrap_or(filename);
+            filename.rsplit('.').next()
+        })
+        .filter(|ext| {
+            rdlp_types::THUMBNAIL_EXTENSIONS
+                .iter()
+                .any(|known| ext.eq_ignore_ascii_case(known))
+        })
+        .map_or_else(|| "jpg".to_owned(), str::to_lowercase)
+}
+
 impl Orchestrator {
     /// Download thumbnail image from URL and save alongside media file.
     ///
@@ -42,20 +69,7 @@ impl Orchestrator {
         debug!(url = RedactedUrl::new(thumbnail_url); "Downloading thumbnail");
 
         // Determine extension from URL (default to jpg)
-        let ext = thumbnail_url
-            .rsplit('/')
-            .next()
-            .and_then(|filename| {
-                // Strip query string
-                let filename = filename.split('?').next().unwrap_or(filename);
-                filename.rsplit('.').next()
-            })
-            .filter(|ext| {
-                ["jpg", "jpeg", "png", "webp"]
-                    .iter()
-                    .any(|known| ext.eq_ignore_ascii_case(known))
-            })
-            .map_or_else(|| "jpg".to_owned(), str::to_lowercase);
+        let ext = thumbnail_extension_from_url(thumbnail_url);
 
         // Build output path: {media_stem}.{ext}
         let thumbnail_path = super::container_resolver::sidecar_path(media_file, &ext);
@@ -136,5 +150,92 @@ impl Orchestrator {
         );
 
         Some(thumbnail_path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::thumbnail_extension_from_url;
+
+    #[test]
+    fn preserves_original_baseline_extensions() {
+        assert_eq!(
+            thumbnail_extension_from_url("https://cdn/x/cover.jpg"),
+            "jpg"
+        );
+        assert_eq!(
+            thumbnail_extension_from_url("https://cdn/x/cover.jpeg"),
+            "jpeg"
+        );
+        assert_eq!(
+            thumbnail_extension_from_url("https://cdn/x/cover.png"),
+            "png"
+        );
+        assert_eq!(
+            thumbnail_extension_from_url("https://cdn/x/cover.webp"),
+            "webp"
+        );
+    }
+
+    /// #521: the widened raster formats must be preserved on disk, not defaulted
+    /// to `jpg`. Fails against the pre-#521 whitelist (`jpg/jpeg/png/webp`),
+    /// which rejected these and saved e.g. GIF bytes under a `.jpg` name — the
+    /// codec/extension mislabel that then breaks embedding.
+    #[test]
+    fn preserves_widened_raster_extensions() {
+        assert_eq!(
+            thumbnail_extension_from_url("https://cdn/x/cover.gif"),
+            "gif"
+        );
+        assert_eq!(
+            thumbnail_extension_from_url("https://cdn/x/cover.bmp"),
+            "bmp"
+        );
+        assert_eq!(
+            thumbnail_extension_from_url("https://cdn/x/cover.tiff"),
+            "tiff"
+        );
+        assert_eq!(
+            thumbnail_extension_from_url("https://cdn/x/cover.tif"),
+            "tif"
+        );
+    }
+
+    #[test]
+    fn lowercases_recognized_uppercase_extension() {
+        assert_eq!(
+            thumbnail_extension_from_url("https://cdn/x/COVER.GIF"),
+            "gif"
+        );
+        assert_eq!(
+            thumbnail_extension_from_url("https://cdn/x/COVER.WEBP"),
+            "webp"
+        );
+    }
+
+    #[test]
+    fn strips_query_string_before_extension() {
+        assert_eq!(
+            thumbnail_extension_from_url("https://cdn/x/cover.png?w=640&sig=abc"),
+            "png"
+        );
+    }
+
+    /// Negative: an extension we cannot decode (avif) or no extension at all
+    /// defaults to `jpg` — never saved under its own unrecognized extension.
+    #[test]
+    fn defaults_unrecognized_or_missing_extension_to_jpg() {
+        assert_eq!(
+            thumbnail_extension_from_url("https://cdn/x/cover.avif"),
+            "jpg"
+        );
+        assert_eq!(
+            thumbnail_extension_from_url("https://cdn/thumb?w=640"),
+            "jpg"
+        );
+        assert_eq!(
+            thumbnail_extension_from_url("https://cdn/x/coverfile"),
+            "jpg"
+        );
     }
 }
