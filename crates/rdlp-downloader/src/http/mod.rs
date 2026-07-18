@@ -11,7 +11,7 @@ mod trait_impl;
 mod tests;
 
 #[cfg(test)]
-pub(crate) use parallel::download_chunk_with_retry;
+pub(crate) use parallel::{download_chunk_with_retry, verify_merged_size};
 
 use backon::Retryable;
 use log::warn;
@@ -74,6 +74,96 @@ where
 /// `BaseExtractor::detect_file_size`. Closes #306.
 pub(crate) use rdlp_http::ProbeResult;
 
+/// HTTP status a single-part ranged response must carry (RFC 9110 §15.3.7).
+///
+/// A `200` means the server ignored `Range` — permitted by §14.2 — and the
+/// content is the WHOLE representation, not the requested span. Writing such a
+/// body into a chunk's offset slot is the corruption in #526, so the parallel
+/// chunk path accepts this status and no other.
+const HTTP_PARTIAL_CONTENT: u16 = 206;
+
+/// A parsed, validated single-part `Content-Range` response header.
+///
+/// Grammar (RFC 9110 §14.4):
+///
+/// ```text
+/// Content-Range = range-unit SP ( range-resp / unsatisfied-range )
+/// range-resp    = incl-range "/" ( complete-length / "*" )
+/// incl-range    = first-pos "-" last-pos
+/// ```
+///
+/// Both positions are INCLUSIVE, so the span covers
+/// `last_pos - first_pos + 1` bytes.
+///
+/// Only the `bytes` range unit is represented: §14.4 requires that a recipient
+/// which does not understand the unit "MUST NOT attempt to recombine it with a
+/// stored representation", and recombining is exactly what the chunk merge
+/// does. `unsatisfied-range` (`bytes */1234`, sent with 416) is likewise not
+/// represented — it describes no enclosed content.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ContentRange {
+    /// First byte position of the enclosed span (inclusive).
+    first_pos: u64,
+    /// Last byte position of the enclosed span (inclusive).
+    last_pos: u64,
+    /// Total length of the selected representation; `None` when the server
+    /// sent `*` to signal that the complete length was unknown (§14.4).
+    complete_length: Option<u64>,
+}
+
+impl ContentRange {
+    /// Parse a `Content-Range` field value, returning `None` when it is absent,
+    /// malformed, carries a non-`bytes` unit, or is *invalid* per RFC 9110
+    /// §14.4 — that is, `last-pos < first-pos`, or a `complete-length` less
+    /// than or equal to `last-pos`. The spec's directive for an invalid value
+    /// is that the recipient "MUST NOT attempt to recombine the received
+    /// content with a stored representation", so an unparseable or invalid
+    /// header and a missing one are treated alike: the response is not usable.
+    fn parse(value: &str) -> Option<Self> {
+        let (unit, rest) = value.trim().split_once(' ')?;
+        if !unit.eq_ignore_ascii_case("bytes") {
+            return None;
+        }
+
+        let (incl_range, complete) = rest.trim().split_once('/')?;
+        let (first, last) = incl_range.split_once('-')?;
+
+        let first_pos: u64 = first.trim().parse().ok()?;
+        let last_pos: u64 = last.trim().parse().ok()?;
+
+        // §14.4: a last-pos below first-pos makes the field value invalid.
+        if last_pos < first_pos {
+            return None;
+        }
+
+        let complete_length = match complete.trim() {
+            "*" => None,
+            digits => {
+                let total: u64 = digits.parse().ok()?;
+                // §14.4: a complete-length <= last-pos makes the value invalid.
+                if total <= last_pos {
+                    return None;
+                }
+                Some(total)
+            }
+        };
+
+        Some(Self {
+            first_pos,
+            last_pos,
+            complete_length,
+        })
+    }
+
+    /// Read the header map and parse the `Content-Range` field if present.
+    fn from_headers(headers: &wreq::header::HeaderMap) -> Option<Self> {
+        headers
+            .get("content-range")
+            .and_then(|v| v.to_str().ok())
+            .and_then(Self::parse)
+    }
+}
+
 /// Parse the `Content-Range` header's total-bytes field.
 ///
 /// Used by `trait_impl::download_with_resume_with_cancel` to discover the
@@ -81,15 +171,123 @@ pub(crate) use rdlp_http::ProbeResult;
 /// `rdlp_http::probe_size` (which has its own parser); this helper is kept
 /// for the resume path's standalone header inspection.
 ///
-/// Accepts `bytes 0-N/TOTAL` (returns `Some(TOTAL)`) and returns `None` for
-/// `bytes 0-N/*` (server signalled unknown total per RFC 7233 §4.2), any
-/// missing header, or any unparseable total.
+/// Returns the `complete-length` of a valid single-part `bytes` range, and
+/// `None` for `bytes 0-N/*` (server signalled unknown total), a missing
+/// header, or any value [`ContentRange::parse`] rejects.
 pub(crate) fn parse_content_range_total(headers: &wreq::header::HeaderMap) -> Option<u64> {
-    headers
-        .get("content-range")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split('/').nth(1))
-        .and_then(|s| s.parse::<u64>().ok())
+    ContentRange::from_headers(headers).and_then(|range| range.complete_length)
+}
+
+/// The inclusive byte span a ranged chunk fetch asked the server for.
+///
+/// Both bounds are inclusive, matching the `Range: bytes=start-end` request
+/// form and RFC 9110 §14.4's `incl-range`, so the span covers
+/// `end - start + 1` bytes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RequestedSpan {
+    /// First byte position requested (inclusive).
+    start: u64,
+    /// Last byte position requested (inclusive).
+    end: u64,
+}
+
+impl RequestedSpan {
+    /// Build a span, rejecting an inverted range.
+    ///
+    /// The invariant `start <= end` is what makes [`Self::len`]'s subtraction
+    /// total; enforcing it here rather than at the call site means no caller
+    /// can construct a span whose length underflows.
+    const fn new(start: u64, end: u64) -> Option<Self> {
+        if end < start {
+            return None;
+        }
+        Some(Self { start, end })
+    }
+
+    /// Number of bytes the span covers.
+    ///
+    /// Cannot underflow: [`Self::new`] rejects `end < start`.
+    const fn len(self) -> u64 {
+        self.end - self.start + 1
+    }
+}
+
+/// Confirm a ranged response actually carries the requested span before any of
+/// its bytes are written into the chunk's offset slot in the merged output.
+///
+/// A parallel chunk is concatenated at a fixed position, so a response that
+/// encloses a different span silently relocates every byte after it — the
+/// ~517 MB interior displacement in #526. RFC 9110 §15.3.7 places this duty on
+/// the client: "A client MUST inspect a 206 response's Content-Type and
+/// Content-Range field(s) to determine what parts are enclosed and whether
+/// additional requests are needed."
+///
+/// Only `Content-Range` is inspected here. The Content-Type half of that
+/// sentence exists to distinguish a single-part response from a
+/// `multipart/byteranges` one (§14.6), which arises only for a multi-range
+/// request; this client always asks for exactly one range. A multipart body
+/// would carry no top-level `Content-Range` anyway, so it is rejected by the
+/// missing-header branch below rather than silently accepted.
+///
+/// Returns `Err` (never a silent acceptance) when the status is not 206, the
+/// `Content-Range` is absent/malformed/invalid, or the enclosed span is not
+/// exactly the one requested.
+fn validate_range_response(
+    response: &wreq::Response,
+    span: RequestedSpan,
+    url: &str,
+) -> Result<()> {
+    let redacted = || Some(rdlp_redact::RedactedUrlBuf::from(url));
+
+    // §14.2 permits a server to ignore Range; the reply is then a 200 carrying
+    // the WHOLE representation. Accepting it here is what wrote whole-file
+    // content into a chunk slot.
+    let status = response.status().as_u16();
+    if status != HTTP_PARTIAL_CONTENT {
+        return Err(RdlpError::Download {
+            url: redacted(),
+            message: format!(
+                "ranged chunk request for bytes {}-{} got HTTP {status}, expected \
+                 {HTTP_PARTIAL_CONTENT} (Partial Content). The server ignored the Range \
+                 header, so the body is the whole resource rather than the requested span \
+                 and cannot be placed at this chunk's offset.",
+                span.start, span.end
+            ),
+        });
+    }
+
+    // §15.3.7.1: a single-part 206 MUST carry Content-Range. Without it there
+    // is no way to confirm which span arrived.
+    let Some(range) = ContentRange::from_headers(response.headers()) else {
+        return Err(RdlpError::Download {
+            url: redacted(),
+            message: format!(
+                "ranged chunk request for bytes {}-{} got a {HTTP_PARTIAL_CONTENT} response \
+                 with a missing, malformed, or invalid Content-Range header; the enclosed \
+                 span cannot be verified.",
+                span.start, span.end
+            ),
+        });
+    };
+
+    // A wrong span is a per-response anomaly rather than a statement about
+    // what the server supports — a retry against another CDN node plausibly
+    // gets the right bytes. Reported as `Network` so `is_retryable_error`
+    // accepts it and `download_chunk_with_retry` re-fetches, instead of
+    // failing a multi-gigabyte download over one bad response.
+    if range.first_pos != span.start || range.last_pos != span.end {
+        return Err(RdlpError::Network {
+            url: redacted(),
+            message: format!(
+                "ranged chunk request for bytes {}-{} got Content-Range bytes {}-{}; the \
+                 response encloses a different span than requested and would corrupt the \
+                 output at this chunk's offset.",
+                span.start, span.end, range.first_pos, range.last_pos
+            ),
+        });
+    }
+
+    Ok(())
 }
 
 /// HTTP/HTTPS downloader
@@ -340,6 +538,19 @@ impl HttpDownloader {
         })
         .await?;
 
+        // Confirm the response encloses exactly the requested span BEFORE any
+        // of its bytes reach the chunk file (#526).
+        let Some(span) = RequestedSpan::new(start, end) else {
+            return Err(RdlpError::Download {
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
+                message: format!(
+                    "internal error: chunk requested an inverted byte range {start}-{end}"
+                ),
+            });
+        };
+        validate_range_response(&response, span, &url)?;
+        let expected_len = span.len();
+
         let file = File::create(chunk_path).await.map_err(|e| {
             RdlpError::Io(std::io::Error::new(
                 e.kind(),
@@ -359,6 +570,24 @@ impl HttpDownloader {
         loop {
             match next_with_cancel_and_timeout(stream.as_mut(), cancel, read_timeout, &url).await {
                 Ok(Some(Ok(chunk))) => {
+                    // Reject the frame BEFORE it reaches disk if it would push
+                    // this chunk past the span its Content-Range promised, so
+                    // an over-long body never lands on disk at all rather than
+                    // being written and caught on the following iteration.
+                    let chunk_len = chunk.len() as u64;
+                    if downloaded.saturating_add(chunk_len) > expected_len {
+                        // Retryable for the same reason as a wrong span: this
+                        // is one malformed response, not a server capability.
+                        return Err(RdlpError::Network {
+                            url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
+                            message: format!(
+                                "ranged chunk for bytes {start}-{end} delivered more than the \
+                                 {expected_len} bytes its Content-Range promised; aborting to \
+                                 avoid overrunning this chunk's offset in the merged output."
+                            ),
+                        });
+                    }
+
                     writer.write_all(&chunk).await.map_err(|e| {
                         RdlpError::Io(std::io::Error::new(
                             e.kind(),
@@ -368,7 +597,7 @@ impl HttpDownloader {
                             ),
                         ))
                     })?;
-                    downloaded += chunk.len() as u64;
+                    downloaded += chunk_len;
 
                     if let Some(ref counter) = progress_counter {
                         counter.fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
@@ -402,6 +631,37 @@ impl HttpDownloader {
                 format!("failed to flush chunk file '{}': {e}", chunk_path.display()),
             ))
         })?;
+
+        // The stream ending is not proof the whole span arrived. hyper does
+        // normally surface an interrupted body as an error, but that is a
+        // property of the current implementation rather than a guarantee the
+        // type system enforces: hyperium/hyper#3253 was a case where an
+        // interrupted chunked body's error was swallowed and the stream simply
+        // ended (that report concerns reading a chunked *request* body, so it
+        // is an analogous decoder path rather than this exact one — the point
+        // is that a silent short read has occurred in this decoder family, not
+        // that it is known to occur here). A short chunk shifts every later
+        // chunk in the merged output, so the byte count is verified
+        // independently rather than trusted to the transport.
+        //
+        // A 206 enclosing less than was requested is also legal on its own
+        // terms (§14.2: a server "may only be possible (or efficient) to send a
+        // portion of the requested ranges first, while expecting the client to
+        // re-request the remaining portions later"). Re-requesting only the
+        // remainder is the spec's answer; this returns a RETRYABLE error so
+        // `download_chunk_with_retry` re-fetches the whole chunk instead, which
+        // is correct but wasteful. Tracked as a follow-up.
+        if downloaded != expected_len {
+            return Err(RdlpError::Network {
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
+                message: format!(
+                    "ranged chunk for bytes {start}-{end} ended after {downloaded} of \
+                     {expected_len} bytes; the chunk is incomplete and would displace every \
+                     later chunk in the merged output."
+                ),
+            });
+        }
+
         Ok(downloaded)
     }
 
@@ -634,6 +894,87 @@ mod content_range_tests {
     fn returns_none_when_total_unparseable() {
         let h = make_headers(Some("bytes 0-262143/notanumber"));
         assert_eq!(parse_content_range_total(&h), None);
+    }
+
+    // -----------------------------------------------------------------------
+    // `ContentRange::parse` grammar branches (RFC 9110 §14.4).
+    //
+    // The chunk path decides whether a response may be written into its offset
+    // slot from this parser's verdict, so each accept/reject branch is pinned
+    // individually rather than only through the mockito-driven tests.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parses_a_conformant_single_part_range() {
+        let range = ContentRange::parse("bytes 0-1023/2048").expect("valid range must parse");
+        assert_eq!(range.first_pos, 0);
+        assert_eq!(range.last_pos, 1023);
+        assert_eq!(range.complete_length, Some(2048));
+    }
+
+    /// `*` for complete-length is explicitly legal — "An asterisk character
+    /// ("*") in place of the complete-length indicates that the representation
+    /// length was unknown when the header field was generated" (§14.4). The
+    /// span is still fully usable, so this MUST parse; rejecting it would
+    /// break every server that cannot cheaply determine total length.
+    #[test]
+    fn accepts_unknown_complete_length() {
+        let range =
+            ContentRange::parse("bytes 0-1023/*").expect("unknown complete-length is legal");
+        assert_eq!(range.first_pos, 0);
+        assert_eq!(range.last_pos, 1023);
+        assert_eq!(range.complete_length, None);
+    }
+
+    /// §14.4: a recipient that does not understand the range unit "MUST NOT
+    /// attempt to recombine it with a stored representation" — and recombining
+    /// is exactly what the chunk merge does.
+    #[test]
+    fn rejects_unknown_range_unit() {
+        assert!(ContentRange::parse("items 0-1023/2048").is_none());
+        assert!(ContentRange::parse("seconds 0-10/60").is_none());
+    }
+
+    #[test]
+    fn accepts_case_insensitive_unit() {
+        assert!(ContentRange::parse("BYTES 0-1023/2048").is_some());
+    }
+
+    /// §14.4 invalidity: "a last-pos value less than its first-pos value".
+    #[test]
+    fn rejects_last_pos_below_first_pos() {
+        assert!(ContentRange::parse("bytes 1023-0/2048").is_none());
+    }
+
+    /// §14.4 invalidity: "a complete-length value less than or equal to its
+    /// last-pos value". Positions are inclusive, so a 0-1023 span needs at
+    /// least 1024 total bytes; 1024 is the tightest legal value.
+    #[test]
+    fn rejects_complete_length_not_above_last_pos() {
+        assert!(ContentRange::parse("bytes 0-1023/1023").is_none());
+        assert!(ContentRange::parse("bytes 0-1023/1024").is_some());
+    }
+
+    /// A single-position span is legal and covers exactly one byte.
+    #[test]
+    fn accepts_single_byte_span() {
+        let range = ContentRange::parse("bytes 5-5/10").expect("single-byte span is valid");
+        assert_eq!(range.first_pos, range.last_pos);
+    }
+
+    #[test]
+    fn rejects_unsatisfied_range_form() {
+        // `bytes */1234` accompanies a 416 and encloses no content.
+        assert!(ContentRange::parse("bytes */1234").is_none());
+    }
+
+    #[test]
+    fn rejects_structurally_malformed_values() {
+        assert!(ContentRange::parse("").is_none());
+        assert!(ContentRange::parse("bytes").is_none());
+        assert!(ContentRange::parse("bytes 0-1023").is_none());
+        assert!(ContentRange::parse("bytes abc-def/2048").is_none());
+        assert!(ContentRange::parse("0-1023/2048").is_none());
     }
 }
 
