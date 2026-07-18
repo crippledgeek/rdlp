@@ -199,6 +199,17 @@ impl FFmpegRunner {
                 enc_time_base,
                 ist_time_base,
             )?;
+            // First-frame-only (#522): a thumbnail is a single still cover
+            // image, but the input may be a multi-frame animation (GIF /
+            // animated WEBP) or a multi-page TIFF — both attacker-controlled and
+            // otherwise uncapped in frame count. Stop after the first
+            // target-stream packet: the `.jpg` output uses FFmpeg's `image2`
+            // muxer, which rejects a second frame written to the same
+            // (non-pattern) filename with EINVAL, so continuing would both waste
+            // decode/encode work proportional to frame count AND fail the whole
+            // normalization. The EOF flush below drains this single frame. Still
+            // images are one packet anyway, so their behavior is unchanged.
+            break;
         }
 
         // Flush decoder -> filter -> encoder.
