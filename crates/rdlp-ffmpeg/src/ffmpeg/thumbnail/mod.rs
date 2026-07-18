@@ -325,10 +325,11 @@ impl FFmpegRunner {
                 .set_metadata(ist.metadata().to_owned());
         }
 
-        // Read the thumbnail's video stream up front: every strategy below
-        // needs its dimensions and/or codec, and the metadata-block-picture
-        // strategy needs its raw bytes read before `thumb_ictx` goes out of
-        // scope.
+        // Probe the thumbnail's video stream up front: every strategy below
+        // needs its dimensions and/or codec. Note this probe does NOT supply
+        // the metadata-block-picture strategy's raw bytes — those come from a
+        // separate `std::fs::read` further down, for the reason documented at
+        // that call site.
         let thumb_ist = thumb_ictx
             .streams()
             .best(ffmpeg_the_third::media::Type::Video)
@@ -379,8 +380,9 @@ impl FFmpegRunner {
         if is_ogg_opus {
             // Deliberate second read of `thumbnail`, not an oversight: the
             // `thumb_ictx`/`thumb_ist` probe above exists only to learn the
-            // image's dimensions and codec (needed for the PICTURE block's
-            // width/height/MIME fields); its demuxed packets are never
+            // image's dimensions (needed for the PICTURE block's width/height
+            // fields; the MIME comes from sniffing the bytes read below, not
+            // from the probe's codec); its demuxed packets are never
             // consumed here. Recovering the encoded bytes from those packets
             // instead of re-reading the file is demuxer/format-dependent —
             // "packet bytes equal the original file bytes" only holds for a
