@@ -17,7 +17,7 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio_util::sync::CancellationToken;
 
 use super::config::PROGRESS_UPDATE_INTERVAL;
-use super::{HttpDownloader, with_retry};
+use super::{ContentRange, HTTP_PARTIAL_CONTENT, HttpDownloader, with_retry};
 use crate::progress::SpeedMeter;
 
 #[allow(clippy::too_many_lines, clippy::option_if_let_else)]
@@ -391,16 +391,50 @@ impl HttpDownloader {
                         .await
                         .map_err(|e| RdlpError::Network { message: format!("Resume request failed: {e}"), url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())) })?;
 
-                    if response.status().as_u16() != 206 {
+                    if response.status().as_u16() != HTTP_PARTIAL_CONTENT {
                         return Err(RdlpError::Download {
                             url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
                             message: format!(
-                                "Server does not support resume (expected HTTP 206, got {}). \
-                                 Cannot continue download without overwriting existing data. \
-                                 Please delete the partial file and restart the download.",
+                                "Server does not support resume (expected HTTP \
+                                 {HTTP_PARTIAL_CONTENT}, got {}). Cannot continue download \
+                                 without overwriting existing data. Please delete the partial \
+                                 file and restart the download.",
                                 response.status()
                             ),
                         });
+                    }
+
+                    // A 206 alone does not prove the body starts where the
+                    // partial file ends. The resumed bytes are appended at EOF,
+                    // so a response enclosing a different span splices foreign
+                    // data into the file at the resume point — the #526
+                    // corruption shape on this path. RFC 9110 §15.3.7 requires
+                    // the client to inspect Content-Range; do so before any
+                    // byte is appended.
+                    match ContentRange::from_headers(response.headers()) {
+                        Some(range) if range.first_pos == resume_from => {}
+                        Some(range) => {
+                            return Err(RdlpError::Download {
+                                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
+                                message: format!(
+                                    "Resume response starts at byte {} but the partial file ends \
+                                     at {resume_from}; appending it would corrupt the file. \
+                                     Please delete the partial file and restart the download.",
+                                    range.first_pos
+                                ),
+                            });
+                        }
+                        None => {
+                            return Err(RdlpError::Download {
+                                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
+                                message: format!(
+                                    "Resume response has a missing, malformed, or invalid \
+                                     Content-Range header, so the span it encloses cannot be \
+                                     verified against the partial file's {resume_from} bytes. \
+                                     Please delete the partial file and restart the download."
+                                ),
+                            });
+                        }
                     }
 
                     Ok(response)

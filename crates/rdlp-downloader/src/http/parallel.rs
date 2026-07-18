@@ -220,7 +220,7 @@ impl HttpDownloader {
 
         // Backstop (#526): the assembly must match the advertised length before
         // this file is handed back as a completed download.
-        verify_merged_size(path, total_size).await?;
+        verify_merged_size(path, total_size, url).await?;
 
         let duration = start_time.elapsed();
         let stats = DownloadStats::new(total_downloaded, duration, 0);
@@ -331,7 +331,7 @@ impl HttpDownloader {
         // that disagreed with the file's real length: the appended bytes land
         // at EOF regardless of the offset the ranges were requested from, so a
         // mismatch shows up here as a wrong final size.
-        verify_merged_size(path, total_size).await?;
+        verify_merged_size(path, total_size, url).await?;
 
         let duration = start_time.elapsed();
         let total_downloaded = resume_from + newly_downloaded;
@@ -591,7 +591,7 @@ impl HttpDownloader {
 /// A size match is not a proof of correctness (#526 produced a full-length file
 /// with displaced interior bytes), so this complements the per-chunk checks
 /// rather than replacing them.
-pub(crate) async fn verify_merged_size(path: &Path, expected_total: u64) -> Result<()> {
+pub(crate) async fn verify_merged_size(path: &Path, expected_total: u64, url: &str) -> Result<()> {
     let actual = tokio::fs::metadata(path)
         .await
         .map_err(|e| {
@@ -607,7 +607,7 @@ pub(crate) async fn verify_merged_size(path: &Path, expected_total: u64) -> Resu
 
     if actual != expected_total {
         return Err(RdlpError::Download {
-            url: None,
+            url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
             message: format!(
                 "assembled output '{}' is {actual} bytes but the server advertised \
                  {expected_total}; the download is incomplete or misassembled.",

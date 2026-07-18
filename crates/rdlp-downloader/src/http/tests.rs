@@ -1427,8 +1427,13 @@ async fn range_fetch_rejects_mismatched_content_range() {
         .await;
 
     assert!(
-        matches!(result, Err(RdlpError::Download { .. })),
+        matches!(result, Err(RdlpError::Network { .. })),
         "a 206 whose Content-Range is not the requested span must be refused, got {result:?}"
+    );
+    assert!(
+        is_retryable_error(&result.unwrap_err()),
+        "a wrong-span response is a per-response anomaly, so the chunk must be re-fetched \
+         rather than failing the whole download"
     );
 }
 
@@ -1502,6 +1507,17 @@ async fn range_fetch_rejects_overlong_body() {
         result.is_err(),
         "a body longer than the requested span must be refused, got {result:?}"
     );
+
+    // The overrun is rejected BEFORE the frame is written, so the excess never
+    // reaches disk — the chunk file must never hold more than the span allows.
+    if let Ok(meta) = tokio::fs::metadata(&chunk_path).await {
+        assert!(
+            meta.len() <= 1024,
+            "an over-long body must not be written past the requested span; \
+             chunk file holds {} bytes",
+            meta.len()
+        );
+    }
 }
 
 /// Positive case: a fully conformant 206 still succeeds and reports the exact
@@ -1553,7 +1569,9 @@ async fn verify_merged_size_accepts_exact_total() {
     tokio::fs::write(&path, vec![0u8; 4096]).await.unwrap();
 
     assert!(
-        verify_merged_size(&path, 4096).await.is_ok(),
+        verify_merged_size(&path, 4096, "https://example.com/video.mp4")
+            .await
+            .is_ok(),
         "an output matching the advertised total must be accepted"
     );
 }
@@ -1568,7 +1586,9 @@ async fn verify_merged_size_rejects_short_output() {
     tokio::fs::write(&path, vec![0u8; 4095]).await.unwrap();
 
     assert!(
-        verify_merged_size(&path, 4096).await.is_err(),
+        verify_merged_size(&path, 4096, "https://example.com/video.mp4")
+            .await
+            .is_err(),
         "an output shorter than the advertised total must be refused"
     );
 }
@@ -1583,7 +1603,9 @@ async fn verify_merged_size_rejects_long_output() {
     tokio::fs::write(&path, vec![0u8; 4097]).await.unwrap();
 
     assert!(
-        verify_merged_size(&path, 4096).await.is_err(),
+        verify_merged_size(&path, 4096, "https://example.com/video.mp4")
+            .await
+            .is_err(),
         "an output longer than the advertised total must be refused"
     );
 }
@@ -1596,7 +1618,330 @@ async fn verify_merged_size_rejects_missing_output() {
     let path = dir.path().join("never-created.mp4");
 
     assert!(
-        verify_merged_size(&path, 4096).await.is_err(),
+        verify_merged_size(&path, 4096, "https://example.com/video.mp4")
+            .await
+            .is_err(),
         "a missing output file must be refused, not treated as verified"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Chunk retry actually RECOVERS from a bad range response (#526)
+//
+// Classifying an error as retryable is not the same as proving the chunk is
+// re-fetched and the download proceeds. These drive the full
+// `download_chunk_with_retry` loop: first attempt gets a corrupt response,
+// second gets a good one, and the chunk must end up with the correct bytes.
+// ---------------------------------------------------------------------------
+
+/// A wrong-span response must be retried, and the retry's correct bytes must
+/// be what lands in the chunk file — not appended to the rejected attempt.
+#[tokio::test]
+async fn chunk_retry_recovers_from_wrong_span_response() {
+    use mockito::Server;
+    use tempfile::TempDir;
+
+    let mut server = Server::new_async().await;
+    let temp_dir = TempDir::new().unwrap();
+    let chunk_path = temp_dir.path().join("chunk_0");
+
+    // Mockito matches LIFO: create the success mock FIRST so it answers SECOND.
+    let _mock_ok = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(206)
+        .with_header("content-range", "bytes 0-1023/1048576")
+        .with_body(vec![0x11u8; 1024])
+        .expect(1)
+        .create_async()
+        .await;
+
+    // Answers FIRST: right length, WRONG span — the #526 signature.
+    let _mock_wrong_span = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(206)
+        .with_header("content-range", "bytes 1048576-1049599/2097152")
+        .with_body(vec![0x99u8; 1024])
+        .expect(1)
+        .create_async()
+        .await;
+
+    let downloader = HttpDownloader::new().with_retry_config(RetryConfig::new(
+        0,
+        Duration::from_millis(1),
+        Duration::from_millis(10),
+        2.0,
+    ));
+
+    let url = format!("{}/video.mp4", server.url());
+    let result = download_chunk_with_retry(
+        &downloader,
+        &url,
+        0,
+        1023,
+        &chunk_path,
+        Some(Arc::new(AtomicU64::new(0))),
+        0,
+        None,
+    )
+    .await;
+
+    assert_eq!(
+        result.expect("the chunk must recover on retry after a wrong-span response"),
+        1024
+    );
+
+    // The rejected attempt's bytes must not survive: the file holds exactly the
+    // retry's payload, not 2048 bytes of both.
+    let contents = tokio::fs::read(&chunk_path).await.unwrap();
+    assert_eq!(contents.len(), 1024, "chunk must hold exactly one attempt");
+    assert!(
+        contents.iter().all(|&b| b == 0x11),
+        "chunk must hold the RETRY's bytes, not the rejected wrong-span response"
+    );
+}
+
+/// Same guarantee for a truncated body.
+#[tokio::test]
+async fn chunk_retry_recovers_from_short_body() {
+    use mockito::Server;
+    use tempfile::TempDir;
+
+    let mut server = Server::new_async().await;
+    let temp_dir = TempDir::new().unwrap();
+    let chunk_path = temp_dir.path().join("chunk_0");
+
+    let _mock_ok = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(206)
+        .with_header("content-range", "bytes 0-1023/1048576")
+        .with_body(vec![0x22u8; 1024])
+        .expect(1)
+        .create_async()
+        .await;
+
+    // Answers FIRST: conformant headers, truncated body.
+    let _mock_short = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(206)
+        .with_header("content-range", "bytes 0-1023/1048576")
+        .with_body(vec![0x88u8; 400])
+        .expect(1)
+        .create_async()
+        .await;
+
+    let downloader = HttpDownloader::new().with_retry_config(RetryConfig::new(
+        0,
+        Duration::from_millis(1),
+        Duration::from_millis(10),
+        2.0,
+    ));
+
+    let url = format!("{}/video.mp4", server.url());
+    let result = download_chunk_with_retry(
+        &downloader,
+        &url,
+        0,
+        1023,
+        &chunk_path,
+        Some(Arc::new(AtomicU64::new(0))),
+        0,
+        None,
+    )
+    .await;
+
+    assert_eq!(
+        result.expect("the chunk must recover on retry after a truncated body"),
+        1024
+    );
+
+    let contents = tokio::fs::read(&chunk_path).await.unwrap();
+    assert_eq!(
+        contents.len(),
+        1024,
+        "the truncated attempt must be discarded, not appended to"
+    );
+    assert!(contents.iter().all(|&b| b == 0x22));
+}
+
+/// A server that ignores Range (answers 200) is stating a capability, not
+/// suffering a transient fault: that must fail fast rather than burn retries.
+#[tokio::test]
+async fn chunk_retry_does_not_retry_range_ignoring_server() {
+    use mockito::Server;
+    use tempfile::TempDir;
+
+    let mut server = Server::new_async().await;
+    let temp_dir = TempDir::new().unwrap();
+    let chunk_path = temp_dir.path().join("chunk_0");
+
+    // expect(1): a non-retryable failure must issue exactly ONE request.
+    let mock_200 = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(200)
+        .with_body(vec![0x77u8; 4096])
+        .expect(1)
+        .create_async()
+        .await;
+
+    let downloader = HttpDownloader::new().with_retry_config(RetryConfig::new(
+        0,
+        Duration::from_millis(1),
+        Duration::from_millis(10),
+        2.0,
+    ));
+
+    let url = format!("{}/video.mp4", server.url());
+    let result = download_chunk_with_retry(
+        &downloader,
+        &url,
+        0,
+        1023,
+        &chunk_path,
+        Some(Arc::new(AtomicU64::new(0))),
+        0,
+        None,
+    )
+    .await;
+
+    assert!(
+        result.is_err(),
+        "a Range-ignoring server must fail the chunk"
+    );
+    mock_200.assert_async().await;
+}
+
+// ---------------------------------------------------------------------------
+// Exact-boundary negatives for the chunk-length check (#526).
+//
+// `range_fetch_accepts_conformant_206` pins N (exactly 1024 bytes accepted).
+// These pin N-1 and N+1, so a `>` / `>=` slip in the length comparison cannot
+// pass: a test at 512 or 2048 would survive that mutation, these do not.
+// ---------------------------------------------------------------------------
+
+/// One byte short of the promised span must still be refused.
+#[tokio::test]
+async fn range_fetch_rejects_body_one_byte_short() {
+    use mockito::Server;
+    use tempfile::TempDir;
+
+    let mut server = Server::new_async().await;
+    let temp_dir = TempDir::new().unwrap();
+    let chunk_path = temp_dir.path().join("chunk_0");
+
+    let _mock = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(206)
+        .with_header("content-range", "bytes 0-1023/1048576")
+        .with_body(vec![0x3Cu8; 1023]) // N-1
+        .create_async()
+        .await;
+
+    let url = format!("{}/video.mp4", server.url());
+    let result = validation_test_downloader()
+        .download_range_with_progress(&url, 0, 1023, &chunk_path, None, None)
+        .await;
+
+    assert!(
+        matches!(result, Err(RdlpError::Network { .. })),
+        "1023 of 1024 bytes must be refused as incomplete, got {result:?}"
+    );
+}
+
+/// One byte over the promised span must be refused, and must not reach disk.
+#[tokio::test]
+async fn range_fetch_rejects_body_one_byte_over() {
+    use mockito::Server;
+    use tempfile::TempDir;
+
+    let mut server = Server::new_async().await;
+    let temp_dir = TempDir::new().unwrap();
+    let chunk_path = temp_dir.path().join("chunk_0");
+
+    let _mock = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(206)
+        .with_header("content-range", "bytes 0-1023/1048576")
+        .with_body(vec![0x3Du8; 1025]) // N+1
+        .create_async()
+        .await;
+
+    let url = format!("{}/video.mp4", server.url());
+    let result = validation_test_downloader()
+        .download_range_with_progress(&url, 0, 1023, &chunk_path, None, None)
+        .await;
+
+    assert!(
+        result.is_err(),
+        "1025 of 1024 bytes must be refused as an overrun, got {result:?}"
+    );
+    if let Ok(meta) = tokio::fs::metadata(&chunk_path).await {
+        assert!(
+            meta.len() <= 1024,
+            "the overrunning byte must not be written; file holds {} bytes",
+            meta.len()
+        );
+    }
+}
+
+/// The resume path appends the response body at EOF, so a server answering
+/// from a DIFFERENT offset than `resume_from` splices foreign bytes into the
+/// file — the #526 corruption shape on the resume path. Checking the status is
+/// 206 is not enough; the enclosed span must start where the file ends.
+#[tokio::test]
+async fn resume_rejects_response_starting_at_wrong_offset() {
+    use mockito::Server;
+    use tempfile::NamedTempFile;
+
+    let mut server = Server::new_async().await;
+
+    let _mock = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", "bytes=1000-")
+        .with_status(206)
+        // Asked to resume at 1000; server answers from 5000.
+        .with_header("content-range", "bytes 5000-9999/10000")
+        .with_body(vec![0x66u8; 5000])
+        .create_async()
+        .await;
+
+    let downloader = HttpDownloader::new().with_retry_config(RetryConfig::new(
+        0,
+        Duration::from_millis(1),
+        Duration::from_millis(10),
+        2.0,
+    ));
+
+    let temp_file = NamedTempFile::new().unwrap();
+    let path = temp_file.path();
+    tokio::fs::write(path, b"partial data").await.unwrap();
+
+    let result = downloader
+        .download_with_resume(
+            &format!("{}/video.mp4", server.url()),
+            path,
+            1000,
+            None,
+            None,
+        )
+        .await;
+
+    assert!(
+        result.is_err(),
+        "a resume response starting at the wrong offset must be refused, got {result:?}"
+    );
+
+    // The existing bytes must be left intact rather than extended with
+    // wrongly-offset data.
+    let contents = tokio::fs::read(path).await.unwrap();
+    assert_eq!(
+        contents, b"partial data",
+        "a rejected resume must not append foreign bytes to the partial file"
     );
 }
