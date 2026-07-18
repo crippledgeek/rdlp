@@ -102,6 +102,11 @@ impl FFmpegRunner {
 
         // Decompression-bomb guard: reject an oversized declared canvas before
         // any frame buffer is allocated (the thumbnail is attacker-controlled).
+        // `decoder.width()/height()` come from the container header (parsed by
+        // `find_stream_info`), so this fires before the codec sizes its per-pixel
+        // decode buffer — the load-bearing property. Still-image codecs
+        // (webp/png/jpeg) don't renegotiate resolution mid-stream, so the header
+        // dims are authoritative here.
         ensure_thumbnail_dimensions(decoder.width(), decoder.height())
             .with_context(|| format!("thumbnail {} rejected", src.display()))?;
 
