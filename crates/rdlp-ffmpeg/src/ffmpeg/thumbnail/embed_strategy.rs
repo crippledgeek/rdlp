@@ -83,8 +83,94 @@ impl ThumbnailEmbedStrategy {
 
 #[cfg(test)]
 mod tests {
+    use std::str::FromStr as _;
+
     use super::ThumbnailEmbedStrategy;
     use rdlp_types::ContainerFormat;
+
+    /// Mirrors `rdlp-postprocess`'s `SUPPORTED_CONTAINERS`
+    /// (`crates/rdlp-postprocess/src/pipeline/stages/thumbnail.rs`) — the two
+    /// lists are independent sources of truth for "can this container carry a
+    /// thumbnail" today (full consolidation tracked by #533). The two tests
+    /// below are the guardrail that keeps them from silently drifting apart
+    /// until that consolidation lands.
+    const MIRRORED_SUPPORTED_CONTAINERS: &[&str] = &[
+        "mp4", "m4a", "m4v", "mov", "mkv", "mka", "mp3", "flac", "ogg", "opus",
+    ];
+
+    /// Every `ContainerFormat` variant. Kept in step, by hand, with
+    /// `for_container`'s own exhaustive match (no catch-all, above) — that
+    /// match already fails to compile if a variant is added without a
+    /// decision, so a stale list here is a soft test gap, not a silently
+    /// wrong answer.
+    fn all_container_formats() -> Vec<ContainerFormat> {
+        vec![
+            ContainerFormat::Mp4,
+            ContainerFormat::Mkv,
+            ContainerFormat::WebM,
+            ContainerFormat::Mov,
+            ContainerFormat::M4v,
+            ContainerFormat::Ts,
+            ContainerFormat::Flv,
+            ContainerFormat::Avi,
+            ContainerFormat::ThreeGp,
+            ContainerFormat::Mpg,
+            ContainerFormat::F4v,
+            ContainerFormat::Asf,
+            ContainerFormat::Mxf,
+            ContainerFormat::Vob,
+            ContainerFormat::Dv,
+            ContainerFormat::Nut,
+            ContainerFormat::Ivf,
+            ContainerFormat::Ogg,
+            ContainerFormat::M4a,
+            ContainerFormat::Mp3,
+            ContainerFormat::Wav,
+            ContainerFormat::Flac,
+            ContainerFormat::Opus,
+            ContainerFormat::Aac,
+            ContainerFormat::Aiff,
+            ContainerFormat::Mka,
+            ContainerFormat::Wv,
+            ContainerFormat::Caf,
+            ContainerFormat::Ac3,
+        ]
+    }
+
+    /// Forward direction: every string `rdlp-postprocess` advertises as
+    /// thumbnail-capable must actually resolve to an embed strategy here.
+    #[test]
+    fn supported_containers_all_resolve_to_a_strategy() {
+        for container in MIRRORED_SUPPORTED_CONTAINERS {
+            let format = ContainerFormat::from_str(container)
+                .unwrap_or_else(|_| panic!("'{container}' must parse as a ContainerFormat"));
+            assert!(
+                ThumbnailEmbedStrategy::for_container(format).is_some(),
+                "'{container}' is listed in SUPPORTED_CONTAINERS but for_container returned None"
+            );
+        }
+    }
+
+    /// Reverse direction: every container this module resolves to a strategy
+    /// for must be advertised by `rdlp-postprocess` — otherwise
+    /// `ThumbnailStage` would never reach this code for that container at
+    /// all, and the two lists have quietly diverged.
+    #[test]
+    fn every_strategy_supported_format_is_in_supported_containers() {
+        for format in all_container_formats() {
+            if ThumbnailEmbedStrategy::for_container(format).is_some() {
+                // `as_ext()` (not `Display`/`to_string()`) is the canonical
+                // extension string: `ContainerFormat`'s `Display` impl does
+                // not necessarily print the same alias `SUPPORTED_CONTAINERS`
+                // uses (e.g. `Mkv`'s `Display` is "matroska", not "mkv").
+                let name = format.as_ext();
+                assert!(
+                    MIRRORED_SUPPORTED_CONTAINERS.contains(&name),
+                    "'{name}' resolves to a thumbnail strategy but is missing from SUPPORTED_CONTAINERS"
+                );
+            }
+        }
+    }
 
     #[test]
     fn matroska_containers_use_native_attachment() {

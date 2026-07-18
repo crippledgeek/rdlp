@@ -14,15 +14,17 @@
 //! directly against a known-good byte vector rather than through a mux/demux
 //! round trip.
 //!
-//! # Lint allowances
-//!
-//! - `clippy::cast_possible_truncation`: `mime`/`image_data` lengths are cast
-//!   to `u32` for the RFC 9639 wire format. Thumbnails are capped at 20 MiB
-//!   by the download layer (`MAX_THUMBNAIL_BYTES`,
-//!   `rdlp-api/src/orchestrator/thumbnail.rs`), far below `u32::MAX`.
+//! [`build_picture_block`] validates that the MIME type and image data each
+//! fit the RFC 9639 `u32` length-prefix field itself, via `u32::try_from`,
+//! rather than trusting that a caller upholds some size cap enforced
+//! elsewhere: this module has more than one caller path (a streamed download
+//! capped by `rdlp-api`'s `MAX_THUMBNAIL_BYTES`, but also
+//! `ThumbnailStage::find_thumbnail`'s uncapped on-disk glob), so the only
+//! guarantee this builder can honestly rely on is the one it checks itself.
+//! See `image_convert.rs`'s `MAX_THUMBNAIL_DIMENSION` doc-comment for the same
+//! "don't cite a distant invariant" discipline applied to decode dimensions.
 
-#![allow(clippy::cast_possible_truncation)]
-
+use anyhow::Context as _;
 use base64::Engine as _;
 
 use rdlp_types::ThumbnailFormat;
@@ -60,25 +62,48 @@ pub(super) const fn mime_type(format: ThumbnailFormat) -> &'static str {
     }
 }
 
+/// Validate that `len` fits the RFC 9639 `u32` length-prefix field, naming
+/// `field` in the error so a rejection identifies which value (MIME type or
+/// image data) was too large. This is the builder's own, locally-enforced
+/// contract — see the module docs for why it must not rely on a cap enforced
+/// by (only some of) its callers.
+fn u32_length(len: usize, field: &str) -> anyhow::Result<u32> {
+    u32::try_from(len)
+        .with_context(|| format!("{field} length {len} exceeds the RFC 9639 u32 length-prefix"))
+}
+
 /// Build the raw (pre-base64) FLAC `PICTURE` metadata block (RFC 9639 §8.8).
 ///
 /// Field order, all big-endian `u32`: picture type; MIME length + MIME
 /// bytes; description length + description bytes (`rdlp` always writes an
 /// empty description, but still emits its zero length); width; height;
 /// colour depth; indexed-colour count; picture-data length + picture bytes.
-fn build_picture_block(mime: &str, width: u32, height: u32, image_data: &[u8]) -> Vec<u8> {
+///
+/// # Errors
+///
+/// Returns an error if `mime` or `image_data` is too long to fit the `u32`
+/// length-prefix field (see [`u32_length`]).
+fn build_picture_block(
+    mime: &str,
+    width: u32,
+    height: u32,
+    image_data: &[u8],
+) -> anyhow::Result<Vec<u8>> {
     const DESCRIPTION: &[u8] = b"";
     const FIELD_OVERHEAD: usize = 32; // 8 u32 fields, 4 bytes each.
 
     let mime_bytes = mime.as_bytes();
+    let mime_len = u32_length(mime_bytes.len(), "MIME type")?;
+    let image_len = u32_length(image_data.len(), "image data")?;
+
     let mut block = Vec::with_capacity(FIELD_OVERHEAD + mime_bytes.len() + image_data.len());
 
     block.extend_from_slice(&PICTURE_TYPE_FRONT_COVER.to_be_bytes());
 
-    block.extend_from_slice(&(mime_bytes.len() as u32).to_be_bytes());
+    block.extend_from_slice(&mime_len.to_be_bytes());
     block.extend_from_slice(mime_bytes);
 
-    block.extend_from_slice(&(DESCRIPTION.len() as u32).to_be_bytes());
+    block.extend_from_slice(&0u32.to_be_bytes()); // DESCRIPTION is always empty
     block.extend_from_slice(DESCRIPTION);
 
     block.extend_from_slice(&width.to_be_bytes());
@@ -86,28 +111,33 @@ fn build_picture_block(mime: &str, width: u32, height: u32, image_data: &[u8]) -
     block.extend_from_slice(&COLOR_DEPTH_TRUE_COLOR.to_be_bytes());
     block.extend_from_slice(&INDEXED_COLORS_NONE.to_be_bytes());
 
-    block.extend_from_slice(&(image_data.len() as u32).to_be_bytes());
+    block.extend_from_slice(&image_len.to_be_bytes());
     block.extend_from_slice(image_data);
 
-    block
+    Ok(block)
 }
 
 /// Build the `METADATA_BLOCK_PICTURE` `VorbisComment` value: the FLAC
 /// `PICTURE` block above, base64-encoded per RFC 4648 §4 (standard alphabet,
 /// `=`-padded, no line breaks).
+///
+/// # Errors
+///
+/// Returns an error if `mime` or `image_data` is too long to fit the RFC 9639
+/// `u32` length-prefix field (see [`build_picture_block`]).
 pub(super) fn build_metadata_block_picture(
     mime: &str,
     width: u32,
     height: u32,
     image_data: &[u8],
-) -> String {
-    let block = build_picture_block(mime, width, height, image_data);
-    base64::engine::general_purpose::STANDARD.encode(block)
+) -> anyhow::Result<String> {
+    let block = build_picture_block(mime, width, height, image_data)?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(block))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{build_metadata_block_picture, build_picture_block, mime_type};
+    use super::{build_metadata_block_picture, build_picture_block, mime_type, u32_length};
     use base64::Engine as _;
     use rdlp_types::ThumbnailFormat;
 
@@ -118,7 +148,8 @@ mod tests {
     #[test]
     fn picture_block_matches_known_good_byte_layout() {
         let image_data = b"DATA";
-        let block = build_picture_block("image/png", 10, 20, image_data);
+        let block =
+            build_picture_block("image/png", 10, 20, image_data).expect("valid-length input");
 
         let mut expected = Vec::new();
         expected.extend_from_slice(&3u32.to_be_bytes()); // picture type
@@ -141,7 +172,7 @@ mod tests {
     /// offset.
     #[test]
     fn empty_description_still_emits_its_zero_length_field() {
-        let block = build_picture_block("image/jpeg", 1, 1, b"X");
+        let block = build_picture_block("image/jpeg", 1, 1, b"X").expect("valid-length input");
 
         // Offset 0..4 picture type, 4..8 mime length, 8..8+10 mime bytes
         // ("image/jpeg" is 10 bytes), then the description length u32.
@@ -178,7 +209,8 @@ mod tests {
     #[test]
     fn data_length_field_matches_actual_image_bytes() {
         let image_data = b"0123456789";
-        let block = build_picture_block("image/png", 999, 999, image_data);
+        let block =
+            build_picture_block("image/png", 999, 999, image_data).expect("valid-length input");
 
         let data_len_offset = block.len() - image_data.len() - 4;
         let data_len = u32::from_be_bytes(
@@ -195,7 +227,8 @@ mod tests {
     #[test]
     fn metadata_block_picture_base64_round_trips_to_the_same_block() {
         let image_data = b"round-trip-bytes";
-        let encoded = build_metadata_block_picture("image/jpeg", 4, 8, image_data);
+        let encoded = build_metadata_block_picture("image/jpeg", 4, 8, image_data)
+            .expect("valid-length input");
 
         assert!(
             !encoded.contains('\n') && !encoded.contains('\r'),
@@ -205,7 +238,34 @@ mod tests {
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(&encoded)
             .expect("must be valid standard-alphabet base64");
-        assert_eq!(decoded, build_picture_block("image/jpeg", 4, 8, image_data));
+        assert_eq!(
+            decoded,
+            build_picture_block("image/jpeg", 4, 8, image_data).expect("valid-length input")
+        );
+    }
+
+    /// Boundary pin: a length of exactly `u32::MAX` still fits the RFC 9639
+    /// length-prefix field and must be accepted.
+    #[test]
+    fn u32_length_accepts_the_u32_max_boundary() {
+        assert_eq!(
+            u32_length(u32::MAX as usize, "image data").expect("u32::MAX must fit a u32 field"),
+            u32::MAX
+        );
+    }
+
+    /// Boundary pin: `u32::MAX + 1` does not fit the RFC 9639 length-prefix
+    /// field and must be rejected rather than silently truncated — the exact
+    /// failure mode this builder now defends against instead of trusting a
+    /// distant size cap (see module docs).
+    #[test]
+    fn u32_length_rejects_one_past_the_u32_max_boundary() {
+        let oversized = u32::MAX as usize + 1;
+        let err = u32_length(oversized, "image data").expect_err("must reject oversize length");
+        assert!(
+            err.to_string().contains("image data"),
+            "error must name the offending field"
+        );
     }
 
     #[test]

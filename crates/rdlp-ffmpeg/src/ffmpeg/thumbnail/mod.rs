@@ -376,23 +376,40 @@ impl FFmpegRunner {
         // the header it writes, and `avformat_write_header` is the point at
         // which a stream-based ATTACHED_PIC would otherwise be rejected.
         if is_ogg_opus {
+            // Deliberate second read of `thumbnail`, not an oversight: the
+            // `thumb_ictx`/`thumb_ist` probe above only demuxes the image to
+            // learn its dimensions and codec — `ffmpeg-the-third` exposes no
+            // way to recover the original whole-file encoded bytes from a
+            // decoded stream, so the raw bytes this branch embeds (MIME-sniffed
+            // and RFC 9639-framed below) have to come from a fresh read of the
+            // same path. Restructuring to share one read would mean threading
+            // raw bytes through the demux path for every other container's
+            // strategy too, for no benefit there.
+            //
             // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking
             // from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
             #[allow(clippy::disallowed_methods)]
             let image_bytes = std::fs::read(thumbnail)
                 .with_context(|| format!("failed to read thumbnail {}", thumbnail.display()))?;
-            let format = rdlp_types::sniff_thumbnail_format(&image_bytes).ok_or_else(|| {
-                PostProcessError::ffmpeg_failed(format!(
-                    "thumbnail {} is not a recognized image format",
-                    thumbnail.display()
-                ))
-            })?;
+            let image_format =
+                rdlp_types::sniff_thumbnail_format(&image_bytes).ok_or_else(|| {
+                    PostProcessError::ffmpeg_failed(format!(
+                        "thumbnail {} is not a recognized image format",
+                        thumbnail.display()
+                    ))
+                })?;
             let picture = vorbis_picture::build_metadata_block_picture(
-                vorbis_picture::mime_type(format),
+                vorbis_picture::mime_type(image_format),
                 thumb_width,
                 thumb_height,
                 &image_bytes,
-            );
+            )
+            .map_err(|e| {
+                PostProcessError::ffmpeg_failed(format!(
+                    "failed to build METADATA_BLOCK_PICTURE for thumbnail {}: {e:#}",
+                    thumbnail.display()
+                ))
+            })?;
             let mut meta = octx.metadata().to_owned();
             meta.set("METADATA_BLOCK_PICTURE", &picture);
             octx.set_metadata(meta);
