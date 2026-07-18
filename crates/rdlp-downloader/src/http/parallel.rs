@@ -218,6 +218,10 @@ impl HttpDownloader {
         )
         .await?;
 
+        // Backstop (#526): the assembly must match the advertised length before
+        // this file is handed back as a completed download.
+        verify_merged_size(path, total_size).await?;
+
         let duration = start_time.elapsed();
         let stats = DownloadStats::new(total_downloaded, duration, 0);
 
@@ -322,6 +326,12 @@ impl HttpDownloader {
             MergeMode::Append,
         )
         .await?;
+
+        // Backstop (#526). On the resume path this also catches a `resume_from`
+        // that disagreed with the file's real length: the appended bytes land
+        // at EOF regardless of the offset the ranges were requested from, so a
+        // mismatch shows up here as a wrong final size.
+        verify_merged_size(path, total_size).await?;
 
         let duration = start_time.elapsed();
         let total_downloaded = resume_from + newly_downloaded;
@@ -567,6 +577,46 @@ impl HttpDownloader {
 
         Ok((chunk_paths, total_bytes))
     }
+}
+
+/// Confirm the assembled output is exactly the size the server advertised.
+///
+/// Last-resort integrity gate for #526, deliberately independent of the
+/// per-chunk validation in `download_range_with_progress`: that layer checks
+/// each response against what was requested, while this one checks the
+/// finished artifact against the resource's advertised length. A defect in
+/// chunk bookkeeping — a dropped, duplicated, or misordered chunk — leaves the
+/// per-chunk checks satisfied but the assembly wrong, and only shows up here.
+///
+/// A size match is not a proof of correctness (#526 produced a full-length file
+/// with displaced interior bytes), so this complements the per-chunk checks
+/// rather than replacing them.
+pub(crate) async fn verify_merged_size(path: &Path, expected_total: u64) -> Result<()> {
+    let actual = tokio::fs::metadata(path)
+        .await
+        .map_err(|e| {
+            RdlpError::Io(std::io::Error::new(
+                e.kind(),
+                format!(
+                    "failed to stat merged output '{}' for size verification: {e}",
+                    path.display()
+                ),
+            ))
+        })?
+        .len();
+
+    if actual != expected_total {
+        return Err(RdlpError::Download {
+            url: None,
+            message: format!(
+                "assembled output '{}' is {actual} bytes but the server advertised \
+                 {expected_total}; the download is incomplete or misassembled.",
+                path.display()
+            ),
+        });
+    }
+
+    Ok(())
 }
 
 /// Merge or append chunks to file using an explicit ordered list of paths.
