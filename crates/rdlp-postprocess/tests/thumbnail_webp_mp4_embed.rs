@@ -246,3 +246,76 @@ async fn process_embeds_webp_thumbnail_into_mkv_natively() {
         result.warnings
     );
 }
+
+/// The reported #525 shape, end to end: WebP bytes carried by a file NAMED
+/// `.jpg`, because the CDN served WebP from a `.jpg` URL path.
+///
+/// The unit tests pin the individual decisions; this pins the symptom at the
+/// level it was reported. It fails against the pre-#525 code, where the gate
+/// read the `.jpg` name as "already embeddable", skipped normalization, and
+/// stream-copied raw WebP into the MP4 muxer:
+///
+/// ```text
+/// Could not find tag for codec webp in stream #2, codec not currently supported in container
+/// ```
+///
+/// Covers gate + normalize + mux + covr in one pass.
+#[tokio::test]
+async fn process_embeds_mislabeled_webp_named_jpg_into_mp4() {
+    if !ffmpeg_cli_available() {
+        eprintln!("[SKIP] ffmpeg CLI not available");
+        return;
+    }
+    let dir = TempDir::new().unwrap();
+    let media = dir.path().join("video.mp4");
+
+    // Build a genuine WebP, then give it a .jpg name — the mislabel itself.
+    let real_webp = dir.path().join("source.webp");
+    if build_mp4_fixture(&media).is_err() || build_still_image_fixture(&real_webp).is_err() {
+        eprintln!("[SKIP] fixture build failed");
+        return;
+    }
+    let mislabeled = dir.path().join("video.jpg");
+    std::fs::rename(&real_webp, &mislabeled).expect("rename webp to .jpg");
+
+    // Sanity-check the fixture really is the mislabel we intend to test.
+    let header = std::fs::read(&mislabeled).expect("read fixture");
+    assert_eq!(
+        &header[0..4],
+        b"RIFF",
+        "fixture must actually be webp bytes under a .jpg name"
+    );
+
+    let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
+    let stage = ThumbnailStage::new(ffmpeg.clone());
+
+    let config = PostProcess {
+        embed_thumbnail: true,
+        ..PostProcess::default()
+    };
+    let msg = make_msg(vec![media], config);
+
+    let result = stage.process(msg).await.expect("non-fatal stage");
+    assert!(
+        result.warnings.is_empty(),
+        "a mislabeled webp-as-.jpg thumbnail must still embed cleanly, got: {:?}",
+        result.warnings
+    );
+
+    let out_path = result.tracker.primary();
+    let info = ffmpeg
+        .probe(&out_path)
+        .await
+        .expect("probing embedded output must succeed");
+    let thumb_stream = info
+        .streams
+        .iter()
+        .find(|s| s.index == 1)
+        .expect("thumbnail stream must be present");
+    assert_eq!(
+        thumb_stream.codec_name.as_deref(),
+        Some("mjpeg"),
+        "the mislabeled webp must be normalized to mjpeg — its .jpg NAME must \
+         not have been taken as proof it was already embeddable"
+    );
+}

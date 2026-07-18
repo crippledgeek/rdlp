@@ -8,7 +8,12 @@ use log::{debug, info, warn};
 use rdlp_redact::RedactedUrl;
 use std::path::{Path, PathBuf};
 
-/// Derive the on-disk sidecar extension for a downloaded thumbnail from its URL.
+/// Derive a FALLBACK sidecar extension for a downloaded thumbnail from its URL.
+///
+/// Since #525 the on-disk name comes from the fetched bytes via
+/// [`rdlp_types::sniff_thumbnail_format`]; this supplies the name only when the
+/// content is unrecognized, because a URL's extension is a claim rather than a
+/// fact — the CDN that prompted #525 serves WebP from a `.jpg` path.
 ///
 /// Preserves the URL's trailing extension only when it is a recognized raster
 /// thumbnail format (see [`rdlp_types::THUMBNAIL_EXTENSIONS`]); any query string
@@ -39,7 +44,9 @@ impl Orchestrator {
     /// Download thumbnail image from URL and save alongside media file.
     ///
     /// Saves as `{media_stem}.{ext}` in the same directory as the media file.
-    /// The extension is inferred from the thumbnail URL (defaults to `jpg`).
+    /// The extension is inferred from the fetched BYTES (#525) — a CDN may
+    /// serve one format from another format's URL path — falling back to the
+    /// URL's extension, and then to `jpg`, only for unrecognized content.
     ///
     /// This is non-fatal: logs a warning and returns `None` on any error.
     /// The `EmbedThumbnail` post-processor will then skip embedding gracefully.
@@ -67,12 +74,6 @@ impl Orchestrator {
         })?;
 
         debug!(url = RedactedUrl::new(thumbnail_url); "Downloading thumbnail");
-
-        // Determine extension from URL (default to jpg)
-        let ext = thumbnail_extension_from_url(thumbnail_url);
-
-        // Build output path: {media_stem}.{ext}
-        let thumbnail_path = super::container_resolver::sidecar_path(media_file, &ext);
 
         // SSRF gate: extractor-sourced URLs flow through here, and an
         // attacker-controlled extractor could return a private/loopback
@@ -136,6 +137,40 @@ impl Orchestrator {
             warn!("Thumbnail response was empty");
             return None;
         }
+
+        // Name the sidecar for what the bytes ACTUALLY are, not what the URL
+        // claims (#525). A CDN serving WebP from a `.jpg` path would otherwise
+        // put WebP bytes in a `.jpg` file, and every later stage that reads the
+        // extension as a proxy for the codec then makes the wrong call — the
+        // embed gate skips normalization and the raw WebP reaches a muxer that
+        // has no tag for it. Falls back to the URL's extension only when the
+        // content is unrecognized, preserving the previous behavior there.
+        let url_ext = thumbnail_extension_from_url(thumbnail_url);
+        let ext = rdlp_types::sniff_thumbnail_format(&bytes).map_or_else(
+            || {
+                debug!(
+                    url = RedactedUrl::new(thumbnail_url),
+                    ext = url_ext.as_str();
+                    "Thumbnail content unrecognized; naming from URL extension"
+                );
+                url_ext.clone()
+            },
+            |format| format.extension().to_owned(),
+        );
+
+        if ext != url_ext {
+            // Worth surfacing: this is the mislabel that produced #525, and it
+            // is otherwise invisible until an embed fails much later.
+            debug!(
+                url = RedactedUrl::new(thumbnail_url),
+                claimed = url_ext.as_str(),
+                actual = ext.as_str();
+                "Thumbnail URL extension disagrees with its content; using content"
+            );
+        }
+
+        // Build output path: {media_stem}.{ext}
+        let thumbnail_path = super::container_resolver::sidecar_path(media_file, &ext);
 
         // Write to disk
         if let Err(e) = tokio::fs::write(&thumbnail_path, &bytes).await {
