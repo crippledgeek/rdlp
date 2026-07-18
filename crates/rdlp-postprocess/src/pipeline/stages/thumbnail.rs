@@ -16,11 +16,9 @@ use async_trait::async_trait;
 use log::{debug, info, warn};
 
 use rdlp_ffmpeg::{FFmpegRunner, RemuxOptions};
+use rdlp_types::THUMBNAIL_EXTENSIONS;
 
 use crate::pipeline::{PipelineMessage, PipelineStage};
-
-/// Supported thumbnail image formats.
-const THUMBNAIL_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "webp"];
 
 /// Containers that support thumbnail embedding via `FFmpeg`.
 const SUPPORTED_CONTAINERS: &[&str] = &[
@@ -61,8 +59,9 @@ impl ThumbnailStage {
 
     /// Find a thumbnail file using `original_stem` for discovery.
     ///
-    /// Searches `{parent}/{original_stem}.{jpg|jpeg|png|webp}`.
-    /// Also tries the current file's stem as a fallback.
+    /// Searches `{parent}/{original_stem}.{ext}` for each `ext` in
+    /// [`rdlp_types::THUMBNAIL_EXTENSIONS`]. Also tries the current file's stem
+    /// as a fallback.
     fn find_thumbnail(media_file: &Path, original_stem: &str) -> Option<PathBuf> {
         let parent = media_file.parent()?;
 
@@ -461,6 +460,30 @@ mod tests {
             "original-title",
         );
         assert!(result.is_none());
+    }
+
+    /// #521: discovery must locate the widened raster formats
+    /// (`gif`/`bmp`/`tiff`), not only the original `jpg`/`jpeg`/`png`/`webp`.
+    /// Fails against the pre-#521 list, which stopped at `webp` and so returned
+    /// `None` for a `gif`/`bmp`/`tiff` sidecar (silent thumbnail skip).
+    #[test]
+    fn find_thumbnail_finds_widened_raster_formats() {
+        use std::fs;
+        use tempfile::TempDir;
+
+        for ext in ["gif", "bmp", "tiff", "tif"] {
+            let dir = TempDir::new().unwrap();
+            let thumb = dir.path().join(format!("clip.{ext}"));
+            fs::write(&thumb, b"fake-image").unwrap();
+
+            let media = dir.path().join("clip.rdlp-tmp-abc123.mp4");
+            let result = ThumbnailStage::find_thumbnail(&media, "clip");
+            assert_eq!(
+                result,
+                Some(thumb),
+                "find_thumbnail must discover a .{ext} sidecar via original_stem"
+            );
+        }
     }
 
     #[test]

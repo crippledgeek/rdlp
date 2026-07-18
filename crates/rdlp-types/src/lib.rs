@@ -43,6 +43,7 @@ pub mod subtitle_format;
 pub mod subtitle_kind;
 pub mod subtitle_selection;
 pub mod subtitle_track;
+pub mod thumbnail;
 pub mod vpx_deadline;
 
 // Re-export main types
@@ -72,4 +73,5 @@ pub use subtitle_track::{
     SubtitleDiagnostic, SubtitleReason, SubtitleResult, SubtitleStatus, SubtitleTrack,
     normalize_from_info_dict,
 };
+pub use thumbnail::THUMBNAIL_EXTENSIONS;
 pub use vpx_deadline::VpxDeadline;
