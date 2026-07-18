@@ -123,6 +123,13 @@ fn extract_cover(media: &Path, dst: &Path) {
 /// bytes belonging to the *next* field can coincidentally pass as base64
 /// alphabet) — the exact value length is read from those 4 length bytes
 /// immediately preceding the marker.
+///
+/// Assumes the comment packet fits on a single Ogg page (payload under the
+/// ~65025-byte max page size): this reads the tag's bytes directly out of
+/// `media` as one contiguous span, which an `OggS` page header would split
+/// if the field spanned pages. Not an issue at `COVER_DIMENSION_PX`'s
+/// current size, but raising it enough to push the base64 payload past a
+/// page boundary would need this helper reassembled page-aware first.
 fn read_metadata_block_picture(media: &Path) -> Vec<u8> {
     const MARKER: &[u8] = b"METADATA_BLOCK_PICTURE=";
 

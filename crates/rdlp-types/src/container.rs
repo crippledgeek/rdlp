@@ -1,12 +1,14 @@
 //! Container format types for video/audio files
 
 use serde::{Deserialize, Serialize};
-use strum_macros::{Display, EnumString};
+use strum_macros::{Display, EnumIter, EnumString};
 
 /// Supported container formats for video/audio files.
 ///
 /// Used for merge output, remux targets, and video recode targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString, EnumIter,
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive)]
 pub enum ContainerFormat {
@@ -172,43 +174,11 @@ impl ContainerFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// All variants for exhaustive testing.
-    const ALL_FORMATS: [ContainerFormat; 29] = [
-        ContainerFormat::Mp4,
-        ContainerFormat::Mkv,
-        ContainerFormat::WebM,
-        ContainerFormat::Mov,
-        ContainerFormat::M4v,
-        ContainerFormat::Ts,
-        ContainerFormat::Flv,
-        ContainerFormat::Avi,
-        ContainerFormat::ThreeGp,
-        ContainerFormat::Mpg,
-        ContainerFormat::F4v,
-        ContainerFormat::Asf,
-        ContainerFormat::Mxf,
-        ContainerFormat::Vob,
-        ContainerFormat::Dv,
-        ContainerFormat::Nut,
-        ContainerFormat::Ivf,
-        ContainerFormat::Ogg,
-        ContainerFormat::M4a,
-        ContainerFormat::Mp3,
-        ContainerFormat::Wav,
-        ContainerFormat::Flac,
-        ContainerFormat::Opus,
-        ContainerFormat::Aac,
-        ContainerFormat::Aiff,
-        ContainerFormat::Mka,
-        ContainerFormat::Wv,
-        ContainerFormat::Caf,
-        ContainerFormat::Ac3,
-    ];
+    use strum::IntoEnumIterator as _;
 
     #[test]
     fn test_display_roundtrip() {
-        for fmt in ALL_FORMATS {
+        for fmt in ContainerFormat::iter() {
             let s = fmt.to_string();
             let parsed: ContainerFormat = s.parse().unwrap();
             assert_eq!(fmt, parsed, "roundtrip failed for {s}");

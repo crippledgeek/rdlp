@@ -47,6 +47,7 @@ use rdlp_types::ContainerFormat;
 use crate::error::{PostProcessError, Result};
 
 use self::embed_strategy::ThumbnailEmbedStrategy;
+pub use self::embed_strategy::supports_thumbnail_embed;
 use super::{FFmpegRunner, ensure_init};
 
 impl FFmpegRunner {
@@ -377,14 +378,16 @@ impl FFmpegRunner {
         // which a stream-based ATTACHED_PIC would otherwise be rejected.
         if is_ogg_opus {
             // Deliberate second read of `thumbnail`, not an oversight: the
-            // `thumb_ictx`/`thumb_ist` probe above only demuxes the image to
-            // learn its dimensions and codec — `ffmpeg-the-third` exposes no
-            // way to recover the original whole-file encoded bytes from a
-            // decoded stream, so the raw bytes this branch embeds (MIME-sniffed
-            // and RFC 9639-framed below) have to come from a fresh read of the
-            // same path. Restructuring to share one read would mean threading
-            // raw bytes through the demux path for every other container's
-            // strategy too, for no benefit there.
+            // `thumb_ictx`/`thumb_ist` probe above exists only to learn the
+            // image's dimensions and codec (needed for the PICTURE block's
+            // width/height/MIME fields); its demuxed packets are never
+            // consumed here. Recovering the encoded bytes from those packets
+            // instead of re-reading the file is demuxer/format-dependent —
+            // "packet bytes equal the original file bytes" only holds for a
+            // single-frame image2-demuxed still, not in general — so relying
+            // on it would couple this Vorbis-comment path to the same
+            // packet-equals-file assumption `write_thumbnail_packets` makes
+            // for the stream-copy paths below, for no benefit here.
             //
             // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking
             // from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).

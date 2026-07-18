@@ -464,6 +464,60 @@ mod tests {
         assert!(!ThumbnailStage::supports_thumbnail("avi"));
     }
 
+    /// Forward direction: every string `SUPPORTED_CONTAINERS` (the REAL
+    /// const, not a copy) advertises as thumbnail-capable must actually
+    /// resolve to an embed strategy in `rdlp-ffmpeg`.
+    ///
+    /// This and the reverse-direction test below replace what used to be a
+    /// same-crate agreement test in `rdlp-ffmpeg` asserting `for_container`
+    /// against `MIRRORED_SUPPORTED_CONTAINERS` — a hand-copied duplicate of
+    /// this very list. That guarded against nothing: editing the real
+    /// `SUPPORTED_CONTAINERS` below left both the copy and the test green.
+    /// Asserting against `rdlp_ffmpeg::supports_thumbnail_embed` here closes
+    /// that gap (full consolidation of the two lists tracked by #533).
+    #[test]
+    fn supported_containers_all_resolve_to_a_strategy() {
+        use std::str::FromStr as _;
+
+        use rdlp_types::ContainerFormat;
+
+        for container in SUPPORTED_CONTAINERS {
+            let format = ContainerFormat::from_str(container)
+                .unwrap_or_else(|_| panic!("'{container}' must parse as a ContainerFormat"));
+            assert!(
+                rdlp_ffmpeg::supports_thumbnail_embed(format),
+                "'{container}' is listed in SUPPORTED_CONTAINERS but \
+                 rdlp_ffmpeg::supports_thumbnail_embed returned false"
+            );
+        }
+    }
+
+    /// Reverse direction: every container `rdlp-ffmpeg` resolves an embed
+    /// strategy for must be advertised by `SUPPORTED_CONTAINERS` — otherwise
+    /// `ThumbnailStage` would never reach this code for that container at
+    /// all, and the two would have quietly diverged.
+    #[test]
+    fn every_strategy_supported_format_is_in_supported_containers() {
+        use strum::IntoEnumIterator as _;
+
+        use rdlp_types::ContainerFormat;
+
+        for format in ContainerFormat::iter() {
+            if rdlp_ffmpeg::supports_thumbnail_embed(format) {
+                // `as_ext()` (not `Display`/`to_string()`) is the canonical
+                // extension string: `ContainerFormat`'s `Display` impl does
+                // not necessarily print the same alias `SUPPORTED_CONTAINERS`
+                // uses (e.g. `Mkv`'s `Display` is "matroska", not "mkv").
+                let name = format.as_ext();
+                assert!(
+                    SUPPORTED_CONTAINERS.contains(&name),
+                    "'{name}' resolves to a thumbnail strategy but is missing from \
+                     SUPPORTED_CONTAINERS"
+                );
+            }
+        }
+    }
+
     #[test]
     fn is_mp4_family() {
         assert!(ThumbnailStage::is_mp4_family("mp4"));

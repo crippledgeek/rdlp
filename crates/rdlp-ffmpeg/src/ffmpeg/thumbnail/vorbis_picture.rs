@@ -103,7 +103,8 @@ fn build_picture_block(
     block.extend_from_slice(&mime_len.to_be_bytes());
     block.extend_from_slice(mime_bytes);
 
-    block.extend_from_slice(&0u32.to_be_bytes()); // DESCRIPTION is always empty
+    let description_len = u32_length(DESCRIPTION.len(), "description")?;
+    block.extend_from_slice(&description_len.to_be_bytes());
     block.extend_from_slice(DESCRIPTION);
 
     block.extend_from_slice(&width.to_be_bytes());
@@ -258,7 +259,12 @@ mod tests {
     /// field and must be rejected rather than silently truncated — the exact
     /// failure mode this builder now defends against instead of trusting a
     /// distant size cap (see module docs).
+    ///
+    /// 64-bit-only: on a 32-bit target `usize` cannot represent `u32::MAX + 1`
+    /// at all (the literal itself overflows `usize`), so the boundary this
+    /// test pins does not exist there.
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn u32_length_rejects_one_past_the_u32_max_boundary() {
         let oversized = u32::MAX as usize + 1;
         let err = u32_length(oversized, "image data").expect_err("must reject oversize length");

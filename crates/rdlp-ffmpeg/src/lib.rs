@@ -56,5 +56,5 @@ pub use ffmpeg::{
     MediaInfo, NormalizeOptions, PeakAnalysis, RemuxOptions, SpeedControlError, StreamInfo,
     VideoCodecInfo, VideoConvertOptions, VideoEncoderInfo, bridge_ffmpeg_logs,
     default_codec_for_container, encoding_tool_tag, resolve_recode_encoder, set_verbose,
-    validate_speed_controls,
+    supports_thumbnail_embed, validate_speed_controls,
 };
