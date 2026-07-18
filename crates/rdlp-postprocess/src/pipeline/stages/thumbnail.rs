@@ -27,6 +27,23 @@ const SUPPORTED_CONTAINERS: &[&str] = &[
     "mp4", "m4a", "m4v", "mov", "mkv", "mka", "mp3", "flac", "ogg", "opus",
 ];
 
+/// Extensions the non-Matroska embed passes (`FFmpeg` `ATTACHED_PIC` stream copy,
+/// `mp4ameta` `covr` atom) can consume without transcoding.
+///
+/// This is the SINGLE source of truth for "already MP4/attached-pic-safe" — used
+/// both to decide whether a thumbnail needs normalizing (see `process`) and,
+/// after normalization, to select the `covr` atom's image type (see
+/// `write_covr_atom`). Every non-Matroska embed strategy in
+/// `rdlp_ffmpeg::thumbnail` stream-copies the thumbnail's source codec into the
+/// target container (see `embed_thumbnail_sync`), so any format outside this
+/// list (e.g. `webp`) must be normalized first — the target containers have no
+/// muxer tag for it.
+const EMBEDDABLE_RASTER_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png"];
+
+/// Containers that attach the thumbnail's source codec natively (Matroska) and
+/// therefore never need image normalization.
+const NATIVE_ATTACHMENT_CONTAINERS: &[&str] = &["mkv", "mka"];
+
 /// Embeds thumbnail into the primary current file.
 ///
 /// `should_run` triggers when `config.embed_thumbnail` is true.
@@ -82,6 +99,72 @@ impl ThumbnailStage {
         ["mp4", "m4a", "m4v", "mov"]
             .iter()
             .any(|c| c.eq_ignore_ascii_case(extension))
+    }
+
+    /// Check if the container attaches the thumbnail's source codec natively
+    /// (Matroska), so it never needs image normalization.
+    fn is_native_attachment_container(extension: &str) -> bool {
+        NATIVE_ATTACHMENT_CONTAINERS
+            .iter()
+            .any(|c| c.eq_ignore_ascii_case(extension))
+    }
+
+    /// Check whether `path`'s extension is already MP4/attached-pic-safe
+    /// (see `EMBEDDABLE_RASTER_EXTENSIONS`).
+    fn is_embeddable_raster(path: &Path) -> bool {
+        path.extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|ext| {
+                EMBEDDABLE_RASTER_EXTENSIONS
+                    .iter()
+                    .any(|c| c.eq_ignore_ascii_case(ext))
+            })
+    }
+
+    /// Normalize `thumbnail_file` to a tracker-owned temp `.jpg` when the
+    /// target container can't consume its codec directly.
+    ///
+    /// Every non-Matroska embed strategy stream-copies the thumbnail's source
+    /// codec into the target container (see `rdlp_ffmpeg::thumbnail`), so a
+    /// codec outside `EMBEDDABLE_RASTER_EXTENSIONS` (e.g. `webp`) must be
+    /// transcoded first or the mux fails (MP4/MOV/M4A/M4V) or the `covr` atom
+    /// silently mislabels raw webp bytes as JPEG (MP4-family only). Matroska
+    /// is exempt — it attaches the source codec natively. On transcode
+    /// failure, falls back to the original thumbnail path so the caller's
+    /// existing non-fatal embed-failure handling still applies.
+    async fn normalize_thumbnail_for_embed(
+        &self,
+        msg: &mut PipelineMessage,
+        extension: &str,
+        thumbnail_file: &Path,
+    ) -> PathBuf {
+        if Self::is_native_attachment_container(extension)
+            || Self::is_embeddable_raster(thumbnail_file)
+        {
+            return thumbnail_file.to_path_buf();
+        }
+
+        let normalized = msg.tracker.temp_path(thumbnail_file, "jpg");
+        debug!(
+            "ThumbnailStage: normalizing thumbnail {} → jpg for {extension} embed",
+            thumbnail_file.display()
+        );
+        match self
+            .ffmpeg
+            .transcode_image(thumbnail_file, &normalized)
+            .await
+        {
+            Ok(()) => {
+                msg.tracker.mark_temp(normalized.clone());
+                normalized
+            }
+            Err(e) => {
+                warn!("ThumbnailStage: thumbnail normalization to jpg failed, using original: {e}");
+                msg.warnings
+                    .push(format!("Thumbnail normalization to jpg failed: {e}"));
+                thumbnail_file.to_path_buf()
+            }
+        }
     }
 
     /// Write the iTunes `covr` metadata atom for Windows Explorer thumbnail visibility.
@@ -199,6 +282,10 @@ impl PipelineStage for ThumbnailStage {
             media_file.display()
         );
 
+        let embed_source = self
+            .normalize_thumbnail_for_embed(&mut msg, &extension, &thumbnail_file)
+            .await;
+
         let temp_output = msg.tracker.temp_path(&media_file, &extension);
 
         let stage_callback = msg.callback_factory.as_ref().map(|f| f(self.name()));
@@ -225,7 +312,7 @@ impl PipelineStage for ThumbnailStage {
             .ffmpeg
             .embed_thumbnail(
                 &media_file,
-                &thumbnail_file,
+                &embed_source,
                 &temp_output,
                 &extension,
                 log_callback,
@@ -243,8 +330,10 @@ impl PipelineStage for ThumbnailStage {
                 msg.tracker.replace(vec![temp_output.clone()]);
 
                 // For MP4-family: write covr atom for Windows Explorer.
+                // `embed_source` is guaranteed EMBEDDABLE_RASTER_EXTENSIONS
+                // (jpg/jpeg/png) by `normalize_thumbnail_for_embed` above.
                 if Self::is_mp4_family(&extension) {
-                    Self::write_covr_atom(&temp_output, &thumbnail_file).await;
+                    Self::write_covr_atom(&temp_output, &embed_source).await;
                 }
 
                 // Clean up thumbnail unless --write-thumbnail was requested.
@@ -455,5 +544,53 @@ mod tests {
             !result.warnings.is_empty(),
             "expected warning about missing thumbnail"
         );
+    }
+
+    // --- is_embeddable_raster / is_native_attachment_container (bugfix/thumbnail-webp-mp4-embed) ---
+
+    #[test]
+    fn embeddable_raster_accepts_jpg_jpeg_png() {
+        assert!(ThumbnailStage::is_embeddable_raster(&PathBuf::from(
+            "/tmp/thumb.jpg"
+        )));
+        assert!(ThumbnailStage::is_embeddable_raster(&PathBuf::from(
+            "/tmp/thumb.JPEG"
+        )));
+        assert!(ThumbnailStage::is_embeddable_raster(&PathBuf::from(
+            "/tmp/thumb.png"
+        )));
+    }
+
+    /// Negative: webp (the reported bug — xHamster and others serve webp
+    /// thumbnails) and an extensionless path are NOT already embeddable —
+    /// they must go through `normalize_thumbnail_for_embed`.
+    #[test]
+    fn embeddable_raster_rejects_webp_and_other() {
+        assert!(!ThumbnailStage::is_embeddable_raster(&PathBuf::from(
+            "/tmp/thumb.webp"
+        )));
+        assert!(!ThumbnailStage::is_embeddable_raster(&PathBuf::from(
+            "/tmp/thumb.gif"
+        )));
+        assert!(!ThumbnailStage::is_embeddable_raster(&PathBuf::from(
+            "/tmp/thumb"
+        )));
+    }
+
+    #[test]
+    fn native_attachment_container_accepts_mkv_mka() {
+        assert!(ThumbnailStage::is_native_attachment_container("mkv"));
+        assert!(ThumbnailStage::is_native_attachment_container("MKA"));
+    }
+
+    /// Negative: MP4-family (and other non-Matroska) containers must NOT be
+    /// treated as native-attachment — they need normalization for non-raster
+    /// codecs. Regression guard for the bug: an unfixed check that also
+    /// exempted "mp4" would silently re-introduce the webp mux failure.
+    #[test]
+    fn native_attachment_container_rejects_mp4_family() {
+        assert!(!ThumbnailStage::is_native_attachment_container("mp4"));
+        assert!(!ThumbnailStage::is_native_attachment_container("mov"));
+        assert!(!ThumbnailStage::is_native_attachment_container("mp3"));
     }
 }
