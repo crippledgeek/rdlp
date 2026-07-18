@@ -38,6 +38,120 @@ use crate::error::{PostProcessError, Result};
 use super::{FFmpegRunner, ensure_init};
 
 impl FFmpegRunner {
+    /// Ask the target container's muxer whether it can store the image's codec.
+    ///
+    /// Every non-Matroska embed strategy stream-copies the thumbnail's codec
+    /// into the target container, so the question "does this thumbnail need
+    /// transcoding first?" is really "does this muxer have a tag for this
+    /// codec?". That is not a fact to hardcode — it is a property of the linked
+    /// `FFmpeg` build's muxer tables, and it is the exact lookup that produced
+    /// the original failure (`Could not find tag for codec webp in stream #2`).
+    /// So ask `FFmpeg` rather than maintaining a parallel whitelist that can
+    /// drift from the build.
+    ///
+    /// Uses `avformat_query_codec`, whose contract is: `1` the codec can be
+    /// stored, `0` it cannot, negative when the information is unavailable.
+    /// Only an explicit `1` is treated as supported — "unknown" resolves to
+    /// "transcode first", the safe direction, since a needless transcode costs
+    /// a little work while a wrong answer costs the embed.
+    ///
+    /// That query is authoritative for tag-table muxers (MP4/MOV) but
+    /// *under-reports* elsewhere: muxers that answer through a `query_codec`
+    /// callback (mp3 returns the `APIC` tag rather than `1`) or that carry
+    /// neither mechanism fall through to `AVERROR_PATCHWELCOME`, reporting
+    /// "cannot store" for images they demonstrably do store. JPEG and PNG are
+    /// therefore accepted outright as a verified baseline, and the query serves
+    /// only to widen that — never to narrow it below what is known to work.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the image cannot be opened or contains no decodable
+    /// image stream. An unrecognized container yields `Ok(false)` rather than
+    /// an error — that is a "cannot store it" answer, not a failure.
+    pub async fn container_accepts_image_codec(
+        &self,
+        container: &str,
+        image: impl AsRef<Path>,
+    ) -> Result<bool> {
+        let container = container.to_string();
+        let image = image.as_ref().to_path_buf();
+        Self::spawn_blocking("container_accepts_image_codec", move || -> Result<bool> {
+            Ok(Self::container_accepts_image_codec_sync(
+                &container, &image,
+            )?)
+        })
+        .await
+    }
+
+    /// Blocking body of [`Self::container_accepts_image_codec`].
+    fn container_accepts_image_codec_sync(container: &str, image: &Path) -> anyhow::Result<bool> {
+        ensure_init()?;
+
+        let ictx = ffmpeg_the_third::format::input(image)
+            .with_context(|| format!("failed to open thumbnail image {}", image.display()))?;
+        let stream = ictx
+            .streams()
+            .best(ffmpeg_the_third::media::Type::Video)
+            .with_context(|| format!("thumbnail {} contains no image stream", image.display()))?;
+        let codec_id = stream.parameters().id();
+
+        // `av_guess_format` resolves a muxer from a filename's extension; the
+        // stem is irrelevant and no file is created.
+        let probe_name = std::ffi::CString::new(format!("thumbnail.{container}"))
+            .context("container extension contained an interior NUL byte")?;
+
+        // SAFETY: `av_guess_format` takes three optional C strings and returns
+        // either NULL or a pointer to a muxer descriptor in libavformat's
+        // static, compiled-in table — never an allocation the caller owns or
+        // frees, and valid for the process lifetime. `probe_name` outlives the
+        // call.
+        let ofmt = unsafe {
+            ffmpeg_the_third::ffi::av_guess_format(
+                std::ptr::null(),
+                probe_name.as_ptr(),
+                std::ptr::null(),
+            )
+        };
+
+        // An unresolvable container cannot store anything. Checked before the
+        // baseline below so "is jpeg embeddable in a container that does not
+        // exist?" stays `false` rather than being waved through.
+        if ofmt.is_null() {
+            return Ok(false);
+        }
+
+        // Baseline: JPEG and PNG embed successfully in every container rdlp
+        // supports, verified end to end. `avformat_query_codec` does NOT report
+        // that — it answers `1` only for muxers carrying a `codec_tag` table,
+        // so mp3 (which answers through a `query_codec` callback returning the
+        // `APIC` tag), flac, and m4a all report "cannot store" for images they
+        // demonstrably do store. Trusting the query alone would re-encode a
+        // lossless PNG cover to lossy JPEG on those containers.
+        //
+        // So the query below only ever WIDENS this baseline; it can never
+        // narrow the answer below what is known to work.
+        if matches!(
+            codec_id,
+            ffmpeg_the_third::codec::Id::MJPEG | ffmpeg_the_third::codec::Id::PNG
+        ) {
+            return Ok(true);
+        }
+
+        // SAFETY: `ofmt` is the non-null static descriptor returned above and
+        // remains valid for the process lifetime. `avformat_query_codec` only
+        // reads that descriptor's codec-tag tables — no allocation, no
+        // ownership transfer, no mutation.
+        let query = unsafe {
+            ffmpeg_the_third::ffi::avformat_query_codec(
+                ofmt,
+                codec_id.into(),
+                ffmpeg_the_third::ffi::FF_COMPLIANCE_NORMAL,
+            )
+        };
+
+        Ok(query == 1)
+    }
+
     /// Embed a thumbnail image into a media file via stream copy (remux).
     ///
     /// Opens both the media file and thumbnail image, copies all media streams,

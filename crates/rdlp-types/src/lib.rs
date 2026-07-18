@@ -73,5 +73,5 @@ pub use subtitle_track::{
     SubtitleDiagnostic, SubtitleReason, SubtitleResult, SubtitleStatus, SubtitleTrack,
     normalize_from_info_dict,
 };
-pub use thumbnail::THUMBNAIL_EXTENSIONS;
+pub use thumbnail::{THUMBNAIL_EXTENSIONS, ThumbnailFormat, sniff_thumbnail_format};
 pub use vpx_deadline::VpxDeadline;

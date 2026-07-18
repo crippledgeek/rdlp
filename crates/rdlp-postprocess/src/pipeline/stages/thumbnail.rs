@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use log::{debug, info, warn};
 
 use rdlp_ffmpeg::{FFmpegRunner, RemuxOptions};
-use rdlp_types::THUMBNAIL_EXTENSIONS;
+use rdlp_types::{THUMBNAIL_EXTENSIONS, ThumbnailFormat};
 
 use crate::pipeline::{PipelineMessage, PipelineStage};
 
@@ -24,19 +24,6 @@ use crate::pipeline::{PipelineMessage, PipelineStage};
 const SUPPORTED_CONTAINERS: &[&str] = &[
     "mp4", "m4a", "m4v", "mov", "mkv", "mka", "mp3", "flac", "ogg", "opus",
 ];
-
-/// Extensions the non-Matroska embed passes (`FFmpeg` `ATTACHED_PIC` stream copy,
-/// `mp4ameta` `covr` atom) can consume without transcoding.
-///
-/// This is the SINGLE source of truth for "already MP4/attached-pic-safe" — used
-/// both to decide whether a thumbnail needs normalizing (see `process`) and,
-/// after normalization, to select the `covr` atom's image type (see
-/// `write_covr_atom`). Every non-Matroska embed strategy in
-/// `rdlp_ffmpeg::thumbnail` stream-copies the thumbnail's source codec into the
-/// target container (see `embed_thumbnail_sync`), so any format outside this
-/// list (e.g. `webp`) must be normalized first — the target containers have no
-/// muxer tag for it.
-const EMBEDDABLE_RASTER_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png"];
 
 /// Containers that attach the thumbnail's source codec natively (Matroska) and
 /// therefore never need image normalization.
@@ -108,37 +95,48 @@ impl ThumbnailStage {
             .any(|c| c.eq_ignore_ascii_case(extension))
     }
 
-    /// Check whether `path`'s extension is already MP4/attached-pic-safe
-    /// (see `EMBEDDABLE_RASTER_EXTENSIONS`).
-    fn is_embeddable_raster(path: &Path) -> bool {
-        path.extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|ext| {
-                EMBEDDABLE_RASTER_EXTENSIONS
-                    .iter()
-                    .any(|c| c.eq_ignore_ascii_case(ext))
-            })
-    }
-
     /// Normalize `thumbnail_file` to a tracker-owned temp `.jpg` when the
     /// target container can't consume its codec directly.
     ///
     /// Every non-Matroska embed strategy stream-copies the thumbnail's source
     /// codec into the target container (see `rdlp_ffmpeg::thumbnail`), so a
-    /// codec outside `EMBEDDABLE_RASTER_EXTENSIONS` (e.g. `webp`) must be
-    /// transcoded first or the mux fails (MP4/MOV/M4A/M4V) or the `covr` atom
-    /// silently mislabels raw webp bytes as JPEG (MP4-family only). Matroska
-    /// is exempt — it attaches the source codec natively. On transcode
-    /// failure, falls back to the original thumbnail path so the caller's
-    /// existing non-fatal embed-failure handling still applies.
+    /// codec the target muxer has no tag for (e.g. `webp` in MP4) must be
+    /// transcoded first or the mux fails. Whether a tag exists is asked of
+    /// `FFmpeg` via `container_accepts_image_codec` rather than hardcoded, so
+    /// the answer always tracks the linked build instead of a list that can
+    /// drift from it. Matroska is exempt — it carries the image as a file
+    /// attachment rather than a stream, so no codec tag is involved.
+    ///
+    /// On transcode failure, falls back to the original thumbnail path so the
+    /// caller's existing non-fatal embed-failure handling still applies —
+    /// which is why downstream steps re-check the bytes rather than assuming
+    /// this returned something normalized.
     async fn normalize_thumbnail_for_embed(
         &self,
         msg: &mut PipelineMessage,
         extension: &str,
         thumbnail_file: &Path,
     ) -> PathBuf {
-        if Self::is_native_attachment_container(extension)
-            || Self::is_embeddable_raster(thumbnail_file)
+        // Matroska is checked FIRST and separately: it carries the thumbnail as
+        // an attachment, not a stream, so the muxer's stream-codec answer below
+        // is simply not the question that governs it — asking would force a
+        // needless transcode for every MKV thumbnail.
+        if Self::is_native_attachment_container(extension) {
+            return thumbnail_file.to_path_buf();
+        }
+
+        // Ask the muxer whether it can carry this image's codec, rather than
+        // consulting a hardcoded list (#525). This is the same codec-tag lookup
+        // that produced the original failure, and it reads the image's real
+        // codec — FFmpeg probes content, so a mislabeled `.jpg` holding webp is
+        // identified as webp here regardless of its name. An error (unopenable
+        // or undecodable image) answers "not accepted", so normalization, the
+        // safe direction, is the default.
+        if self
+            .ffmpeg
+            .container_accepts_image_codec(extension, thumbnail_file)
+            .await
+            .unwrap_or(false)
         {
             return thumbnail_file.to_path_buf();
         }
@@ -182,20 +180,38 @@ impl ThumbnailStage {
             #[allow(clippy::disallowed_methods)]
             let cover_bytes =
                 std::fs::read(&thumb).context("thumbnail stage: failed to read thumbnail file")?;
-            // Invariant: `normalize_thumbnail_for_embed` guarantees the covr
-            // input is an mp4ameta-supported raster (jpg/jpeg/png). Tie the check
-            // to the same predicate so a future change to the embeddable set
-            // can't silently mislabel bytes here (the original webp-as-jpeg bug).
-            debug_assert!(
-                Self::is_embeddable_raster(&thumb),
-                "write_covr_atom requires a normalized jpg/jpeg/png thumbnail: {}",
-                thumb.display()
-            );
-            let ext = thumb.extension().and_then(|e| e.to_str()).unwrap_or("");
-            let img = if ext.eq_ignore_ascii_case("png") {
-                mp4ameta::Img::png(cover_bytes)
-            } else {
-                mp4ameta::Img::jpeg(cover_bytes)
+            // Pick the covr image type from the BYTES, never the extension.
+            // The previous extension-based branch labelled anything not named
+            // `.png` as JPEG, so a `.jpg` file holding webp bytes was written
+            // into the atom tagged as JPEG — precisely the mislabel #519 set
+            // out to prevent, reachable again through #525's misnamed sidecar.
+            // A `debug_assert` on the extension could not catch it either,
+            // since the extension was the thing that lied.
+            //
+            // Content outside mp4ameta's supported rasters is refused rather
+            // than mislabeled. This is non-fatal: the FFmpeg `attached_pic`
+            // pass has already embedded the thumbnail, so skipping covr costs
+            // Windows Explorer visibility, not the thumbnail itself.
+            //
+            // The arms are listed exhaustively rather than with a catch-all so
+            // that adding a ThumbnailFormat variant fails to compile here,
+            // forcing a decision about whether mp4ameta can represent it. A
+            // string match could not do that — which is how the previous
+            // coupling to the embeddable set was lost silently.
+            let img = match rdlp_types::sniff_thumbnail_format(&cover_bytes) {
+                Some(ThumbnailFormat::Jpeg) => mp4ameta::Img::jpeg(cover_bytes),
+                Some(ThumbnailFormat::Png) => mp4ameta::Img::png(cover_bytes),
+                Some(ThumbnailFormat::Bmp) => mp4ameta::Img::bmp(cover_bytes),
+                Some(
+                    format @ (ThumbnailFormat::Gif | ThumbnailFormat::Tiff | ThumbnailFormat::WebP),
+                ) => anyhow::bail!(
+                    "thumbnail stage: covr atom cannot represent {} content",
+                    format.extension()
+                ),
+                None => anyhow::bail!(
+                    "thumbnail stage: covr atom requires a recognized image, found \
+                     unrecognized data"
+                ),
             };
             let mut tag =
                 mp4ameta::Tag::read_from_path(&media).unwrap_or_else(|_| mp4ameta::Tag::default());
@@ -342,8 +358,12 @@ impl PipelineStage for ThumbnailStage {
                 msg.tracker.replace(vec![temp_output.clone()]);
 
                 // For MP4-family: write covr atom for Windows Explorer.
-                // `embed_source` is guaranteed EMBEDDABLE_RASTER_EXTENSIONS
-                // (jpg/jpeg/png) by `normalize_thumbnail_for_embed` above.
+                // `embed_source` is USUALLY normalized by
+                // `normalize_thumbnail_for_embed` above — but not guaranteed:
+                // that helper falls back to the original file when the
+                // transcode fails. `write_covr_atom` therefore re-checks the
+                // bytes itself and refuses what mp4ameta cannot represent,
+                // rather than trusting an invariant that can be violated.
                 if Self::is_mp4_family(&extension) {
                     Self::write_covr_atom(&temp_output, &embed_source).await;
                 }
@@ -580,37 +600,6 @@ mod tests {
             !result.warnings.is_empty(),
             "expected warning about missing thumbnail"
         );
-    }
-
-    // --- is_embeddable_raster / is_native_attachment_container (bugfix/thumbnail-webp-mp4-embed) ---
-
-    #[test]
-    fn embeddable_raster_accepts_jpg_jpeg_png() {
-        assert!(ThumbnailStage::is_embeddable_raster(&PathBuf::from(
-            "/tmp/thumb.jpg"
-        )));
-        assert!(ThumbnailStage::is_embeddable_raster(&PathBuf::from(
-            "/tmp/thumb.JPEG"
-        )));
-        assert!(ThumbnailStage::is_embeddable_raster(&PathBuf::from(
-            "/tmp/thumb.png"
-        )));
-    }
-
-    /// Negative: webp (the reported bug — xHamster and others serve webp
-    /// thumbnails) and an extensionless path are NOT already embeddable —
-    /// they must go through `normalize_thumbnail_for_embed`.
-    #[test]
-    fn embeddable_raster_rejects_webp_and_other() {
-        assert!(!ThumbnailStage::is_embeddable_raster(&PathBuf::from(
-            "/tmp/thumb.webp"
-        )));
-        assert!(!ThumbnailStage::is_embeddable_raster(&PathBuf::from(
-            "/tmp/thumb.gif"
-        )));
-        assert!(!ThumbnailStage::is_embeddable_raster(&PathBuf::from(
-            "/tmp/thumb"
-        )));
     }
 
     #[test]
