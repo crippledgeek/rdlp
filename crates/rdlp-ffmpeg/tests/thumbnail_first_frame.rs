@@ -21,12 +21,17 @@ use std::process::Command;
 
 use rdlp_ffmpeg::FFmpegRunner;
 
-fn ffmpeg_available() -> bool {
-    Command::new("ffmpeg")
-        .arg("-version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
+/// Both `ffmpeg` (fixture build + pixel decode) and `ffprobe` (frame count) are
+/// used by this test, so the skip guard must confirm both — else a host with
+/// only one would fail the test instead of self-skipping.
+fn ffmpeg_cli_available() -> bool {
+    ["ffmpeg", "ffprobe"].iter().all(|bin| {
+        Command::new(bin)
+            .arg("-version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    })
 }
 
 /// Build a 2-frame animated GIF whose frames are distinguishable solid colors:
@@ -135,8 +140,8 @@ fn dominant_rgb(path: &Path) -> Option<(u8, u8, u8)> {
 /// one frame, and that frame is red (frame 0), not blue (frame 1).
 #[tokio::test]
 async fn multi_frame_gif_normalizes_to_first_frame_only() {
-    if !ffmpeg_available() {
-        eprintln!("[SKIP] ffmpeg CLI not available");
+    if !ffmpeg_cli_available() {
+        eprintln!("[SKIP] ffmpeg/ffprobe CLI not available");
         return;
     }
     let dir = tempfile::TempDir::new().unwrap();
