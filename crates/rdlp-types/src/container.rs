@@ -23,6 +23,9 @@ pub enum ContainerFormat {
     /// Apple `QuickTime`, good for editing
     #[strum(serialize = "mov", serialize = "quicktime")]
     Mov,
+    /// MPEG-4 Part 14, video variant (iTunes video) — audio-only sibling is [`Self::M4a`]
+    #[strum(serialize = "m4v")]
+    M4v,
     /// MPEG Transport Stream, broadcast/streaming
     #[strum(serialize = "ts", serialize = "mpegts")]
     Ts,
@@ -109,6 +112,7 @@ impl ContainerFormat {
             Self::Mkv => "mkv",
             Self::WebM => "webm",
             Self::Mov => "mov",
+            Self::M4v => "m4v",
             Self::Ts => "ts",
             Self::Flv => "flv",
             Self::Avi => "avi",
@@ -140,7 +144,7 @@ impl ContainerFormat {
     #[inline]
     #[must_use]
     pub const fn supports_faststart(&self) -> bool {
-        matches!(self, Self::Mp4 | Self::Mov | Self::F4v)
+        matches!(self, Self::Mp4 | Self::Mov | Self::M4v | Self::F4v)
     }
 
     /// Whether this is an audio-only container format.
@@ -170,11 +174,12 @@ mod tests {
     use super::*;
 
     /// All variants for exhaustive testing.
-    const ALL_FORMATS: [ContainerFormat; 28] = [
+    const ALL_FORMATS: [ContainerFormat; 29] = [
         ContainerFormat::Mp4,
         ContainerFormat::Mkv,
         ContainerFormat::WebM,
         ContainerFormat::Mov,
+        ContainerFormat::M4v,
         ContainerFormat::Ts,
         ContainerFormat::Flv,
         ContainerFormat::Avi,
@@ -291,9 +296,28 @@ mod tests {
     fn test_faststart() {
         assert!(ContainerFormat::Mp4.supports_faststart());
         assert!(ContainerFormat::Mov.supports_faststart());
+        assert!(ContainerFormat::M4v.supports_faststart());
         assert!(ContainerFormat::F4v.supports_faststart());
         assert!(!ContainerFormat::Mkv.supports_faststart());
         assert!(!ContainerFormat::Avi.supports_faststart());
+    }
+
+    /// `m4v` (MPEG-4 video) parses to its own variant rather than silently
+    /// aliasing `Mp4`/`Mov` — it is a distinct extension already used by the
+    /// MP4-family thumbnail-embed strategy (`rdlp-postprocess`,
+    /// `rdlp-ffmpeg`) before this variant existed.
+    #[test]
+    fn test_m4v_parses_to_its_own_variant() {
+        assert_eq!(
+            "m4v".parse::<ContainerFormat>().unwrap(),
+            ContainerFormat::M4v
+        );
+        assert_eq!(
+            "M4V".parse::<ContainerFormat>().unwrap(),
+            ContainerFormat::M4v
+        );
+        assert_eq!(ContainerFormat::M4v.as_ext(), "m4v");
+        assert!(!ContainerFormat::M4v.is_audio_only());
     }
 
     #[test]
