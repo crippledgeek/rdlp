@@ -159,6 +159,10 @@ impl ThumbnailStage {
                 normalized
             }
             Err(e) => {
+                // Mark the (possibly partial) temp jpg for cleanup on the success
+                // path too, mirroring the auto-remux-failure path below — otherwise
+                // a failed-transcode partial lingers until the TempRegistry sweep.
+                msg.tracker.mark_temp(normalized);
                 warn!("ThumbnailStage: thumbnail normalization to jpg failed, using original: {e}");
                 msg.warnings
                     .push(format!("Thumbnail normalization to jpg failed: {e}"));
@@ -179,6 +183,15 @@ impl ThumbnailStage {
             #[allow(clippy::disallowed_methods)]
             let cover_bytes =
                 std::fs::read(&thumb).context("thumbnail stage: failed to read thumbnail file")?;
+            // Invariant: `normalize_thumbnail_for_embed` guarantees the covr
+            // input is an mp4ameta-supported raster (jpg/jpeg/png). Tie the check
+            // to the same predicate so a future change to the embeddable set
+            // can't silently mislabel bytes here (the original webp-as-jpeg bug).
+            debug_assert!(
+                Self::is_embeddable_raster(&thumb),
+                "write_covr_atom requires a normalized jpg/jpeg/png thumbnail: {}",
+                thumb.display()
+            );
             let ext = thumb.extension().and_then(|e| e.to_str()).unwrap_or("");
             let img = if ext.eq_ignore_ascii_case("png") {
                 mp4ameta::Img::png(cover_bytes)

@@ -35,6 +35,28 @@ use super::super::{FFmpegRunner, ensure_init};
 /// JPEG output and keeps a thumbnail-sized image small without visible blocking.
 const THUMBNAIL_MJPEG_QSCALE: i32 = 3;
 
+/// Maximum accepted thumbnail edge length, in pixels (decompression-bomb guard).
+///
+/// Thumbnails are attacker-controlled (served by the video site) and the
+/// download layer caps only the *encoded* file size (`MAX_THUMBNAIL_BYTES`),
+/// not decoded dimensions — a small, size-cap-compliant still image can declare
+/// an enormous canvas that decodes to a multi-gigabyte raw frame. 8192 is
+/// generous for any legitimate cover image (4K is 3840 wide) while bounding the
+/// decode buffer to a safe size. Oversized inputs are rejected before any frame
+/// buffer is allocated; `ThumbnailStage` then falls back to the original file
+/// (the embed is non-fatal).
+const MAX_THUMBNAIL_DIMENSION: u32 = 8192;
+
+/// Reject a thumbnail whose declared canvas exceeds [`MAX_THUMBNAIL_DIMENSION`]
+/// on either axis, before any decode buffer is allocated.
+fn ensure_thumbnail_dimensions(width: u32, height: u32) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        width <= MAX_THUMBNAIL_DIMENSION && height <= MAX_THUMBNAIL_DIMENSION,
+        "thumbnail dimensions {width}x{height} exceed the {MAX_THUMBNAIL_DIMENSION}px cap"
+    );
+    Ok(())
+}
+
 impl FFmpegRunner {
     /// Normalize a still image to baseline MJPEG (`.jpg`) on a background thread.
     ///
@@ -77,6 +99,11 @@ impl FFmpegRunner {
 
         let dec_ctx = ffmpeg_the_third::codec::context::Context::from_parameters(ist.parameters())?;
         let mut decoder = dec_ctx.decoder().video()?;
+
+        // Decompression-bomb guard: reject an oversized declared canvas before
+        // any frame buffer is allocated (the thumbnail is attacker-controlled).
+        ensure_thumbnail_dimensions(decoder.width(), decoder.height())
+            .with_context(|| format!("thumbnail {} rejected", src.display()))?;
 
         let mut octx = ffmpeg_the_third::format::output(dst)
             .map_err(PostProcessError::from)
@@ -201,5 +228,30 @@ impl FFmpegRunner {
             .context("failed to write output trailer for image normalization")?;
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MAX_THUMBNAIL_DIMENSION, ensure_thumbnail_dimensions};
+
+    #[test]
+    fn dimensions_at_or_below_cap_accepted() {
+        assert!(ensure_thumbnail_dimensions(1, 1).is_ok());
+        // The cap itself (both axes) is accepted — pins the boundary on the pass side.
+        assert!(
+            ensure_thumbnail_dimensions(MAX_THUMBNAIL_DIMENSION, MAX_THUMBNAIL_DIMENSION).is_ok()
+        );
+    }
+
+    #[test]
+    fn dimensions_one_over_cap_rejected() {
+        // cap + 1 on either axis is rejected — a `>=`/`>` off-by-one flips exactly one.
+        assert!(ensure_thumbnail_dimensions(MAX_THUMBNAIL_DIMENSION + 1, 1).is_err());
+        assert!(ensure_thumbnail_dimensions(1, MAX_THUMBNAIL_DIMENSION + 1).is_err());
+        assert!(
+            ensure_thumbnail_dimensions(MAX_THUMBNAIL_DIMENSION + 1, MAX_THUMBNAIL_DIMENSION + 1)
+                .is_err()
+        );
     }
 }
