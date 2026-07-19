@@ -79,13 +79,19 @@ impl FFmpegRunner {
     /// since a needless transcode costs a little work while a wrong answer
     /// costs the embed.
     ///
-    /// That query is authoritative for tag-table muxers (MP4/MOV) but
-    /// *under-reports* elsewhere: muxers that answer through a `query_codec`
-    /// callback (mp3 returns the `APIC` tag rather than `1`) or that carry
-    /// neither mechanism fall through to `AVERROR_PATCHWELCOME`, reporting
-    /// "cannot store" for images they demonstrably do store. JPEG and PNG are
-    /// therefore accepted outright as a verified baseline, and the query serves
-    /// only to widen that — never to narrow it below what is known to work.
+    /// That query is authoritative for muxers with a `query_codec` callback
+    /// (mp3's callback answers correctly once `> 0` is treated as
+    /// "supported", per the paragraph above) or a matching codec-tag-table
+    /// entry (MP4/MOV). It *under-reports* only for muxers that have
+    /// **neither** mechanism for the codec in question — no `query_codec`
+    /// callback and no codec-tag-table entry, e.g. `flac`'s bare-fourcc
+    /// muxer for MJPEG, or `m4a`'s tag table having no entry for MJPEG/PNG —
+    /// where `avformat_query_codec` falls back to a plain "unsupported"
+    /// answer (`0`, or `AVERROR_PATCHWELCOME` when even that fallback finds
+    /// nothing to match against) for images they demonstrably do store.
+    /// JPEG and PNG are therefore accepted outright as a verified baseline,
+    /// and the query serves only to widen that — never to narrow it below
+    /// what is known to work.
     ///
     /// # Errors
     ///
