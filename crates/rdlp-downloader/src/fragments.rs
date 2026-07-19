@@ -505,7 +505,7 @@ async fn fetch_with_optional_cancel(
 
 /// Fetch `url`, optionally as an HTTP byte range.
 ///
-/// The `byte_range` tuple is `(start, end_exclusive)` and is converted to RFC 7233
+/// The `byte_range` tuple is `(start, end_exclusive)` and is converted to RFC 9110
 /// `Range: bytes=start-end_inclusive` (subtract 1 for HTTP's inclusive end).
 ///
 /// `format_origin` enforces the same-origin header gate: `http.headers()` are
@@ -533,7 +533,7 @@ async fn fetch_with_optional_range(
         req = req.headers(http.headers());
     }
 
-    // `byte_range` is `(start, end_exclusive)`; RFC 7233's `Range` header and
+    // `byte_range` is `(start, end_exclusive)`; RFC 9110's `Range` header and
     // `RequestedSpan` are both inclusive, so `end_exclusive` is converted once
     // here and the same `end_inclusive` is reused below to build the span that
     // validates the response — never recomputed a second way.

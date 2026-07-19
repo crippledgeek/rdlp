@@ -1536,7 +1536,7 @@ fn extrapolate_total_none_on_multiplication_overflow() {
 // land in the merged output's chunk slot. `fetch_with_optional_range` sends the
 // same `Range` header for HLS BYTERANGE / DASH mediaRange fragments but only
 // gated on `resp.status().is_success()` — a server that ignores Range (legal
-// per RFC 9110 §14.4 / RFC 7233) replies 200 with the WHOLE resource, and the
+// per RFC 9110 §14.2) replies 200 with the WHOLE resource, and the
 // unvalidated body is written into a slot sized for one fragment.
 //
 // These tests drive the fix through the fragment-list entry point
@@ -1576,9 +1576,15 @@ async fn ranged_fragment_200_full_body_is_rejected() {
     let res =
         download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
             .await;
+    let err = res.expect_err(
+        "a plain 200 answering a ranged request must be rejected, not accepted as the fragment body",
+    );
+    // Discriminate: without this the test would also pass if the download
+    // failed for an unrelated reason, making it a much weaker guard.
+    let msg = err.to_string();
     assert!(
-        res.is_err(),
-        "a plain 200 answering a ranged request must be rejected, not accepted as the fragment body"
+        msg.contains("got HTTP 200") && msg.contains("expected 206"),
+        "must fail on the status check specifically, got: {msg}"
     );
 }
 
@@ -1603,9 +1609,13 @@ async fn ranged_fragment_content_range_wrong_span_is_rejected() {
     let res =
         download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
             .await;
+    let err = res.expect_err(
+        "a 206 whose Content-Range encloses a different span than requested must be rejected",
+    );
+    let msg = err.to_string();
     assert!(
-        res.is_err(),
-        "a 206 whose Content-Range encloses a different span than requested must be rejected"
+        msg.contains("Content-Range bytes 0-1023") && msg.contains("different span"),
+        "must fail on the span-equality check specifically, got: {msg}"
     );
 }
 
@@ -1630,9 +1640,13 @@ async fn ranged_fragment_short_body_is_rejected() {
     let res =
         download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
             .await;
+    let err = res.expect_err(
+        "a 206 whose body is shorter than its own Content-Range promise must be rejected",
+    );
+    let msg = err.to_string();
     assert!(
-        res.is_err(),
-        "a 206 whose body is shorter than its own Content-Range promise must be rejected"
+        msg.contains("delivered 512 bytes") && msg.contains("expected exactly 1024"),
+        "must fail on the body-length check specifically, and name both counts, got: {msg}"
     );
 }
 
@@ -1657,9 +1671,13 @@ async fn ranged_fragment_over_long_body_is_rejected() {
     let res =
         download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
             .await;
+    let err = res.expect_err(
+        "a 206 whose body is longer than its own Content-Range promise must be rejected",
+    );
+    let msg = err.to_string();
     assert!(
-        res.is_err(),
-        "a 206 whose body is longer than its own Content-Range promise must be rejected"
+        msg.contains("delivered 2048 bytes") && msg.contains("expected exactly 1024"),
+        "must fail on the body-length check specifically, and name both counts, got: {msg}"
     );
 }
 

@@ -78,8 +78,9 @@ pub(crate) use rdlp_http::ProbeResult;
 ///
 /// A `200` means the server ignored `Range` — permitted by §14.2 — and the
 /// content is the WHOLE representation, not the requested span. Writing such a
-/// body into a chunk's offset slot is the corruption in #526, so the parallel
-/// chunk path accepts this status and no other.
+/// body at a position computed for one span is the corruption in #526 (parallel
+/// chunk path) and #564 (HLS/DASH fragment path), so every ranged fetch accepts
+/// this status and no other.
 const HTTP_PARTIAL_CONTENT: u16 = 206;
 
 /// A parsed, validated single-part `Content-Range` response header.
@@ -178,7 +179,7 @@ pub(crate) fn parse_content_range_total(headers: &wreq::header::HeaderMap) -> Op
     ContentRange::from_headers(headers).and_then(|range| range.complete_length)
 }
 
-/// The inclusive byte span a ranged chunk fetch asked the server for.
+/// The inclusive byte span a ranged fetch asked the server for.
 ///
 /// Both bounds are inclusive, matching the `Range: bytes=start-end` request
 /// form and RFC 9110 §14.4's `incl-range`, so the span covers
@@ -213,14 +214,20 @@ impl RequestedSpan {
 }
 
 /// Confirm a ranged response actually carries the requested span before any of
-/// its bytes are written into the chunk's offset slot in the merged output.
+/// its bytes are written into the output.
 ///
-/// A parallel chunk is concatenated at a fixed position, so a response that
-/// encloses a different span silently relocates every byte after it — the
-/// ~517 MB interior displacement in #526. RFC 9110 §15.3.7 places this duty on
-/// the client: "A client MUST inspect a 206 response's Content-Type and
-/// Content-Range field(s) to determine what parts are enclosed and whether
-/// additional requests are needed."
+/// Two callers, both writing a ranged body at a position they computed in
+/// advance:
+/// - the parallel chunk downloader ([`download_chunk_with_retry`]), which
+///   concatenates each chunk at a fixed offset in the merged output;
+/// - the HLS/DASH fragment fetcher (`fragments::fetch_with_optional_range`),
+///   which appends `#EXT-X-BYTERANGE` / `mediaRange` bodies sequentially (#564).
+///
+/// In both cases a response enclosing a different span silently relocates every
+/// byte after it — the ~517 MB interior displacement in #526. RFC 9110 §15.3.7
+/// places this duty on the client: "A client MUST inspect a 206 response's
+/// Content-Type and Content-Range field(s) to determine what parts are enclosed
+/// and whether additional requests are needed."
 ///
 /// Only `Content-Range` is inspected here. The Content-Type half of that
 /// sentence exists to distinguish a single-part response from a
@@ -241,16 +248,16 @@ pub(crate) fn validate_range_response(
 
     // §14.2 permits a server to ignore Range; the reply is then a 200 carrying
     // the WHOLE representation. Accepting it here is what wrote whole-file
-    // content into a chunk slot.
+    // content into a slot sized for one span.
     let status = response.status().as_u16();
     if status != HTTP_PARTIAL_CONTENT {
         return Err(RdlpError::Download {
             url: redacted(),
             message: format!(
-                "ranged chunk request for bytes {}-{} got HTTP {status}, expected \
+                "ranged request for bytes {}-{} got HTTP {status}, expected \
                  {HTTP_PARTIAL_CONTENT} (Partial Content). The server ignored the Range \
                  header, so the body is the whole resource rather than the requested span \
-                 and cannot be placed at this chunk's offset.",
+                 and cannot be placed at this position in the output.",
                 span.start, span.end
             ),
         });
@@ -262,7 +269,7 @@ pub(crate) fn validate_range_response(
         return Err(RdlpError::Download {
             url: redacted(),
             message: format!(
-                "ranged chunk request for bytes {}-{} got a {HTTP_PARTIAL_CONTENT} response \
+                "ranged request for bytes {}-{} got a {HTTP_PARTIAL_CONTENT} response \
                  with a missing, malformed, or invalid Content-Range header; the enclosed \
                  span cannot be verified.",
                 span.start, span.end
@@ -279,9 +286,9 @@ pub(crate) fn validate_range_response(
         return Err(RdlpError::Network {
             url: redacted(),
             message: format!(
-                "ranged chunk request for bytes {}-{} got Content-Range bytes {}-{}; the \
+                "ranged request for bytes {}-{} got Content-Range bytes {}-{}; the \
                  response encloses a different span than requested and would corrupt the \
-                 output at this chunk's offset.",
+                 output at this position.",
                 span.start, span.end, range.first_pos, range.last_pos
             ),
         });
