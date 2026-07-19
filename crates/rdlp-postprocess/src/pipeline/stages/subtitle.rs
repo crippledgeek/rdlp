@@ -11,7 +11,7 @@ use log::{debug, warn};
 
 use rdlp_ffmpeg::FFmpegRunner;
 
-use crate::pipeline::{PipelineMessage, PipelineStage};
+use crate::pipeline::{DiscoveredSidecar, PipelineMessage, PipelineStage, SidecarOwnership};
 
 /// Subtitle file extensions to search for.
 const SUBTITLE_EXTENSIONS: &[&str] = &["srt", "vtt", "ass", "ssa", "lrc"];
@@ -66,7 +66,10 @@ impl SubtitleStage {
     ///
     /// Uses `tokio::fs::read_dir` so the async runtime thread isn't stalled
     /// by blocking directory-scan syscalls on slow / network filesystems.
-    async fn find_subtitle_files(media_file: &Path, original_stem: &str) -> Vec<(String, PathBuf)> {
+    async fn find_subtitle_files(
+        media_file: &Path,
+        original_stem: &str,
+    ) -> Vec<(String, DiscoveredSidecar)> {
         let Some(parent) = media_file.parent() else {
             return Vec::new();
         };
@@ -126,7 +129,7 @@ impl SubtitleStage {
                     };
 
                     if !lang.is_empty() {
-                        result.push((lang.to_string(), path.clone()));
+                        result.push((lang.to_string(), DiscoveredSidecar::new(path.clone())));
                         break;
                     }
                 }
@@ -203,7 +206,7 @@ impl PipelineStage for SubtitleStage {
         for (lang, sub_path) in &subtitle_files {
             debug!(
                 "SubtitleStage: pending-implementation. lang={lang} codec={codec} path={}",
-                sub_path.display()
+                sub_path.path().display()
             );
         }
 
@@ -214,10 +217,17 @@ impl PipelineStage for SubtitleStage {
             langs.join(", "),
         ));
 
-        // Mark subtitle files as temps unless write_subtitles is set.
+        // Mark subtitle files as temps unless write_subtitles is set — and
+        // never when they are the user's own files sitting next to a borrowed
+        // input. `find_subtitle_files` discovers them by stem-matching, which
+        // cannot tell an rdlp-fetched sidecar from one the user already had;
+        // see `SidecarOwnership`. Same defect the thumbnail sidecar had.
         if !msg.config.write_subtitles {
-            for (_, path) in subtitle_files {
-                msg.tracker.mark_temp(path);
+            let ownership = SidecarOwnership::of(&msg);
+            for (_, sidecar) in subtitle_files {
+                if let Some(path) = sidecar.into_disposable(ownership) {
+                    msg.tracker.mark_temp(path);
+                }
             }
         }
 

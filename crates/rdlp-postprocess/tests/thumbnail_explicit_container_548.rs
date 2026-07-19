@@ -14,73 +14,16 @@
 //! fixtures), mirroring `thumbnail_webp_mp4_embed.rs`.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::disallowed_methods)]
 
-use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::Arc;
 
 use tempfile::TempDir;
-use tokio::sync::oneshot;
-use tokio_util::sync::CancellationToken;
 
-use rdlp_postprocess::pipeline::{FileTracker, PipelineMessage, PipelineStage, TempRegistry};
+use rdlp_postprocess::pipeline::PipelineStage;
 use rdlp_postprocess::{FFmpegRunner, PostProcess, ThumbnailStage};
-use rdlp_types::{ContainerFormat, InfoDict};
+use rdlp_types::ContainerFormat;
 
-fn ffmpeg_cli_available() -> bool {
-    Command::new("ffmpeg")
-        .arg("-version")
-        .output()
-        .is_ok_and(|o| o.status.success())
-}
-
-/// Build a 1-frame H.264 fixture via the system `ffmpeg` CLI, muxed
-/// explicitly as `muxer` (the output extension alone is ambiguous for some
-/// containers, e.g. `.f4v`, so the muxer name is passed via `-f`).
-fn build_video_fixture(path: &Path, muxer: &str) -> Result<(), ()> {
-    let ok = Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "testsrc=d=1:s=320x240",
-            "-c:v",
-            "libx264",
-            "-pix_fmt",
-            "yuv420p",
-            "-f",
-            muxer,
-            path.to_str().unwrap(),
-        ])
-        .status()
-        .is_ok_and(|s| s.success());
-    if ok { Ok(()) } else { Err(()) }
-}
-
-fn make_msg(files: Vec<PathBuf>, config: PostProcess) -> PipelineMessage {
-    let reg = Arc::new(TempRegistry::new());
-    let (error_tx, _) = oneshot::channel();
-    PipelineMessage {
-        info: InfoDict::new(
-            "id".to_string(),
-            "Test Video".to_string(),
-            "TestExtractor".to_string(),
-            "https://example.com".to_string(),
-        ),
-        tracker: FileTracker::new(files, reg),
-        config: Arc::new(config),
-        original_stem: "video".to_string(),
-        is_hls: false,
-        verbose: false,
-        callback_factory: None,
-        error_tx: Some(error_tx),
-        warnings: Vec::new(),
-        encoding_tool: None,
-        cancel: CancellationToken::new(),
-    }
-}
+mod common;
+use common::{FIXTURE_FAILED, MsgOptions, build_video_fixture, ffmpeg_cli_available, make_msg};
 
 /// Positive + regression: an explicit `--remux=f4v` container must be KEPT
 /// (never auto-remuxed to mp4), the embed must be skipped, and a warning
@@ -95,10 +38,7 @@ async fn process_keeps_explicit_f4v_container_and_skips_embed() {
     }
     let dir = TempDir::new().unwrap();
     let media = dir.path().join("video.f4v");
-    if build_video_fixture(&media, "flv").is_err() {
-        eprintln!("[SKIP] fixture build failed");
-        return;
-    }
+    build_video_fixture(&media, "flv").expect(FIXTURE_FAILED);
 
     let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
     let stage = ThumbnailStage::new(ffmpeg);
@@ -108,7 +48,7 @@ async fn process_keeps_explicit_f4v_container_and_skips_embed() {
         remux_container: Some(ContainerFormat::F4v),
         ..PostProcess::default()
     };
-    let msg = make_msg(vec![media.clone()], config);
+    let msg = make_msg(vec![media.clone()], config, MsgOptions::default());
 
     let result = stage.process(msg).await.expect("non-fatal stage");
 
@@ -140,10 +80,7 @@ async fn process_keeps_explicit_ts_container_and_skips_embed() {
     }
     let dir = TempDir::new().unwrap();
     let media = dir.path().join("video.ts");
-    if build_video_fixture(&media, "mpegts").is_err() {
-        eprintln!("[SKIP] fixture build failed");
-        return;
-    }
+    build_video_fixture(&media, "mpegts").expect(FIXTURE_FAILED);
 
     let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
     let stage = ThumbnailStage::new(ffmpeg);
@@ -153,7 +90,7 @@ async fn process_keeps_explicit_ts_container_and_skips_embed() {
         remux_container: Some(ContainerFormat::Ts),
         ..PostProcess::default()
     };
-    let msg = make_msg(vec![media.clone()], config);
+    let msg = make_msg(vec![media.clone()], config, MsgOptions::default());
 
     let result = stage.process(msg).await.expect("non-fatal stage");
 
@@ -186,10 +123,7 @@ async fn process_keeps_explicit_container_and_cleans_up_sidecar_thumbnail() {
     }
     let dir = TempDir::new().unwrap();
     let media = dir.path().join("video.f4v");
-    if build_video_fixture(&media, "flv").is_err() {
-        eprintln!("[SKIP] fixture build failed");
-        return;
-    }
+    build_video_fixture(&media, "flv").expect(FIXTURE_FAILED);
     // Real sidecar thumbnail discoverable via original_stem ("video").
     let thumb = dir.path().join("video.jpg");
     std::fs::write(&thumb, b"fake-jpg-bytes").unwrap();
@@ -203,7 +137,7 @@ async fn process_keeps_explicit_container_and_cleans_up_sidecar_thumbnail() {
         write_thumbnail: false,
         ..PostProcess::default()
     };
-    let msg = make_msg(vec![media.clone()], config);
+    let msg = make_msg(vec![media.clone()], config, MsgOptions::default());
 
     let mut result = stage.process(msg).await.expect("non-fatal stage");
     assert_eq!(
@@ -231,10 +165,7 @@ async fn process_keeps_explicit_container_and_retains_sidecar_with_write_thumbna
     }
     let dir = TempDir::new().unwrap();
     let media = dir.path().join("video.f4v");
-    if build_video_fixture(&media, "flv").is_err() {
-        eprintln!("[SKIP] fixture build failed");
-        return;
-    }
+    build_video_fixture(&media, "flv").expect(FIXTURE_FAILED);
     let thumb = dir.path().join("video.jpg");
     std::fs::write(&thumb, b"fake-jpg-bytes").unwrap();
 
@@ -247,7 +178,7 @@ async fn process_keeps_explicit_container_and_retains_sidecar_with_write_thumbna
         write_thumbnail: true,
         ..PostProcess::default()
     };
-    let msg = make_msg(vec![media.clone()], config);
+    let msg = make_msg(vec![media.clone()], config, MsgOptions::default());
 
     let mut result = stage.process(msg).await.expect("non-fatal stage");
     result.tracker.cleanup();
@@ -274,10 +205,7 @@ async fn process_auto_remuxes_ts_when_explicit_container_differs_from_current() 
     }
     let dir = TempDir::new().unwrap();
     let media = dir.path().join("video.ts");
-    if build_video_fixture(&media, "mpegts").is_err() {
-        eprintln!("[SKIP] fixture build failed");
-        return;
-    }
+    build_video_fixture(&media, "mpegts").expect(FIXTURE_FAILED);
 
     let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
     let stage = ThumbnailStage::new(ffmpeg);
@@ -290,7 +218,7 @@ async fn process_auto_remuxes_ts_when_explicit_container_differs_from_current() 
         remux_container: Some(ContainerFormat::Mkv),
         ..PostProcess::default()
     };
-    let msg = make_msg(vec![media], config);
+    let msg = make_msg(vec![media], config, MsgOptions::default());
 
     let result = stage.process(msg).await.expect("non-fatal stage");
 
@@ -328,10 +256,7 @@ async fn process_still_auto_remuxes_ts_to_mp4_when_no_explicit_container() {
     }
     let dir = TempDir::new().unwrap();
     let media = dir.path().join("video.ts");
-    if build_video_fixture(&media, "mpegts").is_err() {
-        eprintln!("[SKIP] fixture build failed");
-        return;
-    }
+    build_video_fixture(&media, "mpegts").expect(FIXTURE_FAILED);
 
     let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
     let stage = ThumbnailStage::new(ffmpeg);
@@ -341,7 +266,7 @@ async fn process_still_auto_remuxes_ts_to_mp4_when_no_explicit_container() {
         remux_container: None,
         ..PostProcess::default()
     };
-    let msg = make_msg(vec![media], config);
+    let msg = make_msg(vec![media], config, MsgOptions::default());
 
     let result = stage.process(msg).await.expect("non-fatal stage");
 

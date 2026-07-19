@@ -5,30 +5,22 @@
 //! decisions and every fallback is explicitly logged.
 
 use log::debug;
-use rdlp_types::ContainerFormat;
+use rdlp_types::{ContainerFormat, ContainerRequest, ContainerSource};
 use std::path::{Path, PathBuf};
-
-/// How the container format was determined.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ContainerSource {
-    /// User explicitly set via `--remux=<container>`.
-    RemuxConfig,
-    /// User explicitly set `postprocess.merge_output_format`.
-    ///
-    /// There is no CLI flag for this: it is settable only from the config TOML
-    /// (`[postprocess] merge_output_format = "<container>"`) or by an API caller
-    /// constructing [`rdlp_types::PostProcess`] directly.
-    MergeConfig,
-    /// Inferred from the output file's extension (reflects format selection).
-    FileExtension,
-    /// No user preference; fell back to a safe default.
-    Fallback,
-}
 
 /// A container format with provenance tracking.
 ///
-/// Every container decision flows through [`resolve()`](Self::resolve),
-/// which applies the precedence rules and logs fallbacks.
+/// The download/merge container decision flows through
+/// [`resolve()`](Self::resolve), which applies the precedence rules and logs
+/// fallbacks.
+///
+/// NOT every container decision in the codebase: post-processing stages ask
+/// [`rdlp_types::PostProcess::explicit_container`] instead, whose chain also
+/// covers the recode targets this one does not (they are irrelevant here — a
+/// recode happens after the download container is already chosen). The two
+/// share [`ContainerSource`]/[`ContainerRequest`] so the provenance vocabulary
+/// is one definition, but they answer different questions and their precedence
+/// deliberately differs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResolvedContainer {
     /// The resolved container format.
@@ -50,7 +42,7 @@ impl ResolvedContainer {
         if let Some(c) = config.postprocess.remux_container {
             return Self {
                 format: c,
-                source: ContainerSource::RemuxConfig,
+                source: ContainerSource::Requested(ContainerRequest::Remux),
             };
         }
 
@@ -58,7 +50,7 @@ impl ResolvedContainer {
         if let Some(c) = config.postprocess.merge_output_format {
             return Self {
                 format: c,
-                source: ContainerSource::MergeConfig,
+                source: ContainerSource::Requested(ContainerRequest::MergeOutputFormat),
             };
         }
 
@@ -139,7 +131,10 @@ mod tests {
         let path = PathBuf::from("/tmp/video.webm");
         let r = ResolvedContainer::resolve(&config, Some(&path));
         assert_eq!(r.format, ContainerFormat::Mkv);
-        assert_eq!(r.source, ContainerSource::RemuxConfig);
+        assert_eq!(
+            r.source,
+            ContainerSource::Requested(ContainerRequest::Remux)
+        );
     }
 
     #[test]
@@ -149,7 +144,10 @@ mod tests {
         let path = PathBuf::from("/tmp/video.mp4");
         let r = ResolvedContainer::resolve(&config, Some(&path));
         assert_eq!(r.format, ContainerFormat::Mkv);
-        assert_eq!(r.source, ContainerSource::MergeConfig);
+        assert_eq!(
+            r.source,
+            ContainerSource::Requested(ContainerRequest::MergeOutputFormat)
+        );
     }
 
     #[test]
@@ -184,7 +182,10 @@ mod tests {
         config.postprocess.merge_output_format = Some(ContainerFormat::Mkv);
         let r = ResolvedContainer::resolve(&config, None);
         assert_eq!(r.format, ContainerFormat::Mkv);
-        assert_eq!(r.source, ContainerSource::MergeConfig);
+        assert_eq!(
+            r.source,
+            ContainerSource::Requested(ContainerRequest::MergeOutputFormat)
+        );
     }
 
     #[test]

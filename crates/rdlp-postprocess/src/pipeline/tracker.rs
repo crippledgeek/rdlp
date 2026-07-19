@@ -166,6 +166,28 @@ impl FileTracker {
         false
     }
 
+    /// Whether this pipeline was handed any borrowed (user-owned) input at
+    /// all — i.e. whether it is post-processing a pre-existing local file
+    /// rather than something rdlp downloaded.
+    ///
+    /// Distinct from [`is_borrowed`], which asks about ONE path. By the time a
+    /// late stage runs, the borrowed input has usually been replaced by a
+    /// derived file (`RemuxStage` turns the user's `clip.mp4` into an
+    /// rdlp-created `clip.ts`), so `is_borrowed(current_file)` is `false` even
+    /// though the run as a whole is operating inside the user's own directory
+    /// on the user's own files. Deciding sidecar ownership needs THIS question,
+    /// not the per-path one — asking the per-path question deletes the user's
+    /// `clip.jpg` the moment any container-changing stage has run.
+    ///
+    /// Failure direction, if the equivalence this relies on ever breaks (a
+    /// future `keep_inputs: true` path that DOES download a thumbnail): the
+    /// sidecar leaks instead of being deleted. Leaking a temp file is the
+    /// right way to be wrong here; deleting a user's file is not.
+    #[must_use]
+    pub(crate) const fn has_borrowed_inputs(&self) -> bool {
+        !self.borrowed.is_empty()
+    }
+
     /// Promote `new_files` to `current_files`, moving the old current files
     /// into `temp_files`.
     ///
@@ -340,6 +362,49 @@ mod tests {
 
     fn test_registry() -> Arc<TempRegistry> {
         Arc::new(TempRegistry::new())
+    }
+
+    /// The download path owns everything it created, so no sidecar next to it
+    /// is user-owned.
+    #[test]
+    fn has_borrowed_inputs_is_false_for_the_download_path() {
+        let tracker = FileTracker::new(
+            vec![PathBuf::from("/tmp/v.rdlp-tmp-1.mp4")],
+            test_registry(),
+        );
+        assert!(!tracker.has_borrowed_inputs());
+    }
+
+    /// Local-file post-processing: the run started from a user's own file, so
+    /// discovered sidecars must be treated as theirs (#414 class).
+    #[test]
+    fn has_borrowed_inputs_is_true_for_a_borrowed_input() {
+        let dir = TempDir::new().unwrap();
+        let media = dir.path().join("myvideo.mp4");
+        fs::write(&media, b"x").unwrap();
+        let tracker = FileTracker::new_borrowing(vec![media], test_registry());
+        assert!(tracker.has_borrowed_inputs());
+    }
+
+    /// The predicate must stay a property of the RUN, not of the current file:
+    /// after a container-changing stage swaps the borrowed input for an
+    /// rdlp-created derivative, it must still report `true`. This is exactly
+    /// the case a per-path `is_borrowed` check gets wrong.
+    #[test]
+    fn has_borrowed_inputs_survives_replacing_the_borrowed_input() {
+        let dir = TempDir::new().unwrap();
+        let media = dir.path().join("myvideo.mp4");
+        fs::write(&media, b"x").unwrap();
+        let mut tracker = FileTracker::new_borrowing(vec![media], test_registry());
+
+        let derived = dir.path().join("myvideo.ts");
+        tracker.replace(vec![derived.clone()]);
+
+        assert!(!tracker.is_borrowed(&derived), "the derived file is rdlp's");
+        assert!(
+            tracker.has_borrowed_inputs(),
+            "but the RUN still started from a user-owned file"
+        );
     }
 
     #[test]

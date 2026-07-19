@@ -19,7 +19,7 @@ use log::{debug, info, warn};
 use rdlp_ffmpeg::{FFmpegRunner, RemuxOptions};
 use rdlp_types::{ContainerFormat, THUMBNAIL_EXTENSIONS, ThumbnailFormat, sniff_thumbnail_format};
 
-use crate::pipeline::{PipelineMessage, PipelineStage};
+use crate::pipeline::{DiscoveredSidecar, PipelineMessage, PipelineStage, SidecarOwnership};
 
 /// Embeds thumbnail into the primary current file.
 ///
@@ -41,7 +41,7 @@ impl ThumbnailStage {
     /// Searches `{parent}/{original_stem}.{ext}` for each `ext` in
     /// [`rdlp_types::THUMBNAIL_EXTENSIONS`]. Also tries the current file's stem
     /// as a fallback.
-    fn find_thumbnail(media_file: &Path, original_stem: &str) -> Option<PathBuf> {
+    fn find_thumbnail(media_file: &Path, original_stem: &str) -> Option<DiscoveredSidecar> {
         let parent = media_file.parent()?;
 
         // Try original_stem first (most accurate after UUID renames).
@@ -50,7 +50,7 @@ impl ThumbnailStage {
             .map(|ext| parent.join(format!("{original_stem}.{ext}")))
             .find(|path| path.exists())
         {
-            return Some(path);
+            return Some(DiscoveredSidecar::new(path));
         }
 
         // Fallback: try current file stem.
@@ -59,7 +59,8 @@ impl ThumbnailStage {
             return THUMBNAIL_EXTENSIONS
                 .iter()
                 .map(|ext| parent.join(format!("{current_stem}.{ext}")))
-                .find(|path| path.exists());
+                .find(|path| path.exists())
+                .map(DiscoveredSidecar::new);
         }
 
         None
@@ -90,7 +91,7 @@ impl ThumbnailStage {
     /// capability matter — `mp4ameta`'s own `ftyp` parsing
     /// (`atom/ftyp.rs:13`) only errors when the atom is entirely missing, so
     /// a `.3gp` file would very likely be accepted if this predicate were
-    /// ever consulted for one. It never is: the call site (~line 478) asks
+    /// ever consulted for one. It never is: the `write_covr_atom` call site asks
     /// this question using the POST-REMUX extension, and `ThreeGp` fails
     /// `rdlp_ffmpeg::supports_thumbnail_embed`, so any `.3gp` input is
     /// auto-remuxed to `.mp4` before `supports_covr_atom` is ever reached —
@@ -386,19 +387,29 @@ impl PipelineStage for ThumbnailStage {
         // pinned behavior.
         let supports_thumbnail = Self::supports_thumbnail(&extension);
 
-        // #548: an explicit `--remux` container must never be silently
-        // discarded by the auto-remux-to-mp4 fallback below. `remux_container`
-        // is `Some` ONLY when the user explicitly requested a container
-        // (`RemuxStage`'s own gate); `None` means rdlp picked the container
-        // itself (e.g. post-HLS `.ts` with no explicit `--remux`), where the
-        // auto-remux-to-mp4 fallback is correct and unaffected by this guard.
-        // Compared as `ContainerFormat`, never a raw extension string.
+        // #548/#551: an explicitly requested container must never be silently
+        // discarded by the auto-remux-to-mp4 fallback below. The request is
+        // resolved by `PostProcess::explicit_container` (the single source of
+        // truth for the `recode_container` > `recode_video` > `remux_container`
+        // precedence chain) — #548 keyed this guard on `remux_container` alone,
+        // which is why `--recode-video=ts` still lost its container (#551).
+        //
+        // `None` means rdlp picked the container itself (e.g. post-HLS `.ts`
+        // with no explicit flag), where the auto-remux-to-mp4 fallback is
+        // correct and unaffected by this guard.
+        //
+        // The comparison is EQUALITY against the container actually on disk,
+        // not `.is_some()`: an explicit request for a DIFFERENT container must
+        // still take the auto-remux path. Compared as `ContainerFormat`, never
+        // a raw extension string.
         if !supports_thumbnail
             && let Ok(current) = ContainerFormat::from_str(&extension)
-            && msg.config.remux_container == Some(current)
+            && let Some(explicit) = msg.config.explicit_container()
+            && explicit.format == current
         {
+            let flag = explicit.source.setting_name();
             let reason = format!(
-                "kept explicit --remux={current} container; thumbnail embed skipped \
+                "kept explicit {flag}={current} container; thumbnail embed skipped \
                  because {current} cannot carry an embedded thumbnail"
             );
             warn!("ThumbnailStage: {reason}");
@@ -406,14 +417,16 @@ impl PipelineStage for ThumbnailStage {
 
             // This early return bypasses the normal embed path below, which is
             // the ONLY other place the orchestrator-downloaded thumbnail
-            // sidecar is marked temp for cleanup (~line 522, guarded on the
+            // sidecar is marked temp for cleanup (the embed-success path's own
+            // `thumbnail_sidecar.into_disposable(..)` below, guarded on the
             // same `!write_thumbnail` condition). Without this, every run
             // that hits this guard with the default `--write-thumbnail=false`
             // leaves a stray sidecar image next to the kept-container output.
             if !msg.config.write_thumbnail
                 && let Some(sidecar) = Self::find_thumbnail(&media_file, &msg.original_stem)
+                && let Some(path) = sidecar.into_disposable(SidecarOwnership::of(&msg))
             {
-                msg.tracker.mark_temp(sidecar);
+                msg.tracker.mark_temp(path);
             }
 
             return Ok(msg);
@@ -453,7 +466,7 @@ impl PipelineStage for ThumbnailStage {
         };
 
         // Use original_stem for thumbnail discovery (per architecture constraint 5).
-        let Some(thumbnail_file) = Self::find_thumbnail(&media_file, &msg.original_stem) else {
+        let Some(thumbnail_sidecar) = Self::find_thumbnail(&media_file, &msg.original_stem) else {
             debug!(
                 "ThumbnailStage: no thumbnail file found for stem '{}'",
                 msg.original_stem
@@ -467,12 +480,12 @@ impl PipelineStage for ThumbnailStage {
 
         info!(
             "ThumbnailStage: embedding thumbnail {} into {}",
-            thumbnail_file.display(),
+            thumbnail_sidecar.path().display(),
             media_file.display()
         );
 
         let embed_source = self
-            .normalize_thumbnail_for_embed(&mut msg, &extension, &thumbnail_file)
+            .normalize_thumbnail_for_embed(&mut msg, &extension, thumbnail_sidecar.path())
             .await;
 
         let temp_output = msg.tracker.temp_path(&media_file, &extension);
@@ -531,9 +544,14 @@ impl PipelineStage for ThumbnailStage {
                     Self::write_covr_atom(&temp_output, &embed_source).await;
                 }
 
-                // Clean up thumbnail unless --write-thumbnail was requested.
-                if !msg.config.write_thumbnail {
-                    msg.tracker.mark_temp(thumbnail_file);
+                // Clean up thumbnail unless --write-thumbnail was requested —
+                // and never when it is the user's own file sitting next to a
+                // borrowed input (see `SidecarOwnership`).
+                if !msg.config.write_thumbnail
+                    && let Some(path) =
+                        thumbnail_sidecar.into_disposable(SidecarOwnership::of(&msg))
+                {
+                    msg.tracker.mark_temp(path);
                 }
             }
             Err(e) => {
@@ -541,6 +559,20 @@ impl PipelineStage for ThumbnailStage {
                 msg.warnings
                     .push(format!("Thumbnail embedding failed: {e}"));
                 msg.tracker.mark_temp(temp_output);
+
+                // The sidecar needs the same disposal as on the success path.
+                // Marking only `temp_output` here left an rdlp-downloaded
+                // thumbnail on disk whenever the embed failed — a disk leak
+                // (found by the pre-push security review of #553), relying on
+                // `TempRegistry`'s stale sweep to eventually collect it.
+                // Ownership still governs: a user's own file is retained,
+                // failure or not.
+                if !msg.config.write_thumbnail
+                    && let Some(path) =
+                        thumbnail_sidecar.into_disposable(SidecarOwnership::of(&msg))
+                {
+                    msg.tracker.mark_temp(path);
+                }
             }
         }
 
@@ -740,7 +772,7 @@ mod tests {
             let media = dir.path().join("clip.rdlp-tmp-abc123.mp4");
             let result = ThumbnailStage::find_thumbnail(&media, "clip");
             assert_eq!(
-                result,
+                result.map(|s| s.path().to_path_buf()),
                 Some(thumb),
                 "find_thumbnail must discover a .{ext} sidecar via original_stem"
             );
@@ -758,7 +790,7 @@ mod tests {
 
         let media = dir.path().join("original-title.rdlp-tmp-abc123.mp4");
         let result = ThumbnailStage::find_thumbnail(&media, "original-title");
-        assert_eq!(result, Some(thumb));
+        assert_eq!(result.map(|s| s.path().to_path_buf()), Some(thumb));
     }
 
     /// Slice 2 (#406 Task 3): `original_stem` is the CLEAN stem (marker-stripped
@@ -785,7 +817,7 @@ mod tests {
 
         let result = ThumbnailStage::find_thumbnail(&seam_media, original_stem);
         assert_eq!(
-            result,
+            result.map(|s| s.path().to_path_buf()),
             Some(thumb),
             "find_thumbnail must find My.Video.jpg via original_stem \
              even when the media file is seam-named"

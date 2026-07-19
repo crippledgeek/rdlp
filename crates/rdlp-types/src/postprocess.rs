@@ -10,6 +10,106 @@ use crate::fixup_policy::FixupPolicy;
 use crate::recode_audio_mode::RecodeAudioMode;
 use crate::vpx_deadline::VpxDeadline;
 
+/// Which configuration field asked for an output container.
+///
+/// A closed four-variant domain value, so it is an enum rather than a
+/// `&'static str` flag name (per `value-objects-by-default`): the variants are
+/// typo-proof at the call site, exhaustively matchable, and — the reason this
+/// is not merely style — they keep CLI presentation OUT of `rdlp-types`.
+/// Baking `"--recode-video"` into a foundation-layer data type would make
+/// every consumer inherit CLI spelling; the desktop GUI sets these same fields
+/// with no CLI involved, and would end up showing a user a flag they never
+/// typed. The flag string is therefore a rendering concern, produced by
+/// [`Self::setting_name`] at the boundary that actually speaks CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerRequest {
+    /// `--recode-container` / `postprocess.recode_container`.
+    RecodeContainer,
+    /// `--recode-video` / `postprocess.recode_video`.
+    RecodeVideo,
+    /// `--remux` / `postprocess.remux_container`.
+    Remux,
+    /// `postprocess.merge_output_format`. The only source with NO CLI flag —
+    /// it is settable from the config file or by an API caller (including the
+    /// desktop GUI) but not from the command line.
+    MergeOutputFormat,
+}
+
+impl ContainerRequest {
+    /// How to name this request back to an operator: the CLI flag where one
+    /// exists, else the config key.
+    ///
+    /// Deliberately NOT called `cli_flag` — `MergeOutputFormat` has no flag,
+    /// and a method promising one would have to invent a string that the user
+    /// could not actually type. Naming the config key is the honest answer,
+    /// and it is what the operator would edit to change the behaviour.
+    ///
+    /// Rendering only — see the type doc for why this is a method rather than
+    /// a stored field.
+    #[must_use]
+    pub const fn setting_name(self) -> &'static str {
+        match self {
+            Self::RecodeContainer => "--recode-container",
+            Self::RecodeVideo => "--recode-video",
+            Self::Remux => "--remux",
+            Self::MergeOutputFormat => "postprocess.merge_output_format",
+        }
+    }
+}
+
+impl std::fmt::Display for ContainerRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.setting_name())
+    }
+}
+
+/// How a container format was determined — an explicit user request, or an
+/// inference rdlp made on the user's behalf.
+///
+/// Composes with [`ContainerRequest`] rather than duplicating it: the explicit
+/// cases live in exactly one enum, and `Requested(..)` lifts that set into the
+/// wider "requested or inferred" question the orchestrator asks when picking a
+/// download/merge container. Keeping them separate is what lets
+/// [`ExplicitContainer`] be unable to hold `FileExtension` — a type that could
+/// would not be an "explicit container" at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerSource {
+    /// The user asked for this container, via the named setting.
+    Requested(ContainerRequest),
+    /// Inferred from the output file's extension (reflects format selection).
+    FileExtension,
+    /// No user preference anywhere; fell back to a safe default.
+    Fallback,
+}
+
+impl ContainerSource {
+    /// The setting an operator would edit to change this decision, or `None`
+    /// when rdlp inferred it and there is no setting to name.
+    #[must_use]
+    pub const fn setting_name(self) -> Option<&'static str> {
+        match self {
+            Self::Requested(request) => Some(request.setting_name()),
+            Self::FileExtension | Self::Fallback => None,
+        }
+    }
+}
+
+/// A container the user explicitly asked for, paired with the request that
+/// asked for it.
+///
+/// The source travels with the format so operator-facing messages can name
+/// what won the precedence chain (`--recode-video=ts`) rather than a bare
+/// container that leaves the user guessing which of their settings took
+/// effect. Mirrors yt-dlp, whose equivalent conflict message names both sides
+/// (`"--remux-video is ignored since --recode-video was given"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExplicitContainer {
+    /// Which configuration field requested this container.
+    pub source: ContainerRequest,
+    /// The requested container format.
+    pub format: ContainerFormat,
+}
+
 /// Post-processing configuration controlling `FFmpeg` transforms and file handling.
 ///
 /// This struct is the canonical post-processing config type. It is placed in
@@ -94,6 +194,57 @@ pub struct PostProcess {
     pub fixup: FixupPolicy,
 }
 
+impl PostProcess {
+    /// The container the user explicitly requested, resolved in precedence
+    /// order: `recode_container` > `recode_video` > `remux_container`.
+    /// `None` means no explicit container was requested anywhere, i.e. rdlp
+    /// is free to choose one itself.
+    ///
+    /// The recode target outranks the remux target because `RecodeStage`
+    /// (pipeline index 4) runs AFTER `RemuxStage` (index 3), so when both are
+    /// set it is the recode target that survives to the end of the pipeline.
+    /// yt-dlp resolves the same conflict the same way, clearing `remuxvideo`
+    /// with `"--remux-video is ignored since --recode-video was given"`.
+    ///
+    /// Single source of truth for this precedence chain — do NOT re-spell the
+    /// `.or()` chain at a call site. A hand-copied mirror of it in
+    /// `ThumbnailStage` is exactly what shipped #551: the guard keyed on
+    /// `remux_container` alone and silently discarded `--recode-video=ts`.
+    ///
+    /// Callers needing a hard default apply `.unwrap_or(..)` themselves —
+    /// *which* default is a per-consumer concern, and `ThumbnailStage`
+    /// genuinely wants the `None`.
+    ///
+    /// `merge_output_format` is the LOWEST-precedence arm (#554). `MergeStage`
+    /// runs at index 0, before every container-changing stage, so anything
+    /// later overrides it — which is exactly why it ranks last, by the same
+    /// later-stage-wins rule that puts recode above remux. But when nothing
+    /// later is set, the merged container IS the final container, and
+    /// discarding it is the same silent override as #551, reached through the
+    /// config file instead of a CLI flag.
+    ///
+    #[must_use]
+    pub fn explicit_container(&self) -> Option<ExplicitContainer> {
+        // Deliberately NOT a destructuring pattern: `PostProcess` has ~35
+        // fields, so binding every one to force a compile error when a field
+        // is added would fire on every unrelated addition (`recode_threads`,
+        // `loudnorm_*`, ...) — a false-positive treadmill, not a safety net.
+        // The doc-comment above is the contract; the unit tests pin the order.
+        let request = |source: ContainerRequest| move |format| ExplicitContainer { source, format };
+        self.recode_container
+            .map(request(ContainerRequest::RecodeContainer))
+            .or_else(|| {
+                self.recode_video
+                    .map(request(ContainerRequest::RecodeVideo))
+            })
+            .or_else(|| self.remux_container.map(request(ContainerRequest::Remux)))
+            .or_else(|| {
+                self.merge_output_format
+                    .map(request(ContainerRequest::MergeOutputFormat))
+            })
+    }
+}
+
 impl Default for PostProcess {
     fn default() -> Self {
         Self {
@@ -143,6 +294,170 @@ mod tests {
     #[test]
     fn default_embed_thumbnail_is_true() {
         assert!(PostProcess::default().embed_thumbnail);
+    }
+
+    // --- explicit_container precedence chain (#551) ---
+    //
+    // Each field is exercised alone (so no arm is dead), then every pairwise
+    // conflict is exercised (so the ORDER is pinned, not just the membership).
+    // A chain reordered to put `remux_container` first still passes the
+    // alone-cases; only the conflict cases catch it.
+
+    #[test]
+    fn explicit_container_is_none_when_nothing_requested() {
+        assert_eq!(PostProcess::default().explicit_container(), None);
+    }
+
+    #[test]
+    fn explicit_container_resolves_recode_container_alone() {
+        let config = PostProcess {
+            recode_container: Some(ContainerFormat::Ts),
+            ..PostProcess::default()
+        };
+        let explicit = config.explicit_container().expect("some");
+        assert_eq!(explicit.format, ContainerFormat::Ts);
+        assert_eq!(explicit.source, ContainerRequest::RecodeContainer);
+    }
+
+    #[test]
+    fn explicit_container_resolves_recode_video_alone() {
+        let config = PostProcess {
+            recode_video: Some(ContainerFormat::Mkv),
+            ..PostProcess::default()
+        };
+        let explicit = config.explicit_container().expect("some");
+        assert_eq!(explicit.format, ContainerFormat::Mkv);
+        assert_eq!(explicit.source, ContainerRequest::RecodeVideo);
+    }
+
+    #[test]
+    fn explicit_container_resolves_remux_container_alone() {
+        let config = PostProcess {
+            remux_container: Some(ContainerFormat::F4v),
+            ..PostProcess::default()
+        };
+        let explicit = config.explicit_container().expect("some");
+        assert_eq!(explicit.format, ContainerFormat::F4v);
+        assert_eq!(explicit.source, ContainerRequest::Remux);
+    }
+
+    #[test]
+    fn recode_container_outranks_recode_video() {
+        let config = PostProcess {
+            recode_container: Some(ContainerFormat::Ts),
+            recode_video: Some(ContainerFormat::Mkv),
+            ..PostProcess::default()
+        };
+        let explicit = config.explicit_container().expect("some");
+        assert_eq!(explicit.format, ContainerFormat::Ts);
+        assert_eq!(explicit.source, ContainerRequest::RecodeContainer);
+    }
+
+    /// `RecodeStage` (index 4) runs after `RemuxStage` (index 3), so the
+    /// recode target is what survives to the end of the pipeline.
+    #[test]
+    fn recode_video_outranks_remux_container() {
+        let config = PostProcess {
+            recode_video: Some(ContainerFormat::Ts),
+            remux_container: Some(ContainerFormat::Mkv),
+            ..PostProcess::default()
+        };
+        let explicit = config.explicit_container().expect("some");
+        assert_eq!(explicit.format, ContainerFormat::Ts);
+        assert_eq!(explicit.source, ContainerRequest::RecodeVideo);
+    }
+
+    #[test]
+    fn recode_container_outranks_remux_container() {
+        let config = PostProcess {
+            recode_container: Some(ContainerFormat::Ts),
+            remux_container: Some(ContainerFormat::Mkv),
+            ..PostProcess::default()
+        };
+        let explicit = config.explicit_container().expect("some");
+        assert_eq!(explicit.format, ContainerFormat::Ts);
+        assert_eq!(explicit.source, ContainerRequest::RecodeContainer);
+    }
+
+    #[test]
+    fn explicit_container_resolves_merge_output_format_alone() {
+        let config = PostProcess {
+            merge_output_format: Some(ContainerFormat::Ts),
+            ..PostProcess::default()
+        };
+        let explicit = config.explicit_container().expect("some");
+        assert_eq!(explicit.format, ContainerFormat::Ts);
+        assert_eq!(explicit.source, ContainerRequest::MergeOutputFormat);
+    }
+
+    /// `MergeStage` runs at index 0, before every container-changing stage, so
+    /// merge output ranks LAST — the same later-stage-wins rule that puts
+    /// recode above remux.
+    #[test]
+    fn remux_outranks_merge_output_format() {
+        let config = PostProcess {
+            remux_container: Some(ContainerFormat::Ts),
+            merge_output_format: Some(ContainerFormat::Mkv),
+            ..PostProcess::default()
+        };
+        let explicit = config.explicit_container().expect("some");
+        assert_eq!(explicit.format, ContainerFormat::Ts);
+        assert_eq!(explicit.source, ContainerRequest::Remux);
+    }
+
+    #[test]
+    fn recode_video_outranks_merge_output_format() {
+        let config = PostProcess {
+            recode_video: Some(ContainerFormat::Ts),
+            merge_output_format: Some(ContainerFormat::Mkv),
+            ..PostProcess::default()
+        };
+        let explicit = config.explicit_container().expect("some");
+        assert_eq!(explicit.source, ContainerRequest::RecodeVideo);
+    }
+
+    #[test]
+    fn requested_source_names_its_setting() {
+        assert_eq!(
+            ContainerSource::Requested(ContainerRequest::Remux).setting_name(),
+            Some("--remux")
+        );
+        assert_eq!(
+            ContainerSource::Requested(ContainerRequest::MergeOutputFormat).setting_name(),
+            Some("postprocess.merge_output_format")
+        );
+    }
+
+    /// An inferred source has no setting to name — `None`, never an invented
+    /// flag string.
+    #[test]
+    fn inferred_sources_name_no_setting() {
+        assert_eq!(ContainerSource::FileExtension.setting_name(), None);
+        assert_eq!(ContainerSource::Fallback.setting_name(), None);
+    }
+
+    /// A config-only source must name the config key, never invent a flag.
+    #[test]
+    fn merge_output_format_setting_name_is_the_config_key() {
+        assert_eq!(
+            ContainerRequest::MergeOutputFormat.setting_name(),
+            "postprocess.merge_output_format"
+        );
+    }
+
+    /// All four set at once — the full chain resolves to the head.
+    #[test]
+    fn recode_container_wins_the_full_chain() {
+        let config = PostProcess {
+            recode_container: Some(ContainerFormat::Ts),
+            recode_video: Some(ContainerFormat::Mkv),
+            remux_container: Some(ContainerFormat::F4v),
+            merge_output_format: Some(ContainerFormat::Avi),
+            ..PostProcess::default()
+        };
+        let explicit = config.explicit_container().expect("some");
+        assert_eq!(explicit.format, ContainerFormat::Ts);
+        assert_eq!(explicit.source, ContainerRequest::RecodeContainer);
     }
 
     #[test]
