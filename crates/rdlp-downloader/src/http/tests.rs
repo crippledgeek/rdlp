@@ -1279,25 +1279,29 @@ fn download_format_uses_biased_select() {
 
 #[test]
 fn parallel_adaptive_cancel_uses_biased_select() {
-    // Static guard: download_parallel_adaptive's semaphore-acquire select!
-    // MUST include `biased;` so cancel-priority is deterministic.
-    // Mirrors next_with_cancel_helper_uses_biased_select (Task 12, PR #303).
+    // Static guard: run_adaptive_chunk's semaphore-acquire select! MUST
+    // include `biased;` so cancel-priority is deterministic. Mirrors
+    // next_with_cancel_helper_uses_biased_select (Task 12, PR #303). The
+    // chunk-job body (including this select!) was extracted from
+    // download_parallel_adaptive into the free function run_adaptive_chunk
+    // as part of the #568 follow-up cleanup — this guard moved with it.
     let source = include_str!("parallel.rs");
 
     let start = source
-        .find("async fn download_parallel_adaptive")
-        .expect("download_parallel_adaptive not found in parallel.rs");
+        .find("async fn run_adaptive_chunk")
+        .expect("run_adaptive_chunk not found in parallel.rs");
 
     let after_start = &source[start..];
     // End at the next top-level fn definition.
     let end = after_start[1..]
-        .find("\n    async fn ")
+        .find("\nasync fn ")
+        .or_else(|| after_start[1..].find("\nfn "))
         .map_or(after_start.len(), |i| i + 1);
     let body = &after_start[..end];
 
     let select_idx = body
         .find("tokio::select!")
-        .expect("download_parallel_adaptive must contain a tokio::select! for cancel");
+        .expect("run_adaptive_chunk must contain a tokio::select! for cancel");
     let after_select = &body[select_idx..];
     let first_arm = after_select
         .find("=>")
@@ -1306,7 +1310,7 @@ fn parallel_adaptive_cancel_uses_biased_select() {
 
     assert!(
         header.contains("biased;"),
-        "tokio::select! in download_parallel_adaptive MUST use `biased;` \
+        "tokio::select! in run_adaptive_chunk MUST use `biased;` \
          to deterministically prioritize the cancel arm. \
          Found header: {header:?}"
     );
@@ -1943,5 +1947,287 @@ async fn resume_rejects_response_starting_at_wrong_offset() {
     assert_eq!(
         contents, b"partial data",
         "a rejected resume must not append foreign bytes to the partial file"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #568 — chunk cleanup on failed parallel downloads
+//
+// Before this fix, the pre-fix cleaner hardcoded the `.part{N}` marker
+// while a resumed download's writer used `.resume{N}` — so a failed resumed
+// download's cleanup pass deleted nothing (D1). The adaptive path called no
+// cleanup at all (D2). All three tests below assert directly on the
+// filesystem: after a failure, only files a foreign process planted may
+// remain in the download's temp directory.
+// ---------------------------------------------------------------------------
+
+/// Collect the set of file names present in `dir`.
+async fn dir_entries(dir: &Path) -> std::collections::HashSet<String> {
+    let mut names = std::collections::HashSet::new();
+    let mut entries = tokio::fs::read_dir(dir).await.unwrap();
+    while let Some(entry) = entries.next_entry().await.unwrap() {
+        names.insert(entry.file_name().to_string_lossy().into_owned());
+    }
+    names
+}
+
+/// Regression guard: a failed FRESH parallel download (static chunking, i.e.
+/// adaptive disabled via `Legacy` strategy) must still clean up its
+/// `.part{N}` chunk files. This path's suffix already matched pre-#568 (both
+/// writer and cleaner used `"part"`), so — unlike the two tests below — this
+/// one is expected to ALREADY PASS against the unpatched code; it pins the
+/// behavior so the migration to `ChunkSet` does not regress it.
+#[tokio::test]
+async fn static_fresh_failure_cleans_up_part_chunks_regression_guard() {
+    use mockito::Server;
+    use tempfile::TempDir;
+
+    let mut server = Server::new_async().await;
+    let temp_dir = TempDir::new().unwrap();
+
+    let chunk_size = 4 * 1024 * 1024; // 4 MiB
+    let total_size = chunk_size * 3; // 3 chunks via Legacy{chunk_count: 3}
+    let body = vec![0xAAu8; chunk_size];
+
+    let _probe = server
+        .mock("GET", "/video.mp4")
+        .match_header("range", "bytes=0-262143")
+        .with_status(206)
+        .with_header("content-range", &format!("bytes 0-262143/{total_size}"))
+        .with_body(vec![0u8; 262144])
+        .create_async()
+        .await;
+
+    let _chunk0 = server
+        .mock("GET", "/video.mp4")
+        .match_header("range", "bytes=0-4194303")
+        .with_status(206)
+        .with_header("content-range", &format!("bytes 0-4194303/{total_size}"))
+        .with_body(body.clone())
+        .create_async()
+        .await;
+
+    let _chunk1 = server
+        .mock("GET", "/video.mp4")
+        .match_header("range", "bytes=4194304-8388607")
+        .with_status(206)
+        .with_header(
+            "content-range",
+            &format!("bytes 4194304-8388607/{total_size}"),
+        )
+        .with_body(body)
+        .create_async()
+        .await;
+
+    // Non-retryable: fails immediately, no chunk-level backoff sleep.
+    let _chunk2_fail = server
+        .mock("GET", "/video.mp4")
+        .match_header("range", "bytes=8388608-12582911")
+        .with_status(403)
+        .with_body("forbidden")
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    let no_retry = RetryConfig::new(0, Duration::from_millis(1), Duration::from_millis(1), 1.0);
+    let downloader = HttpDownloader::new()
+        .with_concurrent_fragments(3)
+        .with_retry_config(no_retry)
+        .with_chunk_strategy(crate::chunking::ChunkSizeStrategy::Legacy { chunk_count: 3 });
+
+    let url = format!("{}/video.mp4", server.url());
+    let output = temp_dir.path().join("output.mp4");
+
+    // Foreign file that must survive the failure's cleanup pass.
+    let foreign = temp_dir.path().join("unrelated.txt");
+    tokio::fs::write(&foreign, b"keep me").await.unwrap();
+
+    let result = downloader.download_to_file(&url, &output, None).await;
+    assert!(result.is_err(), "download must fail on chunk 2's 403");
+
+    let names = dir_entries(temp_dir.path()).await;
+    assert_eq!(
+        names,
+        std::collections::HashSet::from(["unrelated.txt".to_string()]),
+        "chunk files must be cleaned up after a failed fresh/static download; \
+         only the foreign file may remain, found: {names:?}"
+    );
+}
+
+/// D1 (the live #568 leak): a failed RESUMED parallel download (static
+/// chunking) must clean up its `.resume{N}` chunk files, not the `.part{N}`
+/// marker the pre-fix cleaner hardcoded. Must FAIL against the unpatched
+/// code (the stray `.resumeN` files are left behind).
+#[tokio::test]
+async fn static_resume_failure_cleans_up_resume_chunks_d1() {
+    use mockito::Server;
+    use tempfile::TempDir;
+
+    let mut server = Server::new_async().await;
+    let temp_dir = TempDir::new().unwrap();
+
+    let already_downloaded = 8 * 1024 * 1024; // 8 MiB already on disk
+    let chunk_size = 4 * 1024 * 1024; // 4 MiB per remaining chunk
+    let total_size = already_downloaded + chunk_size * 2; // 2 remaining chunks
+
+    let output = temp_dir.path().join("video.mp4");
+    let original_bytes = vec![0xAAu8; already_downloaded as usize];
+    tokio::fs::write(&output, &original_bytes).await.unwrap();
+
+    // `download_with_resume` first issues an open-ended-range analysis
+    // request (`Range: bytes={resume_from}-`) to confirm resume support and
+    // learn the total size before choosing parallel vs. sequential resume.
+    let _resume_analysis = server
+        .mock("GET", "/video.mp4")
+        .match_header("range", "bytes=8388608-")
+        .with_status(206)
+        .with_header(
+            "content-range",
+            &format!("bytes 8388608-16777215/{total_size}"),
+        )
+        .with_header("accept-ranges", "bytes")
+        .with_body(vec![0xBBu8; chunk_size as usize])
+        .create_async()
+        .await;
+
+    let _chunk0 = server
+        .mock("GET", "/video.mp4")
+        .match_header("range", "bytes=8388608-12582911")
+        .with_status(206)
+        .with_header(
+            "content-range",
+            &format!("bytes 8388608-12582911/{total_size}"),
+        )
+        .with_body(vec![0xBBu8; chunk_size as usize])
+        .create_async()
+        .await;
+
+    // Non-retryable: fails immediately, no chunk-level backoff sleep.
+    let _chunk1_fail = server
+        .mock("GET", "/video.mp4")
+        .match_header("range", "bytes=12582912-16777215")
+        .with_status(403)
+        .with_body("forbidden")
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    let no_retry = RetryConfig::new(0, Duration::from_millis(1), Duration::from_millis(1), 1.0);
+    let downloader = HttpDownloader::new()
+        .with_concurrent_fragments(2)
+        .with_retry_config(no_retry)
+        .with_parallel_threshold(1)
+        .with_chunk_strategy(crate::chunking::ChunkSizeStrategy::Legacy { chunk_count: 2 });
+
+    let url = format!("{}/video.mp4", server.url());
+
+    // Foreign file that must survive the failure's cleanup pass.
+    let foreign = temp_dir.path().join("unrelated.txt");
+    tokio::fs::write(&foreign, b"keep me").await.unwrap();
+
+    let result = downloader
+        .download_with_resume(&url, &output, already_downloaded, None, None)
+        .await;
+    assert!(result.is_err(), "resume must fail on chunk 1's 403");
+
+    // The original partial file must be untouched by the failed resume.
+    let contents = tokio::fs::read(&output).await.unwrap();
+    assert_eq!(
+        contents, original_bytes,
+        "a failed resume must not touch the pre-existing partial output file"
+    );
+
+    let names = dir_entries(temp_dir.path()).await;
+    assert_eq!(
+        names,
+        std::collections::HashSet::from(["video.mp4".to_string(), "unrelated.txt".to_string()]),
+        "resume chunk files must be cleaned up after a failed resumed download; \
+         only the output file and the foreign file may remain, found: {names:?}"
+    );
+}
+
+/// D2: the adaptive path called no cleanup function at all, so a failed
+/// adaptive download leaked every chunk already written to disk regardless
+/// of how many sibling chunks had already completed successfully. Must FAIL
+/// against the unpatched code (no cleanup call exists on this path at all).
+///
+/// Uses the default adaptive config (no `with_chunk_strategy` override, so
+/// `config.adaptive` stays `true`). `AdaptiveConfig::initial_chunk_level` is
+/// `MIN_CHUNK_LEVEL` (2 => 256 KiB, see `adaptive::CHUNK_LEVELS`) and
+/// `decision_interval` is 4, so with only 3 total chunks the level never
+/// changes — every chunk is deterministically 256 KiB, matching
+/// `PROBE_WINDOW_BYTES` exactly (so the F3 probe and chunk 0 share one Range
+/// request/response).
+#[tokio::test]
+async fn adaptive_failure_cleans_up_chunks_d2() {
+    use mockito::Server;
+    use tempfile::TempDir;
+
+    let mut server = Server::new_async().await;
+    let temp_dir = TempDir::new().unwrap();
+
+    let chunk_bytes = 256 * 1024; // CHUNK_LEVELS[MIN_CHUNK_LEVEL] == PROBE_WINDOW_BYTES
+    let total_size = chunk_bytes * 3;
+
+    // Chunk 0's Range coincides with the F3 probe's Range, so one mock
+    // (matched at least twice) serves both requests.
+    let _chunk0_and_probe = server
+        .mock("GET", "/video.mp4")
+        .match_header("range", "bytes=0-262143")
+        .with_status(206)
+        .with_header("content-range", &format!("bytes 0-262143/{total_size}"))
+        .with_body(vec![0xCCu8; chunk_bytes])
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    let _chunk1 = server
+        .mock("GET", "/video.mp4")
+        .match_header("range", "bytes=262144-524287")
+        .with_status(206)
+        .with_header(
+            "content-range",
+            &format!("bytes 262144-524287/{total_size}"),
+        )
+        .with_body(vec![0xDDu8; chunk_bytes])
+        .create_async()
+        .await;
+
+    // Non-retryable: fails immediately, no chunk-level backoff sleep.
+    let _chunk2_fail = server
+        .mock("GET", "/video.mp4")
+        .match_header("range", "bytes=524288-786431")
+        .with_status(403)
+        .with_body("forbidden")
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    let no_retry = RetryConfig::new(0, Duration::from_millis(1), Duration::from_millis(1), 1.0);
+    let downloader = HttpDownloader::new()
+        .with_concurrent_fragments(2)
+        .with_retry_config(no_retry)
+        .with_parallel_threshold(1);
+    assert!(
+        downloader.config.adaptive,
+        "this test must exercise the adaptive path"
+    );
+
+    let url = format!("{}/video.mp4", server.url());
+    let output = temp_dir.path().join("output.mp4");
+
+    // Foreign file that must survive the failure's cleanup pass.
+    let foreign = temp_dir.path().join("unrelated.txt");
+    tokio::fs::write(&foreign, b"keep me").await.unwrap();
+
+    let result = downloader.download_to_file(&url, &output, None).await;
+    assert!(result.is_err(), "download must fail on chunk 2's 403");
+
+    let names = dir_entries(temp_dir.path()).await;
+    assert_eq!(
+        names,
+        std::collections::HashSet::from(["unrelated.txt".to_string()]),
+        "chunk files must be cleaned up after a failed adaptive download; \
+         only the foreign file may remain, found: {names:?}"
     );
 }
