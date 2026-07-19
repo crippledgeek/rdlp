@@ -172,4 +172,39 @@ mod tests {
             "a missing thumbnail must not be reported as an error"
         );
     }
+
+    /// The error-propagating arm. Only `NotFound` is absorbed; every other
+    /// failure must surface so the cancel path can log it. Without this test,
+    /// mutating `other => other` into `_ => Ok(())` — silently swallowing every
+    /// real I/O failure — leaves the whole suite green.
+    ///
+    /// Also pins the path into the error text: the token has no accessor by
+    /// design, so `delete` is the only place that can supply it, and that one
+    /// log line is all an operator gets for a cleanup failure.
+    #[tokio::test]
+    async fn deleting_an_undeletable_thumbnail_reports_the_error() {
+        let dir = TempDir::new().unwrap();
+        // `remove_file` on a directory fails with a non-NotFound error.
+        let not_a_file = dir.path().join("a-directory.jpg");
+        tokio::fs::create_dir(&not_a_file).await.unwrap();
+
+        let err = OwnedThumbnail::for_test(not_a_file.clone())
+            .delete()
+            .await
+            .expect_err("a non-NotFound failure must not be absorbed");
+
+        assert_ne!(
+            err.kind(),
+            std::io::ErrorKind::NotFound,
+            "the original ErrorKind must survive so callers can still match on it"
+        );
+        assert!(
+            err.to_string().contains("a-directory.jpg"),
+            "the error text must name the thumbnail: {err}"
+        );
+        assert!(
+            not_a_file.exists(),
+            "a failed delete must leave the path alone"
+        );
+    }
 }

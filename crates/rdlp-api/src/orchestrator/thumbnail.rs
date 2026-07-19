@@ -52,10 +52,10 @@ fn thumbnail_extension_from_url(thumbnail_url: &str) -> String {
 /// caller asserting the second alongside a bare path.
 ///
 /// Deliberately has **no** path accessor, no `Deref`, no `AsRef<Path>`, no
-/// `Clone`, and no `Drop`. Each omission is load-bearing and documented in
-/// `docs/planning/2026-07-19-owned-thumbnail-design.md`; in particular, a
-/// `Drop` impl would invert the default from keep to delete, so any `?` between
-/// mint and cleanup would silently destroy a file the run meant to keep.
+/// `Clone`, and no `Drop`. Each omission is load-bearing (see the design
+/// rationale on #556); in particular, a `Drop` impl would invert the default
+/// from keep to delete, so any `?` between mint and cleanup would silently
+/// destroy a file the run meant to keep.
 ///
 /// The inner `PathBuf` never escapes this module: [`Self::delete`] is the only
 /// operation, so there is no unwrap for a future caller to misuse.
@@ -87,10 +87,22 @@ impl OwnedThumbnail {
     /// Cancel-path callers log and continue: cleanup must not turn a cancel
     /// into a failure (#404). That decision belongs to the caller, not here —
     /// see Rust API Guidelines C-DTOR-FAIL.
+    ///
+    /// A propagated error names the path in its *text*. This is the only place
+    /// that can supply it — the token has no accessor, and by the time a caller
+    /// holds the error `self` is already consumed — and a cleanup failure is
+    /// otherwise silent apart from that one log line. The path lands in the
+    /// message only, never as a value the caller can recover, and the original
+    /// [`std::io::ErrorKind`] is preserved so callers can still match on it.
     pub(super) async fn delete(self) -> std::io::Result<()> {
         match tokio::fs::remove_file(&self.0).await {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            other => other,
+            other => other.map_err(|e| {
+                std::io::Error::new(
+                    e.kind(),
+                    format!("delete thumbnail {}: {e}", self.0.display()),
+                )
+            }),
         }
     }
 }
