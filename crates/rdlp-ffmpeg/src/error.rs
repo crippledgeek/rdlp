@@ -23,6 +23,38 @@ impl fmt::Display for CorruptionKind {
     }
 }
 
+/// Stream medium, as reported by `AVMediaType` — the closed 3-value set
+/// [`PostProcessError::IncompatibleContainerCodec`] can name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Medium {
+    /// `AVMEDIA_TYPE_VIDEO`.
+    Video,
+    /// `AVMEDIA_TYPE_AUDIO`.
+    Audio,
+    /// Any other `AVMediaType` (subtitle, data, attachment, unknown).
+    Stream,
+}
+
+impl fmt::Display for Medium {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Video => write!(f, "video"),
+            Self::Audio => write!(f, "audio"),
+            Self::Stream => write!(f, "stream"),
+        }
+    }
+}
+
+impl From<ffmpeg_the_third::ffi::AVMediaType> for Medium {
+    fn from(codec_type: ffmpeg_the_third::ffi::AVMediaType) -> Self {
+        match codec_type {
+            ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_VIDEO => Self::Video,
+            ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_AUDIO => Self::Audio,
+            _ => Self::Stream,
+        }
+    }
+}
+
 /// Errors that can occur during post-processing.
 #[derive(Debug, Error)]
 #[allow(missing_docs)] // Field names are self-explanatory, variant docs describe them
@@ -143,6 +175,23 @@ pub enum PostProcessError {
     /// Salvage remux failed — input too corrupt to recover.
     #[error("Input corrupt and salvage failed: {message}")]
     SalvageFailed { message: String },
+
+    /// A stream's codec cannot be represented in the target container: the
+    /// muxer cannot store it under any tag (a convention gap in this
+    /// `FFmpeg` build, not a documented container standard).
+    ///
+    /// The remediation is deliberately generic — naming a specific
+    /// alternative container here previously named the very container that
+    /// just failed when that container was itself incompatible.
+    #[error("{container} cannot represent {codec} {medium}; choose a different target container")]
+    IncompatibleContainerCodec {
+        /// Target container/muxer short name (e.g. "avi").
+        container: String,
+        /// Codec name as reported by `FFmpeg` (e.g. "hevc").
+        codec: String,
+        /// Stream medium the codec belongs to.
+        medium: Medium,
+    },
 
     /// Catch-all for errors with context chains from internal operations.
     #[error(transparent)]

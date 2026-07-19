@@ -48,6 +48,7 @@ use crate::error::{PostProcessError, Result};
 
 use self::embed_strategy::ThumbnailEmbedStrategy;
 pub use self::embed_strategy::{supports_thumbnail_embed, uses_native_attachment};
+use super::ffi_helpers::cleanup_partial_output;
 use super::{FFmpegRunner, ensure_init};
 
 impl FFmpegRunner {
@@ -62,19 +63,35 @@ impl FFmpegRunner {
     /// So ask `FFmpeg` rather than maintaining a parallel whitelist that can
     /// drift from the build.
     ///
-    /// Uses `avformat_query_codec`, whose contract is: `1` the codec can be
-    /// stored, `0` it cannot, negative when the information is unavailable.
-    /// Only an explicit `1` is treated as supported — "unknown" resolves to
-    /// "transcode first", the safe direction, since a needless transcode costs
-    /// a little work while a wrong answer costs the embed.
+    /// Uses `avformat_query_codec`, whose contract is: positive the codec can
+    /// be stored, `0` it cannot, negative when the information is unavailable.
+    /// Any positive value is treated as supported — not just `1` — because a
+    /// muxer's own `query_codec` callback may answer with something other
+    /// than a bare `1`: mp3's callback (`mp3enc.c`) returns the `APIC`
+    /// `MKTAG` value (a large positive int) for every image codec `ID3v2`'s
+    /// `APIC` frame can carry (gif/mjpeg/png/tiff/bmp/webp — see
+    /// `ff_id3v2_mime_tags`), reserving the literal `1` for MP3 audio itself.
+    /// Gating on `== 1` therefore misread that positive-but-not-1 answer as
+    /// "cannot store", needlessly transcoding a lossless cover to a fresh
+    /// JPEG — matches the `> 0` convention already used for stream
+    /// representability in `ffi_helpers/mod.rs::resolve_codec_tag`. "Unknown"
+    /// (negative) still resolves to "transcode first", the safe direction,
+    /// since a needless transcode costs a little work while a wrong answer
+    /// costs the embed.
     ///
-    /// That query is authoritative for tag-table muxers (MP4/MOV) but
-    /// *under-reports* elsewhere: muxers that answer through a `query_codec`
-    /// callback (mp3 returns the `APIC` tag rather than `1`) or that carry
-    /// neither mechanism fall through to `AVERROR_PATCHWELCOME`, reporting
-    /// "cannot store" for images they demonstrably do store. JPEG and PNG are
-    /// therefore accepted outright as a verified baseline, and the query serves
-    /// only to widen that — never to narrow it below what is known to work.
+    /// That query is authoritative for muxers with a `query_codec` callback
+    /// (mp3's callback answers correctly once `> 0` is treated as
+    /// "supported", per the paragraph above) or a matching codec-tag-table
+    /// entry (MP4/MOV). It *under-reports* only for muxers that have
+    /// **neither** mechanism for the codec in question — no `query_codec`
+    /// callback and no codec-tag-table entry, e.g. `flac`'s bare-fourcc
+    /// muxer for MJPEG, or `m4a`'s tag table having no entry for MJPEG/PNG —
+    /// where `avformat_query_codec` falls back to a plain "unsupported"
+    /// answer (`0`, or `AVERROR_PATCHWELCOME` when even that fallback finds
+    /// nothing to match against) for images they demonstrably do store.
+    /// JPEG and PNG are therefore accepted outright as a verified baseline,
+    /// and the query serves only to widen that — never to narrow it below
+    /// what is known to work.
     ///
     /// # Errors
     ///
@@ -135,11 +152,18 @@ impl FFmpegRunner {
 
         // Baseline: JPEG and PNG embed successfully in every container rdlp
         // supports, verified end to end. `avformat_query_codec` does NOT report
-        // that — it answers `1` only for muxers carrying a `codec_tag` table,
-        // so mp3 (which answers through a `query_codec` callback returning the
-        // `APIC` tag), flac, and m4a all report "cannot store" for images they
-        // demonstrably do store. Trusting the query alone would re-encode a
-        // lossless PNG cover to lossy JPEG on those containers.
+        // that for every muxer: per `avformat.c`, it dispatches to the muxer's
+        // own `query_codec` callback first when one exists, falling back to
+        // the `codec_tag` table only when it doesn't (see the matching
+        // description in `ffi_helpers/mod.rs::resolve_codec_tag`). flac and
+        // m4a carry neither a `query_codec` callback nor a `codec_tag` table
+        // entry for MJPEG/PNG, so the raw query reports "cannot store" for
+        // images they demonstrably do store; trusting it alone would
+        // re-encode a lossless PNG cover to lossy JPEG on those containers.
+        // (mp3's `query_codec` callback also answers MJPEG/PNG — via the
+        // `APIC` tag, a positive, non-`1` value — so the `> 0` query below
+        // already resolves it correctly without this baseline; the baseline
+        // still short-circuits it harmlessly first.)
         //
         // So the query below only ever WIDENS this baseline; it can never
         // narrow the answer below what is known to work.
@@ -152,8 +176,9 @@ impl FFmpegRunner {
 
         // SAFETY: `ofmt` is the non-null static descriptor returned above and
         // remains valid for the process lifetime. `avformat_query_codec` only
-        // reads that descriptor's codec-tag tables — no allocation, no
-        // ownership transfer, no mutation.
+        // reads that descriptor (its `query_codec` callback and/or its
+        // codec-tag tables, per the dispatch order noted above) — no
+        // allocation, no ownership transfer, no mutation.
         let query = unsafe {
             ffmpeg_the_third::ffi::avformat_query_codec(
                 ofmt,
@@ -162,7 +187,7 @@ impl FFmpegRunner {
             )
         };
 
-        Ok(query == 1)
+        Ok(query > 0)
     }
 
     /// Embed a thumbnail image into a media file via stream copy (remux).
@@ -318,8 +343,12 @@ impl FFmpegRunner {
             ist_time_bases[ist_index] = ist.time_base();
             ost_index += 1;
 
-            let ost_idx =
-                Self::add_stream_copy(&mut octx, ist.parameters(), "for thumbnail embed")?;
+            // `format::output` above already created (truncated) `output` on
+            // disk via `avio_open` — a codec-tag rejection here must not
+            // leave that empty file behind as if a thumbnail embed had run
+            // and produced nothing.
+            let ost_idx = Self::add_stream_copy(&mut octx, ist.parameters(), "for thumbnail embed")
+                .inspect_err(|_| cleanup_partial_output(output))?;
             octx.stream_mut(ost_idx)
                 .expect("just-added stream")
                 .set_metadata(ist.metadata().to_owned());
@@ -345,8 +374,8 @@ impl FFmpegRunner {
         let thumb_ost_index = if is_ogg_opus {
             None
         } else {
-            let ost_idx =
-                Self::add_stream_copy(&mut octx, thumb_ist.parameters(), "for thumbnail")?;
+            let ost_idx = Self::add_stream_copy(&mut octx, thumb_ist.parameters(), "for thumbnail")
+                .inspect_err(|_| cleanup_partial_output(output))?;
             {
                 let mut thumb_ost = octx
                     .stream_mut(ost_idx)

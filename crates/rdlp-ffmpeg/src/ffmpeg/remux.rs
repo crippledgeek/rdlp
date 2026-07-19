@@ -30,6 +30,7 @@ use log::debug;
 
 use crate::error::{PostProcessError, Result};
 
+use super::ffi_helpers::cleanup_partial_output;
 use super::log_capture::LogSuppressGuard;
 use super::{FFmpegRunner, RemuxOptions, ensure_init};
 
@@ -153,7 +154,12 @@ impl FFmpegRunner {
 
             ost_index += 1;
 
-            let ost_idx = Self::add_stream_copy(&mut octx, ist.parameters(), "for remux")?;
+            // `format::output` above already created (truncated) `output` on
+            // disk via `avio_open` — a codec-tag rejection here must not
+            // leave that empty file behind as if a remux had run and produced
+            // nothing.
+            let ost_idx = Self::add_stream_copy(&mut octx, ist.parameters(), "for remux")
+                .inspect_err(|_| cleanup_partial_output(output))?;
             octx.stream_mut(ost_idx)
                 .expect("just-added stream")
                 .set_metadata(ist.metadata().to_owned());
@@ -368,8 +374,26 @@ impl FFmpegRunner {
                     .into());
                 }
 
-                // Reset codec tag for container compatibility
-                (*(*out_stream).codecpar).codec_tag = 0;
+                // Resolve and apply the codec tag through the same decision
+                // point the safe `add_stream_copy` path uses
+                // (`FFmpegRunner::resolve_and_apply_codec_tag`) rather than
+                // unconditionally zeroing — the asymmetry between this
+                // raw-FFI path (always zeroed, always worked) and
+                // `add_stream_copy` (rejected on a tag-table miss) is what
+                // hid the #549 predicate bug from the regression matrix in
+                // the first place. `out_stream.codecpar` is the destination
+                // for the resolve step's own `AVOutputFormat`/`AVCodecParameters`
+                // reads: `ofmt_ctx` is the live output context this loop is
+                // building, and `(*out_stream).codecpar` was just populated
+                // by `avcodec_parameters_copy` above.
+                let oformat: *const ffi::AVOutputFormat = (*ofmt_ctx).oformat;
+                if let Err(e) =
+                    Self::resolve_and_apply_codec_tag(oformat, (*out_stream).codecpar.cast_const())
+                {
+                    ffi::avformat_close_input(&mut ifmt_ctx);
+                    ffi::avformat_free_context(ofmt_ctx);
+                    return Err(e.into());
+                }
 
                 // Copy per-stream metadata (preserves encoder tags set by RecodeStage)
                 ffi::av_dict_copy(&mut (*out_stream).metadata, (*in_stream).metadata, 0);

@@ -23,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::PostProcessError;
 
+use super::super::ffi_helpers::cleanup_partial_output;
 use super::super::{FFmpegRunner, VideoConvertOptions};
 use super::mux_timing::flush_interleave_queue;
 use super::video_transcode_context::{AudioTranscodeState, Phase1Outputs, VideoTranscodeContext};
@@ -343,11 +344,16 @@ impl FFmpegRunner {
             let audio_ist = ctx.ictx.stream(audio_idx).ok_or_else(|| {
                 PostProcessError::ffmpeg_failed(format!("audio input stream {audio_idx} not found"))
             })?;
+            // `format::output` already created (truncated) `ctx.output_path` on
+            // disk via `avio_open` — a codec-tag rejection here must not leave
+            // that empty file behind as if a video transcode had run and
+            // produced nothing.
             let audio_ost_idx = Self::add_stream_copy(
                 &mut ctx.octx,
                 audio_ist.parameters(),
                 "for video transcode audio copy",
-            )?;
+            )
+            .inspect_err(|_| cleanup_partial_output(ctx.output_path))?;
             ctx.octx
                 .stream_mut(audio_ost_idx)
                 .expect("just-added stream")

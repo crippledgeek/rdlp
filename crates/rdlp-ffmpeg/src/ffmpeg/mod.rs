@@ -55,7 +55,16 @@ mod normalize_types;
 mod options;
 mod probe;
 mod remux;
-pub(crate) mod salvage;
+// `#[doc(hidden)] pub`, not `pub(crate)`: the corruption-recovery path
+// (`salvage_remux_sync`) is otherwise unreachable from `tests/`, where its
+// only meaningful coverage can live — `scripts/check-no-cli.sh` forbids
+// `std::process::Command` under `crates/*/src/`, and verifying that a font
+// attachment survives salvage requires driving the `ffmpeg`/`ffprobe` CLI to
+// build and inspect the fixture independently of rdlp's own decode path.
+// `doc(hidden)` keeps it out of the documented API surface: this is exposed
+// for testing, not for callers.
+#[doc(hidden)]
+pub mod salvage;
 pub mod speed_controls;
 mod thumbnail;
 pub use thumbnail::{supports_thumbnail_embed, uses_native_attachment};

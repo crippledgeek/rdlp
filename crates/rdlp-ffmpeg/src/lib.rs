@@ -49,7 +49,7 @@ pub mod error;
 pub mod ffmpeg;
 
 // Re-export main types at crate root
-pub use error::{CorruptionKind, PostProcessError, Result};
+pub use error::{CorruptionKind, Medium, PostProcessError, Result};
 pub use ffmpeg::{
     AudioCodecInfo, AudioEncoderInfo, AudioExtractOptions, AudioNormMode, ChapterEntry,
     FFmpegRunner, FfmpegLogBridge, LogForwarderGuard, LoudnormMeasurements, LoudnormPreset,
