@@ -32,7 +32,7 @@ use log::{debug, info, warn};
 
 use crate::error::{CorruptionKind, PostProcessError, Result};
 
-use super::ffi_helpers::packet_unref;
+use super::ffi_helpers::{cleanup_partial_output, packet_unref};
 use super::log_capture::{LogCaptureGuard, LogSuppressGuard};
 use super::{FFmpegRunner, ensure_init};
 
@@ -55,6 +55,11 @@ const EBML_CORRUPTION_MARKERS: &[&str] = &[
 ///
 /// Used as Tier 3 recovery in [`super::normalize::helpers::with_mux_retry`] when
 /// both normal encode and salvage remux fail.
+///
+/// # Errors
+///
+/// Returns an error if `FFmpeg` fails to open `path` even with the resilient
+/// flags applied (e.g. the file does not exist or is not a media container).
 pub fn open_input_resilient(path: &Path) -> Result<ffmpeg_the_third::format::context::Input> {
     ensure_init()?;
 
@@ -81,6 +86,12 @@ pub fn open_input_resilient(path: &Path) -> Result<ffmpeg_the_third::format::con
 ///
 /// Returns `Ok(())` if the container is clean or not Matroska/WebM.
 /// Returns `Err(InputCorrupt { kind: MatroskaEbml, .. })` if corruption is detected.
+///
+/// # Errors
+///
+/// Returns [`PostProcessError::InputCorrupt`] when EBML structural error
+/// markers are found in the demuxer log, or any other [`PostProcessError`]
+/// if `input` cannot be opened or log capture cannot be started.
 pub fn check_matroska_integrity(input: &Path) -> Result<()> {
     ensure_init()?;
 
@@ -176,6 +187,14 @@ fn next_salvage_path(input: &Path, stem: &str, ext: &str) -> PathBuf {
 ///
 /// Returns the path to the salvaged temporary file. The caller is responsible
 /// for cleaning up this file when done.
+///
+/// # Errors
+///
+/// Returns an error if `input`/the salvage output cannot be opened, if the
+/// target container cannot represent one of the input's streams (see
+/// [`crate::error::PostProcessError::IncompatibleContainerCodec`]), if no
+/// packets at all could be recovered, or if the header/trailer cannot be
+/// written.
 pub fn salvage_remux_sync(input: &Path) -> anyhow::Result<PathBuf> {
     ensure_init()?;
 
@@ -213,10 +232,29 @@ pub fn salvage_remux_sync(input: &Path) -> anyhow::Result<PathBuf> {
         .map_err(PostProcessError::from)
         .with_context(|| format!("failed to create salvage output {}", salvage_path.display()))?;
 
-    // Map all input streams to output (stream copy, no re-encoding)
+    // Map all input streams to output (stream copy, no re-encoding). No
+    // medium filter: salvage is the corruption-recovery path of last
+    // resort and must not silently drop a stream (e.g. a font attachment)
+    // just because it isn't audio/video.
+    //
+    // `format::output` above already created (truncated) `salvage_path` on
+    // disk via `avio_open` — a codec-tag rejection here must not leave
+    // that empty file behind as if a salvage remux had run and produced
+    // nothing.
     let stream_count = ictx.streams().count();
     for ist in ictx.streams() {
-        FFmpegRunner::add_stream_copy(&mut octx, ist.parameters(), "for salvage")?;
+        let ost_idx = FFmpegRunner::add_stream_copy(&mut octx, ist.parameters(), "for salvage")
+            .inspect_err(|_| cleanup_partial_output(&salvage_path))?;
+        // Per-stream metadata must travel with the stream: for an
+        // attachment, Matroska's muxer hard-requires a "mimetype" tag
+        // (`matroskaenc.c`'s `mkv_write_attachments` rejects the whole
+        // mux with EINVAL when it's absent) — dropping it here would
+        // trade the codec-tag rejection this fix removes for a header
+        // -write failure instead, on the exact fixture (a font
+        // attachment) this fix exists to recover.
+        if let Some(mut ost) = octx.stream_mut(ost_idx) {
+            ost.set_metadata(ist.metadata().to_owned());
+        }
     }
 
     // Use FFmpeg's default 10s max_interleave_delta for salvage. This prevents
@@ -304,6 +342,13 @@ pub fn salvage_remux_sync(input: &Path) -> anyhow::Result<PathBuf> {
 ///
 /// If `salvage_enabled` is false and corruption is detected, returns the
 /// `InputCorrupt` error directly.
+///
+/// # Errors
+///
+/// Returns [`PostProcessError::InputCorrupt`] when corruption is detected and
+/// `salvage_enabled` is `false`, or any error [`salvage_remux_sync`] can
+/// return when `salvage_enabled` is `true` and the salvage attempt itself
+/// fails.
 pub fn prepare_input_with_salvage(
     input: &Path,
     salvage_enabled: bool,
@@ -340,7 +385,6 @@ pub fn prepare_input_with_salvage(
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn test_ebml_markers_detect_invalid_first_byte() {
         let line = "[matroska,webm @ 0x1234] invalid as first byte of an EBML number";

@@ -36,6 +36,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::{PostProcessError, Result};
 
+use super::ffi_helpers::cleanup_partial_output;
 use super::log_capture::LogSuppressGuard;
 use super::{FFmpegRunner, RemuxOptions, ensure_init};
 
@@ -140,6 +141,10 @@ impl FFmpegRunner {
             .map(|s| s.index())
             .ok_or(PostProcessError::NoVideoStream)?;
 
+        // `format::output` above already created (truncated) `output` on
+        // disk via `avio_open` — a codec-tag rejection on either stream
+        // below must not leave that empty file behind as if a merge had
+        // run and produced nothing.
         let video_ost_index = Self::add_stream_copy(
             &mut octx,
             ictx_video
@@ -151,7 +156,8 @@ impl FFmpegRunner {
                 })?
                 .parameters(),
             "for merge video",
-        )?;
+        )
+        .inspect_err(|_| cleanup_partial_output(output))?;
 
         // Find best audio stream from audio input
         let audio_ist_index = ictx_audio
@@ -171,7 +177,8 @@ impl FFmpegRunner {
                 })?
                 .parameters(),
             "for merge audio",
-        )?;
+        )
+        .inspect_err(|_| cleanup_partial_output(output))?;
         // Set audio as default stream so players select it automatically
         if let Some(mut ost_audio) = octx.stream_mut(audio_ost_index) {
             unsafe {

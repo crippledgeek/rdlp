@@ -30,7 +30,7 @@ use log::debug;
 
 use crate::error::{PostProcessError, Result};
 
-use super::ffi_helpers::CodecTagAction;
+use super::ffi_helpers::cleanup_partial_output;
 use super::log_capture::LogSuppressGuard;
 use super::{FFmpegRunner, RemuxOptions, ensure_init};
 
@@ -159,12 +159,7 @@ impl FFmpegRunner {
             // leave that empty file behind as if a remux had run and produced
             // nothing.
             let ost_idx = Self::add_stream_copy(&mut octx, ist.parameters(), "for remux")
-                .inspect_err(|_| {
-                    // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking
-                    // from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
-                    #[allow(clippy::disallowed_methods)]
-                    let _ = std::fs::remove_file(output);
-                })?;
+                .inspect_err(|_| cleanup_partial_output(output))?;
             octx.stream_mut(ost_idx)
                 .expect("just-added stream")
                 .set_metadata(ist.metadata().to_owned());
@@ -379,28 +374,25 @@ impl FFmpegRunner {
                     .into());
                 }
 
-                // Resolve the codec tag through the same decision point the
-                // safe `add_stream_copy` path uses (`FFmpegRunner::resolve_codec_tag`)
-                // rather than unconditionally zeroing — the asymmetry between
-                // this raw-FFI path (always zeroed, always worked) and
+                // Resolve and apply the codec tag through the same decision
+                // point the safe `add_stream_copy` path uses
+                // (`FFmpegRunner::resolve_and_apply_codec_tag`) rather than
+                // unconditionally zeroing — the asymmetry between this
+                // raw-FFI path (always zeroed, always worked) and
                 // `add_stream_copy` (rejected on a tag-table miss) is what
                 // hid the #549 predicate bug from the regression matrix in
                 // the first place. `out_stream.codecpar` is the destination
-                // for `resolve_codec_tag`'s own `AVOutputFormat`/`AVCodecParameters`
+                // for the resolve step's own `AVOutputFormat`/`AVCodecParameters`
                 // reads: `ofmt_ctx` is the live output context this loop is
                 // building, and `(*out_stream).codecpar` was just populated
                 // by `avcodec_parameters_copy` above.
                 let oformat: *const ffi::AVOutputFormat = (*ofmt_ctx).oformat;
-                match Self::resolve_codec_tag(oformat, (*out_stream).codecpar.cast_const()) {
-                    Ok(CodecTagAction::Preserve) => {}
-                    Ok(CodecTagAction::Clear) => {
-                        Self::clear_codec_tag((*out_stream).codecpar.cast_const());
-                    }
-                    Err(e) => {
-                        ffi::avformat_close_input(&mut ifmt_ctx);
-                        ffi::avformat_free_context(ofmt_ctx);
-                        return Err(e.into());
-                    }
+                if let Err(e) =
+                    Self::resolve_and_apply_codec_tag(oformat, (*out_stream).codecpar.cast_const())
+                {
+                    ffi::avformat_close_input(&mut ifmt_ctx);
+                    ffi::avformat_free_context(ofmt_ctx);
+                    return Err(e.into());
                 }
 
                 // Copy per-stream metadata (preserves encoder tags set by RecodeStage)

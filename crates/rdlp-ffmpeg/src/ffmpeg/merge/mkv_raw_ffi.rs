@@ -36,7 +36,6 @@ use log::{debug, info};
 use crate::error::{PostProcessError, Result};
 
 use super::super::FFmpegRunner;
-use super::super::ffi_helpers::CodecTagAction;
 use super::av_packet_owned::AvPacketOwned;
 use super::raw_ffi_helpers::{
     dts_in_us, out_codecpar_video_delay, read_next_raw, rescale_and_write_raw,
@@ -219,24 +218,19 @@ impl FFmpegRunner {
                     message: format!("Failed to copy video codec params: error code {ret}"),
                 });
             }
-            // Resolve the codec tag through the same decision point the safe
-            // `add_stream_copy` path uses, rather than unconditionally
-            // zeroing (see the equivalent site in `remux.rs` for why this
-            // asymmetry between raw-FFI and `add_stream_copy` mattered).
-            match Self::resolve_codec_tag(
+            // Resolve and apply the codec tag through the same decision
+            // point the safe `add_stream_copy` path uses, rather than
+            // unconditionally zeroing (see the equivalent site in
+            // `remux.rs` for why this asymmetry between raw-FFI and
+            // `add_stream_copy` mattered).
+            if let Err(e) = Self::resolve_and_apply_codec_tag(
                 (*ofmt_ctx).oformat,
                 (*out_video_stream).codecpar.cast_const(),
             ) {
-                Ok(CodecTagAction::Preserve) => {}
-                Ok(CodecTagAction::Clear) => {
-                    Self::clear_codec_tag((*out_video_stream).codecpar.cast_const());
-                }
-                Err(e) => {
-                    ffi::avformat_close_input(&mut ifmt_video);
-                    ffi::avformat_close_input(&mut ifmt_audio);
-                    ffi::avformat_free_context(ofmt_ctx);
-                    return Err(e);
-                }
+                ffi::avformat_close_input(&mut ifmt_video);
+                ffi::avformat_close_input(&mut ifmt_audio);
+                ffi::avformat_free_context(ofmt_ctx);
+                return Err(e);
             }
 
             // Copy per-stream metadata (preserves encoder tags set by RecodeStage)
@@ -300,20 +294,14 @@ impl FFmpegRunner {
                     message: format!("Failed to copy audio codec params: error code {ret}"),
                 });
             }
-            match Self::resolve_codec_tag(
+            if let Err(e) = Self::resolve_and_apply_codec_tag(
                 (*ofmt_ctx).oformat,
                 (*out_audio_stream).codecpar.cast_const(),
             ) {
-                Ok(CodecTagAction::Preserve) => {}
-                Ok(CodecTagAction::Clear) => {
-                    Self::clear_codec_tag((*out_audio_stream).codecpar.cast_const());
-                }
-                Err(e) => {
-                    ffi::avformat_close_input(&mut ifmt_video);
-                    ffi::avformat_close_input(&mut ifmt_audio);
-                    ffi::avformat_free_context(ofmt_ctx);
-                    return Err(e);
-                }
+                ffi::avformat_close_input(&mut ifmt_video);
+                ffi::avformat_close_input(&mut ifmt_audio);
+                ffi::avformat_free_context(ofmt_ctx);
+                return Err(e);
             }
 
             // Copy per-stream metadata (preserves encoder tags set by RecodeStage)

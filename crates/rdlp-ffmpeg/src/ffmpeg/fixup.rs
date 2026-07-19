@@ -231,6 +231,7 @@ impl FFmpegRunner {
 
         Self::spawn_blocking("fixup_sar", move || -> Result<()> {
             use super::ensure_init;
+            use super::ffi_helpers::cleanup_partial_output;
             use super::log_capture::LogSuppressGuard;
 
             ensure_init()?;
@@ -260,7 +261,12 @@ impl FFmpegRunner {
                 ist_time_bases[ist_index] = ist.time_base();
                 ost_index += 1;
 
-                let ost_idx = Self::add_stream_copy(&mut octx, ist.parameters(), "for fixup")?;
+                // `format::output` above already created (truncated) `output`
+                // on disk via `avio_open` — a codec-tag rejection here must
+                // not leave that empty file behind as if a fixup remux had
+                // run and produced nothing.
+                let ost_idx = Self::add_stream_copy(&mut octx, ist.parameters(), "for fixup")
+                    .inspect_err(|_| cleanup_partial_output(&output))?;
                 octx.stream_mut(ost_idx)
                     .expect("just-added stream")
                     .set_metadata(ist.metadata().to_owned());

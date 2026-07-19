@@ -21,6 +21,8 @@
 
 mod filter_graph;
 
+use std::path::Path;
+
 use crate::error::Result;
 
 use super::FFmpegRunner;
@@ -138,8 +140,25 @@ impl FFmpegRunner {
     ///   for AAC's `mp4a` into AVI, and H.264's `avc1` into FLV); zeroing
     ///   lets `FFmpeg` auto-fill the muxer's own preferred tag instead.
     /// - The table has **no** entry for `codec_id`: fall back to
-    ///   `avformat_query_codec` (representability, not tag choice). If it
-    ///   reports the codec is supported (MKV+HEVC, MKV+SubRip) ->
+    ///   `avformat_query_codec` (representability, not tag choice). Before
+    ///   consulting it, streams whose medium is not Video/Audio/Subtitle
+    ///   (Attachment, Data, Unknown — fonts, timed ID3, generic binary
+    ///   blobs) are never eligible for rejection at all: `Err` here means
+    ///   "this `FFmpeg` build cannot decode/play the codec in this
+    ///   container", a question that only applies to playable media
+    ///   streams. An attachment's "codec" (e.g. `ttf`) is never decoded —
+    ///   it is opaque payload the muxer stores verbatim — so `mkv`'s
+    ///   `query_codec` reporting it unsupported is not a representability
+    ///   gap, it is simply not a question `query_codec`'s table was built
+    ///   to answer for that medium. Rejecting these unconditionally broke
+    ///   `salvage_remux_sync` (the container-corruption recovery path of
+    ///   last resort, which copies every stream with no medium filter by
+    ///   design) on any input carrying a font attachment — the standard
+    ///   layout for a subtitled release. These streams resolve to
+    ///   [`CodecTagAction::Clear`] (the pre-branch behavior: no tag-table
+    ///   entry to preserve or auto-fill from, so clearing is inert).
+    /// - Otherwise (Video/Audio/Subtitle), if `avformat_query_codec` reports
+    ///   the codec is supported (MKV+HEVC, MKV+SubRip) ->
     ///   [`CodecTagAction::Clear`] — there is no tag-table entry to preserve
     ///   or auto-fill from, so clearing is simply inert here too. If it
     ///   reports unsupported (AVI+HEVC): the pairing cannot be represented
@@ -149,10 +168,27 @@ impl FFmpegRunner {
     ///   else (AVI + HEVC: tag stays 0, `riff.c` maps a zero fourcc to raw
     ///   video — exit 0, corrupt file).
     ///
+    /// `avformat_query_codec` itself returns `1` (supported), `0` (not
+    /// supported), or negative (`AVERROR_PATCHWELCOME` — information
+    /// unavailable), per its header contract in `avformat.h`. Only a
+    /// strictly positive result is treated as "supported"
+    /// (`query > 0`, not `query != 0`): a negative "unknown" answer is not
+    /// evidence the pairing works, so it takes the same conservative,
+    /// reject-before-writing branch as an explicit `0`. At every call site
+    /// this predicate actually reaches (guarded above by the tag-table-miss
+    /// branch), the linked `FFmpeg` 8.0 build's `query_codec` callbacks
+    /// (`mkv_query_codec`/`webm_query_codec`) and the C library's own
+    /// tag-table fallback in `avformat_query_codec` both only ever return
+    /// `0` or `1` here — never negative — so this correction changes no
+    /// case in the regression matrix; it is a defensive alignment with the
+    /// documented contract for a `query_codec` implementation this build
+    /// does not ship.
+    ///
     /// # Errors
     ///
     /// Returns [`crate::error::PostProcessError::IncompatibleContainerCodec`]
-    /// when the muxer cannot represent the stream's codec under any tag.
+    /// when the muxer cannot represent a Video/Audio/Subtitle stream's codec
+    /// under any tag.
     ///
     /// `pub(crate)`: called directly (not through [`Self::add_stream_copy`])
     /// by the raw-FFI mux paths, which build `AVStream`/`AVCodecParameters`
@@ -198,7 +234,20 @@ impl FFmpegRunner {
             });
         }
 
-        // No tag-table entry: ask representability, not tag choice.
+        // No tag-table entry. Attachment/Data/Unknown streams are opaque
+        // payload, never decoded, so representability (which only applies
+        // to playable Video/Audio/Subtitle media) is not a question that
+        // can reject them — see the doc comment above.
+        if !matches!(
+            codec_type,
+            ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_VIDEO
+                | ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_AUDIO
+                | ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_SUBTITLE
+        ) {
+            return Ok(CodecTagAction::Clear);
+        }
+
+        // Ask representability, not tag choice.
         // SAFETY: `oformat` is the same live, non-null descriptor read above.
         let query = unsafe {
             ffmpeg_the_third::ffi::avformat_query_codec(
@@ -207,7 +256,7 @@ impl FFmpegRunner {
                 ffmpeg_the_third::ffi::FF_COMPLIANCE_NORMAL,
             )
         };
-        if query != 0 {
+        if query > 0 {
             return Ok(CodecTagAction::Clear);
         }
 
@@ -271,6 +320,34 @@ impl FFmpegRunner {
         unsafe {
             (*params_ptr.cast_mut()).codec_tag = 0;
         }
+    }
+
+    /// Resolve and apply the codec-tag decision for one just-added raw-FFI
+    /// output stream — [`Self::resolve_codec_tag`] followed by
+    /// [`Self::clear_codec_tag`] on [`CodecTagAction::Clear`], a no-op on
+    /// [`CodecTagAction::Preserve`].
+    ///
+    /// The 4 raw-FFI mux paths (`remux_mkv_raw_ffi`, `merge_mkv_raw_ffi`'s
+    /// two streams, `embed_thumbnail_mkv_raw_ffi`) each repeated this
+    /// 3-arm `match` verbatim; collapsing the two `Ok` arms here leaves each
+    /// call site only its own cleanup (closing input/output contexts) on
+    /// `Err`, which differs per site and cannot be folded in without losing
+    /// that context-specific teardown.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::PostProcessError::IncompatibleContainerCodec`]
+    /// when [`Self::resolve_codec_tag`] rejects the pairing; the caller is
+    /// still responsible for its own cleanup before propagating.
+    pub(crate) fn resolve_and_apply_codec_tag(
+        oformat: *const ffmpeg_the_third::ffi::AVOutputFormat,
+        codecpar: *const ffmpeg_the_third::ffi::AVCodecParameters,
+    ) -> Result<()> {
+        match Self::resolve_codec_tag(oformat, codecpar)? {
+            CodecTagAction::Preserve => {}
+            CodecTagAction::Clear => Self::clear_codec_tag(codecpar),
+        }
+        Ok(())
     }
 
     /// Copy encoder parameters back to an output stream.
@@ -491,6 +568,30 @@ impl FFmpegRunner {
     }
 }
 
+/// Delete a just-created, still-empty output file after a stream-copy setup
+/// failure (best-effort; a failure here is not itself propagated).
+///
+/// `ffmpeg_the_third::format::output(path)` (and the raw-FFI equivalent,
+/// `avio_open` under `AVIO_FLAG_WRITE`) creates/truncates `path` on disk
+/// immediately — before a single stream, header, or packet is written. If
+/// [`FFmpegRunner::add_stream_copy`] (or the raw-FFI
+/// [`FFmpegRunner::resolve_and_apply_codec_tag`]) then rejects the pairing,
+/// that 0-byte file is left behind looking like a completed-but-empty
+/// operation rather than "never ran". Six call sites across `remux.rs`,
+/// `salvage.rs`, `metadata.rs`, `fixup.rs`, `thumbnail/mod.rs`, and
+/// `merge/mod.rs` share this exact cleanup; a single helper keeps the
+/// six from drifting apart.
+///
+/// Deletes exactly the caller-supplied `path` — never a directory sweep
+/// (rdlp #558's lesson: a directory-wide cleanup can delete a concurrent
+/// operation's live output).
+pub(crate) fn cleanup_partial_output(path: &Path) {
+    // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking from
+    // async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
+    #[allow(clippy::disallowed_methods)]
+    let _ = std::fs::remove_file(path);
+}
+
 /// Release packet buffer references. Idempotent — safe on empty packets.
 ///
 /// SAFETY: `Packet::as_ptr()` returns a valid, non-null `AVPacket` pointer
@@ -554,6 +655,39 @@ pub const fn codec_threading_info(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// IMPORTANT #2 regression guard: the shared 0-byte-output cleanup
+    /// helper must actually delete the file it's given.
+    #[test]
+    fn cleanup_partial_output_deletes_existing_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("partial.mkv");
+        // Safe: test fixture — creating an empty file synchronously is not
+        // on any async-runtime hot path.
+        #[allow(clippy::disallowed_methods)]
+        std::fs::write(&path, b"").expect("create empty fixture");
+        assert!(path.exists());
+
+        cleanup_partial_output(&path);
+
+        assert!(
+            !path.exists(),
+            "cleanup_partial_output must delete the partial output file"
+        );
+    }
+
+    /// `remove_file` on an already-absent path must not panic — every call
+    /// site invokes this from an error path where a prior step (e.g. a
+    /// mid-loop cancellation) may have already removed the file.
+    #[test]
+    fn cleanup_partial_output_is_idempotent_on_missing_file() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("never_created.mkv");
+        assert!(!path.exists());
+
+        cleanup_partial_output(&path); // must not panic
+        cleanup_partial_output(&path); // still must not panic
+    }
 
     #[test]
     fn packet_unref_on_empty_packet() {
@@ -711,6 +845,55 @@ mod tests {
             CodecTagAction::Clear,
             "mp4a does not round-trip to AAC in mkv's tag table -> Clear, not Preserve"
         );
+    }
+
+    /// CRITICAL regression guard (post-#549 review): `salvage_remux_sync`
+    /// copies every stream in the corrupt input with no media-type filter
+    /// (by design — it is the last-resort recovery path and must not drop
+    /// arbitrary attachments), so an MKV carrying a font attachment (the
+    /// standard layout for a subtitled release) must not have its font
+    /// stream rejected. `AV_CODEC_ID_TTF`'s `AVMediaType` is
+    /// `AVMEDIA_TYPE_ATTACHMENT` — mkv's codec-tag table has no entry for it
+    /// and `mkv_query_codec` reports it unsupported (0), so before this fix
+    /// the fallback reached the final `Err` branch. Fails against the
+    /// unpatched predicate (which does not gate on medium at all).
+    #[test]
+    fn resolve_codec_tag_clears_ttf_attachment_into_mkv() {
+        crate::ffmpeg::ensure_init().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let oformat = oformat_for_extension(dir.path(), "mkv");
+        let params = fake_params(
+            ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_TTF,
+            ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_ATTACHMENT,
+        );
+
+        let action = FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params)).expect(
+            "attachment streams (e.g. embedded fonts) must never be rejected on \
+             codec representability — only Video/Audio/Subtitle streams are \
+             eligible for IncompatibleContainerCodec",
+        );
+        assert_eq!(
+            action,
+            CodecTagAction::Clear,
+            "no tag-table entry for a font attachment -> Clear (not Err)"
+        );
+    }
+
+    /// Same medium-gate bug, `AVMEDIA_TYPE_DATA` variant: `BIN_DATA` (generic
+    /// binary side-channel data, e.g. subtitle-adjacent blobs) has no
+    /// mkv tag-table entry either and must not be rejected.
+    #[test]
+    fn resolve_codec_tag_clears_data_medium_into_mkv() {
+        crate::ffmpeg::ensure_init().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let oformat = oformat_for_extension(dir.path(), "mkv");
+        let params = fake_params(
+            ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_BIN_DATA,
+            ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_DATA,
+        );
+
+        FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params))
+            .expect("AVMEDIA_TYPE_DATA streams must never be rejected on codec representability");
     }
 
     /// Sanity check on the other side of the same predicate: AVI's tag table

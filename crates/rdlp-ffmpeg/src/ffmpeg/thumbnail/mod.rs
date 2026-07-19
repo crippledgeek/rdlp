@@ -48,6 +48,7 @@ use crate::error::{PostProcessError, Result};
 
 use self::embed_strategy::ThumbnailEmbedStrategy;
 pub use self::embed_strategy::{supports_thumbnail_embed, uses_native_attachment};
+use super::ffi_helpers::cleanup_partial_output;
 use super::{FFmpegRunner, ensure_init};
 
 impl FFmpegRunner {
@@ -135,11 +136,15 @@ impl FFmpegRunner {
 
         // Baseline: JPEG and PNG embed successfully in every container rdlp
         // supports, verified end to end. `avformat_query_codec` does NOT report
-        // that — it answers `1` only for muxers carrying a `codec_tag` table,
-        // so mp3 (which answers through a `query_codec` callback returning the
-        // `APIC` tag), flac, and m4a all report "cannot store" for images they
-        // demonstrably do store. Trusting the query alone would re-encode a
-        // lossless PNG cover to lossy JPEG on those containers.
+        // that: per `avformat.c`, it dispatches to the muxer's own
+        // `query_codec` callback first when one exists, falling back to the
+        // `codec_tag` table only when it doesn't (see the matching, correct
+        // description in `ffi_helpers/mod.rs::resolve_codec_tag`) — so mp3
+        // (whose `query_codec` callback answers via the `APIC` tag rather
+        // than a plain codec match), flac, and m4a all report "cannot store"
+        // for images they demonstrably do store. Trusting the query alone
+        // would re-encode a lossless PNG cover to lossy JPEG on those
+        // containers.
         //
         // So the query below only ever WIDENS this baseline; it can never
         // narrow the answer below what is known to work.
@@ -152,8 +157,9 @@ impl FFmpegRunner {
 
         // SAFETY: `ofmt` is the non-null static descriptor returned above and
         // remains valid for the process lifetime. `avformat_query_codec` only
-        // reads that descriptor's codec-tag tables — no allocation, no
-        // ownership transfer, no mutation.
+        // reads that descriptor (its `query_codec` callback and/or its
+        // codec-tag tables, per the dispatch order noted above) — no
+        // allocation, no ownership transfer, no mutation.
         let query = unsafe {
             ffmpeg_the_third::ffi::avformat_query_codec(
                 ofmt,
@@ -318,8 +324,12 @@ impl FFmpegRunner {
             ist_time_bases[ist_index] = ist.time_base();
             ost_index += 1;
 
-            let ost_idx =
-                Self::add_stream_copy(&mut octx, ist.parameters(), "for thumbnail embed")?;
+            // `format::output` above already created (truncated) `output` on
+            // disk via `avio_open` — a codec-tag rejection here must not
+            // leave that empty file behind as if a thumbnail embed had run
+            // and produced nothing.
+            let ost_idx = Self::add_stream_copy(&mut octx, ist.parameters(), "for thumbnail embed")
+                .inspect_err(|_| cleanup_partial_output(output))?;
             octx.stream_mut(ost_idx)
                 .expect("just-added stream")
                 .set_metadata(ist.metadata().to_owned());
@@ -345,8 +355,8 @@ impl FFmpegRunner {
         let thumb_ost_index = if is_ogg_opus {
             None
         } else {
-            let ost_idx =
-                Self::add_stream_copy(&mut octx, thumb_ist.parameters(), "for thumbnail")?;
+            let ost_idx = Self::add_stream_copy(&mut octx, thumb_ist.parameters(), "for thumbnail")
+                .inspect_err(|_| cleanup_partial_output(output))?;
             {
                 let mut thumb_ost = octx
                     .stream_mut(ost_idx)

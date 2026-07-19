@@ -345,6 +345,45 @@ async fn hevc_mp4_to_avi_is_rejected_with_actionable_message() {
     );
 }
 
+/// IMPORTANT #2 (code-review follow-up): the 0-byte-output cleanup on a
+/// codec-tag rejection previously landed only at the `remux.rs` call site;
+/// `embed_metadata` shares the exact same `format::output` (create/truncate)
+/// -then-`add_stream_copy` (can newly fail) shape and had no cleanup at all.
+/// Reuses the proven HEVC-into-AVI rejection (same as
+/// `hevc_mp4_to_avi_is_rejected_with_actionable_message` above) through a
+/// different call site to prove the cleanup helper landed there too.
+#[tokio::test]
+async fn metadata_embed_hevc_into_avi_leaves_no_partial_file() {
+    if !require_ffmpeg() {
+        return;
+    }
+    let dst = fixtures().dir.path().join("hevc_metadata_to_avi.avi");
+    let runner = FFmpegRunner::new().expect("FFmpegRunner::new");
+
+    let err = runner
+        .embed_metadata(
+            &fixtures().hevc_mp4,
+            &dst,
+            &std::collections::HashMap::new(),
+            &[],
+            None,
+            None,
+        )
+        .await
+        .expect_err("AVI cannot represent HEVC; metadata embed must be rejected too");
+
+    let msg = err.to_string().to_lowercase();
+    assert!(
+        msg.contains("avi") && msg.contains("hevc"),
+        "error should name the container/codec pairing, got: {msg}"
+    );
+    assert!(
+        !dst.exists(),
+        "rejection must not leave a partial/empty output file at {}",
+        dst.display()
+    );
+}
+
 /// Regression guard matrix: every pairing that worked before this fix must
 /// keep working — the MKV raw-FFI path (now also routed through
 /// `resolve_codec_tag`, see `mkv_raw_ffi_audio_bearing_sources_preserve_aac_and_decode`
