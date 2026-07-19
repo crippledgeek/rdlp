@@ -174,6 +174,13 @@ impl ThumbnailStage {
     /// `container_accepts_image_codec`, which answers an unrelated
     /// stream-codec-tag question that does not apply to attachments.
     ///
+    /// MP3 gets the same conservative treatment as a deliberate *policy*
+    /// carve-out, layered on top of (not a correction to) the capability
+    /// query below — see [`Self::mp3_apic_renders_natively`] for why "the
+    /// muxer can store it" and "a player renders it" are different
+    /// questions for `ID3v2` `APIC` covers, same as they were for Matroska
+    /// attachments in #530.
+    ///
     /// Every non-Matroska embed strategy stream-copies the thumbnail's source
     /// codec into the target container (see `rdlp_ffmpeg::thumbnail`), so a
     /// codec the target muxer has no tag for (e.g. `webp` in MP4) must be
@@ -201,6 +208,24 @@ impl ThumbnailStage {
             };
         }
 
+        // MP3 policy carve-out (#549 follow-up): `container_accepts_image_codec`'s
+        // `> 0` fix (#549) makes mp3's own `query_codec` callback (`mp3enc.c`)
+        // correctly report every image mime it lists — gif/jpeg/png/tiff/bmp/webp
+        // — as representable, since it answers with the shared `APIC` tag
+        // rather than a bare `1`. That answers "can the muxer store these
+        // bytes", not "will an `ID3v2` reader display them as a cover". #530
+        // found exactly that gap for Matroska (bmp/webp attach fine, render
+        // invisible); no equivalent verification exists for `ID3v2` `APIC`
+        // readers, so mp3 mirrors the same conservative policy rather than
+        // trusting the widened capability query at face value.
+        if ContainerFormat::from_str(extension) == Ok(ContainerFormat::Mp3)
+            && !Self::mp3_apic_renders_natively(thumbnail_file).await
+        {
+            return self
+                .transcode_thumbnail_to_jpg(msg, extension, thumbnail_file)
+                .await;
+        }
+
         // Ask the muxer whether it can carry this image's codec, rather than
         // consulting a hardcoded list (#525). This is the same codec-tag lookup
         // that produced the original failure, and it reads the image's real
@@ -219,6 +244,37 @@ impl ThumbnailStage {
 
         self.transcode_thumbnail_to_jpg(msg, extension, thumbnail_file)
             .await
+    }
+
+    /// Whether `thumbnail_file`'s content is a format this policy treats as a
+    /// verified-safe mp3 `ID3v2` `APIC` cover — a **conservative product
+    /// decision**, not an `FFmpeg`-verified capability like
+    /// [`Self::mkv_attachment_renders_natively`]'s Matroska read-back table.
+    ///
+    /// `gif`/`jpeg`/`png`/`tiff` are accepted outright — they were the
+    /// baseline behavior before #549's `> 0` widening (jpeg/png always
+    /// embedded natively via the universal `MJPEG`/`PNG` baseline in
+    /// `container_accepts_image_codec`; gif/tiff were previously transcoded
+    /// under the stricter `== 1` gate, so passing them through here is a
+    /// deliberate, accepted widening, not an oversight). `bmp`/`webp` stay
+    /// normalized: #530 is the concrete precedent for "a muxer/tag mechanism
+    /// answering yes" not implying "a player renders it", and nothing in
+    /// this codebase has verified an `ID3v2` reader displaying a bmp/webp
+    /// `APIC` frame. A read failure or unrecognized signature answers
+    /// `false`, the same safe direction.
+    async fn mp3_apic_renders_natively(thumbnail_file: &Path) -> bool {
+        let Ok(bytes) = tokio::fs::read(thumbnail_file).await else {
+            return false;
+        };
+        matches!(
+            rdlp_types::sniff_thumbnail_format(&bytes),
+            Some(
+                ThumbnailFormat::Jpeg
+                    | ThumbnailFormat::Png
+                    | ThumbnailFormat::Gif
+                    | ThumbnailFormat::Tiff
+            )
+        )
     }
 
     /// Transcode `thumbnail_file` to a tracker-owned temp `.jpg`, falling
