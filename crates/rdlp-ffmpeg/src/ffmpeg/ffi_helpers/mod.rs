@@ -25,8 +25,24 @@ use crate::error::Result;
 
 use super::FFmpegRunner;
 
+/// What to do with a stream's copied codec tag for the target container.
+///
+/// Decided once, by [`FFmpegRunner::resolve_codec_tag`], and applied by
+/// [`FFmpegRunner::add_stream_copy`] — the single call site for both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodecTagAction {
+    /// The muxer's codec-tag table has an entry for this codec: keep the
+    /// tag `avcodec_parameters_copy` already copied from the source stream.
+    Preserve,
+    /// The muxer isn't tag-driven (no codec-tag table at all, e.g.
+    /// MPEG-TS): zeroing has no effect either way; zero for consistency
+    /// with this crate's historical behavior.
+    Clear,
+}
+
 impl FFmpegRunner {
-    /// Add a stream-copy output stream: add stream, copy parameters, clear codec tag.
+    /// Add a stream-copy output stream: add stream, copy parameters, resolve
+    /// the codec tag for the target container.
     ///
     /// This is the standard pattern for remuxing/metadata/merge where a stream
     /// is copied without re-encoding. Returns the output stream index.
@@ -35,6 +51,11 @@ impl FFmpegRunner {
     /// * `octx` - Output format context
     /// * `params` - Input stream parameters to copy
     /// * `context_msg` - Error context message (e.g., "for remux", "for merge video")
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the target container's muxer cannot represent the
+    /// stream's codec at all (see [`Self::resolve_codec_tag`]).
     pub(crate) fn add_stream_copy(
         octx: &mut ffmpeg_the_third::format::context::Output,
         params: impl ffmpeg_the_third::AsPtr<ffmpeg_the_third::ffi::AVCodecParameters>,
@@ -43,6 +64,14 @@ impl FFmpegRunner {
         use crate::error::PostProcessError;
         use anyhow::Context;
 
+        // Captured before `add_stream` takes a mutable borrow of `octx`.
+        // SAFETY: `octx` owns a valid AVFormatContext; `oformat` is set once
+        // at context-alloc time (`avformat_alloc_output_context2`) and never
+        // changes afterward, so reading it through a short-lived reborrow
+        // here is sound regardless of what happens to `octx` later.
+        let oformat: *const ffmpeg_the_third::ffi::AVOutputFormat =
+            unsafe { (*octx.as_mut_ptr()).oformat };
+
         let mut ost = octx
             .add_stream(ffmpeg_the_third::encoder::find(
                 ffmpeg_the_third::codec::Id::None,
@@ -50,14 +79,129 @@ impl FFmpegRunner {
             .map_err(PostProcessError::from)
             .context(format!("failed to add output stream {context_msg}"))?;
         ost.set_parameters(params);
-        Self::clear_codec_tag(ost.parameters().as_ptr());
+
+        let params_ptr = ost.parameters().as_ptr();
+        match Self::resolve_codec_tag(oformat, params_ptr)? {
+            CodecTagAction::Preserve => {}
+            CodecTagAction::Clear => Self::clear_codec_tag(params_ptr),
+        }
+
         Ok(ost.index())
+    }
+
+    /// Decide what to do with a stream's codec tag for the target container
+    /// (see [`CodecTagAction`]) — the single decision point `add_stream_copy`
+    /// consults; no other call site re-implements this predicate.
+    ///
+    /// Uses `av_codec_get_tag`/`av_codec_get_id` — the same public `FFmpeg`
+    /// API the muxer's own header-validation path uses internally — against
+    /// `oformat.codec_tag`, since `ffmpeg-the-third` has no safe wrapper for
+    /// either. (`avformat_query_codec` was tried first and rejected: it only
+    /// asks "does this muxer support this `codec_id` at all", not "does it
+    /// accept *this specific* tag" — reporting `1` for e.g. AAC-in-AVI even
+    /// though the source's `mp4a` tag isn't one the AVI table recognizes,
+    /// which broke real audio/FLV streams in this fix's own test matrix.)
+    ///
+    /// - The muxer has no codec-tag table at all (`oformat.codec_tag` is
+    ///   null, e.g. MPEG-TS): tag-clearing is inert either way ->
+    ///   [`CodecTagAction::Clear`].
+    /// - The table has no entry for this codec's `codec_id` whatsoever
+    ///   (`av_codec_get_tag` returns 0): the pairing cannot be represented in
+    ///   this container by this `FFmpeg` build (a convention gap, not a
+    ///   documented standard — no spec covers HEVC-in-AVI). Reject before
+    ///   writing rather than let a zeroed tag silently decode as something
+    ///   else (AVI + HEVC: tag stays 0, `riff.c` maps a zero fourcc to raw
+    ///   video — exit 0, corrupt file).
+    /// - The table has an entry for `codec_id`, and the source's specific
+    ///   tag maps back to that same `codec_id` (`av_codec_get_id` round-trips)
+    ///   -> [`CodecTagAction::Preserve`]. Zeroing here would make `FFmpeg`
+    ///   auto-fill the tag from the muxer's own table, which for AVI
+    ///   substitutes a literal `'H264'` fourcc — that value arms
+    ///   `avienc.c`'s start-code guard and hard-fails AVCC-packaged H.264
+    ///   (no start codes in the bitstream).
+    /// - The table has an entry for `codec_id`, but under a *different* tag
+    ///   than the source's -> [`CodecTagAction::Clear`]. Preserving would
+    ///   write a tag the muxer's own validation rejects outright (observed
+    ///   for AAC's `mp4a` into AVI, and H.264's `avc1` into FLV); zeroing
+    ///   lets `FFmpeg` auto-fill the muxer's own preferred tag instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`crate::error::PostProcessError::IncompatibleContainerCodec`]
+    /// when the muxer's tag table has no entry for the stream's codec.
+    fn resolve_codec_tag(
+        oformat: *const ffmpeg_the_third::ffi::AVOutputFormat,
+        params_ptr: *const ffmpeg_the_third::ffi::AVCodecParameters,
+    ) -> Result<CodecTagAction> {
+        use crate::error::PostProcessError;
+
+        // SAFETY: `oformat` is the live output context's format descriptor
+        // (see the SAFETY note at the `add_stream_copy` call site);
+        // `params_ptr` is the just-copied codecpar of the stream we added to
+        // that same context, so both reads are into live FFmpeg-owned memory.
+        let (codec_id, source_tag, codec_type, tags) = unsafe {
+            (
+                (*params_ptr).codec_id,
+                (*params_ptr).codec_tag,
+                (*params_ptr).codec_type,
+                (*oformat).codec_tag,
+            )
+        };
+
+        if tags.is_null() {
+            return Ok(CodecTagAction::Clear);
+        }
+
+        // SAFETY: `tags` was just proven non-null; both lookups are pure
+        // reads over the muxer's static, compiled-in tag table.
+        let (muxer_tag_for_codec, id_for_source_tag) = unsafe {
+            (
+                ffmpeg_the_third::ffi::av_codec_get_tag(tags, codec_id),
+                ffmpeg_the_third::ffi::av_codec_get_id(tags, source_tag),
+            )
+        };
+
+        if muxer_tag_for_codec != 0 {
+            return Ok(if id_for_source_tag == codec_id {
+                // The source's specific tag round-trips to this codec: keep it.
+                CodecTagAction::Preserve
+            } else {
+                // Codec supported, but not under the source's specific tag;
+                // let FFmpeg auto-fill its own preferred tag instead.
+                CodecTagAction::Clear
+            });
+        }
+
+        // No entry for this codec at all, under any tag: unrepresentable.
+        // SAFETY: every registered muxer descriptor has a non-null,
+        // NUL-terminated `name`.
+        let container = unsafe {
+            std::ffi::CStr::from_ptr((*oformat).name)
+                .to_string_lossy()
+                .into_owned()
+        };
+        let codec = ffmpeg_the_third::codec::Id::from(codec_id)
+            .name()
+            .to_string();
+        let medium = match codec_type {
+            ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_VIDEO => "video",
+            ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_AUDIO => "audio",
+            _ => "stream",
+        }
+        .to_string();
+
+        Err(PostProcessError::IncompatibleContainerCodec {
+            container,
+            codec,
+            medium,
+        })
     }
 
     /// Reset the codec tag to 0 for container compatibility.
     ///
-    /// When remuxing between containers, the source codec tag may not be valid
-    /// in the target container. Setting it to 0 lets `FFmpeg` auto-select.
+    /// Only correct to call when the target muxer isn't tag-driven at all
+    /// (see [`Self::resolve_codec_tag`]) — zeroing then has no effect, since
+    /// there is no table for `FFmpeg` to auto-fill a tag from.
     pub(crate) fn clear_codec_tag(params_ptr: *const ffmpeg_the_third::ffi::AVCodecParameters) {
         // SAFETY: `params_ptr` points to a valid AVCodecParameters allocated by FFmpeg.
         // Setting codec_tag to 0 is always valid — it tells FFmpeg to auto-select.

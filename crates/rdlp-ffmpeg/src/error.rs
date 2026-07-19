@@ -144,6 +144,21 @@ pub enum PostProcessError {
     #[error("Input corrupt and salvage failed: {message}")]
     SalvageFailed { message: String },
 
+    /// A stream's codec cannot be represented in the target container: the
+    /// muxer's codec-tag table has no entry for it (a convention gap in
+    /// this `FFmpeg` build, not a documented container standard).
+    #[error(
+        "{container} cannot represent {codec} {medium}; try mkv or another container that supports this codec"
+    )]
+    IncompatibleContainerCodec {
+        /// Target container/muxer short name (e.g. "avi").
+        container: String,
+        /// Codec name as reported by `FFmpeg` (e.g. "hevc").
+        codec: String,
+        /// Stream medium: "video", "audio", or "stream" for anything else.
+        medium: String,
+    },
+
     /// Catch-all for errors with context chains from internal operations.
     #[error(transparent)]
     Other(#[from] anyhow::Error),
