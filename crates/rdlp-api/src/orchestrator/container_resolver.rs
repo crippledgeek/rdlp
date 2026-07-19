@@ -13,7 +13,11 @@ use std::path::{Path, PathBuf};
 pub enum ContainerSource {
     /// User explicitly set via `--remux=<container>`.
     RemuxConfig,
-    /// User explicitly set via `--merge-output-format=<container>`.
+    /// User explicitly set `postprocess.merge_output_format`.
+    ///
+    /// There is no CLI flag for this: it is settable only from the config TOML
+    /// (`[postprocess] merge_output_format = "<container>"`) or by an API caller
+    /// constructing [`rdlp_types::PostProcess`] directly.
     MergeConfig,
     /// Inferred from the output file's extension (reflects format selection).
     FileExtension,
@@ -37,8 +41,8 @@ impl ResolvedContainer {
     /// Resolve the target container using the precedence chain.
     ///
     /// # Precedence (highest to lowest)
-    /// 1. `config.remux_container` (`--remux=<fmt>`)
-    /// 2. `config.merge_output_format` (`--merge-output-format=<fmt>`)
+    /// 1. `config.postprocess.remux_container` (`--remux=<fmt>`)
+    /// 2. `config.postprocess.merge_output_format` (config TOML / API only)
     /// 3. Output file extension (from format selection)
     /// 4. Fallback to MP4 with warning
     pub fn resolve(config: &rdlp_types::Config, output_path: Option<&Path>) -> Self {
