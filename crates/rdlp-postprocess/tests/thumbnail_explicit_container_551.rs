@@ -364,10 +364,19 @@ async fn remux_outranks_merge_output_format() {
         merge_output_format: Some(ContainerFormat::Mkv),
         ..PostProcess::default()
     };
-    let msg = make_msg(vec![media], config, MsgOptions::default());
+    let msg = make_msg(vec![media.clone()], config, MsgOptions::default());
 
     let result = stage.process(msg).await.expect("non-fatal stage");
 
+    // Assert the CONTAINER was kept, not merely that a warning fired: the
+    // warning is emitted only on the keep path today, so on its own it is a
+    // proxy rather than the property under test, and would not notice a
+    // warning emitted without the container actually surviving.
+    assert_eq!(
+        result.tracker.primary(),
+        media,
+        "the remux target (.ts) must be the container that survives"
+    );
     assert!(
         result.warnings.iter().any(|w| w.contains("--remux=ts")),
         "the remux target must win over merge_output_format, got: {:?}",

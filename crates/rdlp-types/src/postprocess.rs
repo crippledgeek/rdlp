@@ -12,7 +12,7 @@ use crate::vpx_deadline::VpxDeadline;
 
 /// Which configuration field asked for an output container.
 ///
-/// A closed three-variant domain value, so it is an enum rather than a
+/// A closed four-variant domain value, so it is an enum rather than a
 /// `&'static str` flag name (per `value-objects-by-default`): the variants are
 /// typo-proof at the call site, exhaustively matchable, and — the reason this
 /// is not merely style — they keep CLI presentation OUT of `rdlp-types`.
@@ -20,7 +20,7 @@ use crate::vpx_deadline::VpxDeadline;
 /// every consumer inherit CLI spelling; the desktop GUI sets these same fields
 /// with no CLI involved, and would end up showing a user a flag they never
 /// typed. The flag string is therefore a rendering concern, produced by
-/// [`Self::cli_flag`] at the boundary that actually speaks CLI.
+/// [`Self::setting_name`] at the boundary that actually speaks CLI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ContainerRequest {
     /// `--recode-container` / `postprocess.recode_container`.
@@ -83,14 +83,6 @@ pub enum ContainerSource {
 }
 
 impl ContainerSource {
-    /// Whether the user asked for this container, as opposed to rdlp choosing
-    /// it. The distinction that governs whether a later stage may override it
-    /// (#548, #551, #554).
-    #[must_use]
-    pub const fn is_explicit(self) -> bool {
-        matches!(self, Self::Requested(_))
-    }
-
     /// The setting an operator would edit to change this decision, or `None`
     /// when rdlp inferred it and there is no setting to name.
     #[must_use]
@@ -422,21 +414,6 @@ mod tests {
         };
         let explicit = config.explicit_container().expect("some");
         assert_eq!(explicit.source, ContainerRequest::RecodeVideo);
-    }
-
-    #[test]
-    fn requested_sources_are_explicit() {
-        assert!(ContainerSource::Requested(ContainerRequest::Remux).is_explicit());
-        assert!(ContainerSource::Requested(ContainerRequest::MergeOutputFormat).is_explicit());
-    }
-
-    /// The load-bearing direction: an inferred container is NOT an explicit
-    /// request, so a later stage may still override it (the post-HLS `.ts`
-    /// case that must keep auto-remuxing).
-    #[test]
-    fn inferred_sources_are_not_explicit() {
-        assert!(!ContainerSource::FileExtension.is_explicit());
-        assert!(!ContainerSource::Fallback.is_explicit());
     }
 
     #[test]
