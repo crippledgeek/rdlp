@@ -24,7 +24,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, ControllerMode};
 use crate::atomic::{SIDECAR_SAVE_FAILURE_THRESHOLD, SaveFailureTracker};
-use crate::http::HttpDownloader;
+use crate::http::{HttpDownloader, RequestedSpan, validate_range_response};
 use crate::progress::SpeedMeter;
 use rdlp_security;
 
@@ -505,7 +505,7 @@ async fn fetch_with_optional_cancel(
 
 /// Fetch `url`, optionally as an HTTP byte range.
 ///
-/// The `byte_range` tuple is `(start, end_exclusive)` and is converted to RFC 7233
+/// The `byte_range` tuple is `(start, end_exclusive)` and is converted to RFC 9110
 /// `Range: bytes=start-end_inclusive` (subtract 1 for HTTP's inclusive end).
 ///
 /// `format_origin` enforces the same-origin header gate: `http.headers()` are
@@ -532,19 +532,34 @@ async fn fetch_with_optional_range(
     if same_origin {
         req = req.headers(http.headers());
     }
-    if let Some((start, end_exclusive)) = byte_range {
-        // Saturating_sub guards against any future caller passing end_exclusive == 0.
-        // (Caller responsibility: end_exclusive > start, validated at expand time.)
-        let end_inclusive = end_exclusive.saturating_sub(1);
-        let value = format!("bytes={start}-{end_inclusive}");
-        req = req.header(
-            "Range",
-            HeaderValue::from_str(&value).map_err(|e| rdlp_core::RdlpError::Download {
-                message: format!("fetch {safe_url}: {e}"),
-                url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
-            })?,
-        );
-    }
+
+    // `byte_range` is `(start, end_exclusive)`; RFC 9110's `Range` header and
+    // `RequestedSpan` are both inclusive, so `end_exclusive` is converted once
+    // here and the same `end_inclusive` is reused below to build the span that
+    // validates the response — never recomputed a second way.
+    let requested_span = match byte_range {
+        Some((start, end_exclusive)) => {
+            let end_inclusive = end_exclusive.saturating_sub(1);
+            let value = format!("bytes={start}-{end_inclusive}");
+            req = req.header(
+                "Range",
+                HeaderValue::from_str(&value).map_err(|e| rdlp_core::RdlpError::Download {
+                    message: format!("fetch {safe_url}: {e}"),
+                    url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
+                })?,
+            );
+            Some(RequestedSpan::new(start, end_inclusive).ok_or_else(|| {
+                rdlp_core::RdlpError::Download {
+                    url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
+                    message: format!(
+                        "internal error: fragment requested an inverted byte range \
+                         {start}-{end_inclusive}"
+                    ),
+                }
+            })?)
+        }
+        None => None,
+    };
 
     let resp = req
         .send()
@@ -554,20 +569,58 @@ async fn fetch_with_optional_range(
             url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
         })?;
 
-    if !resp.status().is_success() {
-        return Err(rdlp_core::RdlpError::Http {
-            status: resp.status().as_u16(),
-            reason: format!("fragment HTTP {}", resp.status()),
+    // Unranged fetches keep the plain success-status gate — a 200 is exactly
+    // right there and must not be held to a 206 standard.
+    //
+    // Ranged fetches (HLS #EXT-X-BYTERANGE / DASH mediaRange) reuse the same
+    // validator #526 added for the parallel-chunk path: RFC 9110 §14.2
+    // permits a server to ignore Range entirely and reply 200 with the WHOLE
+    // resource, and §15.3.7.1 requires a single-part 206 to carry
+    // Content-Range. Skipping this check is exactly what let a whole-file
+    // body land in a slot sized for one fragment.
+    let expected_len = if let Some(span) = requested_span {
+        validate_range_response(&resp, span, url)?;
+        Some(span.len())
+    } else {
+        if !resp.status().is_success() {
+            return Err(rdlp_core::RdlpError::Http {
+                status: resp.status().as_u16(),
+                reason: format!("fragment HTTP {}", resp.status()),
+            });
+        }
+        None
+    };
+
+    let body =
+        resp.bytes()
+            .await
+            .map(|b| b.to_vec())
+            .map_err(|e| rdlp_core::RdlpError::Network {
+                message: format!("read {safe_url}: {e}"),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
+            })?;
+
+    // The Content-Range check above only inspected headers; confirm the body
+    // that actually arrived is exactly the promised length. This single
+    // post-read check covers both a short body (§14.2 permits a server to
+    // send only part of a range, expecting a re-request) and an over-long
+    // body — the chunk path checks these directions separately because it
+    // streams, but this path already buffers the whole body via
+    // `resp.bytes()`, so one length comparison after the read suffices.
+    if let Some(expected_len) = expected_len
+        && body.len() as u64 != expected_len
+    {
+        return Err(rdlp_core::RdlpError::Download {
+            url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
+            message: format!(
+                "ranged fragment fetch {safe_url} delivered {} bytes; expected exactly \
+                 {expected_len} bytes per its Content-Range",
+                body.len()
+            ),
         });
     }
 
-    resp.bytes()
-        .await
-        .map(|b| b.to_vec())
-        .map_err(|e| rdlp_core::RdlpError::Network {
-            message: format!("read {safe_url}: {e}"),
-            url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
-        })
+    Ok(body)
 }
 
 pub(crate) mod state;

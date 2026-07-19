@@ -8,6 +8,8 @@ async fn byte_range_emits_http_range_header() {
     let _seg = server
         .mock("GET", "/seg.m4s")
         .match_header("Range", Matcher::Regex(r"^bytes=1024-2047$".to_string()))
+        .with_status(206)
+        .with_header("Content-Range", "bytes 1024-2047/8192")
         .with_body(b"X".repeat(1024))
         .expect(1)
         .create_async()
@@ -1525,4 +1527,207 @@ fn extrapolate_total_none_on_multiplication_overflow() {
         est, None,
         "overflowing extrapolation must yield None, per the \"None when unknown\" principle"
     );
+}
+
+// --- fetch_with_optional_range: ranged-fragment response validation (issue #564) ---
+//
+// #526 fixed the parallel-chunk path (crates/rdlp-downloader/src/http/mod.rs) by
+// validating a ranged response's status/Content-Range/length BEFORE any bytes
+// land in the merged output's chunk slot. `fetch_with_optional_range` sends the
+// same `Range` header for HLS BYTERANGE / DASH mediaRange fragments but only
+// gated on `resp.status().is_success()` — a server that ignores Range (legal
+// per RFC 9110 §14.2) replies 200 with the WHOLE resource, and the
+// unvalidated body is written into a slot sized for one fragment.
+//
+// These tests drive the fix through the fragment-list entry point
+// (`download_pre_resolved_fragments`) rather than calling the private
+// `fetch_with_optional_range` directly, so they exercise the exact code path
+// #564 describes end to end.
+
+fn ranged_frag(url: String, start: u64, end_exclusive: u64) -> Fragment {
+    Fragment {
+        url,
+        byte_range: Some((start, end_exclusive)),
+        init_url: None,
+        init_byte_range: None,
+        duration: Some(6.0),
+        filesize: None,
+    }
+}
+
+#[tokio::test]
+async fn ranged_fragment_200_full_body_is_rejected() {
+    // Server ignores Range (RFC 9110 §14.2) and answers 200 with the WHOLE
+    // resource — far larger than the requested 1024-byte span. Accepting
+    // this silently writes the whole file into the fragment's slot.
+    let mut server = mockito::Server::new_async().await;
+    let _seg = server
+        .mock("GET", "/seg.m4s")
+        .with_status(200)
+        .with_body(vec![0xAA; 8192])
+        .create_async()
+        .await;
+
+    let url = format!("{}/seg.m4s", server.url());
+    let frags = vec![ranged_frag(url, 1024, 2048)];
+
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let res =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+            .await;
+    let err = res.expect_err(
+        "a plain 200 answering a ranged request must be rejected, not accepted as the fragment body",
+    );
+    // Discriminate: without this the test would also pass if the download
+    // failed for an unrelated reason, making it a much weaker guard.
+    let msg = err.to_string();
+    assert!(
+        msg.contains("got HTTP 200") && msg.contains("expected 206"),
+        "must fail on the status check specifically, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn ranged_fragment_content_range_wrong_span_is_rejected() {
+    // 206 + Content-Range present, but it encloses a DIFFERENT span than the
+    // one requested (bytes=1024-2047 requested; server claims bytes=0-1023).
+    let mut server = mockito::Server::new_async().await;
+    let _seg = server
+        .mock("GET", "/seg.m4s")
+        .with_status(206)
+        .with_header("Content-Range", "bytes 0-1023/8192")
+        .with_body(vec![0xBB; 1024])
+        .create_async()
+        .await;
+
+    let url = format!("{}/seg.m4s", server.url());
+    let frags = vec![ranged_frag(url, 1024, 2048)];
+
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let res =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+            .await;
+    let err = res.expect_err(
+        "a 206 whose Content-Range encloses a different span than requested must be rejected",
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Content-Range bytes 0-1023") && msg.contains("different span"),
+        "must fail on the span-equality check specifically, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn ranged_fragment_short_body_is_rejected() {
+    // 206 + correct Content-Range (1024-2047, 1024 bytes) but the body is
+    // shorter than promised.
+    let mut server = mockito::Server::new_async().await;
+    let _seg = server
+        .mock("GET", "/seg.m4s")
+        .with_status(206)
+        .with_header("Content-Range", "bytes 1024-2047/8192")
+        .with_body(vec![0xCC; 512])
+        .create_async()
+        .await;
+
+    let url = format!("{}/seg.m4s", server.url());
+    let frags = vec![ranged_frag(url, 1024, 2048)];
+
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let res =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+            .await;
+    let err = res.expect_err(
+        "a 206 whose body is shorter than its own Content-Range promise must be rejected",
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("delivered 512 bytes") && msg.contains("expected exactly 1024"),
+        "must fail on the body-length check specifically, and name both counts, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn ranged_fragment_over_long_body_is_rejected() {
+    // 206 + correct Content-Range (1024-2047, 1024 bytes) but the body is
+    // longer than promised.
+    let mut server = mockito::Server::new_async().await;
+    let _seg = server
+        .mock("GET", "/seg.m4s")
+        .with_status(206)
+        .with_header("Content-Range", "bytes 1024-2047/8192")
+        .with_body(vec![0xDD; 2048])
+        .create_async()
+        .await;
+
+    let url = format!("{}/seg.m4s", server.url());
+    let frags = vec![ranged_frag(url, 1024, 2048)];
+
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let res =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+            .await;
+    let err = res.expect_err(
+        "a 206 whose body is longer than its own Content-Range promise must be rejected",
+    );
+    let msg = err.to_string();
+    assert!(
+        msg.contains("delivered 2048 bytes") && msg.contains("expected exactly 1024"),
+        "must fail on the body-length check specifically, and name both counts, got: {msg}"
+    );
+}
+
+#[tokio::test]
+async fn ranged_fragment_correct_206_is_accepted() {
+    // Positive: 206 + matching Content-Range + exact-length body succeeds and
+    // the exact bytes land in the output.
+    let mut server = mockito::Server::new_async().await;
+    let body = vec![0xEE; 1024];
+    let _seg = server
+        .mock("GET", "/seg.m4s")
+        .with_status(206)
+        .with_header("Content-Range", "bytes 1024-2047/8192")
+        .with_body(body.clone())
+        .create_async()
+        .await;
+
+    let url = format!("{}/seg.m4s", server.url());
+    let frags = vec![ranged_frag(url, 1024, 2048)];
+
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+        .await
+        .expect("a correct 206 + matching Content-Range + exact body must succeed");
+    let written = tokio::fs::read(tmp.path()).await.unwrap();
+    assert_eq!(written, body, "output must be exactly the validated span");
+}
+
+#[tokio::test]
+async fn unranged_fragment_plain_200_still_succeeds() {
+    // Regression guard: a fragment fetch with byte_range: None must keep
+    // today's behavior — a plain 200 is correct there and must NOT be
+    // required to be 206. This pins that the #564 fix does not require
+    // Partial Content on the no-Range path.
+    let mut server = mockito::Server::new_async().await;
+    let body = vec![0x11; 100];
+    let _f1 = server
+        .mock("GET", "/f1")
+        .with_status(200)
+        .with_body(body.clone())
+        .create_async()
+        .await;
+
+    let frags = vec![frag(format!("{}/f1", server.url()))];
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+        .await
+        .expect("unranged fragment fetch must still succeed on a plain 200");
+    let written = tokio::fs::read(tmp.path()).await.unwrap();
+    assert_eq!(written, body);
 }
