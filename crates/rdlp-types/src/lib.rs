@@ -58,7 +58,7 @@ pub use format::{
 };
 pub use info_dict::{Chapter, InfoDict, Subtitle, Thumbnail};
 pub use parse_error::ParseEnumError;
-pub use postprocess::{ContainerRequest, ExplicitContainer, PostProcess};
+pub use postprocess::{ContainerRequest, ContainerSource, ExplicitContainer, PostProcess};
 pub use progress::Progress;
 pub use protocol::DownloadProtocol;
 pub use recode_audio_mode::RecodeAudioMode;

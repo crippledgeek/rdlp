@@ -63,6 +63,45 @@ impl std::fmt::Display for ContainerRequest {
     }
 }
 
+/// How a container format was determined — an explicit user request, or an
+/// inference rdlp made on the user's behalf.
+///
+/// Composes with [`ContainerRequest`] rather than duplicating it: the explicit
+/// cases live in exactly one enum, and `Requested(..)` lifts that set into the
+/// wider "requested or inferred" question the orchestrator asks when picking a
+/// download/merge container. Keeping them separate is what lets
+/// [`ExplicitContainer`] be unable to hold `FileExtension` — a type that could
+/// would not be an "explicit container" at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerSource {
+    /// The user asked for this container, via the named setting.
+    Requested(ContainerRequest),
+    /// Inferred from the output file's extension (reflects format selection).
+    FileExtension,
+    /// No user preference anywhere; fell back to a safe default.
+    Fallback,
+}
+
+impl ContainerSource {
+    /// Whether the user asked for this container, as opposed to rdlp choosing
+    /// it. The distinction that governs whether a later stage may override it
+    /// (#548, #551, #554).
+    #[must_use]
+    pub const fn is_explicit(self) -> bool {
+        matches!(self, Self::Requested(_))
+    }
+
+    /// The setting an operator would edit to change this decision, or `None`
+    /// when rdlp inferred it and there is no setting to name.
+    #[must_use]
+    pub const fn setting_name(self) -> Option<&'static str> {
+        match self {
+            Self::Requested(request) => Some(request.setting_name()),
+            Self::FileExtension | Self::Fallback => None,
+        }
+    }
+}
+
 /// A container the user explicitly asked for, paired with the request that
 /// asked for it.
 ///
@@ -383,6 +422,41 @@ mod tests {
         };
         let explicit = config.explicit_container().expect("some");
         assert_eq!(explicit.source, ContainerRequest::RecodeVideo);
+    }
+
+    #[test]
+    fn requested_sources_are_explicit() {
+        assert!(ContainerSource::Requested(ContainerRequest::Remux).is_explicit());
+        assert!(ContainerSource::Requested(ContainerRequest::MergeOutputFormat).is_explicit());
+    }
+
+    /// The load-bearing direction: an inferred container is NOT an explicit
+    /// request, so a later stage may still override it (the post-HLS `.ts`
+    /// case that must keep auto-remuxing).
+    #[test]
+    fn inferred_sources_are_not_explicit() {
+        assert!(!ContainerSource::FileExtension.is_explicit());
+        assert!(!ContainerSource::Fallback.is_explicit());
+    }
+
+    #[test]
+    fn requested_source_names_its_setting() {
+        assert_eq!(
+            ContainerSource::Requested(ContainerRequest::Remux).setting_name(),
+            Some("--remux")
+        );
+        assert_eq!(
+            ContainerSource::Requested(ContainerRequest::MergeOutputFormat).setting_name(),
+            Some("postprocess.merge_output_format")
+        );
+    }
+
+    /// An inferred source has no setting to name — `None`, never an invented
+    /// flag string.
+    #[test]
+    fn inferred_sources_name_no_setting() {
+        assert_eq!(ContainerSource::FileExtension.setting_name(), None);
+        assert_eq!(ContainerSource::Fallback.setting_name(), None);
     }
 
     /// A config-only source must name the config key, never invent a flag.
