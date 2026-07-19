@@ -16,7 +16,7 @@ use async_trait::async_trait;
 use log::{debug, info, warn};
 
 use rdlp_ffmpeg::{FFmpegRunner, RemuxOptions};
-use rdlp_types::{THUMBNAIL_EXTENSIONS, ThumbnailFormat};
+use rdlp_types::{THUMBNAIL_EXTENSIONS, ThumbnailFormat, sniff_thumbnail_format};
 
 use crate::pipeline::{PipelineMessage, PipelineStage};
 
@@ -104,8 +104,16 @@ impl ThumbnailStage {
     /// transcoded first or the mux fails. Whether a tag exists is asked of
     /// `FFmpeg` via `container_accepts_image_codec` rather than hardcoded, so
     /// the answer always tracks the linked build instead of a list that can
-    /// drift from it. Matroska is exempt — it carries the image as a file
-    /// attachment rather than a stream, so no codec tag is involved.
+    /// drift from it.
+    ///
+    /// Matroska is checked first and separately, but is only PARTIALLY exempt:
+    /// it carries the image as a file attachment rather than a stream, so the
+    /// stream-codec-tag question below does not govern most formats — but
+    /// `image/bmp`/`image/webp` are not recognized by `FFmpeg`'s own
+    /// attachment-mimetype read-back table (`ThumbnailFormat::
+    /// matroska_attachment`), producing an invisible, non-rendering cover
+    /// (#530). Those two still fall through to the normal transcode path;
+    /// jpeg/png/gif/tiff return early untouched.
     ///
     /// On transcode failure, falls back to the original thumbnail path so the
     /// caller's existing non-fatal embed-failure handling still applies —
@@ -117,11 +125,9 @@ impl ThumbnailStage {
         extension: &str,
         thumbnail_file: &Path,
     ) -> PathBuf {
-        // Matroska is checked FIRST and separately: it carries the thumbnail as
-        // an attachment, not a stream, so the muxer's stream-codec answer below
-        // is simply not the question that governs it — asking would force a
-        // needless transcode for every MKV thumbnail.
-        if Self::is_native_attachment_container(extension) {
+        if Self::is_native_attachment_container(extension)
+            && Self::mkv_attachment_renders_natively(thumbnail_file).await
+        {
             return thumbnail_file.to_path_buf();
         }
 
@@ -166,6 +172,21 @@ impl ThumbnailStage {
                 thumbnail_file.to_path_buf()
             }
         }
+    }
+
+    /// Whether `thumbnail_file`'s content is a format the linked `FFmpeg`
+    /// build's Matroska read-back recognizes as a real, player-visible cover
+    /// (see [`ThumbnailFormat::matroska_attachment`]), so the native
+    /// attachment path can carry it as-is with no normalization.
+    ///
+    /// A read failure or an unrecognized signature answers `false` — the
+    /// safe direction, since it routes into the normal transcode-to-jpeg
+    /// path below rather than risking a silently non-rendering attachment.
+    async fn mkv_attachment_renders_natively(thumbnail_file: &Path) -> bool {
+        let Ok(bytes) = tokio::fs::read(thumbnail_file).await else {
+            return false;
+        };
+        sniff_thumbnail_format(&bytes).is_some_and(|format| format.matroska_attachment().is_some())
     }
 
     /// Write the iTunes `covr` metadata atom for Windows Explorer thumbnail visibility.
@@ -672,4 +693,11 @@ mod tests {
         assert!(!ThumbnailStage::is_native_attachment_container("mov"));
         assert!(!ThumbnailStage::is_native_attachment_container("mp3"));
     }
+
+    // #530 end-to-end coverage (gif/tiff attach natively, bmp/webp get
+    // normalized) lives in `crates/rdlp-postprocess/tests/
+    // thumbnail_mkv_cover_mimetype.rs` — those cases need the `ffmpeg` CLI to
+    // build real decodable image fixtures, which `scripts/check-no-cli.sh`
+    // forbids under `src/` (production-code CLI-usage gate); only files under
+    // `tests/` are exempt.
 }

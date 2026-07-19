@@ -194,11 +194,20 @@ async fn process_embeds_jpg_thumbnail_without_normalizing() {
     );
 }
 
-/// Regression guard: the Matroska path is untouched by the normalization
-/// fix — an mkv container must still embed a webp thumbnail directly (native
-/// Matroska attachment, no normalization), unlike the MP4-family path above.
+/// #530 update: unlike jpg/png/gif/tiff, a webp thumbnail is NOT carried
+/// natively into Matroska — `FFmpeg`'s own attachment-mimetype read-back
+/// table doesn't recognize `image/webp`, so an unnormalized webp attachment
+/// would silently fail to render as a cover in any player. The Matroska path
+/// must therefore normalize webp to mjpeg first, exactly like the MP4-family
+/// path above, and the embed must still succeed with no warnings.
+///
+/// Before #530 this test asserted the opposite (webp attached "natively,
+/// no normalization") and passed anyway because it never checked the
+/// resulting stream's codec — a silently non-rendering attachment produced
+/// the same "no warnings" outcome as a correct embed. The codec assertion
+/// below is what actually pins the behavior.
 #[tokio::test]
-async fn process_embeds_webp_thumbnail_into_mkv_natively() {
+async fn process_normalizes_webp_thumbnail_into_mkv_as_mjpeg() {
     if !ffmpeg_cli_available() {
         eprintln!("[SKIP] ffmpeg CLI not available");
         return;
@@ -231,7 +240,7 @@ async fn process_embeds_webp_thumbnail_into_mkv_natively() {
     }
 
     let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
-    let stage = ThumbnailStage::new(ffmpeg);
+    let stage = ThumbnailStage::new(ffmpeg.clone());
 
     let config = PostProcess {
         embed_thumbnail: true,
@@ -242,8 +251,31 @@ async fn process_embeds_webp_thumbnail_into_mkv_natively() {
     let result = stage.process(msg).await.expect("non-fatal stage");
     assert!(
         result.warnings.is_empty(),
-        "mkv native webp attachment should succeed with no warnings, got: {:?}",
+        "mkv webp normalization should succeed with no warnings, got: {:?}",
         result.warnings
+    );
+
+    let out_path = result.tracker.primary();
+    let info = ffmpeg
+        .probe(&out_path)
+        .await
+        .expect("probing embedded output must succeed");
+    let thumb_stream = info
+        .streams
+        .iter()
+        .find(|s| s.index == 1)
+        .expect("second stream (thumbnail attachment) must be present");
+    assert_eq!(
+        thumb_stream.codec_type, "video",
+        "the normalized cover must promote to a real, player-visible video \
+         (attached_pic) stream, not a generic attachment"
+    );
+    assert_eq!(
+        thumb_stream.codec_name.as_deref(),
+        Some("mjpeg"),
+        "webp under mkv must be normalized to mjpeg — the raw webp mimetype \
+         is not recognized by FFmpeg's Matroska read-back and would attach \
+         invisibly (#530)"
     );
 }
 
