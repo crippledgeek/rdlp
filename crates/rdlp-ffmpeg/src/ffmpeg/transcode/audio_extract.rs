@@ -145,6 +145,11 @@ impl FFmpegRunner {
             .time_base();
 
         // Add output stream (stream copy mode)
+        //
+        // `format::output` above already created (truncated) `output` on disk
+        // via `avio_open` — a codec-tag rejection here must not leave that
+        // empty file behind as if an audio extract had run and produced
+        // nothing.
         Self::add_stream_copy(
             &mut octx,
             ictx.stream(ist_index)

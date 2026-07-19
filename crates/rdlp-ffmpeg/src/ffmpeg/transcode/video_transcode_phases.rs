@@ -344,6 +344,10 @@ impl FFmpegRunner {
             let audio_ist = ctx.ictx.stream(audio_idx).ok_or_else(|| {
                 PostProcessError::ffmpeg_failed(format!("audio input stream {audio_idx} not found"))
             })?;
+            // `format::output` already created (truncated) `ctx.output_path` on
+            // disk via `avio_open` — a codec-tag rejection here must not leave
+            // that empty file behind as if a video transcode had run and
+            // produced nothing.
             let audio_ost_idx = Self::add_stream_copy(
                 &mut ctx.octx,
                 audio_ist.parameters(),
