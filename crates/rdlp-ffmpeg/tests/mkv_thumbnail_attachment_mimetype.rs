@@ -213,10 +213,29 @@ async fn bmp_and_webp_reaching_mkv_embed_directly_are_rejected() {
             .embed_thumbnail(&media, &thumb, &output, "mkv", None, None)
             .await;
 
-        assert!(
-            result.is_err(),
+        let err = result.expect_err(&format!(
             "{format} reaching the raw MKV embed path unnormalized must be \
              rejected, not silently attached under a fallback mimetype"
+        ));
+
+        // Pin the FAILURE MODE, not just failure: `is_err()` alone would
+        // equally pass for a fixture-build failure, an unreadable path, or
+        // any unrelated muxer error. `embed_thumbnail`'s MKV path routes the
+        // typed `PostProcessError::FFmpegLibraryError` this guard raises
+        // through an intermediate `anyhow::Result` (see
+        // `embed_thumbnail_sync`'s `Ok(result?)`), which re-wraps it as
+        // `PostProcessError::Other` — so no typed discriminant survives to
+        // this boundary. The message text IS load-bearing here (it is what
+        // the raw-FFI guard actually asserts), so match on it rather than on
+        // the (unavailable) variant: both the rejected format's own name AND
+        // the exact normalization-contract phrase must appear, so a
+        // regression that fails for the WRONG reason cannot slip through.
+        let message = err.to_string();
+        assert!(
+            message.contains(&format!("{format} content"))
+                && message.contains("without normalizing to jpeg/png/gif/tiff first"),
+            "{format} rejection must be the mimetype-normalization guard, \
+             not some other muxer error: {message}"
         );
     }
 }

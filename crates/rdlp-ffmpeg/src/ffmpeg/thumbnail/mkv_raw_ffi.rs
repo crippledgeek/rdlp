@@ -211,41 +211,12 @@ impl FFmpegRunner {
                 }
             })?;
 
-            let out_stream = ffi::avformat_new_stream(ofmt_ctx, ptr::null());
-            if out_stream.is_null() {
-                ffi::avformat_close_input(&mut media_ctx);
-                ffi::avformat_close_input(&mut thumb_ctx);
-                ffi::avformat_free_context(ofmt_ctx);
-                return Err(PostProcessError::FFmpegLibraryError {
-                    message: "Failed to create attachment stream".into(),
-                });
-            }
-
-            // Configure as attachment stream
-            let codecpar = (*out_stream).codecpar;
-            (*codecpar).codec_type = ffi::AVMediaType::AVMEDIA_TYPE_ATTACHMENT;
-            (*codecpar).codec_id = thumb_codec_id;
-
-            // Copy thumbnail data into extradata (must be av_malloc'd)
-            let alloc_size = thumb_data.len() + ffi::AV_INPUT_BUFFER_PADDING_SIZE as usize;
-            let extradata = ffi::av_mallocz(alloc_size);
-            if extradata.is_null() {
-                ffi::avformat_close_input(&mut media_ctx);
-                ffi::avformat_close_input(&mut thumb_ctx);
-                ffi::avformat_free_context(ofmt_ctx);
-                return Err(PostProcessError::FFmpegLibraryError {
-                    message: "Failed to allocate memory for thumbnail attachment".into(),
-                });
-            }
-            ptr::copy_nonoverlapping(
-                thumb_data.as_ptr(),
-                extradata.cast::<u8>(),
-                thumb_data.len(),
-            );
-            (*codecpar).extradata = extradata.cast::<u8>();
-            (*codecpar).extradata_size = thumb_data.len() as i32;
-
-            // Set mimetype and filename metadata (required by Matroska muxer).
+            // Determine the mimetype/filename metadata (required by Matroska
+            // muxer) BEFORE creating the attachment stream or allocating
+            // extradata, so a format the caller failed to normalize is
+            // rejected without paying for the `av_mallocz` + full-image
+            // `copy_nonoverlapping` below (#530 code review: the allocation
+            // was previously wasted work on every rejected bmp/webp).
             //
             // Derived from the THUMBNAIL BYTES (`thumb_data`, already read
             // above) via `rdlp_types::sniff_thumbnail_format` — the same
@@ -283,6 +254,40 @@ impl FFmpegRunner {
                     ),
                 });
             };
+
+            let out_stream = ffi::avformat_new_stream(ofmt_ctx, ptr::null());
+            if out_stream.is_null() {
+                ffi::avformat_close_input(&mut media_ctx);
+                ffi::avformat_close_input(&mut thumb_ctx);
+                ffi::avformat_free_context(ofmt_ctx);
+                return Err(PostProcessError::FFmpegLibraryError {
+                    message: "Failed to create attachment stream".into(),
+                });
+            }
+
+            // Configure as attachment stream
+            let codecpar = (*out_stream).codecpar;
+            (*codecpar).codec_type = ffi::AVMediaType::AVMEDIA_TYPE_ATTACHMENT;
+            (*codecpar).codec_id = thumb_codec_id;
+
+            // Copy thumbnail data into extradata (must be av_malloc'd)
+            let alloc_size = thumb_data.len() + ffi::AV_INPUT_BUFFER_PADDING_SIZE as usize;
+            let extradata = ffi::av_mallocz(alloc_size);
+            if extradata.is_null() {
+                ffi::avformat_close_input(&mut media_ctx);
+                ffi::avformat_close_input(&mut thumb_ctx);
+                ffi::avformat_free_context(ofmt_ctx);
+                return Err(PostProcessError::FFmpegLibraryError {
+                    message: "Failed to allocate memory for thumbnail attachment".into(),
+                });
+            }
+            ptr::copy_nonoverlapping(
+                thumb_data.as_ptr(),
+                extradata.cast::<u8>(),
+                thumb_data.len(),
+            );
+            (*codecpar).extradata = extradata.cast::<u8>();
+            (*codecpar).extradata_size = thumb_data.len() as i32;
 
             let key_mime = CString::new("mimetype").expect("static string has no null bytes");
             let val_mime = CString::new(mimetype).expect("mimetype has no null bytes");

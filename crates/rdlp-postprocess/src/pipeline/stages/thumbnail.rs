@@ -98,6 +98,18 @@ impl ThumbnailStage {
     /// Normalize `thumbnail_file` to a tracker-owned temp `.jpg` when the
     /// target container can't consume its codec directly.
     ///
+    /// Matroska is handled entirely separately (see
+    /// [`Self::mkv_attachment_renders_natively`]): it carries the image as a
+    /// file attachment rather than a stream, so the stream-codec-tag question
+    /// below does not govern it at all. `jpeg`/`png`/`gif`/`tiff` attachments
+    /// render natively and return early untouched; `bmp`/`webp` are not
+    /// recognized by `FFmpeg`'s own attachment-mimetype read-back table
+    /// (`ThumbnailFormat::matroska_attachment`) and are unconditionally
+    /// transcoded to jpeg first — producing an invisible, non-rendering cover
+    /// otherwise (#530). This branch never consults
+    /// `container_accepts_image_codec`, which answers an unrelated
+    /// stream-codec-tag question that does not apply to attachments.
+    ///
     /// Every non-Matroska embed strategy stream-copies the thumbnail's source
     /// codec into the target container (see `rdlp_ffmpeg::thumbnail`), so a
     /// codec the target muxer has no tag for (e.g. `webp` in MP4) must be
@@ -105,15 +117,6 @@ impl ThumbnailStage {
     /// `FFmpeg` via `container_accepts_image_codec` rather than hardcoded, so
     /// the answer always tracks the linked build instead of a list that can
     /// drift from it.
-    ///
-    /// Matroska is checked first and separately, but is only PARTIALLY exempt:
-    /// it carries the image as a file attachment rather than a stream, so the
-    /// stream-codec-tag question below does not govern most formats — but
-    /// `image/bmp`/`image/webp` are not recognized by `FFmpeg`'s own
-    /// attachment-mimetype read-back table (`ThumbnailFormat::
-    /// matroska_attachment`), producing an invisible, non-rendering cover
-    /// (#530). Those two still fall through to the normal transcode path;
-    /// jpeg/png/gif/tiff return early untouched.
     ///
     /// On transcode failure, falls back to the original thumbnail path so the
     /// caller's existing non-fatal embed-failure handling still applies —
@@ -125,10 +128,13 @@ impl ThumbnailStage {
         extension: &str,
         thumbnail_file: &Path,
     ) -> PathBuf {
-        if Self::is_native_attachment_container(extension)
-            && Self::mkv_attachment_renders_natively(thumbnail_file).await
-        {
-            return thumbnail_file.to_path_buf();
+        if Self::is_native_attachment_container(extension) {
+            return if Self::mkv_attachment_renders_natively(thumbnail_file).await {
+                thumbnail_file.to_path_buf()
+            } else {
+                self.transcode_thumbnail_to_jpg(msg, extension, thumbnail_file)
+                    .await
+            };
         }
 
         // Ask the muxer whether it can carry this image's codec, rather than
@@ -147,6 +153,22 @@ impl ThumbnailStage {
             return thumbnail_file.to_path_buf();
         }
 
+        self.transcode_thumbnail_to_jpg(msg, extension, thumbnail_file)
+            .await
+    }
+
+    /// Transcode `thumbnail_file` to a tracker-owned temp `.jpg`, falling
+    /// back to the original path on failure (non-fatal — the caller's
+    /// existing embed-failure handling still applies).
+    ///
+    /// Shared by both branches of [`Self::normalize_thumbnail_for_embed`] so
+    /// the transcode-and-fallback logic exists in exactly one place.
+    async fn transcode_thumbnail_to_jpg(
+        &self,
+        msg: &mut PipelineMessage,
+        extension: &str,
+        thumbnail_file: &Path,
+    ) -> PathBuf {
         let normalized = msg.tracker.temp_path(thumbnail_file, "jpg");
         debug!(
             "ThumbnailStage: normalizing thumbnail {} → jpg for {extension} embed",
@@ -182,6 +204,16 @@ impl ThumbnailStage {
     /// A read failure or an unrecognized signature answers `false` — the
     /// safe direction, since it routes into the normal transcode-to-jpeg
     /// path below rather than risking a silently non-rendering attachment.
+    ///
+    /// This reads `thumbnail_file` a second time when the embed later
+    /// reaches `rdlp_ffmpeg`'s raw-FFI path (which re-reads + re-sniffs the
+    /// same bytes to decide the attachment mimetype, see
+    /// `mkv_raw_ffi.rs`). Not threaded through: `embed_thumbnail`'s public
+    /// signature is shared by every container strategy (MP4/MP3/FLAC/OGG/
+    /// Matroska), most of which never sniff at all, so plumbing pre-read
+    /// bytes through it would widen that boundary for one container's
+    /// benefit. Thumbnails are small (single-frame stills), so the extra
+    /// read is a few KB/µs, not a hot path — not worth the API contortion.
     async fn mkv_attachment_renders_natively(thumbnail_file: &Path) -> bool {
         let Ok(bytes) = tokio::fs::read(thumbnail_file).await else {
             return false;
