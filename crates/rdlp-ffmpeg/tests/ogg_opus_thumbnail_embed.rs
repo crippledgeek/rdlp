@@ -1,8 +1,7 @@
 //! Regression test for #531: thumbnail embed into Ogg/Opus.
 //!
-//! `ogg`/`opus` are listed in `SUPPORTED_CONTAINERS`
-//! (`rdlp-postprocess/src/pipeline/stages/thumbnail.rs`), but embedding via
-//! `FFmpegRunner::embed_thumbnail` failed with `Unsupported codec id in
+//! `ogg`/`opus` resolve to `Some` via `rdlp_ffmpeg::supports_thumbnail_embed`,
+//! but embedding via `FFmpegRunner::embed_thumbnail` failed with `Unsupported codec id in
 //! stream 1` — `FFmpeg`'s Ogg muxer (`oggenc.c` `ogg_init()`) hard-rejects
 //! any stream whose codec isn't Vorbis/Theora/Speex/FLAC/Opus/VP8, so the
 //! cover art can never ride an `ATTACHED_PIC` video stream in these

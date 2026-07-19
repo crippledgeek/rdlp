@@ -84,13 +84,27 @@ impl ThumbnailEmbedStrategy {
 /// Whether `format` can carry an embedded thumbnail at all.
 ///
 /// The public gateway to [`ThumbnailEmbedStrategy::for_container`] — exposed
-/// so `rdlp-postprocess`'s `SUPPORTED_CONTAINERS` can be asserted against the
-/// real strategy table instead of a hand-copied mirror of it (full
-/// consolidation of the two lists into one source of truth is tracked by
-/// #533).
+/// so `rdlp-postprocess` gates its auto-remux/embed decision directly against
+/// the real strategy table instead of a hand-copied mirror of it (#533).
 #[must_use]
 pub const fn supports_thumbnail_embed(format: ContainerFormat) -> bool {
     ThumbnailEmbedStrategy::for_container(format).is_some()
+}
+
+/// Whether `format` attaches the thumbnail's source codec natively
+/// (Matroska attachment) and therefore never needs image normalization.
+///
+/// The public gateway to the [`ThumbnailEmbedStrategy::MatroskaAttachment`]
+/// case — exposed so `rdlp-postprocess` derives its normalization gate from
+/// the real strategy table instead of a hand-copied container list (#533).
+/// Named for the PROPERTY the caller cares about (no stream-codec
+/// normalization needed), not the variant name.
+#[must_use]
+pub const fn uses_native_attachment(format: ContainerFormat) -> bool {
+    matches!(
+        ThumbnailEmbedStrategy::for_container(format),
+        Some(ThumbnailEmbedStrategy::MatroskaAttachment)
+    )
 }
 
 #[cfg(test)]
@@ -156,9 +170,9 @@ mod tests {
     }
 
     /// Negative: a container `rdlp` never advertises as thumbnail-capable
-    /// (`SUPPORTED_CONTAINERS` in `rdlp-postprocess`) must resolve to `None`,
-    /// not silently fall through to a stream-based strategy that would fail
-    /// at mux time.
+    /// (i.e. `supports_thumbnail_embed` returns `false`) must resolve to
+    /// `None`, not silently fall through to a stream-based strategy that
+    /// would fail at mux time.
     #[test]
     fn unsupported_container_resolves_to_none() {
         assert_eq!(
@@ -173,5 +187,27 @@ mod tests {
             ThumbnailEmbedStrategy::for_container(ContainerFormat::Avi),
             None
         );
+    }
+
+    /// Positive: Matroska containers (the only `MatroskaAttachment` case)
+    /// report native attachment support.
+    #[test]
+    fn matroska_containers_use_native_attachment_property() {
+        assert!(super::uses_native_attachment(ContainerFormat::Mkv));
+        assert!(super::uses_native_attachment(ContainerFormat::Mka));
+    }
+
+    /// Negative: every other resolvable strategy (stream-based) — and the
+    /// unsupported case — must NOT report native attachment support. A
+    /// regression that also flagged MP4-family as native would silently
+    /// re-introduce the webp-mux-failure bug `normalize_thumbnail_for_embed`
+    /// exists to prevent.
+    #[test]
+    fn non_matroska_containers_reject_native_attachment() {
+        assert!(!super::uses_native_attachment(ContainerFormat::Mp4));
+        assert!(!super::uses_native_attachment(ContainerFormat::Mov));
+        assert!(!super::uses_native_attachment(ContainerFormat::Mp3));
+        assert!(!super::uses_native_attachment(ContainerFormat::Ogg));
+        assert!(!super::uses_native_attachment(ContainerFormat::WebM));
     }
 }

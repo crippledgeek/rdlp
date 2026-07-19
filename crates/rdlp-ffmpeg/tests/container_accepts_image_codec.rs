@@ -89,9 +89,10 @@ async fn mp4_accepts_jpeg_and_png() {
 /// bypasses codec tags entirely. So the muxer's "no" here does not contradict
 /// MKV thumbnail support — the two mechanisms are different.
 ///
-/// This is why the embed gate must test `is_native_attachment_container` BEFORE
-/// consulting this query: asking the stream question about a container that
-/// uses attachments would force a needless transcode for every MKV thumbnail.
+/// This is why the embed gate must test `rdlp_ffmpeg::uses_native_attachment`
+/// BEFORE consulting this query: asking the stream question about a
+/// container that uses attachments would force a needless transcode for
+/// every MKV thumbnail.
 #[tokio::test]
 async fn matroska_rejects_webp_as_a_stream_despite_attachment_support() {
     if !ffmpeg_cli_available() {
@@ -158,8 +159,9 @@ async fn jpeg_and_png_are_accepted_by_every_supported_container() {
 
     // Containers where the jpeg/png baseline is VERIFIED to embed.
     //
-    // Deliberately narrower than SUPPORTED_CONTAINERS: `ogg` and `opus` are
-    // listed there but genuinely cannot carry an image STREAM at all — their
+    // Deliberately narrower than `rdlp_ffmpeg::supports_thumbnail_embed`'s
+    // accepted set: `ogg` and `opus` resolve to a strategy there but
+    // genuinely cannot carry an image STREAM at all — their
     // muxer's `ogg_init()` hard-rejects any stream whose codec isn't
     // Vorbis/Theora/Speex/FLAC/Opus/VP8, which is exactly the question this
     // function asks. #531 fixed the actual embed by carrying the cover as a
