@@ -14,7 +14,7 @@ use crate::error::PostProcessError;
 use super::super::{FFmpegRunner, LoudnormMeasurements, NormalizeOptions, PeakAnalysis};
 use super::encode::EncodeCallCtx;
 use super::helpers::{
-    TRUE_PEAK_OVERSAMPLE_GAIN_THRESHOLD, audio_only_extension_for, build_alimiter_spec,
+    TRUE_PEAK_OVERSAMPLE_GAIN_THRESHOLD, audio_only_extension_for_ext, build_alimiter_spec,
     build_loudnorm_pass2_filter, with_mux_retry,
 };
 
@@ -179,7 +179,7 @@ impl FFmpegRunner {
             });
 
         if has_video {
-            let audio_ext = audio_only_extension_for(ext);
+            let audio_ext = audio_only_extension_for_ext(ext);
             let temp_audio = output.with_extension(format!("norm_audio.{audio_ext}"));
 
             if salvage {

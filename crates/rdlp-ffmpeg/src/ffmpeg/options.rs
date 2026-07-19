@@ -3,6 +3,28 @@
 //! Provides `RemuxOptions`, `AudioExtractOptions`, `VideoConvertOptions`,
 //! and `ChapterEntry` used across remux, merge, transcode, and metadata modules.
 
+use std::path::Path;
+
+/// Whether output written to `path` should enable faststart.
+///
+/// This is the **boundary** form of the question: these callers receive only a
+/// filesystem path and have no `ContainerFormat` in scope, so the extension is
+/// parsed into the domain type once, here, and the answer comes from
+/// [`ContainerFormat::supports_faststart`] rather than a local string list.
+///
+/// Interior callers that already hold a `ContainerFormat` (the remux and merge
+/// pipeline stages) must call `supports_faststart()` directly instead of
+/// round-tripping through a string.
+///
+/// An unrecognised extension answers `false` — matching the previous behaviour
+/// for unknown containers.
+pub fn faststart_for_output(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .and_then(|e| e.parse::<rdlp_types::ContainerFormat>().ok())
+        .is_some_and(|c| c.supports_faststart())
+}
+
 /// Options for remux and merge operations.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RemuxOptions {
@@ -74,11 +96,75 @@ pub struct VideoConvertOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn video_convert_options_threads_defaults_none() {
         let opts = VideoConvertOptions::default();
         assert_eq!(opts.threads, None);
+    }
+
+    /// Every ISOBMFF container `supports_faststart()` claims must get faststart.
+    ///
+    /// `m4v` and `f4v` are the #539 regression: they route to the same
+    /// mov/mp4 muxer as `mp4`/`mov` and `+faststart` demonstrably relocates
+    /// their `moov` atom, but a hardcoded `"mp4" | "mov"` list silently
+    /// excluded them.
+    #[test]
+    fn faststart_enabled_for_every_container_that_supports_it() {
+        for fmt in ["mp4", "mov", "m4v", "f4v"] {
+            let path = PathBuf::from(format!("out.{fmt}"));
+            assert!(
+                faststart_for_output(&path),
+                ".{fmt} supports faststart (ContainerFormat::supports_faststart) \
+                 but faststart_for_output said false"
+            );
+        }
+    }
+
+    /// Containers outside the mov/mp4 family must not get `movflags`.
+    #[test]
+    fn faststart_disabled_for_non_isobmff_containers() {
+        for fmt in ["mkv", "webm", "avi", "ts", "flv", "mp3", "flac"] {
+            let path = PathBuf::from(format!("out.{fmt}"));
+            assert!(
+                !faststart_for_output(&path),
+                ".{fmt} does not support faststart but faststart_for_output said true"
+            );
+        }
+    }
+
+    /// Extension matching stays case-insensitive.
+    #[test]
+    fn faststart_is_case_insensitive() {
+        assert!(faststart_for_output(&PathBuf::from("out.MP4")));
+        assert!(faststart_for_output(&PathBuf::from("out.M4V")));
+        assert!(!faststart_for_output(&PathBuf::from("out.MKV")));
+    }
+
+    /// A missing or unrecognised extension answers `false`, never panics.
+    #[test]
+    fn faststart_false_for_unknown_or_missing_extension() {
+        assert!(!faststart_for_output(&PathBuf::from("out.qqq")));
+        assert!(!faststart_for_output(&PathBuf::from("out")));
+        assert!(!faststart_for_output(&PathBuf::from("")));
+    }
+
+    /// Aliases resolve to their container, so faststart follows the container.
+    ///
+    /// `ContainerFormat`'s `FromStr` is alias-aware, which the old two-literal
+    /// comparison was not: a `.quicktime` file is a `QuickTime` file.
+    #[test]
+    fn faststart_honours_container_aliases() {
+        assert!(faststart_for_output(&PathBuf::from("out.quicktime"))); // → Mov
+        assert!(!faststart_for_output(&PathBuf::from("out.matroska"))); // → Mkv
+    }
+
+    /// The `fixup` caller defaults an extensionless input to `mp4`, so the
+    /// output path it builds is `.mp4` and must get faststart.
+    #[test]
+    fn faststart_true_for_the_mp4_default_fixup_builds() {
+        assert!(faststart_for_output(&PathBuf::from("v.rdlp-tmp-abc.mp4")));
     }
 }
 

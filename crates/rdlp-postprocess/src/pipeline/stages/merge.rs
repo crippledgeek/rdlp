@@ -18,6 +18,8 @@ use log::{debug, info};
 
 use rdlp_ffmpeg::{FFmpegRunner, RemuxOptions};
 
+use rdlp_types::ContainerFormat;
+
 use crate::pipeline::{PipelineMessage, PipelineStage};
 
 /// Merges separate video + audio streams into a single container.
@@ -54,30 +56,30 @@ impl MergeStage {
         audio_ext: Option<&str>,
         video_codec: Option<&str>,
         audio_codec: Option<&str>,
-    ) -> &'static str {
+    ) -> ContainerFormat {
         if let Some(format) = config.merge_output_format {
-            return format.as_ext();
+            return format;
         }
         // When both codecs are known, mirror yt-dlp's get_compatible_ext:
         // try mp4 → webm → mkv (mkv as the catch-all when neither container
         // fits the codec pair). This is the path that routes VP9+AAC to
         // mkv even though both source files have .mp4 / .m4a extensions.
         if let (Some(v), Some(a)) = (video_codec, audio_codec) {
-            let ext = Self::compatible_ext_from_codecs(v, a).unwrap_or("mkv");
+            let container = Self::compatible_ext_from_codecs(v, a).unwrap_or(ContainerFormat::Mkv);
             debug!(
-                vcodec = v, acodec = a, ext;
+                vcodec = v, acodec = a, ext = container.as_ext();
                 "MergeStage: codec-aware container picked"
             );
-            return ext;
+            return container;
         }
         // Ext-only fallback (codec info missing — e.g. plugin-emitted Format
         // with no vcodec/acodec). Conservative: webm ext → mkv (broadest
         // playability), else mp4.
         match (video_ext, audio_ext) {
-            (Some("webm"), _) | (_, Some("webm")) => "mkv",
+            (Some("webm"), _) | (_, Some("webm")) => ContainerFormat::Mkv,
             _ => {
                 debug!("No codec info available; defaulting to MP4 by ext heuristic");
-                "mp4"
+                ContainerFormat::Mp4
             }
         }
     }
@@ -94,7 +96,7 @@ impl MergeStage {
     /// Returns `Some(ext)` when both codecs fit one container; `None`
     /// signals "use MKV as the catch-all" (caller's responsibility, via
     /// fall-through to the extension-only path).
-    fn compatible_ext_from_codecs(vcodec: &str, acodec: &str) -> Option<&'static str> {
+    fn compatible_ext_from_codecs(vcodec: &str, acodec: &str) -> Option<ContainerFormat> {
         // MP4-compatible: video + audio fourccs that ISO BMFF accepts.
         const MP4_COMPAT: &[&str] = &[
             "av1", "hevc", "avc1", "h264", "mp4a", "ac-4", "aacl", "ec-3",
@@ -106,12 +108,27 @@ impl MergeStage {
         let a = Self::sanitize_codec(acodec);
 
         if MP4_COMPAT.contains(&v.as_str()) && MP4_COMPAT.contains(&a.as_str()) {
-            return Some("mp4");
+            return Some(ContainerFormat::Mp4);
         }
         if WEBM_COMPAT.contains(&v.as_str()) && WEBM_COMPAT.contains(&a.as_str()) {
-            return Some("webm");
+            return Some(ContainerFormat::WebM);
         }
         None
+    }
+
+    /// Build the mux options for a resolved output container.
+    ///
+    /// Exists as a named function so the faststart decision is observable in a
+    /// test. Inlined into `process()` it was unreachable without a real `FFmpeg`
+    /// run, which let #539 ship: a test could assert `supports_faststart()` on
+    /// a container it supplied itself and never touch the production
+    /// expression at all.
+    fn merge_opts(output_format: ContainerFormat, encoding_tool: Option<String>) -> RemuxOptions {
+        RemuxOptions {
+            faststart: output_format.supports_faststart(),
+            encoding_tool_override: encoding_tool,
+            ..Default::default()
+        }
     }
 
     /// Sanitize a codec string per yt-dlp's normalisation.
@@ -212,13 +229,9 @@ impl PipelineStage for MergeStage {
         );
 
         // Use tracker.temp_path — no naming collision possible.
-        let output_path = msg.tracker.temp_path(&video_file, output_format);
+        let output_path = msg.tracker.temp_path(&video_file, output_format.as_ext());
 
-        let opts = RemuxOptions {
-            faststart: matches!(output_format, "mp4" | "mov"),
-            encoding_tool_override: msg.encoding_tool.clone(),
-            ..Default::default()
-        };
+        let opts = Self::merge_opts(output_format, msg.encoding_tool.clone());
 
         let stage_callback = msg.callback_factory.as_ref().map(|f| f(self.name()));
         let _log_bridge = stage_callback
@@ -307,6 +320,40 @@ mod tests {
         assert!(!stage.should_run(&msg));
     }
 
+    /// #539, fourth site: merge decides faststart from the container type.
+    ///
+    /// The issue named three sites; this one was missed. It is reachable
+    /// whenever `merge_output_format` is an ISOBMFF container beyond mp4/mov,
+    /// which the old `matches!(output_format, "mp4" | "mov")` excluded.
+    #[test]
+    fn merge_faststart_follows_the_container_type() {
+        for (container, want) in [
+            (ContainerFormat::Mp4, true),
+            (ContainerFormat::Mov, true),
+            (ContainerFormat::M4v, true),
+            (ContainerFormat::F4v, true),
+            (ContainerFormat::Mkv, false),
+            (ContainerFormat::WebM, false),
+        ] {
+            let config = PostProcess {
+                merge_output_format: Some(container),
+                ..PostProcess::default()
+            };
+            let resolved =
+                MergeStage::determine_output_format(&config, Some("mp4"), Some("m4a"), None, None);
+            assert_eq!(resolved, container);
+            // Assert on the options the stage actually builds — asserting
+            // `resolved.supports_faststart()` here would only re-test the
+            // predicate with a value this test supplied, and would stay green
+            // if the stage hardcoded `faststart: false`.
+            assert_eq!(
+                MergeStage::merge_opts(resolved, None).faststart,
+                want,
+                "merge faststart for {container:?} must follow supports_faststart()"
+            );
+        }
+    }
+
     #[test]
     fn determine_output_format_explicit_config() {
         let config = PostProcess {
@@ -315,7 +362,7 @@ mod tests {
         };
         assert_eq!(
             MergeStage::determine_output_format(&config, Some("mp4"), Some("m4a"), None, None),
-            "mkv"
+            ContainerFormat::Mkv
         );
     }
 
@@ -325,7 +372,7 @@ mod tests {
         let config = PostProcess::default();
         assert_eq!(
             MergeStage::determine_output_format(&config, Some("webm"), Some("opus"), None, None),
-            "mkv"
+            ContainerFormat::Mkv
         );
     }
 
@@ -334,7 +381,7 @@ mod tests {
         let config = PostProcess::default();
         assert_eq!(
             MergeStage::determine_output_format(&config, Some("mp4"), Some("m4a"), None, None),
-            "mp4"
+            ContainerFormat::Mp4
         );
     }
 
@@ -351,7 +398,7 @@ mod tests {
                 Some("avc1.640028"),
                 Some("mp4a.40.2"),
             ),
-            "mp4"
+            ContainerFormat::Mp4
         );
     }
 
@@ -369,7 +416,7 @@ mod tests {
                 Some("vp09.00.30.08"),
                 Some("mp4a.40.2"),
             ),
-            "mkv"
+            ContainerFormat::Mkv
         );
     }
 
@@ -396,7 +443,7 @@ mod tests {
                 Some("av01.0.04M.08"),
                 Some("opus"),
             ),
-            "webm"
+            ContainerFormat::WebM
         );
     }
 
@@ -411,7 +458,7 @@ mod tests {
                 Some("vp09.00.30.08"),
                 Some("opus"),
             ),
-            "webm"
+            ContainerFormat::WebM
         );
     }
 
@@ -426,7 +473,7 @@ mod tests {
                 Some("hevc"),
                 Some("mp4a"),
             ),
-            "mp4"
+            ContainerFormat::Mp4
         );
     }
 

@@ -24,6 +24,8 @@ use std::path::Path;
 
 use log::{debug, warn};
 
+use rdlp_types::ContainerFormat;
+
 use crate::error::{PostProcessError, Result};
 
 use super::super::log_capture::LogCaptureGuard;
@@ -261,37 +263,67 @@ pub(super) fn default_bitrate_for_encoder(encoder: &str) -> usize {
     }
 }
 
-/// Map a container extension to an audio-only container extension for temp files.
+/// Audio-only container used when nothing more specific fits, and for any
+/// container whose own muxer is unsuitable for a long audio-only temp file.
+const DEFAULT_AUDIO_ONLY: ContainerFormat = ContainerFormat::Mka;
+
+/// Map a container to the audio-only container used for its temp files.
 ///
 /// Uses MKA for all MOV-based formats to avoid the MOV muxer's ENOMEM issue.
 /// The MOV muxer accumulates per-packet metadata in memory until trailer write,
 /// causing allocation failures on long audio tracks. Matroska writes metadata
 /// incrementally without unbounded buffering.
-pub(super) const fn audio_only_extension_for(ext: &str) -> &'static str {
-    if ext.eq_ignore_ascii_case("mp4")
-        || ext.eq_ignore_ascii_case("m4a")
-        || ext.eq_ignore_ascii_case("mov")
-        || ext.eq_ignore_ascii_case("f4v")
-        || ext.eq_ignore_ascii_case("3gp")
-        || ext.eq_ignore_ascii_case("ts")
-        || ext.eq_ignore_ascii_case("mpg")
-        || ext.eq_ignore_ascii_case("flv")
-        || ext.eq_ignore_ascii_case("mkv")
-        || ext.eq_ignore_ascii_case("mka")
-        || ext.eq_ignore_ascii_case("webm")
-    {
-        "mka"
-    } else if ext.eq_ignore_ascii_case("avi") || ext.eq_ignore_ascii_case("mp3") {
-        "mp3"
-    } else if ext.eq_ignore_ascii_case("ogg") || ext.eq_ignore_ascii_case("opus") {
-        "opus"
-    } else if ext.eq_ignore_ascii_case("flac") {
-        "flac"
-    } else if ext.eq_ignore_ascii_case("wav") {
-        "wav"
-    } else {
-        "mka"
+///
+/// Takes a `ContainerFormat` and matches exhaustively rather than testing a
+/// hand-written list of extension strings. The list previously omitted `m4v` —
+/// harmless only because the fall-through default happened to return the same
+/// answer the MOV-family arm would have. That is the same silent drift as #539,
+/// one edit to the default away from becoming a real bug. With an exhaustive
+/// match, a new `ContainerFormat` variant fails to compile until someone
+/// classifies it.
+///
+/// Every mapping below preserves the previous behaviour exactly, including the
+/// containers that reached `"mka"` via the old default.
+pub(super) const fn audio_only_extension_for(container: ContainerFormat) -> &'static str {
+    match container {
+        // MOV/ISOBMFF family — routed to MKA for the ENOMEM reason above.
+        ContainerFormat::Mp4
+        | ContainerFormat::Mov
+        | ContainerFormat::M4v
+        | ContainerFormat::F4v
+        | ContainerFormat::ThreeGp
+        | ContainerFormat::M4a
+        // Other video containers whose muxers we likewise avoid for audio-only.
+        | ContainerFormat::Ts
+        | ContainerFormat::Mpg
+        | ContainerFormat::Flv
+        | ContainerFormat::Mkv
+        | ContainerFormat::Mka
+        | ContainerFormat::WebM
+        // Reached the old `else` default; kept on MKA deliberately.
+        | ContainerFormat::Asf
+        | ContainerFormat::Mxf
+        | ContainerFormat::Vob
+        | ContainerFormat::Dv
+        | ContainerFormat::Nut
+        | ContainerFormat::Ivf
+        | ContainerFormat::Aac
+        | ContainerFormat::Aiff
+        | ContainerFormat::Wv
+        | ContainerFormat::Caf
+        | ContainerFormat::Ac3 => DEFAULT_AUDIO_ONLY.as_ext(),
+        ContainerFormat::Avi | ContainerFormat::Mp3 => ContainerFormat::Mp3.as_ext(),
+        ContainerFormat::Ogg | ContainerFormat::Opus => ContainerFormat::Opus.as_ext(),
+        ContainerFormat::Flac => ContainerFormat::Flac.as_ext(),
+        ContainerFormat::Wav => ContainerFormat::Wav.as_ext(),
     }
+}
+
+/// Boundary form of [`audio_only_extension_for`] for callers holding only a path
+/// extension. An unrecognised extension keeps the previous default.
+pub(super) fn audio_only_extension_for_ext(ext: &str) -> &'static str {
+    ext.parse::<ContainerFormat>()
+        .map_or(DEFAULT_AUDIO_ONLY.as_ext(), audio_only_extension_for)
 }
 
 /// Three-tier recovery for mux failures during audio normalization.
