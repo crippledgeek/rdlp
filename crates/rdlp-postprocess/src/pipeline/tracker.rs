@@ -145,7 +145,8 @@ impl FileTracker {
     /// When `std::fs::canonicalize` can't run (Drop/cleanup, file already gone),
     /// step 2 simply doesn't match and the result is determined by step 1 —
     /// never worse than the original exact-match implementation.
-    fn is_borrowed(&self, path: &Path) -> bool {
+    #[must_use]
+    pub fn is_borrowed(&self, path: &Path) -> bool {
         // Step 1: raw equality — O(n) but no syscall.
         if self.borrowed.iter().any(|(raw, _)| raw.as_path() == path) {
             return true;
@@ -164,6 +165,23 @@ impl FileTracker {
             return true;
         }
         false
+    }
+
+    /// Whether this pipeline was handed any borrowed (user-owned) input at
+    /// all — i.e. whether it is post-processing a pre-existing local file
+    /// rather than something rdlp downloaded.
+    ///
+    /// Distinct from [`is_borrowed`], which asks about ONE path. By the time a
+    /// late stage runs, the borrowed input has usually been replaced by a
+    /// derived file (`RemuxStage` turns the user's `clip.mp4` into an
+    /// rdlp-created `clip.ts`), so `is_borrowed(current_file)` is `false` even
+    /// though the run as a whole is operating inside the user's own directory
+    /// on the user's own files. Deciding sidecar ownership needs THIS question,
+    /// not the per-path one — asking the per-path question deletes the user's
+    /// `clip.jpg` the moment any container-changing stage has run.
+    #[must_use]
+    pub const fn has_borrowed_inputs(&self) -> bool {
+        !self.borrowed.is_empty()
     }
 
     /// Promote `new_files` to `current_files`, moving the old current files

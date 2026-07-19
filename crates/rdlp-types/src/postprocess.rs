@@ -130,6 +130,17 @@ impl PostProcess {
     /// Callers needing a hard default apply `.unwrap_or(..)` themselves —
     /// *which* default is a per-consumer concern, and `ThumbnailStage`
     /// genuinely wants the `None`.
+    ///
+    /// `merge_output_format` is deliberately NOT in this chain, and the
+    /// omission is scoped rather than settled: `MergeStage` (index 0) runs
+    /// before every container-changing stage, so its output is an
+    /// *intermediate* container that a later `--remux`/`--recode` is free to
+    /// replace — unlike a recode/remux target, it is not a statement about the
+    /// FINAL container. It nonetheless reaches `ThumbnailStage` unchanged when
+    /// no other flag is set, which is the same defect shape as #551 via the
+    /// config TOML instead of a CLI flag; tracked separately rather than
+    /// widened into this fix. Note `rdlp-api`'s `ResolvedContainer::resolve`
+    /// ranks it second, so the two chains intentionally disagree here.
     #[must_use]
     pub fn explicit_container(&self) -> Option<ExplicitContainer> {
         // Deliberately NOT a destructuring pattern: `PostProcess` has ~35
