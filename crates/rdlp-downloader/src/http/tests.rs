@@ -1279,25 +1279,29 @@ fn download_format_uses_biased_select() {
 
 #[test]
 fn parallel_adaptive_cancel_uses_biased_select() {
-    // Static guard: download_parallel_adaptive's semaphore-acquire select!
-    // MUST include `biased;` so cancel-priority is deterministic.
-    // Mirrors next_with_cancel_helper_uses_biased_select (Task 12, PR #303).
+    // Static guard: run_adaptive_chunk's semaphore-acquire select! MUST
+    // include `biased;` so cancel-priority is deterministic. Mirrors
+    // next_with_cancel_helper_uses_biased_select (Task 12, PR #303). The
+    // chunk-job body (including this select!) was extracted from
+    // download_parallel_adaptive into the free function run_adaptive_chunk
+    // as part of the #568 follow-up cleanup — this guard moved with it.
     let source = include_str!("parallel.rs");
 
     let start = source
-        .find("async fn download_parallel_adaptive")
-        .expect("download_parallel_adaptive not found in parallel.rs");
+        .find("async fn run_adaptive_chunk")
+        .expect("run_adaptive_chunk not found in parallel.rs");
 
     let after_start = &source[start..];
     // End at the next top-level fn definition.
     let end = after_start[1..]
-        .find("\n    async fn ")
+        .find("\nasync fn ")
+        .or_else(|| after_start[1..].find("\nfn "))
         .map_or(after_start.len(), |i| i + 1);
     let body = &after_start[..end];
 
     let select_idx = body
         .find("tokio::select!")
-        .expect("download_parallel_adaptive must contain a tokio::select! for cancel");
+        .expect("run_adaptive_chunk must contain a tokio::select! for cancel");
     let after_select = &body[select_idx..];
     let first_arm = after_select
         .find("=>")
@@ -1306,7 +1310,7 @@ fn parallel_adaptive_cancel_uses_biased_select() {
 
     assert!(
         header.contains("biased;"),
-        "tokio::select! in download_parallel_adaptive MUST use `biased;` \
+        "tokio::select! in run_adaptive_chunk MUST use `biased;` \
          to deterministically prioritize the cancel arm. \
          Found header: {header:?}"
     );
