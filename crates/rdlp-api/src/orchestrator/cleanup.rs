@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use super::Orchestrator;
 use super::session_state::{self, SessionState};
+use super::thumbnail::OwnedThumbnail;
 
 /// Idempotently delete the orchestrator-owned artifacts of a cancelled job:
 /// the session-state file, the downloaded thumbnail, and (defensively) any
@@ -22,7 +23,7 @@ pub(super) async fn cleanup_cancelled_artifacts(
     output_to_stdout: bool,
     title: &str,
     source_files: &[PathBuf],
-    thumbnail: Option<&Path>,
+    thumbnail: Option<OwnedThumbnail>,
 ) {
     // Session state — skip in stdout mode (none is ever written there).
     if !output_to_stdout {
@@ -33,15 +34,13 @@ pub(super) async fn cleanup_cancelled_artifacts(
         SessionState::delete(&state_path).await;
     }
 
-    // Downloaded thumbnail (exact captured path).
+    // Downloaded thumbnail. The token is proof rdlp created this file; a
+    // borrowed run cannot produce one, so this path cannot reach a user file.
     if let Some(thumb) = thumbnail
-        && thumb.exists()
-        && let Err(e) = tokio::fs::remove_file(thumb).await
+        && let Err(e) = thumb.delete().await
     {
-        log::warn!(
-            "cleanup_cancelled_artifacts: failed to delete thumbnail {}: {e}",
-            thumb.display()
-        );
+        // Best-effort: cleanup must not turn a cancel into a failure (#404).
+        log::warn!("cleanup_cancelled_artifacts: failed to delete thumbnail: {e}");
     }
 
     // Source download files — defense-in-depth; normally already removed by the
@@ -81,7 +80,7 @@ mod tests {
             false,
             title,
             std::slice::from_ref(&source),
-            Some(thumb.as_path()),
+            Some(OwnedThumbnail::for_test(thumb.clone())),
         )
         .await;
 
@@ -99,7 +98,7 @@ mod tests {
             false,
             "Gone",
             &[dir.path().join("missing.mp4")],
-            Some(&dir.path().join("missing.webp")),
+            Some(OwnedThumbnail::for_test(dir.path().join("missing.webp"))),
         )
         .await;
     }
@@ -134,13 +133,43 @@ mod tests {
             false,
             title,
             std::slice::from_ref(&absent_source),
-            Some(thumb.as_path()),
+            Some(OwnedThumbnail::for_test(thumb.clone())),
         )
         .await;
 
         assert!(
             !thumb.exists(),
             "thumbnail must be deleted even when source/state absent"
+        );
+    }
+
+    /// The keep-by-default invariant: a token that never reaches cleanup must
+    /// leave the file alone. This is what makes the absence of a `Drop` impl
+    /// safe — dropping the token is inert.
+    #[tokio::test]
+    async fn dropped_token_does_not_delete_the_thumbnail() {
+        let dir = TempDir::new().unwrap();
+        let thumb = dir.path().join("Kept.jpg");
+        tokio::fs::write(&thumb, b"x").await.unwrap();
+
+        let token = OwnedThumbnail::for_test(thumb.clone());
+        drop(token);
+
+        assert!(
+            thumb.exists(),
+            "dropping the token must not delete the thumbnail (keep-by-default)"
+        );
+    }
+
+    /// `NotFound` is success: the postcondition ("no thumbnail here") holds.
+    #[tokio::test]
+    async fn deleting_an_absent_thumbnail_is_ok() {
+        let dir = TempDir::new().unwrap();
+        let token = OwnedThumbnail::for_test(dir.path().join("never-existed.jpg"));
+
+        assert!(
+            token.delete().await.is_ok(),
+            "a missing thumbnail must not be reported as an error"
         );
     }
 }

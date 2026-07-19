@@ -368,7 +368,7 @@ impl Orchestrator {
                     self.config.output_to_stdout,
                     &final_info.title,
                     &download_files,
-                    thumbnail_path.as_deref(),
+                    thumbnail_path,
                 )
                 .await;
                 return Err(e);

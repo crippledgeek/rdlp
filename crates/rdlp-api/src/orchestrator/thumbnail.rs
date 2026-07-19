@@ -40,6 +40,61 @@ fn thumbnail_extension_from_url(thumbnail_url: &str) -> String {
         .map_or_else(|| "jpg".to_owned(), str::to_lowercase)
 }
 
+/// A thumbnail sidecar that rdlp downloaded and therefore may delete.
+///
+/// Minted only by [`Orchestrator::download_thumbnail`]. A borrowed run
+/// (`process_local_file`) never calls that function, so in the borrowed case
+/// this value is unconstructible — the cancel-path deletion cannot reach a
+/// user-owned file by construction rather than by call-graph accident (#556).
+///
+/// Analogous to [`std::os::fd::OwnedFd`] (RFC 3128): possession IS the
+/// authorization, so designation and permission travel together instead of the
+/// caller asserting the second alongside a bare path.
+///
+/// Deliberately has **no** path accessor, no `Deref`, no `AsRef<Path>`, no
+/// `Clone`, and no `Drop`. Each omission is load-bearing and documented in
+/// `docs/planning/2026-07-19-owned-thumbnail-design.md`; in particular, a
+/// `Drop` impl would invert the default from keep to delete, so any `?` between
+/// mint and cleanup would silently destroy a file the run meant to keep.
+///
+/// The inner `PathBuf` never escapes this module: [`Self::delete`] is the only
+/// operation, so there is no unwrap for a future caller to misuse.
+#[derive(Debug)]
+pub(super) struct OwnedThumbnail(PathBuf);
+
+impl OwnedThumbnail {
+    /// Module-private on purpose: only `download_thumbnail` mints one.
+    /// Widening this to `pub(super)` would let any orchestrator module forge a
+    /// token from an arbitrary path and defeat the provenance guarantee.
+    const fn new(path: PathBuf) -> Self {
+        Self(path)
+    }
+
+    /// Test-only mint, reachable from the sibling `cleanup` module's tests.
+    /// `#[cfg(test)]` keeps it out of release builds, so the production mint
+    /// gate is unaffected.
+    #[cfg(test)]
+    pub(super) const fn for_test(path: PathBuf) -> Self {
+        Self(path)
+    }
+
+    /// Delete the downloaded thumbnail, consuming the ownership token.
+    ///
+    /// `NotFound` is treated as success — the postcondition ("no thumbnail at
+    /// this path") already holds, and a missing file is not evidence of a
+    /// fault. This also avoids the TOCTOU race an `exists()` guard would have.
+    ///
+    /// Cancel-path callers log and continue: cleanup must not turn a cancel
+    /// into a failure (#404). That decision belongs to the caller, not here —
+    /// see Rust API Guidelines C-DTOR-FAIL.
+    pub(super) async fn delete(self) -> std::io::Result<()> {
+        match tokio::fs::remove_file(&self.0).await {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            other => other,
+        }
+    }
+}
+
 impl Orchestrator {
     /// Download thumbnail image from URL and save alongside media file.
     ///
@@ -53,13 +108,14 @@ impl Orchestrator {
     ///
     /// # Returns
     ///
-    /// - `Some(path)` — thumbnail downloaded successfully
+    /// - `Some(token)` — thumbnail downloaded successfully; the token carries
+    ///   proof that rdlp created the file and is the only way to delete it
     /// - `None` — no thumbnail URL available or download failed
     pub(super) async fn download_thumbnail(
         &self,
         info: &rdlp_types::InfoDict,
         media_file: &Path,
-    ) -> Option<PathBuf> {
+    ) -> Option<OwnedThumbnail> {
         // Streaming size cap (20 MB) — adversarial CDN can't OOM the host
         // by sending a 1 GB image before the cap fires.
         const MAX_THUMBNAIL_BYTES: usize = 20 * 1024 * 1024;
@@ -184,7 +240,7 @@ impl Orchestrator {
             "Thumbnail downloaded"
         );
 
-        Some(thumbnail_path)
+        Some(OwnedThumbnail::new(thumbnail_path))
     }
 }
 
