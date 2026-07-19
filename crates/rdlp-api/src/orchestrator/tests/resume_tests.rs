@@ -339,14 +339,17 @@ mod resume_compatibility_tests {
         assert!(foreign.exists(), "foreign file must survive cleanup");
     }
 
-    /// #568/#559 item 4: a `.resume{N}` chunk set orphaned by an abandoned
-    /// resume attempt must be discoverable and cleaned up, not left to leak
-    /// forever, even though it can never be safely merged (the byte offset
-    /// it continues from is not persisted anywhere). Scenario: the main
+    /// #568/#559/#571 HIGH: a `.resume{N}` chunk set orphaned by an
+    /// abandoned resume attempt must be DISCOVERED (so the operator learns
+    /// about it) but MUST NOT be deleted automatically — `download_id` is a
+    /// per-process counter starting at 0, so a second concurrent rdlp
+    /// process downloading the same output name may be actively writing to
+    /// that exact low id right now. Deleting on a bare existence probe would
+    /// reintroduce the #558 defect class one crate over. Scenario: the main
     /// output file still exists (ordinary partial-file resume applies), and
     /// orphaned resume chunks sit alongside it.
     #[tokio::test]
-    async fn test_orphaned_resume_chunks_cleaned_when_file_partial() {
+    async fn test_orphaned_resume_chunks_not_deleted_when_file_partial() {
         let temp_dir = tempfile::tempdir().unwrap();
         let output_path = temp_dir.path().join("video.mp4");
 
@@ -367,15 +370,16 @@ mod resume_compatibility_tests {
             .unwrap();
 
         assert_eq!(resume_offset, 1000);
-        assert!(!temp_dir.path().join("video.mp4.3.resume0").exists());
-        assert!(!temp_dir.path().join("video.mp4.3.resume1").exists());
+        // Never deleted: a live concurrent process could own this download_id.
+        assert!(temp_dir.path().join("video.mp4.3.resume0").exists());
+        assert!(temp_dir.path().join("video.mp4.3.resume1").exists());
     }
 
     /// Same as above, but there is no main output file and no fresh/legacy
     /// chunk set either — only orphaned resume chunks. They must still be
-    /// discovered and cleaned up rather than leaking indefinitely.
+    /// left untouched (never auto-deleted), same as every other branch.
     #[tokio::test]
-    async fn test_orphaned_resume_chunks_cleaned_when_no_other_chunks_or_file() {
+    async fn test_orphaned_resume_chunks_not_deleted_when_no_other_chunks_or_file() {
         let temp_dir = tempfile::tempdir().unwrap();
         let output_path = temp_dir.path().join("video.mp4");
 
@@ -390,7 +394,104 @@ mod resume_compatibility_tests {
             .unwrap();
 
         assert_eq!(resume_offset, 0);
-        assert!(!temp_dir.path().join("video.mp4.5.resume0").exists());
+        assert!(temp_dir.path().join("video.mp4.5.resume0").exists());
+    }
+
+    /// #568 C3: when `detect_chunk_files` resolves to the LEGACY set
+    /// (`download_id: None`), the old code's `if
+    /// chunk_info.download_id.is_some()` guard skipped the resume-chunk pass
+    /// entirely (it was nested inside `cleanup_old_chunks`, only called from
+    /// that one `if` arm). Orphaned resume chunks alongside a legacy chunk
+    /// set must survive (not be silently unreachable) exactly as they do on
+    /// every other branch, and the legacy merge must still proceed normally.
+    #[tokio::test]
+    async fn test_orphaned_resume_chunks_survive_legacy_chunk_branch() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+
+        // Legacy (old-style) fresh chunks -- no main file, so this is the
+        // `detect_chunk_files` branch with `download_id: None`.
+        tokio::fs::write(temp_dir.path().join("video.mp4.part0"), &[1u8; 512])
+            .await
+            .unwrap();
+        tokio::fs::write(temp_dir.path().join("video.mp4.part1"), &[2u8; 512])
+            .await
+            .unwrap();
+
+        // Orphaned resume chunks for an unrelated download_id.
+        tokio::fs::write(temp_dir.path().join("video.mp4.7.resume0"), &[9u8; 64])
+            .await
+            .unwrap();
+
+        let orchestrator = create_test_orchestrator();
+        let resume_offset = orchestrator
+            .detect_resume_point(&output_path, None)
+            .await
+            .unwrap();
+
+        // Legacy chunks merged normally.
+        assert_eq!(resume_offset, 1024);
+        assert!(!temp_dir.path().join("video.mp4.part0").exists());
+        assert!(!temp_dir.path().join("video.mp4.part1").exists());
+        // Orphaned resume chunk untouched.
+        assert!(temp_dir.path().join("video.mp4.7.resume0").exists());
+    }
+
+    /// #568 C1: resume chunks complete out of order on the adaptive
+    /// (`try_buffer_unordered`) path, so a holed set — e.g. `resume0`,
+    /// `resume2`, `resume4` present, `resume1`/`resume3` missing — is the
+    /// NORMAL case, not evidence the set ends at the first hole. A
+    /// break-on-first-missing scan would only discover `resume0` here; the
+    /// fix must discover all three. This calls `log_orphaned_resume_chunks`
+    /// directly (rather than asserting on file survival, which a no-op
+    /// would also satisfy) so the assertion pins the discovery logic itself.
+    #[tokio::test]
+    async fn test_log_orphaned_resume_chunks_discovers_across_holes() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+
+        tokio::fs::write(temp_dir.path().join("video.mp4.9.resume0"), &[1u8; 8])
+            .await
+            .unwrap();
+        // resume1 deliberately absent.
+        tokio::fs::write(temp_dir.path().join("video.mp4.9.resume2"), &[2u8; 8])
+            .await
+            .unwrap();
+        // resume3 deliberately absent.
+        tokio::fs::write(temp_dir.path().join("video.mp4.9.resume4"), &[3u8; 8])
+            .await
+            .unwrap();
+
+        let discovered = resume::log_orphaned_resume_chunks(&output_path).await;
+
+        assert_eq!(
+            discovered.len(),
+            3,
+            "expected resume0, resume2, resume4 despite the holes at 1 and 3; got {discovered:?}"
+        );
+        assert!(discovered.contains(&temp_dir.path().join("video.mp4.9.resume0")));
+        assert!(discovered.contains(&temp_dir.path().join("video.mp4.9.resume2")));
+        assert!(discovered.contains(&temp_dir.path().join("video.mp4.9.resume4")));
+
+        // Discovery never deletes.
+        assert!(temp_dir.path().join("video.mp4.9.resume0").exists());
+        assert!(temp_dir.path().join("video.mp4.9.resume2").exists());
+        assert!(temp_dir.path().join("video.mp4.9.resume4").exists());
+    }
+
+    /// The chunk-0 sentinel optimization must not cause a real orphaned set
+    /// to be skipped when chunk 0 IS present alongside later holes (the
+    /// common shape); this is the negative-space complement of the previous
+    /// test, pinning that an entirely-unused `download_id` (chunk 0 absent)
+    /// contributes nothing to the discovered set.
+    #[tokio::test]
+    async fn test_log_orphaned_resume_chunks_skips_unused_download_id() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+
+        // No files at all for this output path.
+        let discovered = resume::log_orphaned_resume_chunks(&output_path).await;
+        assert!(discovered.is_empty());
     }
 
     #[tokio::test]

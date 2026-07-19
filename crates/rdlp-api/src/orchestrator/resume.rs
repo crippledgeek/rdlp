@@ -14,18 +14,25 @@ use tracing::instrument;
 const MAX_DOWNLOAD_ID_SCAN: u64 = 100;
 
 /// Ceiling on how many sequential chunk ids a scan probes within one chunk
-/// set before concluding the set is exhausted (the scan breaks earlier, on
-/// the first missing chunk id, in the overwhelmingly common case).
+/// set before concluding the set is exhausted.
 ///
 /// This is a sanity ceiling against a pathological or corrupted directory,
-/// not a live limit on either grammar: new-style power-of-two chunking can
-/// legitimately produce thousands of small chunks, and — per #559's
-/// investigation — the legacy grammar's historical `concurrent_fragments`
-/// cap of 10 was never itself enforced as a scan/cleanup bound. A hardcoded
-/// `0..10` cleanup bound would silently strand any legacy chunk set that
-/// ever did exceed 10 (see `test_cleanup_legacy_chunks_beyond_old_ten_chunk_bound`);
-/// using the same generous ceiling for both grammars removes that trap
-/// without pretending the legacy count is normally this large.
+/// not a live limit on any grammar: new-style power-of-two chunking (and the
+/// resume grammar, which chunks the same way) can legitimately produce
+/// thousands of small chunks, and — per #559's investigation — the legacy
+/// grammar's historical `concurrent_fragments` cap of 10 was never itself
+/// enforced as a scan/cleanup bound. A hardcoded `0..10` cleanup bound would
+/// silently strand any legacy chunk set that ever did exceed 10 (see
+/// `test_cleanup_legacy_chunks_beyond_old_ten_chunk_bound`); using the same
+/// generous ceiling everywhere removes that trap.
+///
+/// Only [`collect_contiguous_chunks`] breaks on the first missing id within
+/// this range — contiguity is a real correctness requirement there, since you
+/// cannot merge across a hole. [`cleanup_old_chunks`] and
+/// [`log_orphaned_resume_chunks`] do NOT break on a hole: an interrupted
+/// adaptive/resume download completes chunks out of order, so a holed set
+/// (e.g. `resume0`, `resume2`, `resume4`) is the normal case there, and
+/// breaking on the first hole would leak the remainder (#568 C1).
 const CHUNK_SCAN_CEILING: u64 = 10_000;
 
 /// Information about detected chunk files
@@ -49,13 +56,16 @@ async fn collect_contiguous_chunks(set: &ChunkSet, parent_dir: &Path) -> (Vec<Pa
 
     for chunk_id in 0..CHUNK_SCAN_CEILING {
         let chunk_path = set.path_in(parent_dir, chunk_id);
-        if chunk_path.exists() {
-            if let Ok(metadata) = tokio::fs::metadata(&chunk_path).await {
-                chunk_paths.push(chunk_path);
+        // A single async `metadata` call replaces the previous synchronous
+        // `exists()` pre-check plus a second async `metadata` call — same
+        // information, half the syscalls, and no blocking call on the async
+        // executor thread (#568 C4).
+        match tokio::fs::metadata(&chunk_path).await {
+            Ok(metadata) => {
                 total_size += metadata.len();
+                chunk_paths.push(chunk_path);
             }
-        } else {
-            break;
+            Err(_) => break,
         }
     }
 
@@ -198,20 +208,30 @@ async fn cleanup_old_chunks(output_path: &Path) {
     let mut deleted = 0;
     for chunk_id in 0..CHUNK_SCAN_CEILING {
         let chunk_path = set.path_in(parent_dir, chunk_id);
-        if chunk_path.exists() && tokio::fs::remove_file(&chunk_path).await.is_ok() {
-            deleted += 1;
+        // Attempt the delete directly instead of probing with a synchronous
+        // `exists()` first: `NotFound` tells us exactly what the probe
+        // would have, in one syscall instead of two, without blocking the
+        // async executor thread (#568 C4). Never break on a miss: a legacy
+        // set can be holed same as any other grammar, and the scan bound is
+        // [`CHUNK_SCAN_CEILING`], not "first gap".
+        match tokio::fs::remove_file(&chunk_path).await {
+            Ok(()) => deleted += 1,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => debug!(
+                "Failed to remove legacy chunk {}: {e}",
+                chunk_path.display()
+            ),
         }
     }
 
     if deleted > 0 {
         debug!(deleted; "Cleaned up legacy-style chunk files");
     }
-
-    cleanup_orphaned_resume_chunks(output_path).await;
 }
 
-/// Clean up orphaned resume-kind chunk sets (`{filename}.{download_id}.resume{i}`)
-/// left behind by an abandoned resume attempt (refs #568, #559).
+/// Discover orphaned resume-kind chunk sets (`{filename}.{download_id}.resume{i}`)
+/// left behind by an abandoned resume attempt, and log them for the operator
+/// to remove manually (refs #568, #559, #571 HIGH). **Never deletes.**
 ///
 /// A resume chunk set encodes only a chunk index *relative* to the resume
 /// attempt's byte offset — the offset itself is never persisted in the file
@@ -220,46 +240,83 @@ async fn cleanup_old_chunks(output_path: &Path) {
 /// can never be safely merged: there is no way to recover which byte offset
 /// its `chunk_id 0` continues from, and the base file it was meant to extend
 /// may since have been deleted (an oversized-file restart) or already
-/// resumed independently at a different offset. Discover-and-delete is the
-/// safe contract; the bytes are simply re-downloaded by whatever fresh
-/// attempt follows.
+/// resumed independently at a different offset.
 ///
-/// Deletes only exact paths computed via [`ChunkSet::path_in`] — never a
-/// directory sweep (`scripts/check-no-dir-sweep-delete.sh`, #558).
-async fn cleanup_orphaned_resume_chunks(output_path: &Path) {
+/// # Why this only logs, and never deletes
+///
+/// `download_id` is a monotonic counter **per process**, starting at 0. Two
+/// rdlp processes downloading to the same output path concurrently are
+/// therefore using the same low ids *at the same time* — an existence probe
+/// here cannot tell "abandoned by a past attempt" apart from "being written
+/// right now by a live peer" (the exact defect class #558 was about, one
+/// crate over). `TempRegistry::cleanup_stale` in `rdlp-postprocess`
+/// (`pipeline::registry`) earns the right to delete by requiring an fs4
+/// exclusive advisory lock on a sidecar that its own writer
+/// (`FileTracker::register`) takes at creation time. The downloader's chunk
+/// writer takes no equivalent lock on chunk files, so reproducing that proof
+/// here would require a cross-crate change to `rdlp-downloader`'s write
+/// path — a real option, but out of proportion to the benefit: an orphaned
+/// resume set can never be merged anyway (see above), so all automatic
+/// cleanup would reclaim is a few megabytes of disk, and #568's acceptance
+/// criterion 4 explicitly allows "documented as requiring manual cleanup" as
+/// an alternative to automatic reclamation. This function takes that
+/// alternative: discover, log with the exact paths implied by
+/// `download_id`, and leave removal to the operator.
+///
+/// # Hole tolerance
+///
+/// Never breaks a per-`download_id` scan on the first missing chunk id:
+/// resume chunks complete out of order on the adaptive path (`try_buffer_unordered`),
+/// so a holed set (e.g. `resume0`, `resume2`, `resume4`) is the NORMAL case,
+/// not evidence the set ends there (#568 C1). Chunk id 0 is checked first as
+/// a cheap sentinel — a resume attempt always schedules id 0 immediately, so
+/// its absence means this `download_id` was never used, and the rest of the
+/// ceiling is skipped for it. This bounds the cost of the overwhelmingly
+/// common "nothing orphaned" case to one probe per `download_id`. Narrow
+/// limitation: a set that has lost chunk 0 specifically (e.g. to some other
+/// partial cleanup) is not discovered by this pass.
+///
+/// Returns every discovered chunk path (across all `download_id`s), so
+/// callers/tests can assert on discovery independently of the (absent)
+/// deletion side effect.
+pub async fn log_orphaned_resume_chunks(output_path: &Path) -> Vec<PathBuf> {
     let parent_dir = output_path.parent().unwrap_or_else(|| Path::new("."));
+    let mut discovered = Vec::new();
 
-    let mut deleted = 0;
     for download_id in 0..MAX_DOWNLOAD_ID_SCAN {
         let Ok(set) = ChunkSet::for_attempt(output_path, download_id, ChunkKind::Resume) else {
-            return;
+            break;
         };
 
-        let mut deleted_for_id = 0;
-        for chunk_id in 0..CHUNK_SCAN_CEILING {
+        let sentinel = set.path_in(parent_dir, 0);
+        if tokio::fs::metadata(&sentinel).await.is_err() {
+            continue;
+        }
+
+        let mut found_for_id = vec![sentinel];
+        for chunk_id in 1..CHUNK_SCAN_CEILING {
             let chunk_path = set.path_in(parent_dir, chunk_id);
-            if chunk_path.exists() {
-                if tokio::fs::remove_file(&chunk_path).await.is_ok() {
-                    deleted_for_id += 1;
-                }
-            } else {
-                break;
+            if tokio::fs::metadata(&chunk_path).await.is_ok() {
+                found_for_id.push(chunk_path);
             }
         }
 
-        if deleted_for_id > 0 {
-            warn!(
-                download_id, deleted_for_id;
-                "Deleting orphaned resume chunk set: safely merging requires the \
-                 original byte offset, which chunk file names don't encode"
-            );
-            deleted += deleted_for_id;
-        }
+        warn!(
+            download_id,
+            chunk_count = found_for_id.len();
+            "Found an orphaned resume chunk set (download_id {download_id}) next to {}: \
+             not deleting automatically — a concurrent rdlp process may still own this \
+             download_id, and safely merging would require the original byte offset, \
+             which chunk file names don't encode. Remove \
+             '{}.{download_id}.resume*' manually once you've confirmed no other rdlp \
+             process is using this output path.",
+            output_path.display(),
+            output_path.display(),
+        );
+        discovered.extend(found_for_id);
     }
 
-    if deleted > 0 {
-        debug!(deleted; "Cleaned up orphaned resume-style chunk files");
-    }
+    discovered
 }
 
 impl Orchestrator {
@@ -281,6 +338,13 @@ impl Orchestrator {
         output_path: &Path,
         expected_size: Option<u64>,
     ) -> Result<u64> {
+        // 0. Discover (and log-only) any orphaned resume-kind chunk sets.
+        // Unconditional and first, so every branch below sees it run — not
+        // just the branches that also happen to run legacy cleanup (#568 C3:
+        // the old call was nested inside `cleanup_old_chunks`/one `else`
+        // arm, so the legacy-chunk-present branch never reached it).
+        log_orphaned_resume_chunks(output_path).await;
+
         // 1. Check for existing complete or partial download file
         if output_path.exists()
             && let Ok(metadata) = tokio::fs::metadata(output_path).await
@@ -362,10 +426,8 @@ impl Orchestrator {
             }
         } else {
             // No main file, and no legacy/new-style Fresh chunk set found
-            // either. Still clean up any orphaned resume chunks so they
-            // don't leak indefinitely (#568/#559 item 4) — nothing else on
-            // this path would ever reach them.
-            cleanup_orphaned_resume_chunks(output_path).await;
+            // either. Orphaned resume chunks (if any) were already
+            // discovered and logged by step 0 above.
             Ok(0)
         }
     }
