@@ -508,7 +508,7 @@ impl DownloadPhase {
                             orchestrator.config.output_to_stdout,
                             &info.title,
                             &download_files,
-                            thumbnail_path.as_deref(),
+                            thumbnail_path,
                         )
                         .await;
                         return Err(e);
