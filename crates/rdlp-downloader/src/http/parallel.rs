@@ -3,6 +3,7 @@
 //! Provides parallel download using multiple range requests with fine-grained chunking.
 
 use super::HttpDownloader;
+use super::chunk_ledger::ChunkLedger;
 use super::chunk_name::{ChunkKind, ChunkSet};
 use super::config::DownloaderConfig;
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, ChunkRequest, ControllerMode};
@@ -175,26 +176,6 @@ impl Attempt {
 
 /// Global atomic counter for generating unique download IDs
 static DOWNLOAD_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
-
-/// Sweep every chunk file `chunk_set` claims in `temp_dir` and log the
-/// outcome.
-///
-/// Deliberately takes no reference to the download error that triggered the
-/// sweep: logging *why* a sweep is happening is the caller's job (each call
-/// site logs its own `error!("... failed: {e}")` immediately before
-/// sweeping, so that log line exists exactly once instead of being
-/// duplicated here), so this function's only concern is "how did cleanup
-/// go".
-async fn sweep_after_failure(chunk_set: &ChunkSet, temp_dir: &Path) {
-    match chunk_set.sweep(temp_dir).await {
-        Ok(report) => {
-            debug!(deleted = report.deleted, temp_dir:? = temp_dir; "Swept chunk files after failed download");
-        }
-        Err(sweep_err) => {
-            warn!(temp_dir:? = temp_dir; "Failed to sweep chunk files after failed download: {sweep_err:#}");
-        }
-    }
-}
 
 impl HttpDownloader {
     /// Parallel download using multiple range requests with fine-grained chunking.
@@ -435,6 +416,13 @@ impl HttpDownloader {
         // itself.
         let stop_scheduling = Arc::new(AtomicBool::new(false));
 
+        // Owns the deletion authority for every chunk path this attempt
+        // creates. Registered from inside the `try_unfold` closure below,
+        // which runs concurrently across many in-flight futures — hence the
+        // `Arc` and the ledger's own interior `Mutex` rather than requiring
+        // exclusive access.
+        let ledger = Arc::new(ChunkLedger::new());
+
         let buffered = {
             let downloader = self.clone();
             let url_arc = url_shared.clone();
@@ -445,6 +433,7 @@ impl HttpDownloader {
             let cancel_outer = cancel.clone();
             let stop_flag = stop_scheduling.clone();
             let controller_for_jobs = controller.clone();
+            let ledger_for_unfold = ledger.clone();
 
             stream::try_unfold((controller.clone(), 0u64), move |(ctrl, chunk_id)| {
                 let sem = sem.clone();
@@ -452,6 +441,10 @@ impl HttpDownloader {
                 let url = url_arc.clone();
                 let progress = progress.clone();
                 let chunk_path = chunk_set_owned.path_in(&temp_dir_owned, chunk_id);
+                // Registered BEFORE this chunk's download starts (the future
+                // below hasn't been polled yet), so a chunk that fails
+                // mid-write is still tracked for cleanup.
+                ledger_for_unfold.register(chunk_path.clone());
                 let ctrl_next = ctrl.clone();
                 let cancel_for_unfold = cancel_outer.clone();
                 let stop_flag = stop_flag.clone();
@@ -500,7 +493,7 @@ impl HttpDownloader {
 
         if let Some(e) = first_err {
             error!("Adaptive download failed: {e}");
-            sweep_after_failure(chunk_set, temp_dir).await;
+            ledger.cleanup().await;
             return Err(e);
         }
 
@@ -533,10 +526,18 @@ impl HttpDownloader {
         let url_shared: Arc<str> = Arc::from(url);
         let temp_dir_owned = temp_dir.to_path_buf();
 
+        // Owns the deletion authority for every chunk path this attempt
+        // creates. The chunk ids are known up front here (unlike the
+        // adaptive path), but registration still happens per-chunk, before
+        // that chunk's download starts, so the mechanism is uniform across
+        // both paths.
+        let ledger = ChunkLedger::new();
+
         let results: Vec<(usize, PathBuf, u64)> = match stream::iter(0..plan.total_chunks)
             .map(|chunk_id| {
                 let (start, end) = plan.range_of(chunk_id);
                 let chunk_path = chunk_set.path_in(&temp_dir_owned, chunk_id as u64);
+                ledger.register(chunk_path.clone());
                 let downloader = self.clone();
                 let url = Arc::clone(&url_shared);
                 let progress = Some(progress_counter.clone());
@@ -566,7 +567,7 @@ impl HttpDownloader {
             Ok(r) => r,
             Err(e) => {
                 error!("Download failed: {e}");
-                sweep_after_failure(chunk_set, temp_dir).await;
+                ledger.cleanup().await;
                 return Err(e);
             }
         };
