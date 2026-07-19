@@ -197,7 +197,7 @@ impl RequestedSpan {
     /// The invariant `start <= end` is what makes [`Self::len`]'s subtraction
     /// total; enforcing it here rather than at the call site means no caller
     /// can construct a span whose length underflows.
-    const fn new(start: u64, end: u64) -> Option<Self> {
+    pub(crate) const fn new(start: u64, end: u64) -> Option<Self> {
         if end < start {
             return None;
         }
@@ -207,7 +207,7 @@ impl RequestedSpan {
     /// Number of bytes the span covers.
     ///
     /// Cannot underflow: [`Self::new`] rejects `end < start`.
-    const fn len(self) -> u64 {
+    pub(crate) const fn len(self) -> u64 {
         self.end - self.start + 1
     }
 }
@@ -232,7 +232,7 @@ impl RequestedSpan {
 /// Returns `Err` (never a silent acceptance) when the status is not 206, the
 /// `Content-Range` is absent/malformed/invalid, or the enclosed span is not
 /// exactly the one requested.
-fn validate_range_response(
+pub(crate) fn validate_range_response(
     response: &wreq::Response,
     span: RequestedSpan,
     url: &str,
