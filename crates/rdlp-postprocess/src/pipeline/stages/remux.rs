@@ -14,6 +14,8 @@ use log::{debug, info};
 
 use rdlp_ffmpeg::{FFmpegRunner, RemuxOptions};
 
+use rdlp_types::ContainerFormat;
+
 use crate::pipeline::{PipelineMessage, PipelineStage};
 
 /// Remuxes the current file to a different container.
@@ -32,22 +34,43 @@ impl RemuxStage {
         Self { ffmpeg }
     }
 
-    /// Determine the target extension for remuxing.
+    /// Determine the target container for remuxing.
     ///
     /// Returns `None` if the file is already in the target container.
-    fn target_ext(msg: &PipelineMessage, input_ext: &str) -> Option<&'static str> {
+    ///
+    /// Returns the `ContainerFormat` itself rather than its extension: the
+    /// decision originates from `config.remux_container`, which is already
+    /// typed, and callers need to ask container-level questions of it (does it
+    /// support faststart?). Handing back a `&str` forced every caller to
+    /// re-derive those answers from string literals, which is how the faststart
+    /// list silently drifted out of sync with `supports_faststart()` (#539).
+    fn target_container(msg: &PipelineMessage, input_ext: &str) -> Option<ContainerFormat> {
         if let Some(container) = msg.config.remux_container {
-            let ext = container.as_ext();
-            if input_ext.eq_ignore_ascii_case(ext) {
+            if input_ext.eq_ignore_ascii_case(container.as_ext()) {
                 return None; // already in target container
             }
-            return Some(ext);
+            return Some(container);
         }
         // HLS auto-remux: .ts → .mp4
-        if msg.is_hls && !input_ext.eq_ignore_ascii_case("mp4") {
-            return Some("mp4");
+        if msg.is_hls && !input_ext.eq_ignore_ascii_case(ContainerFormat::Mp4.as_ext()) {
+            return Some(ContainerFormat::Mp4);
         }
         None
+    }
+
+    /// Build the mux options for a resolved target container.
+    ///
+    /// Exists as a named function so the faststart decision is observable in a
+    /// test. Inlined into `process()` it was unreachable without a real `FFmpeg`
+    /// run, which let #539 ship: a test could assert `supports_faststart()` on
+    /// a container it supplied itself and never touch the production
+    /// expression at all.
+    fn remux_opts(target: ContainerFormat, encoding_tool: Option<String>) -> RemuxOptions {
+        RemuxOptions {
+            faststart: target.supports_faststart(),
+            output_format: Some(target.as_ext().to_string()),
+            encoding_tool_override: encoding_tool,
+        }
     }
 }
 
@@ -77,7 +100,7 @@ impl PipelineStage for RemuxStage {
             .and_then(|e| e.to_str())
             .unwrap_or("");
 
-        let Some(target_ext) = Self::target_ext(&msg, input_ext) else {
+        let Some(target) = Self::target_container(&msg, input_ext) else {
             debug!("RemuxStage: file already in target container ({input_ext}), skipping");
             return Ok(msg);
         };
@@ -85,20 +108,12 @@ impl PipelineStage for RemuxStage {
         info!(
             "RemuxStage: remuxing {} → {}",
             input_file.display(),
-            target_ext
+            target.as_ext()
         );
 
-        let output_path = msg.tracker.temp_path(&input_file, target_ext);
+        let output_path = msg.tracker.temp_path(&input_file, target.as_ext());
 
-        let opts = RemuxOptions {
-            faststart: matches!(target_ext, "mp4" | "mov"),
-            output_format: Some(
-                msg.config
-                    .remux_container
-                    .map_or_else(|| "mp4".to_string(), |c| c.to_string()),
-            ),
-            encoding_tool_override: msg.encoding_tool.clone(),
-        };
+        let opts = Self::remux_opts(target, msg.encoding_tool.clone());
 
         let stage_callback = msg.callback_factory.as_ref().map(|f| f(self.name()));
         let _log_bridge = stage_callback
@@ -214,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn target_ext_already_in_target_returns_none() {
+    fn target_container_already_in_target_returns_none() {
         let reg = Arc::new(TempRegistry::new());
         let (error_tx, _) = oneshot::channel::<PipelineError>();
         let msg = PipelineMessage {
@@ -238,11 +253,74 @@ mod tests {
             encoding_tool: None,
             cancel: tokio_util::sync::CancellationToken::new(),
         };
-        assert!(RemuxStage::target_ext(&msg, "mp4").is_none());
+        assert!(RemuxStage::target_container(&msg, "mp4").is_none());
+    }
+
+    /// #539: the faststart decision must come from the container type.
+    ///
+    /// `m4v`/`f4v` route to the same mov/mp4 muxer as `mp4`/`mov` and
+    /// `+faststart` demonstrably relocates their `moov` atom, but the old
+    /// `matches!(target_ext, "mp4" | "mov")` excluded them, so `--remux m4v`
+    /// shipped a file with `moov` at the end.
+    #[test]
+    fn faststart_follows_the_container_type_for_every_remux_target() {
+        for (container, want) in [
+            (ContainerFormat::Mp4, true),
+            (ContainerFormat::Mov, true),
+            (ContainerFormat::M4v, true),
+            (ContainerFormat::F4v, true),
+            (ContainerFormat::Mkv, false),
+            (ContainerFormat::WebM, false),
+            (ContainerFormat::Avi, false),
+        ] {
+            let config = PostProcess {
+                remux_container: Some(container),
+                ..PostProcess::default()
+            };
+            let msg = make_msg_with_config(vec![PathBuf::from("/tmp/v.ts")], config, false);
+            let target = RemuxStage::target_container(&msg, "ts")
+                .expect("a different container must produce a remux target");
+            assert_eq!(target, container);
+            // Assert on the options the stage actually builds — asserting
+            // `target.supports_faststart()` here would only re-test the
+            // predicate with a value this test supplied, and would stay green
+            // if the stage hardcoded `faststart: false`.
+            let opts = RemuxStage::remux_opts(target, None);
+            assert_eq!(
+                opts.faststart, want,
+                "faststart for {container:?} must follow supports_faststart()"
+            );
+            assert_eq!(opts.output_format.as_deref(), Some(container.as_ext()));
+        }
+    }
+
+    /// An explicit target is honoured verbatim, aliases included.
+    #[test]
+    fn target_container_returns_the_configured_container() {
+        let config = PostProcess {
+            remux_container: Some(ContainerFormat::M4v),
+            ..PostProcess::default()
+        };
+        let msg = make_msg_with_config(vec![PathBuf::from("/tmp/v.mp4")], config, false);
+        assert_eq!(
+            RemuxStage::target_container(&msg, "mp4"),
+            Some(ContainerFormat::M4v)
+        );
+    }
+
+    /// Already-in-target detection stays case-insensitive.
+    #[test]
+    fn target_container_none_when_already_in_target_any_case() {
+        let config = PostProcess {
+            remux_container: Some(ContainerFormat::M4v),
+            ..PostProcess::default()
+        };
+        let msg = make_msg_with_config(vec![PathBuf::from("/tmp/v.M4V")], config, false);
+        assert!(RemuxStage::target_container(&msg, "M4V").is_none());
     }
 
     #[test]
-    fn target_ext_hls_ts_returns_mp4() {
+    fn target_container_hls_ts_returns_mp4() {
         let reg = Arc::new(TempRegistry::new());
         let (error_tx, _) = oneshot::channel::<PipelineError>();
         let msg = PipelineMessage {
@@ -263,7 +341,10 @@ mod tests {
             encoding_tool: None,
             cancel: tokio_util::sync::CancellationToken::new(),
         };
-        assert_eq!(RemuxStage::target_ext(&msg, "ts"), Some("mp4"));
+        assert_eq!(
+            RemuxStage::target_container(&msg, "ts"),
+            Some(ContainerFormat::Mp4)
+        );
     }
 
     #[test]

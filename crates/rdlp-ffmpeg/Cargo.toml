@@ -31,6 +31,7 @@ openssl-sys = { workspace = true }
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 tempfile = { workspace = true }
+strum = { workspace = true }
 
 [lints.rust]
 missing_docs = "warn"

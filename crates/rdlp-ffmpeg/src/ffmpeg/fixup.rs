@@ -189,10 +189,16 @@ impl FFmpegRunner {
         let has_sar_fix = issues
             .iter()
             .any(|i| matches!(i, FixupIssue::StretchedVideo { .. }));
-        let is_mp4 = input
-            .as_ref()
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("mp4") || e.eq_ignore_ascii_case("mov"));
+        // Faststart is a property of the container being WRITTEN, so ask about
+        // `output`, not `input`.
+        //
+        // For any input that HAS an extension this matches the previous
+        // input-derived answer, because the sole caller builds the output path
+        // from the input's extension. For an extensionless input the two differ:
+        // the caller defaults to `mp4`, so the file really is written through
+        // the mov/mp4 muxer and faststart is correct — where the old
+        // input-derived check answered `false` and silently skipped it.
+        let faststart = super::options::faststart_for_output(output.as_ref());
 
         info!(
             "FixupStage: repairing {} issue(s) via re-mux",
@@ -200,7 +206,7 @@ impl FFmpegRunner {
         );
 
         let opts = RemuxOptions {
-            faststart: is_mp4,
+            faststart,
             output_format: None,
             encoding_tool_override,
         };

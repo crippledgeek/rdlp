@@ -221,31 +221,90 @@ fn test_build_loudnorm_pass2_filter_precompress() {
 
 #[test]
 fn test_audio_only_extension_for() {
+    use rdlp_types::ContainerFormat as C;
+
     // MOV-based formats now use MKA to avoid ENOMEM
-    assert_eq!(audio_only_extension_for("mp4"), "mka");
-    assert_eq!(audio_only_extension_for("m4a"), "mka");
-    assert_eq!(audio_only_extension_for("mov"), "mka");
-    assert_eq!(audio_only_extension_for("f4v"), "mka");
-    assert_eq!(audio_only_extension_for("3gp"), "mka");
-    assert_eq!(audio_only_extension_for("ts"), "mka");
-    assert_eq!(audio_only_extension_for("mpg"), "mka");
-    assert_eq!(audio_only_extension_for("flv"), "mka");
+    assert_eq!(audio_only_extension_for(C::Mp4), "mka");
+    assert_eq!(audio_only_extension_for(C::M4a), "mka");
+    assert_eq!(audio_only_extension_for(C::Mov), "mka");
+    assert_eq!(audio_only_extension_for(C::F4v), "mka");
+    assert_eq!(audio_only_extension_for(C::ThreeGp), "mka");
+    assert_eq!(audio_only_extension_for(C::Ts), "mka");
+    assert_eq!(audio_only_extension_for(C::Mpg), "mka");
+    assert_eq!(audio_only_extension_for(C::Flv), "mka");
 
     // Matroska-based formats
-    assert_eq!(audio_only_extension_for("mkv"), "mka");
-    assert_eq!(audio_only_extension_for("mka"), "mka");
-    assert_eq!(audio_only_extension_for("webm"), "mka");
+    assert_eq!(audio_only_extension_for(C::Mkv), "mka");
+    assert_eq!(audio_only_extension_for(C::Mka), "mka");
+    assert_eq!(audio_only_extension_for(C::WebM), "mka");
 
     // Other formats
-    assert_eq!(audio_only_extension_for("avi"), "mp3");
-    assert_eq!(audio_only_extension_for("mp3"), "mp3");
-    assert_eq!(audio_only_extension_for("ogg"), "opus");
-    assert_eq!(audio_only_extension_for("opus"), "opus");
-    assert_eq!(audio_only_extension_for("flac"), "flac");
-    assert_eq!(audio_only_extension_for("wav"), "wav");
+    assert_eq!(audio_only_extension_for(C::Avi), "mp3");
+    assert_eq!(audio_only_extension_for(C::Mp3), "mp3");
+    assert_eq!(audio_only_extension_for(C::Ogg), "opus");
+    assert_eq!(audio_only_extension_for(C::Opus), "opus");
+    assert_eq!(audio_only_extension_for(C::Flac), "flac");
+    assert_eq!(audio_only_extension_for(C::Wav), "wav");
 
-    // Default
-    assert_eq!(audio_only_extension_for("xyz"), "mka");
+    // `m4v` was absent from the old hand-written MOV-family list and only
+    // reached "mka" through the fall-through default — the #539 drift shape.
+    // Now it is classified explicitly.
+    assert_eq!(audio_only_extension_for(C::M4v), "mka");
+}
+
+/// The boundary form keeps the old default for anything unparseable.
+#[test]
+fn test_audio_only_extension_for_ext_boundary() {
+    assert_eq!(audio_only_extension_for_ext("xyz"), "mka");
+    assert_eq!(audio_only_extension_for_ext(""), "mka");
+    // Parses, so it follows the container — including aliases and case.
+    assert_eq!(audio_only_extension_for_ext("WAV"), "wav");
+    assert_eq!(audio_only_extension_for_ext("wave"), "wav");
+    assert_eq!(audio_only_extension_for_ext("m4v"), "mka");
+}
+
+/// Behavioural equivalence with the pre-refactor string implementation, over
+/// every variant — the refactor must change classification for none of them.
+#[test]
+fn audio_only_extension_matches_previous_string_behaviour() {
+    use rdlp_types::ContainerFormat;
+    use strum::IntoEnumIterator as _;
+
+    /// Verbatim copy of the pre-refactor implementation.
+    fn legacy(ext: &str) -> &'static str {
+        if ext.eq_ignore_ascii_case("mp4")
+            || ext.eq_ignore_ascii_case("m4a")
+            || ext.eq_ignore_ascii_case("mov")
+            || ext.eq_ignore_ascii_case("f4v")
+            || ext.eq_ignore_ascii_case("3gp")
+            || ext.eq_ignore_ascii_case("ts")
+            || ext.eq_ignore_ascii_case("mpg")
+            || ext.eq_ignore_ascii_case("flv")
+            || ext.eq_ignore_ascii_case("mkv")
+            || ext.eq_ignore_ascii_case("mka")
+            || ext.eq_ignore_ascii_case("webm")
+        {
+            "mka"
+        } else if ext.eq_ignore_ascii_case("avi") || ext.eq_ignore_ascii_case("mp3") {
+            "mp3"
+        } else if ext.eq_ignore_ascii_case("ogg") || ext.eq_ignore_ascii_case("opus") {
+            "opus"
+        } else if ext.eq_ignore_ascii_case("flac") {
+            "flac"
+        } else if ext.eq_ignore_ascii_case("wav") {
+            "wav"
+        } else {
+            "mka"
+        }
+    }
+
+    for c in ContainerFormat::iter() {
+        assert_eq!(
+            audio_only_extension_for(c),
+            legacy(c.as_ext()),
+            "classification for {c:?} changed; the refactor must be behaviour-preserving"
+        );
+    }
 }
 
 #[test]

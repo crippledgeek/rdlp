@@ -99,10 +99,8 @@ impl FFmpegRunner {
         cancel: Option<&CancellationToken>,
     ) -> anyhow::Result<()> {
         if opts.remux_only {
-            // Determine if output is MP4/MOV for faststart
-            let ext = output.extension().and_then(|e| e.to_str()).unwrap_or("");
             let remux_opts = RemuxOptions {
-                faststart: ext.eq_ignore_ascii_case("mp4") || ext.eq_ignore_ascii_case("mov"),
+                faststart: crate::ffmpeg::options::faststart_for_output(output),
                 ..Default::default()
             };
             Ok(Self::remux_sync(input, output, &remux_opts, progress_fn)
