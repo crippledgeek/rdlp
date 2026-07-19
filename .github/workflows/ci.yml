@@ -59,6 +59,15 @@ jobs:
         # Diff guard: if the host WIT and vendored copy diverge, fail loud.
         run: bash scripts/check-wit-drift.sh
 
+      - name: Check Rust enum / TypeScript union drift
+        # crates/rdlp-desktop/src/types/index.ts hand-mirrors several lowercase
+        # serde enums from rdlp-types. Adding a Rust variant does not break the
+        # TS build — it just lets Rust serialize a value the TS type declares
+        # impossible (#534 added ContainerFormat::M4v; the union kept 28, #542).
+        # Derives the Rust side from the enum body, so it can't agree with a
+        # stale mirror.
+        run: bash scripts/check-ts-enum-drift.sh
+
       - name: Install semgrep
         run: pipx install semgrep || pip install semgrep
 

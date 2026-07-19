@@ -273,7 +273,7 @@ export interface DownloadJob {
  * Container formats matching Rust `ContainerFormat` (#[serde(rename_all = "lowercase")]).
  */
 export type ContainerFormat =
-    | "mp4" | "mkv" | "webm" | "mov" | "ts" | "flv" | "avi"
+    | "mp4" | "mkv" | "webm" | "mov" | "m4v" | "ts" | "flv" | "avi"
     | "threegp" | "mpg" | "f4v" | "asf" | "mxf" | "vob" | "dv"
     | "nut" | "ivf" | "ogg" | "m4a" | "mp3" | "wav" | "flac"
     | "opus" | "aac" | "aiff" | "mka" | "wv" | "caf" | "ac3";
