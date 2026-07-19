@@ -386,19 +386,29 @@ impl PipelineStage for ThumbnailStage {
         // pinned behavior.
         let supports_thumbnail = Self::supports_thumbnail(&extension);
 
-        // #548: an explicit `--remux` container must never be silently
-        // discarded by the auto-remux-to-mp4 fallback below. `remux_container`
-        // is `Some` ONLY when the user explicitly requested a container
-        // (`RemuxStage`'s own gate); `None` means rdlp picked the container
-        // itself (e.g. post-HLS `.ts` with no explicit `--remux`), where the
-        // auto-remux-to-mp4 fallback is correct and unaffected by this guard.
-        // Compared as `ContainerFormat`, never a raw extension string.
+        // #548/#551: an explicitly requested container must never be silently
+        // discarded by the auto-remux-to-mp4 fallback below. The request is
+        // resolved by `PostProcess::explicit_container` (the single source of
+        // truth for the `recode_container` > `recode_video` > `remux_container`
+        // precedence chain) — #548 keyed this guard on `remux_container` alone,
+        // which is why `--recode-video=ts` still lost its container (#551).
+        //
+        // `None` means rdlp picked the container itself (e.g. post-HLS `.ts`
+        // with no explicit flag), where the auto-remux-to-mp4 fallback is
+        // correct and unaffected by this guard.
+        //
+        // The comparison is EQUALITY against the container actually on disk,
+        // not `.is_some()`: an explicit request for a DIFFERENT container must
+        // still take the auto-remux path. Compared as `ContainerFormat`, never
+        // a raw extension string.
         if !supports_thumbnail
             && let Ok(current) = ContainerFormat::from_str(&extension)
-            && msg.config.remux_container == Some(current)
+            && let Some(explicit) = msg.config.explicit_container()
+            && explicit.format == current
         {
+            let flag = explicit.flag;
             let reason = format!(
-                "kept explicit --remux={current} container; thumbnail embed skipped \
+                "kept explicit {flag}={current} container; thumbnail embed skipped \
                  because {current} cannot carry an embedded thumbnail"
             );
             warn!("ThumbnailStage: {reason}");

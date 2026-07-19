@@ -10,6 +10,22 @@ use crate::fixup_policy::FixupPolicy;
 use crate::recode_audio_mode::RecodeAudioMode;
 use crate::vpx_deadline::VpxDeadline;
 
+/// A container the user explicitly asked for, paired with the CLI flag that
+/// asked for it.
+///
+/// The flag travels with the format so operator-facing messages can name the
+/// exact flag that won the precedence chain (`--recode-video=ts`), rather than
+/// a bare container that leaves the user guessing which of their flags took
+/// effect. Mirrors yt-dlp, whose equivalent conflict message names both sides
+/// (`"--remux-video is ignored since --recode-video was given"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExplicitContainer {
+    /// The CLI flag that requested this container, e.g. `"--recode-video"`.
+    pub flag: &'static str,
+    /// The requested container format.
+    pub format: ContainerFormat,
+}
+
 /// Post-processing configuration controlling `FFmpeg` transforms and file handling.
 ///
 /// This struct is the canonical post-processing config type. It is placed in
@@ -94,6 +110,53 @@ pub struct PostProcess {
     pub fixup: FixupPolicy,
 }
 
+impl PostProcess {
+    /// The container the user explicitly requested, resolved in precedence
+    /// order: `recode_container` > `recode_video` > `remux_container`.
+    /// `None` means no explicit container was requested anywhere, i.e. rdlp
+    /// is free to choose one itself.
+    ///
+    /// The recode target outranks the remux target because `RecodeStage`
+    /// (pipeline index 4) runs AFTER `RemuxStage` (index 3), so when both are
+    /// set it is the recode target that survives to the end of the pipeline.
+    /// yt-dlp resolves the same conflict the same way, clearing `remuxvideo`
+    /// with `"--remux-video is ignored since --recode-video was given"`.
+    ///
+    /// Single source of truth for this precedence chain — do NOT re-spell the
+    /// `.or()` chain at a call site. A hand-copied mirror of it in
+    /// `ThumbnailStage` is exactly what shipped #551: the guard keyed on
+    /// `remux_container` alone and silently discarded `--recode-video=ts`.
+    ///
+    /// Callers needing a hard default apply `.unwrap_or(..)` themselves —
+    /// *which* default is a per-consumer concern, and `ThumbnailStage`
+    /// genuinely wants the `None`.
+    #[must_use]
+    pub fn explicit_container(&self) -> Option<ExplicitContainer> {
+        // Deliberately NOT a destructuring pattern: `PostProcess` has ~35
+        // fields, so binding every one to force a compile error when a field
+        // is added would fire on every unrelated addition (`recode_threads`,
+        // `loudnorm_*`, ...) — a false-positive treadmill, not a safety net.
+        // The doc-comment above is the contract; the unit tests pin the order.
+        self.recode_container
+            .map(|format| ExplicitContainer {
+                flag: "--recode-container",
+                format,
+            })
+            .or_else(|| {
+                self.recode_video.map(|format| ExplicitContainer {
+                    flag: "--recode-video",
+                    format,
+                })
+            })
+            .or_else(|| {
+                self.remux_container.map(|format| ExplicitContainer {
+                    flag: "--remux",
+                    format,
+                })
+            })
+    }
+}
+
 impl Default for PostProcess {
     fn default() -> Self {
         Self {
@@ -143,6 +206,103 @@ mod tests {
     #[test]
     fn default_embed_thumbnail_is_true() {
         assert!(PostProcess::default().embed_thumbnail);
+    }
+
+    // --- explicit_container precedence chain (#551) ---
+    //
+    // Each field is exercised alone (so no arm is dead), then every pairwise
+    // conflict is exercised (so the ORDER is pinned, not just the membership).
+    // A chain reordered to put `remux_container` first still passes the
+    // alone-cases; only the conflict cases catch it.
+
+    #[test]
+    fn explicit_container_is_none_when_nothing_requested() {
+        assert_eq!(PostProcess::default().explicit_container(), None);
+    }
+
+    #[test]
+    fn explicit_container_resolves_recode_container_alone() {
+        let config = PostProcess {
+            recode_container: Some(ContainerFormat::Ts),
+            ..PostProcess::default()
+        };
+        let explicit = config.explicit_container().expect("some");
+        assert_eq!(explicit.format, ContainerFormat::Ts);
+        assert_eq!(explicit.flag, "--recode-container");
+    }
+
+    #[test]
+    fn explicit_container_resolves_recode_video_alone() {
+        let config = PostProcess {
+            recode_video: Some(ContainerFormat::Mkv),
+            ..PostProcess::default()
+        };
+        let explicit = config.explicit_container().expect("some");
+        assert_eq!(explicit.format, ContainerFormat::Mkv);
+        assert_eq!(explicit.flag, "--recode-video");
+    }
+
+    #[test]
+    fn explicit_container_resolves_remux_container_alone() {
+        let config = PostProcess {
+            remux_container: Some(ContainerFormat::F4v),
+            ..PostProcess::default()
+        };
+        let explicit = config.explicit_container().expect("some");
+        assert_eq!(explicit.format, ContainerFormat::F4v);
+        assert_eq!(explicit.flag, "--remux");
+    }
+
+    #[test]
+    fn recode_container_outranks_recode_video() {
+        let config = PostProcess {
+            recode_container: Some(ContainerFormat::Ts),
+            recode_video: Some(ContainerFormat::Mkv),
+            ..PostProcess::default()
+        };
+        let explicit = config.explicit_container().expect("some");
+        assert_eq!(explicit.format, ContainerFormat::Ts);
+        assert_eq!(explicit.flag, "--recode-container");
+    }
+
+    /// `RecodeStage` (index 4) runs after `RemuxStage` (index 3), so the
+    /// recode target is what survives to the end of the pipeline.
+    #[test]
+    fn recode_video_outranks_remux_container() {
+        let config = PostProcess {
+            recode_video: Some(ContainerFormat::Ts),
+            remux_container: Some(ContainerFormat::Mkv),
+            ..PostProcess::default()
+        };
+        let explicit = config.explicit_container().expect("some");
+        assert_eq!(explicit.format, ContainerFormat::Ts);
+        assert_eq!(explicit.flag, "--recode-video");
+    }
+
+    #[test]
+    fn recode_container_outranks_remux_container() {
+        let config = PostProcess {
+            recode_container: Some(ContainerFormat::Ts),
+            remux_container: Some(ContainerFormat::Mkv),
+            ..PostProcess::default()
+        };
+        let explicit = config.explicit_container().expect("some");
+        assert_eq!(explicit.format, ContainerFormat::Ts);
+        assert_eq!(explicit.flag, "--recode-container");
+    }
+
+    /// All three set at once — the full chain resolves to the head.
+    #[test]
+    fn recode_container_wins_the_full_three_way_chain() {
+        let config = PostProcess {
+            recode_container: Some(ContainerFormat::Ts),
+            recode_video: Some(ContainerFormat::Mkv),
+            remux_container: Some(ContainerFormat::F4v),
+            ..PostProcess::default()
+        };
+        let explicit = config.explicit_container().expect("some");
+        assert_eq!(explicit.format, ContainerFormat::Ts);
+        assert_eq!(explicit.flag, "--recode-container");
     }
 
     #[test]
