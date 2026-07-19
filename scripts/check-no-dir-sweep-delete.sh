@@ -41,14 +41,21 @@
 # semgrep is already installed later in the same CI job) is tracked separately.
 # ---------------------------------------------------------------------------
 #
-# Usage: scripts/check-no-dir-sweep-delete.sh [--canary]
-#   --canary: invert the check -- expects to FIND a violation. Used to prove the
-#             gate actually fires; run it against a tree that still has one.
+# Usage: scripts/check-no-dir-sweep-delete.sh [--self-test]
+#   --self-test: prove the gate still fires, by scanning a synthetic violating
+#                file in a temp dir. Runs in CI every time, so "canary-verified"
+#                stays true as the tree evolves instead of being a one-off claim.
 
 set -euo pipefail
 
-CANARY=0
-[ "${1:-}" = "--canary" ] && CANARY=1
+# Anchor to the repo root. `crates/*/src` is a relative glob: run from anywhere
+# else it expands to nothing, find scans zero files, and the script would
+# cheerfully report OK. A gate that passes having scanned nothing is worse than
+# no gate, so this is load-bearing, not tidiness.
+cd "$(git rev-parse --show-toplevel)"
+
+SELF_TEST=0
+[ "${1:-}" = "--self-test" ] && SELF_TEST=1
 
 # Allowlist: each entry must state why scanning-then-deleting is sound there.
 #
@@ -67,27 +74,60 @@ crates/rdlp-cli/src/plugin_cmd/build_from_ytdlp.rs'
 ENUMERATE='read_dir|WalkDir|walkdir|glob::'
 DELETE='remove_file|remove_dir'
 
-violations=""
-while IFS= read -r file; do
-    case "$ALLOWLIST" in *"$file"*) continue ;; esac
-    # Production code only: drop everything from the first `#[cfg(test)]` on.
-    # Tests legitimately read_dir a TempDir to assert on its contents (e.g.
-    # naming.rs's finalize tests), which is not this defect.
-    prod=$(sed '/#\[cfg(test)\]/,$d' "$file")
-    if printf '%s' "$prod" | grep -qE "$ENUMERATE" \
-        && printf '%s' "$prod" | grep -qE "$DELETE"; then
-        violations="${violations}${file}\n"
-    fi
-done < <(find crates/*/src -name '*.rs' -type f 2>/dev/null)
+# Scan one directory tree; echo any offending files. Shared by the real run and
+# the self-test so the self-test exercises the SAME matcher, not a copy of it.
+scan() {
+    local root="$1" file prod
+    while IFS= read -r file; do
+        # Exact match, not substring: a substring test would let a new file whose
+        # path contains an allowlisted path slip through unexamined.
+        if printf '%s\n' "$ALLOWLIST" | grep -Fxq "$file"; then
+            continue
+        fi
+        # Production code only: drop everything from the first `#[cfg(test)]` on.
+        # Tests legitimately read_dir a TempDir to assert on its contents (e.g.
+        # naming.rs's finalize tests), which is not this defect. This assumes the
+        # first `#[cfg(test)]` in a file begins its tail test module -- true
+        # across crates/*/src today.
+        prod=$(sed '/#\[cfg(test)\]/,$d' "$file")
+        if printf '%s' "$prod" | grep -qE "$ENUMERATE" \
+            && printf '%s' "$prod" | grep -qE "$DELETE"; then
+            printf '%s\n' "$file"
+        fi
+    done < <(find "$root" -name '*.rs' -type f)
+}
 
-if [ -n "$violations" ]; then
-    if [ "$CANARY" -eq 1 ]; then
-        echo "CANARY OK: gate fires on:"
-        printf "%b" "$violations"
+if [ "$SELF_TEST" -eq 1 ]; then
+    tmp=$(mktemp -d)
+    trap 'rm -rf "$tmp"' EXIT
+    cat > "$tmp/sweep.rs" <<'FIXTURE'
+async fn sweep(dir: &Path) {
+    let mut entries = tokio::fs::read_dir(dir).await.unwrap();
+    while let Ok(Some(e)) = entries.next_entry().await {
+        let _ = tokio::fs::remove_file(e.path()).await;
+    }
+}
+FIXTURE
+    if [ -n "$(scan "$tmp")" ]; then
+        echo "SELF-TEST OK: the gate still detects a directory sweep."
         exit 0
     fi
+    echo "SELF-TEST FAILED: the gate did NOT flag a known sweep — it is broken."
+    exit 1
+fi
+
+# Guard against scanning nothing and calling it a pass.
+file_count=$(find crates/*/src -name '*.rs' -type f | wc -l)
+if [ "$file_count" -eq 0 ]; then
+    echo "ERROR: found no .rs files under crates/*/src — refusing to report OK."
+    exit 1
+fi
+
+violations=$(scan "crates")
+
+if [ -n "$violations" ]; then
     echo "ERROR: directory enumeration co-located with file deletion:"
-    printf "%b" "$violations"
+    printf '%s\n' "$violations"
     echo ""
     echo "Deleting files discovered by a directory scan cannot distinguish"
     echo "'a file rdlp created' from 'a file the user already had' (#558)."
@@ -96,9 +136,4 @@ if [ -n "$violations" ]; then
     exit 1
 fi
 
-if [ "$CANARY" -eq 1 ]; then
-    echo "CANARY FAILED: gate found nothing -- it would not catch a regression."
-    exit 1
-fi
-
-echo "OK: No directory-sweep deletion in production code."
+echo "OK: No directory-sweep deletion in production code ($file_count files scanned)."

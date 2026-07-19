@@ -74,6 +74,11 @@ jobs:
         # comparable tool (yt-dlp/aria2/curl/wget/rsync) deletes by pattern match.
         run: bash scripts/check-no-dir-sweep-delete.sh
 
+      - name: Verify the dir-sweep gate still fires
+        # Scans a synthetic sweep in a temp dir. Without this, "canary-verified"
+        # decays into an unchecked claim as the matcher evolves.
+        run: bash scripts/check-no-dir-sweep-delete.sh --self-test
+
       - name: Install semgrep
         run: pipx install semgrep || pip install semgrep
 

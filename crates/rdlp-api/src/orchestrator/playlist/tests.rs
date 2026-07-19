@@ -113,3 +113,92 @@ fn test_extract_cdn_host_stickiness_sort() {
     // s2 (same host) should sort first
     assert!(urls[0].contains("s2.netmagcdn.com"));
 }
+
+// ---------------------------------------------------------------------------
+// #558 regression: a download must not delete files it did not create
+// ---------------------------------------------------------------------------
+
+/// `cleanup_leftover_segments` used to enumerate the output directory before a
+/// download and unlink every entry matching `starts_with(title)` +
+/// `contains(".part")` + digits after the last `.part`. That matched partial
+/// files left by other tools (wget, aria2, a browser) and deleted them on a
+/// normal, successful download.
+///
+/// This drives the real `download_from_info_to_dir` path against a mock server
+/// rather than asserting on source text, so it stays valid however a future
+/// sweep might be spelled — including the existence-probe shape that
+/// `scripts/check-no-dir-sweep-delete.sh` cannot see.
+// The `mockito::Server` must stay alive for the whole body — it stops serving
+// when dropped — so its drop cannot be tightened. Same rationale as the
+// module-level allow in `orchestrator/tests/hls_e2e.rs`.
+#[allow(clippy::significant_drop_tightening)]
+#[tokio::test]
+async fn foreign_part_files_survive_an_episode_download() {
+    use crate::events::Event;
+    use crate::handle::DownloadId;
+    use crate::orchestrator::Orchestrator;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
+
+    let mut server = mockito::Server::new_async().await;
+    let body = b"video-bytes";
+    let _mock = server
+        .mock("GET", "/video.mp4")
+        .with_status(200)
+        .with_header("content-length", &body.len().to_string())
+        .with_body(body)
+        .create_async()
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let title = "My Show S01E01";
+
+    // Files another tool could plausibly have left in the user's download
+    // directory. Each matched the old sweep's pattern.
+    let foreign_part = dir.path().join(format!("{title}.mp4.part1"));
+    // The old digit check accepted an EMPTY suffix too: all() on an empty
+    // iterator is vacuously true, so a bare `.part` matched as well.
+    let foreign_bare = dir.path().join(format!("{title}.mp4.part"));
+    let unrelated = dir.path().join("holiday.jpg");
+    for p in [&foreign_part, &foreign_bare, &unrelated] {
+        tokio::fs::write(p, b"not rdlp's").await.unwrap();
+    }
+
+    let fmt = rdlp_types::Format::new(
+        "http-1",
+        format!("{}/video.mp4", server.url()),
+        "mp4",
+        rdlp_types::DownloadProtocol::Https,
+    );
+    let mut info =
+        rdlp_types::InfoDict::new("id-558", title, "test", format!("{}/watch", server.url()));
+    info.formats = vec![fmt];
+
+    let (tx, _rx) = mpsc::channel::<Event>(64);
+    let orch = Orchestrator::new(
+        Arc::new(rdlp_types::Config::default()),
+        tx,
+        DownloadId::next(),
+        CancellationToken::new(),
+        None,
+    );
+
+    let _ = orch
+        .download_from_info_to_dir(&info, false, dir.path(), &[], None, None)
+        .await;
+
+    // The assertions are about the foreign files, not the download's outcome:
+    // the sweep ran before the download, so it destroyed these even on paths
+    // where the download itself later failed.
+    assert!(
+        foreign_part.exists(),
+        "a foreign .part1 file must survive — deleting it is #558"
+    );
+    assert!(
+        foreign_bare.exists(),
+        "a foreign bare .part file must survive (empty-suffix match)"
+    );
+    assert!(unrelated.exists(), "an unrelated file must survive");
+}
