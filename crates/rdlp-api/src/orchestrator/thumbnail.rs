@@ -342,3 +342,32 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod signature_pin {
+    use super::OwnedThumbnail;
+    use std::future::Future;
+
+    /// Coercing the fn item to a fn pointer pins arity, parameter types,
+    /// receiver mode, and return type. The generic form is required because
+    /// `delete` is `async`: its return type is an anonymous future, so a plain
+    /// `const _: fn(..) -> ..` cannot name it.
+    fn assert_delete_signature<F: Future<Output = std::io::Result<()>>>(
+        _f: fn(OwnedThumbnail) -> F,
+    ) {
+    }
+
+    /// The type system enforces that a bare `&Path` cannot reach the deletion
+    /// path — but nothing stops a future change from reverting the signature,
+    /// which would silently remove the guarantee. This pins it: `delete(&self)`
+    /// or a `&Path` parameter becomes `E0308` at `cargo check`.
+    ///
+    /// Verified by mutation, both directions (see the design rationale on
+    /// #556). A compile-fail test is not viable here — doctests and trybuild
+    /// compile as external crates and cannot name a `pub(crate)` item, so any
+    /// such test would pass for the wrong reason.
+    #[test]
+    fn delete_signature_is_pinned() {
+        assert_delete_signature(OwnedThumbnail::delete);
+    }
+}
