@@ -571,16 +571,20 @@ impl FFmpegRunner {
 /// Delete a just-created, still-empty output file after a stream-copy setup
 /// failure (best-effort; a failure here is not itself propagated).
 ///
-/// `ffmpeg_the_third::format::output(path)` (and the raw-FFI equivalent,
-/// `avio_open` under `AVIO_FLAG_WRITE`) creates/truncates `path` on disk
+/// `ffmpeg_the_third::format::output(path)` creates/truncates `path` on disk
 /// immediately — before a single stream, header, or packet is written. If
-/// [`FFmpegRunner::add_stream_copy`] (or the raw-FFI
-/// [`FFmpegRunner::resolve_and_apply_codec_tag`]) then rejects the pairing,
-/// that 0-byte file is left behind looking like a completed-but-empty
-/// operation rather than "never ran". Six call sites across `remux.rs`,
-/// `salvage.rs`, `metadata.rs`, `fixup.rs`, `thumbnail/mod.rs`, and
-/// `merge/mod.rs` share this exact cleanup; a single helper keeps the
-/// six from drifting apart.
+/// [`FFmpegRunner::add_stream_copy`] then rejects the pairing, that 0-byte
+/// file is left behind looking like a completed-but-empty operation rather
+/// than "never ran". Ten call sites across `remux.rs`, `salvage.rs`,
+/// `metadata.rs`, `fixup.rs`, `thumbnail/mod.rs`, `merge/mod.rs`, and
+/// `transcode/{audio_extract.rs,video_transcode_phases.rs}` share this exact
+/// cleanup; a single helper keeps the ten from drifting apart.
+///
+/// The raw-FFI codec-tag callers (e.g. `merge/mkv_raw_ffi.rs`) call
+/// [`FFmpegRunner::resolve_and_apply_codec_tag`] directly, but that helper is
+/// NOT a cleanup trigger there: in every raw-FFI mux path, `avio_open` runs
+/// AFTER the per-stream loop that calls it, so no output file exists yet at
+/// the point a rejection could occur — there is nothing to clean up.
 ///
 /// Deletes exactly the caller-supplied `path` — never a directory sweep
 /// (rdlp #558's lesson: a directory-wide cleanup can delete a concurrent
@@ -914,5 +918,36 @@ mod tests {
             .expect_err("AVI cannot represent HEVC under this FFmpeg build");
         let msg = err.to_string().to_lowercase();
         assert!(msg.contains("avi") && msg.contains("hevc"), "got: {msg}");
+    }
+
+    /// IMPORTANT #5 (code-review follow-up): the medium gate at the top of
+    /// `resolve_codec_tag` exempts Attachment/Data/Unknown streams from the
+    /// representability question entirely (see
+    /// `resolve_codec_tag_clears_ttf_attachment_into_mkv` /
+    /// `resolve_codec_tag_clears_data_medium_into_mkv` above) — but Subtitle
+    /// stays in the eligible set alongside Video/Audio. Nothing pinned that a
+    /// subtitle codec a container genuinely cannot represent is still
+    /// rejected, so a future widening of the exemption to
+    /// `AVMEDIA_TYPE_SUBTITLE` would go green with no test noticing. AVI's
+    /// tag table has no entry for `SubRip` and `avienc` defines no
+    /// `query_codec` fallback (the same shape that makes
+    /// `resolve_codec_tag_rejects_hevc_into_avi` reject HEVC above), so the
+    /// pairing must still be rejected, not waved through as if it were an
+    /// attachment.
+    #[test]
+    fn resolve_codec_tag_rejects_subrip_into_avi() {
+        crate::ffmpeg::ensure_init().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let oformat = oformat_for_extension(dir.path(), "avi");
+        let params = fake_params(
+            ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_SUBRIP,
+            ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_SUBTITLE,
+        );
+
+        let err = FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params)).expect_err(
+            "subtitle streams must remain rejection-eligible: AVI cannot represent SubRip",
+        );
+        let msg = err.to_string().to_lowercase();
+        assert!(msg.contains("avi") && msg.contains("subrip"), "got: {msg}");
     }
 }

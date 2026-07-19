@@ -28,6 +28,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::{PostProcessError, Result};
 
+use super::super::ffi_helpers::cleanup_partial_output;
 use super::super::log_capture::LogSuppressGuard;
 use super::super::salvage::prepare_input_with_salvage;
 use super::super::{AudioExtractOptions, FFmpegRunner, ensure_init};
@@ -154,7 +155,8 @@ impl FFmpegRunner {
                 })?
                 .parameters(),
             "for audio copy extract",
-        )?;
+        )
+        .inspect_err(|_| cleanup_partial_output(output))?;
 
         // Set format-level encoding_tool metadata (copy, no re-encoding)
         crate::ffmpeg::encoding_tag::set_encoding_tool(&mut octx, "copy");

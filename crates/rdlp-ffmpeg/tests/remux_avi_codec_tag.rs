@@ -220,7 +220,7 @@ fn build_cover_jpg(dir: &Path) -> PathBuf {
 /// subprocess per source is real work — this is the "cached, not
 /// regenerated per test" fixture idiom used across this crate's test suite).
 struct Fixtures {
-    dir: tempfile::TempDir,
+    dir: PathBuf,
     h264_mp4: PathBuf,
     hevc_mp4: PathBuf,
     ts: PathBuf,
@@ -232,16 +232,35 @@ struct Fixtures {
 
 static FIXTURES: OnceLock<Fixtures> = OnceLock::new();
 
+/// Fixtures are built once per process and cached, so they live under the
+/// crate's `target/` rather than in a `TempDir`.
+///
+/// A `static` is never dropped, so a `TempDir` here could never run its
+/// cleanup — it would leak the whole fixture set (~448K of built video and
+/// image files) on every run, pass or panic. That matters because this
+/// machine's `/tmp` is a RAM-backed tmpfs, so the leak would be real memory.
+/// Building into `target/` instead makes the residue ordinary build output:
+/// it costs no RAM, `cargo clean` reclaims it, and a rebuilt fixture simply
+/// overwrites the previous one, which also makes repeat runs faster.
+fn fixture_dir() -> PathBuf {
+    // CARGO_TARGET_TMPDIR is `<target>/tmp`, provided by cargo for integration
+    // tests exactly like this one.
+    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("remux_avi_codec_tag");
+    std::fs::create_dir_all(&dir)
+        .unwrap_or_else(|e| panic!("create fixture dir {}: {e}", dir.display()));
+    dir
+}
+
 fn fixtures() -> &'static Fixtures {
     FIXTURES.get_or_init(|| {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let h264_mp4 = build_fixture(dir.path(), "h264", "mp4", "libx264");
-        let hevc_mp4 = build_fixture(dir.path(), "hevc", "mp4", "libx265");
-        let ts = build_fixture(dir.path(), "src", "ts", "libx264");
-        let mkv = build_fixture(dir.path(), "src", "mkv", "libx264");
-        let video_only = build_video_only(dir.path());
-        let audio_only = build_audio_only(dir.path());
-        let cover_jpg = build_cover_jpg(dir.path());
+        let dir = fixture_dir();
+        let h264_mp4 = build_fixture(&dir, "h264", "mp4", "libx264");
+        let hevc_mp4 = build_fixture(&dir, "hevc", "mp4", "libx265");
+        let ts = build_fixture(&dir, "src", "ts", "libx264");
+        let mkv = build_fixture(&dir, "src", "mkv", "libx264");
+        let video_only = build_video_only(&dir);
+        let audio_only = build_audio_only(&dir);
+        let cover_jpg = build_cover_jpg(&dir);
         Fixtures {
             dir,
             h264_mp4,
@@ -269,7 +288,7 @@ async fn assert_remux_matches(
     expected_codec: &str,
     expected_tag: Option<&str>,
 ) {
-    let dst = fixtures().dir.path().join(format!("{label}.{target_ext}"));
+    let dst = fixtures().dir.join(format!("{label}.{target_ext}"));
     runner
         .remux(src, &dst, &RemuxOptions::default(), None)
         .await
@@ -325,7 +344,7 @@ async fn hevc_mp4_to_avi_is_rejected_with_actionable_message() {
     if !require_ffmpeg() {
         return;
     }
-    let dst = fixtures().dir.path().join("hevc_to_avi.avi");
+    let dst = fixtures().dir.join("hevc_to_avi.avi");
     let runner = FFmpegRunner::new().expect("FFmpegRunner::new");
 
     let err = runner
@@ -357,7 +376,7 @@ async fn metadata_embed_hevc_into_avi_leaves_no_partial_file() {
     if !require_ffmpeg() {
         return;
     }
-    let dst = fixtures().dir.path().join("hevc_metadata_to_avi.avi");
+    let dst = fixtures().dir.join("hevc_metadata_to_avi.avi");
     let runner = FFmpegRunner::new().expect("FFmpegRunner::new");
 
     let err = runner
@@ -439,7 +458,7 @@ async fn hevc_mp4_to_mkv_via_add_stream_copy_succeeds() {
     if !require_ffmpeg() {
         return;
     }
-    let dst = fixtures().dir.path().join("hevc_via_metadata.mkv");
+    let dst = fixtures().dir.join("hevc_via_metadata.mkv");
     let runner = FFmpegRunner::new().expect("FFmpegRunner::new");
 
     runner
@@ -487,7 +506,7 @@ async fn mkv_raw_ffi_audio_bearing_sources_preserve_aac_and_decode() {
     ];
 
     for (label, src, expected_video_codec) in cases {
-        let dst = fixtures().dir.path().join(format!("{label}.mkv"));
+        let dst = fixtures().dir.join(format!("{label}.mkv"));
         runner
             .remux(src, &dst, &RemuxOptions::default(), None)
             .await
@@ -521,7 +540,7 @@ async fn merge_to_mkv_preserves_h264_and_aac() {
         return;
     }
     let runner = FFmpegRunner::new().expect("FFmpegRunner::new");
-    let dst = fixtures().dir.path().join("merged.mkv");
+    let dst = fixtures().dir.join("merged.mkv");
 
     runner
         .merge(
@@ -555,7 +574,7 @@ async fn embed_thumbnail_mkv_preserves_stream_identity() {
         return;
     }
     let runner = FFmpegRunner::new().expect("FFmpegRunner::new");
-    let dst = fixtures().dir.path().join("with_thumb.mkv");
+    let dst = fixtures().dir.join("with_thumb.mkv");
 
     runner
         .embed_thumbnail(

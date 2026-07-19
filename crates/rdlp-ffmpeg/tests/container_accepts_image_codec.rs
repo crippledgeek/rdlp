@@ -191,6 +191,38 @@ async fn jpeg_and_png_are_accepted_by_every_supported_container() {
     }
 }
 
+/// IMPORTANT #4 (code-review follow-up): mp3's `query_codec` callback
+/// (`mp3enc.c`) answers every ID3v2-APIC-representable image codec (gif,
+/// mjpeg, png, tiff, bmp, webp — `ff_id3v2_mime_tags`) with `MKTAG('A','P',
+/// 'I','C')`, a large *positive* value, reserving the literal `1` for MP3
+/// audio itself. A predicate gated on `== 1` misreads that as "cannot
+/// store" and needlessly transcodes; `> 0` reads it correctly. mjpeg/png are
+/// already covered by the JPEG/PNG baseline above regardless of this
+/// predicate, so this test targets the codecs the baseline does NOT cover:
+/// gif, tiff, bmp, webp. Fails against the unpatched `== 1` predicate.
+#[tokio::test]
+async fn mp3_accepts_every_id3v2_apic_codec() {
+    if !ffmpeg_cli_available() {
+        eprintln!("skipping: ffmpeg CLI not available");
+        return;
+    }
+    let dir = tempfile::TempDir::new().unwrap();
+    let runner = FFmpegRunner::new().expect("FFmpeg");
+
+    for format in ["gif", "tiff", "bmp", "webp"] {
+        let img = make_image(dir.path(), format);
+        assert!(
+            runner
+                .container_accepts_image_codec("mp3", &img)
+                .await
+                .expect("query must succeed"),
+            "mp3 must accept {format} without transcoding — its query_codec \
+             callback answers via the APIC MKTAG value (positive, not 1) for \
+             every codec ff_id3v2_mime_tags lists"
+        );
+    }
+}
+
 /// The baseline must not swallow the actual bug: webp is still refused by the
 /// MP4 family, which is what forces normalization.
 #[tokio::test]

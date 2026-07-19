@@ -63,11 +63,21 @@ impl FFmpegRunner {
     /// So ask `FFmpeg` rather than maintaining a parallel whitelist that can
     /// drift from the build.
     ///
-    /// Uses `avformat_query_codec`, whose contract is: `1` the codec can be
-    /// stored, `0` it cannot, negative when the information is unavailable.
-    /// Only an explicit `1` is treated as supported — "unknown" resolves to
-    /// "transcode first", the safe direction, since a needless transcode costs
-    /// a little work while a wrong answer costs the embed.
+    /// Uses `avformat_query_codec`, whose contract is: positive the codec can
+    /// be stored, `0` it cannot, negative when the information is unavailable.
+    /// Any positive value is treated as supported — not just `1` — because a
+    /// muxer's own `query_codec` callback may answer with something other
+    /// than a bare `1`: mp3's callback (`mp3enc.c`) returns the `APIC`
+    /// `MKTAG` value (a large positive int) for every image codec `ID3v2`'s
+    /// `APIC` frame can carry (gif/mjpeg/png/tiff/bmp/webp — see
+    /// `ff_id3v2_mime_tags`), reserving the literal `1` for MP3 audio itself.
+    /// Gating on `== 1` therefore misread that positive-but-not-1 answer as
+    /// "cannot store", needlessly transcoding a lossless cover to a fresh
+    /// JPEG — matches the `> 0` convention already used for stream
+    /// representability in `ffi_helpers/mod.rs::resolve_codec_tag`. "Unknown"
+    /// (negative) still resolves to "transcode first", the safe direction,
+    /// since a needless transcode costs a little work while a wrong answer
+    /// costs the embed.
     ///
     /// That query is authoritative for tag-table muxers (MP4/MOV) but
     /// *under-reports* elsewhere: muxers that answer through a `query_codec`
@@ -136,15 +146,18 @@ impl FFmpegRunner {
 
         // Baseline: JPEG and PNG embed successfully in every container rdlp
         // supports, verified end to end. `avformat_query_codec` does NOT report
-        // that: per `avformat.c`, it dispatches to the muxer's own
-        // `query_codec` callback first when one exists, falling back to the
-        // `codec_tag` table only when it doesn't (see the matching, correct
-        // description in `ffi_helpers/mod.rs::resolve_codec_tag`) — so mp3
-        // (whose `query_codec` callback answers via the `APIC` tag rather
-        // than a plain codec match), flac, and m4a all report "cannot store"
-        // for images they demonstrably do store. Trusting the query alone
-        // would re-encode a lossless PNG cover to lossy JPEG on those
-        // containers.
+        // that for every muxer: per `avformat.c`, it dispatches to the muxer's
+        // own `query_codec` callback first when one exists, falling back to
+        // the `codec_tag` table only when it doesn't (see the matching
+        // description in `ffi_helpers/mod.rs::resolve_codec_tag`). flac and
+        // m4a carry neither a `query_codec` callback nor a `codec_tag` table
+        // entry for MJPEG/PNG, so the raw query reports "cannot store" for
+        // images they demonstrably do store; trusting it alone would
+        // re-encode a lossless PNG cover to lossy JPEG on those containers.
+        // (mp3's `query_codec` callback also answers MJPEG/PNG — via the
+        // `APIC` tag, a positive, non-`1` value — so the `> 0` query below
+        // already resolves it correctly without this baseline; the baseline
+        // still short-circuits it harmlessly first.)
         //
         // So the query below only ever WIDENS this baseline; it can never
         // narrow the answer below what is known to work.
@@ -168,7 +181,7 @@ impl FFmpegRunner {
             )
         };
 
-        Ok(query == 1)
+        Ok(query > 0)
     }
 
     /// Embed a thumbnail image into a media file via stream copy (remux).

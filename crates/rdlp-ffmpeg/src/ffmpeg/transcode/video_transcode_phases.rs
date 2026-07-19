@@ -23,6 +23,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::PostProcessError;
 
+use super::super::ffi_helpers::cleanup_partial_output;
 use super::super::{FFmpegRunner, VideoConvertOptions};
 use super::mux_timing::flush_interleave_queue;
 use super::video_transcode_context::{AudioTranscodeState, Phase1Outputs, VideoTranscodeContext};
@@ -347,7 +348,8 @@ impl FFmpegRunner {
                 &mut ctx.octx,
                 audio_ist.parameters(),
                 "for video transcode audio copy",
-            )?;
+            )
+            .inspect_err(|_| cleanup_partial_output(ctx.output_path))?;
             ctx.octx
                 .stream_mut(audio_ost_idx)
                 .expect("just-added stream")

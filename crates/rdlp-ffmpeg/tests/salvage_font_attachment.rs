@@ -50,7 +50,11 @@ fn require_cli() -> bool {
 
 /// A real MKV with video, audio and a native Matroska font attachment. The
 /// attached bytes need not be a genuine TTF: `-attach` embeds them verbatim
-/// with the given mimetype/filename metadata regardless of content.
+/// with the given mimetype/filename metadata regardless of content. The
+/// audio stream also carries a `language` tag, unrelated to the attachment,
+/// so a test can pin that `salvage_remux_sync`'s per-stream metadata copy
+/// (`salvage.rs`) covers every stream — not just the attachment it was added
+/// to fix.
 fn build_font_attached_mkv(dir: &Path) -> PathBuf {
     let font_path = dir.join("font.ttf");
     std::fs::write(&font_path, b"\x00\x01\x00\x00not a real font, just bytes")
@@ -63,6 +67,7 @@ fn build_font_attached_mkv(dir: &Path) -> PathBuf {
         .args(["-f", "lavfi", "-i", "sine=d=1"])
         .args(["-c:v", "libx264", "-pix_fmt", "yuv420p"])
         .args(["-c:a", "aac", "-b:a", "64k", "-shortest"])
+        .args(["-metadata:s:a:0", "language=jpn"])
         .arg("-attach")
         .arg(&font_path)
         .args(["-metadata:s:t", "mimetype=application/x-truetype-font"])
@@ -136,4 +141,37 @@ fn salvage_preserves_font_attachment() {
             "{expected} stream missing: {names}"
         );
     }
+}
+
+/// IMPORTANT #6 (code-review follow-up): `salvage_remux_sync`'s per-stream
+/// metadata copy (added to fix the attachment's `mimetype` requirement) runs
+/// unconditionally for every stream, not just attachments. This pins the
+/// non-attachment side: the audio stream's `language` tag — set on the input
+/// fixture, unrelated to the attachment fix — must also survive.
+#[test]
+fn salvage_preserves_non_attachment_stream_metadata() {
+    if !require_cli() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = build_font_attached_mkv(dir.path());
+
+    let salvaged = salvage_remux_sync(&input)
+        .unwrap_or_else(|e| panic!("salvage must succeed on a font-attached input: {e:#}"));
+
+    let tags = ffprobe_entries(
+        &salvaged,
+        &[
+            "-select_streams",
+            "a",
+            "-show_entries",
+            "stream_tags=language",
+            "-of",
+            "default=noprint_wrappers=1",
+        ],
+    );
+    assert!(
+        tags.contains("TAG:language=jpn"),
+        "salvaged output lost the audio stream's language tag: {tags}"
+    );
 }
