@@ -3,6 +3,7 @@
 //! Provides parallel download using multiple range requests with fine-grained chunking.
 
 use super::HttpDownloader;
+use super::chunk_name::{ChunkKind, ChunkSet};
 use super::config::DownloaderConfig;
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, ControllerMode};
 use crate::chunking::calculate_chunks;
@@ -12,7 +13,7 @@ use log::{debug, error, info, warn};
 use rdlp_core::{DownloadStats, ProgressCallback, RdlpError, Result, is_retryable_error};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::fs::File;
 use tokio::io::{AsyncWriteExt, BufWriter};
@@ -123,24 +124,20 @@ impl MergeMode {
 /// Global atomic counter for generating unique download IDs
 static DOWNLOAD_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
-/// Cleanup chunk files by index range (used when chunk list is not available)
-async fn cleanup_chunk_files(
-    temp_dir: &Path,
-    filename: &str,
-    download_id: u64,
-    total_chunks: usize,
-) {
-    debug!(chunks = total_chunks; "Cleaning up partial chunk files");
-    let mut deleted = 0;
-    for chunk_id in 0..total_chunks {
-        let chunk_path = temp_dir.join(format!("{filename}.{download_id}.part{chunk_id}"));
-        match tokio::fs::remove_file(&chunk_path).await {
-            Ok(()) => deleted += 1,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => warn!(path:? = chunk_path; "Failed to delete chunk file: {e}"),
+/// Sweep every chunk file `chunk_set` claims in `temp_dir`, logging the
+/// outcome without letting a sweep failure mask `original_err` — the download
+/// error is what the caller must surface; a cleanup failure is secondary.
+async fn sweep_after_failure(chunk_set: &ChunkSet, temp_dir: &Path, original_err: &RdlpError) {
+    match chunk_set.sweep(temp_dir).await {
+        Ok(report) => {
+            debug!(deleted = report.deleted; "Swept chunk files after failed download: {original_err}");
+        }
+        Err(sweep_err) => {
+            warn!(
+                "Failed to sweep chunk files after failed download ({original_err}): {sweep_err:#}"
+            );
         }
     }
-    debug!(deleted; "Chunk cleanup complete");
 }
 
 impl HttpDownloader {
@@ -186,7 +183,7 @@ impl HttpDownloader {
                 &filename,
                 downloaded.clone(),
                 0,
-                "part",
+                ChunkKind::Fresh,
                 progress.clone(),
                 None,
             )
@@ -200,7 +197,7 @@ impl HttpDownloader {
                 &filename,
                 downloaded.clone(),
                 0,
-                "part",
+                ChunkKind::Fresh,
             )
             .await?
         };
@@ -288,7 +285,7 @@ impl HttpDownloader {
                 &filename,
                 downloaded.clone(),
                 resume_from,
-                "resume",
+                ChunkKind::Resume,
                 progress.clone(),
                 None,
             )
@@ -302,7 +299,7 @@ impl HttpDownloader {
                 &filename,
                 downloaded.clone(),
                 resume_from,
-                "resume",
+                ChunkKind::Resume,
             )
             .await
         };
@@ -365,10 +362,17 @@ impl HttpDownloader {
         filename: &str,
         progress_counter: Arc<AtomicU64>,
         byte_offset: u64,
-        suffix: &str,
+        kind: ChunkKind,
         log_callback: Option<Arc<dyn ProgressCallback>>,
         cancel: Option<CancellationToken>,
     ) -> Result<(Vec<PathBuf>, u64)> {
+        let chunk_set = ChunkSet::for_attempt(filename, download_id, kind).map_err(|e| {
+            RdlpError::Download {
+                message: format!("{e:#}"),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
+            }
+        })?;
+
         let controller = Arc::new(AdaptiveController::new(
             size_to_download,
             AdaptiveConfig {
@@ -389,15 +393,20 @@ impl HttpDownloader {
         // buffer_unordered with a generous buffer lets the semaphore control actual concurrency.
         let buffer_factor = self.config.concurrent_fragments * 2;
 
-        let results: Vec<(u64, PathBuf, u64)> = {
+        // Set once a sibling chunk fails, so the unfold generator stops
+        // scheduling NEW chunks. It deliberately does NOT cancel chunks
+        // already in flight (see below) — only gates further generation.
+        let stop_scheduling = Arc::new(AtomicBool::new(false));
+
+        let buffered = {
             let downloader = self.clone();
             let url_arc = url_shared.clone();
             let progress = progress_counter.clone();
             let temp_dir_owned = temp_dir.to_path_buf();
-            let filename_owned = filename.to_string();
-            let suffix_owned = suffix.to_string();
+            let chunk_set_owned = chunk_set.clone();
             // Clone once outside the closure; each iteration re-clones from this.
             let cancel_outer = cancel.clone();
+            let stop_flag = stop_scheduling.clone();
 
             stream::try_unfold((controller.clone(), 0u64), move |(ctrl, chunk_id)| {
                 let sem = sem.clone();
@@ -405,13 +414,19 @@ impl HttpDownloader {
                 let url = url_arc.clone();
                 let progress = progress.clone();
                 let ctrl_report = ctrl.clone();
-                let chunk_path = temp_dir_owned.join(format!(
-                    "{filename_owned}.{download_id}.{suffix_owned}{chunk_id}"
-                ));
+                let chunk_path = chunk_set_owned.path_in(&temp_dir_owned, chunk_id);
                 let ctrl_next = ctrl.clone();
                 let cancel_for_unfold = cancel_outer.clone();
+                let stop_flag = stop_flag.clone();
 
                 async move {
+                    // A sibling chunk has already failed terminally: stop
+                    // generating further work rather than downloading the
+                    // rest of a doomed transfer (see the drain loop below).
+                    if stop_flag.load(Ordering::Relaxed) {
+                        return Ok(None);
+                    }
+
                     let Some(chunk) = ctrl.next_chunk() else {
                         return Ok(None);
                     };
@@ -476,9 +491,38 @@ impl HttpDownloader {
                 }
             })
             .try_buffer_unordered(buffer_factor)
-            .try_collect()
-            .await?
         };
+        futures::pin_mut!(buffered);
+
+        // Drain every buffered future to completion rather than dropping the
+        // stream on the first error (`try_collect`'s default): dropping the
+        // `TryBufferUnordered` mid-poll abandons any chunk still in flight,
+        // and `tokio::fs` operations dispatched to the blocking pool keep
+        // running in the background after their driving future is dropped
+        // (tokio::fs docs) — sweeping immediately would race those writes and
+        // could delete a file the background write hasn't produced yet, or
+        // leave a file created just after the sweep ran. Setting
+        // `stop_scheduling` (checked above) halts new chunk generation
+        // immediately so this only waits out the already-buffered futures,
+        // not the whole remaining transfer.
+        let mut results: Vec<(u64, PathBuf, u64)> = Vec::new();
+        let mut first_err: Option<RdlpError> = None;
+        while let Some(item) = buffered.next().await {
+            match item {
+                Ok(v) => results.push(v),
+                Err(e) => {
+                    if first_err.is_none() {
+                        stop_scheduling.store(true, Ordering::Relaxed);
+                        first_err = Some(e);
+                    }
+                }
+            }
+        }
+
+        if let Some(e) = first_err {
+            sweep_after_failure(&chunk_set, temp_dir, &e).await;
+            return Err(e);
+        }
 
         // Sort by chunk_id to ensure correct merge order.
         let mut sorted = results;
@@ -503,8 +547,15 @@ impl HttpDownloader {
         filename: &str,
         progress_counter: Arc<AtomicU64>,
         byte_offset: u64,
-        suffix: &str,
+        kind: ChunkKind,
     ) -> Result<(Vec<PathBuf>, u64)> {
+        let chunk_set = ChunkSet::for_attempt(filename, download_id, kind).map_err(|e| {
+            RdlpError::Download {
+                message: format!("{e:#}"),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
+            }
+        })?;
+
         let (chunk_size, total_chunks) =
             calculate_chunks(size_to_download, self.config.chunk_strategy);
 
@@ -519,8 +570,6 @@ impl HttpDownloader {
 
         let url_shared: Arc<str> = Arc::from(url);
         let temp_dir_owned = temp_dir.to_path_buf();
-        let filename_owned = filename.to_string();
-        let suffix_owned = suffix.to_string();
 
         let results: Vec<(usize, PathBuf, u64)> = match stream::iter(0..total_chunks)
             .map(|chunk_id| {
@@ -531,9 +580,7 @@ impl HttpDownloader {
                     start + chunk_size as u64 - 1
                 };
 
-                let chunk_path = temp_dir_owned.join(format!(
-                    "{filename_owned}.{download_id}.{suffix_owned}{chunk_id}"
-                ));
+                let chunk_path = chunk_set.path_in(&temp_dir_owned, chunk_id as u64);
                 let downloader = self.clone();
                 let url = Arc::clone(&url_shared);
                 let progress = Some(progress_counter.clone());
@@ -563,7 +610,7 @@ impl HttpDownloader {
             Ok(r) => r,
             Err(e) => {
                 error!("Download failed: {e}");
-                cleanup_chunk_files(temp_dir, filename, download_id, total_chunks).await;
+                sweep_after_failure(&chunk_set, temp_dir, &e).await;
                 return Err(e);
             }
         };
