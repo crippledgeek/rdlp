@@ -184,6 +184,48 @@ impl ThumbnailFormat {
             Self::WebP => "webp",
         }
     }
+
+    /// The `(mimetype, filename)` pair this format renders as a *visible*
+    /// Matroska cover attachment, or `None` when it must be normalized to a
+    /// renderable format first.
+    ///
+    /// A Matroska attachment's mimetype string is not just descriptive
+    /// metadata: on read-back, `FFmpeg`'s demuxer (`matroskadec.c`'s
+    /// `mkv_image_mime_tags` table) promotes an attachment to a real,
+    /// player-visible `attached_pic` video stream ONLY when the mimetype
+    /// string is one it recognizes; every other mimetype stays a generic,
+    /// non-rendered file attachment. This is a **mimetype-string** match, not
+    /// a codec/content check — verified empirically (2026-07-19) against the
+    /// linked `FFmpeg` build by attaching the same filename under every
+    /// mimetype string and reading the result back with `ffprobe`:
+    ///
+    /// | mimetype      | read back as              |
+    /// |---------------|----------------------------|
+    /// | `image/jpeg`  | `Video` (`attached_pic=1`)   |
+    /// | `image/png`   | `Video` (`attached_pic=1`)   |
+    /// | `image/gif`   | `Video` (`attached_pic=1`)   |
+    /// | `image/tiff`  | `Video` (`attached_pic=1`)   |
+    /// | `image/bmp`   | `Attachment` (invisible)     |
+    /// | `image/webp`  | `Attachment` (invisible)     |
+    ///
+    /// RFC 9559 §21.1 recommends only JPEG/PNG cover art (a SHOULD, not a
+    /// MUST), so the wider GIF/TIFF support this `FFmpeg` build gives is not a
+    /// spec violation.
+    ///
+    /// Callers embedding into Matroska MUST normalize `Bmp`/`WebP` content
+    /// (see `rdlp_ffmpeg`'s `transcode_image`) before attaching, or the cover
+    /// silently fails to display — the bug behind #530, where the previous
+    /// catch-all additionally mislabeled GIF/TIFF/BMP as `image/jpeg`.
+    #[must_use]
+    pub const fn matroska_attachment(self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::Jpeg => Some(("image/jpeg", "cover.jpg")),
+            Self::Png => Some(("image/png", "cover.png")),
+            Self::Gif => Some(("image/gif", "cover.gif")),
+            Self::Tiff => Some(("image/tiff", "cover.tiff")),
+            Self::Bmp | Self::WebP => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -342,6 +384,62 @@ mod tests {
             !THUMBNAIL_EXTENSIONS.contains(&"avif"),
             "avif is not decodable by the current FFmpeg build; keep it out of discovery"
         );
+    }
+
+    /// #530 regression guard: every format the linked `FFmpeg` build renders
+    /// as a real, player-visible Matroska cover (verified via `ffprobe`
+    /// against `attached_pic` disposition) must declare its OWN honest
+    /// mimetype/filename — never silently fall back to `image/jpeg` the way
+    /// the pre-fix catch-all did for gif/tiff/bmp.
+    #[test]
+    fn matroska_attachment_declares_honest_mimetype_for_renderable_formats() {
+        assert_eq!(
+            ThumbnailFormat::Jpeg.matroska_attachment(),
+            Some(("image/jpeg", "cover.jpg"))
+        );
+        assert_eq!(
+            ThumbnailFormat::Png.matroska_attachment(),
+            Some(("image/png", "cover.png"))
+        );
+        assert_eq!(
+            ThumbnailFormat::Gif.matroska_attachment(),
+            Some(("image/gif", "cover.gif"))
+        );
+        assert_eq!(
+            ThumbnailFormat::Tiff.matroska_attachment(),
+            Some(("image/tiff", "cover.tiff"))
+        );
+    }
+
+    /// #530: `Bmp`/`WebP` mimetypes are NOT recognized by `FFmpeg`'s
+    /// read-back promotion table, so they must resolve to `None` — signaling
+    /// "must normalize first" — rather than being handed a mimetype that
+    /// produces an invisible attachment.
+    #[test]
+    fn matroska_attachment_refuses_formats_that_render_invisibly() {
+        assert_eq!(ThumbnailFormat::Bmp.matroska_attachment(), None);
+        assert_eq!(ThumbnailFormat::WebP.matroska_attachment(), None);
+    }
+
+    /// No format may ever resolve to the pre-fix catch-all's mimetype unless
+    /// it genuinely IS jpeg — pins the exact defect #530 reports (gif/tiff
+    /// attached as `cover.jpg` declared `image/jpeg`).
+    #[test]
+    fn only_jpeg_declares_the_jpeg_mimetype() {
+        for format in [
+            ThumbnailFormat::Png,
+            ThumbnailFormat::Gif,
+            ThumbnailFormat::Bmp,
+            ThumbnailFormat::Tiff,
+            ThumbnailFormat::WebP,
+        ] {
+            if let Some((mimetype, _)) = format.matroska_attachment() {
+                assert_ne!(
+                    mimetype, "image/jpeg",
+                    "{format:?} must not silently claim image/jpeg"
+                );
+            }
+        }
     }
 
     /// All entries are lowercase, bare (no leading dot) extensions — callers

@@ -211,6 +211,50 @@ impl FFmpegRunner {
                 }
             })?;
 
+            // Determine the mimetype/filename metadata (required by Matroska
+            // muxer) BEFORE creating the attachment stream or allocating
+            // extradata, so a format the caller failed to normalize is
+            // rejected without paying for the `av_mallocz` + full-image
+            // `copy_nonoverlapping` below (#530 code review: the allocation
+            // was previously wasted work on every rejected bmp/webp).
+            //
+            // Derived from the THUMBNAIL BYTES (`thumb_data`, already read
+            // above) via `rdlp_types::sniff_thumbnail_format` — the same
+            // content sniffer used everywhere else in rdlp (download naming,
+            // discovery, the MP4 `covr` atom) — rather than a second,
+            // parallel `AVCodecID` table. `thumb_codec_id` above is a
+            // separate concern: it only tags the attachment stream's
+            // `codecpar.codec_id`, which no downstream reader consults for
+            // cover-art rendering.
+            //
+            // `ThumbnailFormat::matroska_attachment` is the single source of
+            // truth for which formats the linked `FFmpeg` build actually
+            // renders as a visible cover (jpeg/png/gif/tiff) versus which
+            // silently produce an invisible, generic attachment (bmp/webp) —
+            // see #530. A format that resolves to `None` here means the
+            // caller failed to normalize it first; that is a contract
+            // violation, not something to paper over with a fallback
+            // mimetype (the exact defect #530 reports: gif/tiff/bmp silently
+            // relabeled `image/jpeg`).
+            let sniffed = rdlp_types::sniff_thumbnail_format(&thumb_data);
+            let Some((mimetype, filename)) =
+                sniffed.and_then(rdlp_types::ThumbnailFormat::matroska_attachment)
+            else {
+                let reason = sniffed.map_or_else(
+                    || "unrecognized image bytes".to_string(),
+                    |format| format!("{} content", format.extension()),
+                );
+                ffi::avformat_close_input(&mut media_ctx);
+                ffi::avformat_close_input(&mut thumb_ctx);
+                ffi::avformat_free_context(ofmt_ctx);
+                return Err(PostProcessError::FFmpegLibraryError {
+                    message: format!(
+                        "cannot attach {reason} as a Matroska cover without normalizing to \
+                         jpeg/png/gif/tiff first"
+                    ),
+                });
+            };
+
             let out_stream = ffi::avformat_new_stream(ofmt_ctx, ptr::null());
             if out_stream.is_null() {
                 ffi::avformat_close_input(&mut media_ctx);
@@ -244,13 +288,6 @@ impl FFmpegRunner {
             );
             (*codecpar).extradata = extradata.cast::<u8>();
             (*codecpar).extradata_size = thumb_data.len() as i32;
-
-            // Set mimetype and filename metadata (required by Matroska muxer)
-            let (mimetype, filename) = match thumb_codec_id {
-                ffi::AVCodecID::AV_CODEC_ID_PNG => ("image/png", "cover.png"),
-                ffi::AVCodecID::AV_CODEC_ID_WEBP => ("image/webp", "cover.webp"),
-                _ => ("image/jpeg", "cover.jpg"),
-            };
 
             let key_mime = CString::new("mimetype").expect("static string has no null bytes");
             let val_mime = CString::new(mimetype).expect("mimetype has no null bytes");

@@ -107,11 +107,18 @@ fn build_unset_dts_mkv(
     Ok((src, unset))
 }
 
-/// Generate a tiny real WebP cover image in `dir`.
+/// Generate a tiny real JPEG cover image in `dir`.
+///
+/// JPEG (not WebP): since #530, the raw MKV thumbnail-embed path requires a
+/// format `FFmpeg`'s own Matroska read-back renders as a visible cover
+/// (jpeg/png/gif/tiff) and rejects webp/bmp outright, expecting callers to
+/// normalize those first. This test's subject is DTS synthesis on the MAIN
+/// media stream, not thumbnail-format handling, so any accepted cover format
+/// works — jpeg keeps it a minimal, still-valid fixture.
 ///
 /// Returns `Ok(path)` or `Err(())` (self-skip).
-fn build_webp_cover(dir: &std::path::Path) -> Result<std::path::PathBuf, ()> {
-    let cover = dir.join("cover.webp");
+fn build_jpeg_cover(dir: &std::path::Path) -> Result<std::path::PathBuf, ()> {
+    let cover = dir.join("cover.jpg");
     run_ffmpeg(&[
         "-y",
         "-loglevel",
@@ -303,7 +310,7 @@ async fn thumbnail_embed_emits_no_unset_timestamp_warning() {
         Err(()) => return, // self-skip — fixture generation failed
     };
 
-    let cover = match build_webp_cover(dir.path()) {
+    let cover = match build_jpeg_cover(dir.path()) {
         Ok(p) => p,
         Err(()) => return, // self-skip
     };
