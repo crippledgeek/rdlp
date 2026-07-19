@@ -92,17 +92,19 @@ impl OwnedThumbnail {
     /// that can supply it — the token has no accessor, and by the time a caller
     /// holds the error `self` is already consumed — and a cleanup failure is
     /// otherwise silent apart from that one log line. The path lands in the
-    /// message only, never as a value the caller can recover, and the original
+    /// message only, never as a value the caller can recover.
+    ///
     /// [`std::io::ErrorKind`] is preserved so callers can still match on it.
+    /// The rewrap does box the original as a string, so `raw_os_error()` and a
+    /// `.source()` downcast to [`std::io::Error`] are lost; no caller needs
+    /// either, and the kind is what the cancel path matches on.
     pub(super) async fn delete(self) -> std::io::Result<()> {
         match tokio::fs::remove_file(&self.0).await {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            other => other.map_err(|e| {
-                std::io::Error::new(
-                    e.kind(),
-                    format!("delete thumbnail {}: {e}", self.0.display()),
-                )
-            }),
+            // The caller's log line already says "failed to delete thumbnail",
+            // so this supplies only what the caller cannot: the path.
+            other => other
+                .map_err(|e| std::io::Error::new(e.kind(), format!("{}: {e}", self.0.display()))),
         }
     }
 }
@@ -360,12 +362,21 @@ mod signature_pin {
     /// The type system enforces that a bare `&Path` cannot reach the deletion
     /// path — but nothing stops a future change from reverting the signature,
     /// which would silently remove the guarantee. This pins it: `delete(&self)`
-    /// or a `&Path` parameter becomes `E0308` at `cargo check`.
+    /// or a `&Path` parameter becomes `E0308` here.
     ///
-    /// Verified by mutation, both directions (see the design rationale on
-    /// #556). A compile-fail test is not viable here — doctests and trybuild
-    /// compile as external crates and cannot name a `pub(crate)` item, so any
-    /// such test would pass for the wrong reason.
+    /// Enforced by `cargo test` and `cargo clippy --all-targets`, NOT by plain
+    /// `cargo check` — the latter does not compile `#[cfg(test)]` modules.
+    ///
+    /// Verified by mutation in both directions (see the design rationale on
+    /// #556). Note that a `&Path` reversion surfaces as `E0599` at the call
+    /// sites first, because the lib target fails before this one is checked;
+    /// the pin still catches it, you just see the louder error. The `&self`
+    /// reversion is the case where this pin is the *only* guard — call sites
+    /// accept it via autoref.
+    ///
+    /// A compile-fail test is not viable here — doctests and trybuild compile
+    /// as external crates and cannot name a `pub(crate)` item, so any such test
+    /// would pass for the wrong reason.
     #[test]
     fn delete_signature_is_pinned() {
         assert_delete_signature(OwnedThumbnail::delete);

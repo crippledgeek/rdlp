@@ -15,9 +15,15 @@ use super::thumbnail::OwnedThumbnail;
 
 /// Idempotently delete the orchestrator-owned artifacts of a cancelled job:
 /// the session-state file, the downloaded thumbnail, and (defensively) any
-/// source download files. Every delete is `exists()`-guarded and best-effort —
-/// failures are logged, never propagated, so cleanup cannot turn a cancel into
-/// a failure.
+/// source download files.
+///
+/// The session state and the thumbnail are `NotFound`-tolerant — they delete
+/// unconditionally and absorb "already gone", which is atomic; only the source
+/// files are still `exists()`-guarded (a check-then-act with a TOCTOU window,
+/// kept for now because that block predates #556).
+///
+/// Every delete is best-effort — failures are logged, never propagated, so
+/// cleanup cannot turn a cancel into a failure.
 pub(super) async fn cleanup_cancelled_artifacts(
     output_dir: &Path,
     output_to_stdout: bool,
@@ -30,7 +36,7 @@ pub(super) async fn cleanup_cancelled_artifacts(
         let sanitized = Orchestrator::sanitize_filename(title);
         let state_path = session_state::single_video_state_path(output_dir, &sanitized);
         // SessionState::delete is itself NotFound-tolerant + best-effort, so no
-        // exists()-guard is needed here (unlike the thumbnail/source blocks below).
+        // exists()-guard is needed here (unlike the source block below).
         SessionState::delete(&state_path).await;
     }
 
@@ -205,6 +211,53 @@ mod tests {
         assert!(
             not_a_file.exists(),
             "a failed delete must leave the path alone"
+        );
+    }
+
+    /// The best-effort contract at the seam: a thumbnail that fails to delete
+    /// must not abort the rest of the cleanup. Without this, mutating the
+    /// thumbnail block to `let _ = thumb.delete().await;` — or to an early
+    /// `return` — leaves every other test green while the source files silently
+    /// stop being cleaned up.
+    #[tokio::test]
+    async fn a_failing_thumbnail_delete_does_not_abort_source_cleanup() {
+        let dir = TempDir::new().unwrap();
+        let out = dir.path();
+        let title = "Resilient";
+
+        // Undeletable thumbnail: remove_file on a directory fails.
+        let undeletable = out.join("Resilient.jpg");
+        tokio::fs::create_dir(&undeletable).await.unwrap();
+
+        let state = out.join(format!(
+            "{}.rdlp_state.json",
+            Orchestrator::sanitize_filename(title)
+        ));
+        let source = out.join("Resilient [id].mp4");
+        for p in [&state, &source] {
+            tokio::fs::write(p, b"x").await.unwrap();
+        }
+
+        cleanup_cancelled_artifacts(
+            out,
+            false,
+            title,
+            std::slice::from_ref(&source),
+            Some(OwnedThumbnail::for_test(undeletable.clone())),
+        )
+        .await;
+
+        assert!(
+            !source.exists(),
+            "source cleanup must still run after a thumbnail delete fails"
+        );
+        assert!(
+            !state.exists(),
+            "session-state cleanup must still run after a thumbnail delete fails"
+        );
+        assert!(
+            undeletable.exists(),
+            "the undeletable thumbnail itself must be left alone"
         );
     }
 }
