@@ -11,7 +11,7 @@ use log::{debug, warn};
 
 use rdlp_ffmpeg::FFmpegRunner;
 
-use crate::pipeline::{PipelineMessage, PipelineStage};
+use crate::pipeline::{PipelineMessage, PipelineStage, SidecarOwnership};
 
 /// Subtitle file extensions to search for.
 const SUBTITLE_EXTENSIONS: &[&str] = &["srt", "vtt", "ass", "ssa", "lrc"];
@@ -214,8 +214,12 @@ impl PipelineStage for SubtitleStage {
             langs.join(", "),
         ));
 
-        // Mark subtitle files as temps unless write_subtitles is set.
-        if !msg.config.write_subtitles {
+        // Mark subtitle files as temps unless write_subtitles is set — and
+        // never when they are the user's own files sitting next to a borrowed
+        // input. `find_subtitle_files` discovers them by stem-matching, which
+        // cannot tell an rdlp-fetched sidecar from one the user already had;
+        // see `SidecarOwnership`. Same defect the thumbnail sidecar had.
+        if !msg.config.write_subtitles && SidecarOwnership::of(&msg).is_disposable() {
             for (_, path) in subtitle_files {
                 msg.tracker.mark_temp(path);
             }

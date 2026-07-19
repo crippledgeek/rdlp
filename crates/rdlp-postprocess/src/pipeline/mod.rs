@@ -23,6 +23,7 @@
 )]
 
 pub mod registry;
+pub mod sidecar;
 pub mod stages;
 pub mod tracker;
 
@@ -38,6 +39,7 @@ use rdlp_types::InfoDict;
 use rdlp_types::PostProcess;
 
 pub use registry::TempRegistry;
+pub use sidecar::SidecarOwnership;
 pub use tracker::FileTracker;
 
 // ---------------------------------------------------------------------------

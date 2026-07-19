@@ -19,7 +19,7 @@ use log::{debug, info, warn};
 use rdlp_ffmpeg::{FFmpegRunner, RemuxOptions};
 use rdlp_types::{ContainerFormat, THUMBNAIL_EXTENSIONS, ThumbnailFormat, sniff_thumbnail_format};
 
-use crate::pipeline::{PipelineMessage, PipelineStage};
+use crate::pipeline::{PipelineMessage, PipelineStage, SidecarOwnership};
 
 /// Embeds thumbnail into the primary current file.
 ///
@@ -149,37 +149,6 @@ impl ThumbnailStage {
     /// support for a container `rdlp-ffmpeg` doesn't recognize at all.
     fn is_native_attachment(extension: &str) -> bool {
         ContainerFormat::from_str(extension).is_ok_and(rdlp_ffmpeg::uses_native_attachment)
-    }
-
-    /// Whether a discovered thumbnail sidecar may be deleted once this stage
-    /// is done with it.
-    ///
-    /// [`Self::find_thumbnail`] locates the sidecar by stem-matching next to
-    /// the media file, which cannot by itself distinguish "a thumbnail rdlp
-    /// downloaded" from "a file the user already had". For a **borrowed**
-    /// input (`rdlp /home/me/clip.mp4` — local-file post-processing via
-    /// `FileTracker::new_borrowing`) the neighbouring `clip.jpg` is the user's
-    /// own file, and deleting it is silent data loss: the #414 incident class
-    /// (local-file source preservation) applied to sidecars rather than to the
-    /// media file. The orchestrator downloads no thumbnail on that path, so a
-    /// sidecar found beside a borrowed input is ALWAYS user-owned.
-    ///
-    /// `FileTracker::mark_temp`'s own `debug_assert!(!is_borrowed(..))` does
-    /// not cover this: it is compiled out in release builds (where the data
-    /// loss was reproduced), and the sidecar was never in the borrowed set to
-    /// begin with — only the media file was.
-    ///
-    /// The question is `has_borrowed_inputs` (did this RUN start from a user
-    /// file), NOT `is_borrowed(media_file)` (is the file in hand user-owned).
-    /// By the time this stage runs, a container-changing stage has usually
-    /// replaced the borrowed input with an rdlp-created derivative — after
-    /// `--remux=ts`, the current file is a `.ts` rdlp made, so the per-path
-    /// question answers `false` and the user's sidecar gets deleted anyway.
-    /// That distinction is invisible to a single-stage test that feeds the
-    /// borrowed file in directly; it was caught only by running the real
-    /// binary.
-    const fn sidecar_is_disposable(msg: &PipelineMessage) -> bool {
-        !msg.tracker.has_borrowed_inputs()
     }
 
     /// Whether `extension`'s container can carry an embedded thumbnail at all.
@@ -437,7 +406,7 @@ impl PipelineStage for ThumbnailStage {
             && let Some(explicit) = msg.config.explicit_container()
             && explicit.format == current
         {
-            let flag = explicit.flag;
+            let flag = explicit.source.cli_flag();
             let reason = format!(
                 "kept explicit {flag}={current} container; thumbnail embed skipped \
                  because {current} cannot carry an embedded thumbnail"
@@ -447,12 +416,13 @@ impl PipelineStage for ThumbnailStage {
 
             // This early return bypasses the normal embed path below, which is
             // the ONLY other place the orchestrator-downloaded thumbnail
-            // sidecar is marked temp for cleanup (~line 522, guarded on the
+            // sidecar is marked temp for cleanup (the embed-success path's own
+            // `mark_temp(thumbnail_file)` below, guarded on the
             // same `!write_thumbnail` condition). Without this, every run
             // that hits this guard with the default `--write-thumbnail=false`
             // leaves a stray sidecar image next to the kept-container output.
             if !msg.config.write_thumbnail
-                && Self::sidecar_is_disposable(&msg)
+                && SidecarOwnership::of(&msg).is_disposable()
                 && let Some(sidecar) = Self::find_thumbnail(&media_file, &msg.original_stem)
             {
                 msg.tracker.mark_temp(sidecar);
@@ -576,7 +546,7 @@ impl PipelineStage for ThumbnailStage {
                 // Clean up thumbnail unless --write-thumbnail was requested —
                 // and never when it is the user's own file sitting next to a
                 // borrowed input (see `sidecar_is_disposable`).
-                if !msg.config.write_thumbnail && Self::sidecar_is_disposable(&msg) {
+                if !msg.config.write_thumbnail && SidecarOwnership::of(&msg).is_disposable() {
                     msg.tracker.mark_temp(thumbnail_file);
                 }
             }

@@ -10,18 +10,60 @@ use crate::fixup_policy::FixupPolicy;
 use crate::recode_audio_mode::RecodeAudioMode;
 use crate::vpx_deadline::VpxDeadline;
 
-/// A container the user explicitly asked for, paired with the CLI flag that
+/// Which configuration field asked for an output container.
+///
+/// A closed three-variant domain value, so it is an enum rather than a
+/// `&'static str` flag name (per `value-objects-by-default`): the variants are
+/// typo-proof at the call site, exhaustively matchable, and — the reason this
+/// is not merely style — they keep CLI presentation OUT of `rdlp-types`.
+/// Baking `"--recode-video"` into a foundation-layer data type would make
+/// every consumer inherit CLI spelling; the desktop GUI sets these same fields
+/// with no CLI involved, and would end up showing a user a flag they never
+/// typed. The flag string is therefore a rendering concern, produced by
+/// [`Self::cli_flag`] at the boundary that actually speaks CLI.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContainerRequest {
+    /// `--recode-container` / `postprocess.recode_container`.
+    RecodeContainer,
+    /// `--recode-video` / `postprocess.recode_video`.
+    RecodeVideo,
+    /// `--remux` / `postprocess.remux_container`.
+    Remux,
+}
+
+impl ContainerRequest {
+    /// The CLI flag a user would type to make this request.
+    ///
+    /// Rendering only — see the type doc for why this is a method rather than
+    /// a stored field.
+    #[must_use]
+    pub const fn cli_flag(self) -> &'static str {
+        match self {
+            Self::RecodeContainer => "--recode-container",
+            Self::RecodeVideo => "--recode-video",
+            Self::Remux => "--remux",
+        }
+    }
+}
+
+impl std::fmt::Display for ContainerRequest {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.cli_flag())
+    }
+}
+
+/// A container the user explicitly asked for, paired with the request that
 /// asked for it.
 ///
-/// The flag travels with the format so operator-facing messages can name the
-/// exact flag that won the precedence chain (`--recode-video=ts`), rather than
-/// a bare container that leaves the user guessing which of their flags took
+/// The source travels with the format so operator-facing messages can name
+/// what won the precedence chain (`--recode-video=ts`) rather than a bare
+/// container that leaves the user guessing which of their settings took
 /// effect. Mirrors yt-dlp, whose equivalent conflict message names both sides
 /// (`"--remux-video is ignored since --recode-video was given"`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExplicitContainer {
-    /// The CLI flag that requested this container, e.g. `"--recode-video"`.
-    pub flag: &'static str,
+    /// Which configuration field requested this container.
+    pub source: ContainerRequest,
     /// The requested container format.
     pub format: ContainerFormat,
 }
@@ -148,23 +190,14 @@ impl PostProcess {
         // is added would fire on every unrelated addition (`recode_threads`,
         // `loudnorm_*`, ...) — a false-positive treadmill, not a safety net.
         // The doc-comment above is the contract; the unit tests pin the order.
+        let request = |source: ContainerRequest| move |format| ExplicitContainer { source, format };
         self.recode_container
-            .map(|format| ExplicitContainer {
-                flag: "--recode-container",
-                format,
-            })
+            .map(request(ContainerRequest::RecodeContainer))
             .or_else(|| {
-                self.recode_video.map(|format| ExplicitContainer {
-                    flag: "--recode-video",
-                    format,
-                })
+                self.recode_video
+                    .map(request(ContainerRequest::RecodeVideo))
             })
-            .or_else(|| {
-                self.remux_container.map(|format| ExplicitContainer {
-                    flag: "--remux",
-                    format,
-                })
-            })
+            .or_else(|| self.remux_container.map(request(ContainerRequest::Remux)))
     }
 }
 
@@ -239,7 +272,7 @@ mod tests {
         };
         let explicit = config.explicit_container().expect("some");
         assert_eq!(explicit.format, ContainerFormat::Ts);
-        assert_eq!(explicit.flag, "--recode-container");
+        assert_eq!(explicit.source, ContainerRequest::RecodeContainer);
     }
 
     #[test]
@@ -250,7 +283,7 @@ mod tests {
         };
         let explicit = config.explicit_container().expect("some");
         assert_eq!(explicit.format, ContainerFormat::Mkv);
-        assert_eq!(explicit.flag, "--recode-video");
+        assert_eq!(explicit.source, ContainerRequest::RecodeVideo);
     }
 
     #[test]
@@ -261,7 +294,7 @@ mod tests {
         };
         let explicit = config.explicit_container().expect("some");
         assert_eq!(explicit.format, ContainerFormat::F4v);
-        assert_eq!(explicit.flag, "--remux");
+        assert_eq!(explicit.source, ContainerRequest::Remux);
     }
 
     #[test]
@@ -273,7 +306,7 @@ mod tests {
         };
         let explicit = config.explicit_container().expect("some");
         assert_eq!(explicit.format, ContainerFormat::Ts);
-        assert_eq!(explicit.flag, "--recode-container");
+        assert_eq!(explicit.source, ContainerRequest::RecodeContainer);
     }
 
     /// `RecodeStage` (index 4) runs after `RemuxStage` (index 3), so the
@@ -287,7 +320,7 @@ mod tests {
         };
         let explicit = config.explicit_container().expect("some");
         assert_eq!(explicit.format, ContainerFormat::Ts);
-        assert_eq!(explicit.flag, "--recode-video");
+        assert_eq!(explicit.source, ContainerRequest::RecodeVideo);
     }
 
     #[test]
@@ -299,7 +332,7 @@ mod tests {
         };
         let explicit = config.explicit_container().expect("some");
         assert_eq!(explicit.format, ContainerFormat::Ts);
-        assert_eq!(explicit.flag, "--recode-container");
+        assert_eq!(explicit.source, ContainerRequest::RecodeContainer);
     }
 
     /// All three set at once — the full chain resolves to the head.
@@ -313,7 +346,7 @@ mod tests {
         };
         let explicit = config.explicit_container().expect("some");
         assert_eq!(explicit.format, ContainerFormat::Ts);
-        assert_eq!(explicit.flag, "--recode-container");
+        assert_eq!(explicit.source, ContainerRequest::RecodeContainer);
     }
 
     #[test]
