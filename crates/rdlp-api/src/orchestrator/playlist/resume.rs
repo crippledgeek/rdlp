@@ -69,11 +69,16 @@ impl Orchestrator {
     ///
     /// # Note on .part files
     ///
-    /// - HTTP chunks: `filename.mp4.part0` - few large files, resumable
-    /// - HLS segments: `filename.part0` - many small files, will be cleaned up
+    /// The `.part{i}` grammar checked below (`ChunkSet` in the non-playlist
+    /// `orchestrator::resume` module) belongs only to HTTP parallel-chunk
+    /// downloads (`filename.mp4.part0`, few large files, resumable). HLS has no `.part`
+    /// naming at all: segments stream directly to the output file and resume
+    /// state lives in `{output}.hls_state.json`, not in loose segment files
+    /// (DASH's equivalent is a `.parts` *directory*, plural, also unrelated to
+    /// this grammar). A `.part` match here is always leftover HTTP chunks.
     ///
-    /// Since HLS segments are cleaned up before each download, we just report
-    /// the count for user information.
+    /// Since leftover chunk files are cleaned up before each download, we just
+    /// report the count for user information.
     pub(super) async fn detect_existing_playlist_files(
         &self,
         playlist_dir: &std::path::Path,

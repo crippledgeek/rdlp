@@ -270,6 +270,129 @@ mod resume_compatibility_tests {
         assert!(!temp_dir.path().join("video.mp4.part2").exists());
     }
 
+    /// #559 acceptance: the legacy `0..10` scan bound never leaked in
+    /// practice (legacy `concurrent_fragments` was capped at 10), but a
+    /// hardcoded ceiling on cleanup is still a defect waiting to happen if
+    /// that assumption ever drifts. 12 legacy chunks (2 beyond the old
+    /// bound) must ALL be cleaned up when the file is already complete.
+    #[tokio::test]
+    async fn test_cleanup_legacy_chunks_beyond_old_ten_chunk_bound() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+
+        let complete_data = vec![7u8; 4096];
+        tokio::fs::write(&output_path, &complete_data)
+            .await
+            .unwrap();
+
+        for i in 0..12 {
+            tokio::fs::write(
+                temp_dir.path().join(format!("video.mp4.part{i}")),
+                &[i as u8; 64],
+            )
+            .await
+            .unwrap();
+        }
+
+        let orchestrator = create_test_orchestrator();
+        let resume_offset = orchestrator
+            .detect_resume_point(&output_path, Some(4096))
+            .await
+            .unwrap();
+
+        assert_eq!(resume_offset, 4096);
+        for i in 0..12 {
+            assert!(
+                !temp_dir.path().join(format!("video.mp4.part{i}")).exists(),
+                "chunk {i} should have been cleaned up (beyond the old 0..10 bound)"
+            );
+        }
+    }
+
+    /// A foreign file that merely shares the output file's prefix must never
+    /// be deleted by chunk cleanup — cleanup only removes exact computed
+    /// chunk paths, never a directory sweep.
+    #[tokio::test]
+    async fn test_cleanup_does_not_delete_foreign_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+
+        let complete_data = vec![9u8; 1024];
+        tokio::fs::write(&output_path, &complete_data)
+            .await
+            .unwrap();
+
+        tokio::fs::write(temp_dir.path().join("video.mp4.part0"), &[1u8; 64])
+            .await
+            .unwrap();
+        let foreign = temp_dir.path().join("video.mp4.notes.txt");
+        tokio::fs::write(&foreign, b"keep me").await.unwrap();
+
+        let orchestrator = create_test_orchestrator();
+        let resume_offset = orchestrator
+            .detect_resume_point(&output_path, Some(1024))
+            .await
+            .unwrap();
+
+        assert_eq!(resume_offset, 1024);
+        assert!(!temp_dir.path().join("video.mp4.part0").exists());
+        assert!(foreign.exists(), "foreign file must survive cleanup");
+    }
+
+    /// #568/#559 item 4: a `.resume{N}` chunk set orphaned by an abandoned
+    /// resume attempt must be discoverable and cleaned up, not left to leak
+    /// forever, even though it can never be safely merged (the byte offset
+    /// it continues from is not persisted anywhere). Scenario: the main
+    /// output file still exists (ordinary partial-file resume applies), and
+    /// orphaned resume chunks sit alongside it.
+    #[tokio::test]
+    async fn test_orphaned_resume_chunks_cleaned_when_file_partial() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+
+        tokio::fs::write(&output_path, &vec![1u8; 1000])
+            .await
+            .unwrap();
+        tokio::fs::write(temp_dir.path().join("video.mp4.3.resume0"), &[2u8; 64])
+            .await
+            .unwrap();
+        tokio::fs::write(temp_dir.path().join("video.mp4.3.resume1"), &[3u8; 64])
+            .await
+            .unwrap();
+
+        let orchestrator = create_test_orchestrator();
+        let resume_offset = orchestrator
+            .detect_resume_point(&output_path, None)
+            .await
+            .unwrap();
+
+        assert_eq!(resume_offset, 1000);
+        assert!(!temp_dir.path().join("video.mp4.3.resume0").exists());
+        assert!(!temp_dir.path().join("video.mp4.3.resume1").exists());
+    }
+
+    /// Same as above, but there is no main output file and no fresh/legacy
+    /// chunk set either — only orphaned resume chunks. They must still be
+    /// discovered and cleaned up rather than leaking indefinitely.
+    #[tokio::test]
+    async fn test_orphaned_resume_chunks_cleaned_when_no_other_chunks_or_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+
+        tokio::fs::write(temp_dir.path().join("video.mp4.5.resume0"), &[4u8; 64])
+            .await
+            .unwrap();
+
+        let orchestrator = create_test_orchestrator();
+        let resume_offset = orchestrator
+            .detect_resume_point(&output_path, None)
+            .await
+            .unwrap();
+
+        assert_eq!(resume_offset, 0);
+        assert!(!temp_dir.path().join("video.mp4.5.resume0").exists());
+    }
+
     #[tokio::test]
     async fn test_prioritize_higher_download_id() {
         let temp_dir = tempfile::tempdir().unwrap();

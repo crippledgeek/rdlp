@@ -3,8 +3,30 @@
 use super::{Orchestrator, errors::Result};
 use anyhow::Context;
 use log::{debug, warn};
+use rdlp_downloader::{ChunkKind, ChunkSet};
 use std::path::{Path, PathBuf};
 use tracing::instrument;
+
+/// Upper bound on how many distinct download attempts (`download_id`s) a
+/// scan probes for new-style chunks. Not a grammar constraint — `download_id`
+/// is a monotonic per-process counter starting at 0, so any in-progress or
+/// recently-abandoned download is well within this window.
+const MAX_DOWNLOAD_ID_SCAN: u64 = 100;
+
+/// Ceiling on how many sequential chunk ids a scan probes within one chunk
+/// set before concluding the set is exhausted (the scan breaks earlier, on
+/// the first missing chunk id, in the overwhelmingly common case).
+///
+/// This is a sanity ceiling against a pathological or corrupted directory,
+/// not a live limit on either grammar: new-style power-of-two chunking can
+/// legitimately produce thousands of small chunks, and — per #559's
+/// investigation — the legacy grammar's historical `concurrent_fragments`
+/// cap of 10 was never itself enforced as a scan/cleanup bound. A hardcoded
+/// `0..10` cleanup bound would silently strand any legacy chunk set that
+/// ever did exceed 10 (see `test_cleanup_legacy_chunks_beyond_old_ten_chunk_bound`);
+/// using the same generous ceiling for both grammars removes that trap
+/// without pretending the legacy count is normally this large.
+const CHUNK_SCAN_CEILING: u64 = 10_000;
 
 /// Information about detected chunk files
 #[derive(Debug, Clone)]
@@ -17,6 +39,29 @@ pub struct ChunkInfo {
     pub(crate) total_size: u64,
 }
 
+/// Probe `set` for a contiguous run of chunk ids starting at 0, stopping at
+/// the first missing id (or at [`CHUNK_SCAN_CEILING`]). Read-only: builds
+/// each candidate path via [`ChunkSet::path_in`] and checks existence, never
+/// enumerating the directory's contents.
+async fn collect_contiguous_chunks(set: &ChunkSet, parent_dir: &Path) -> (Vec<PathBuf>, u64) {
+    let mut chunk_paths = Vec::new();
+    let mut total_size = 0u64;
+
+    for chunk_id in 0..CHUNK_SCAN_CEILING {
+        let chunk_path = set.path_in(parent_dir, chunk_id);
+        if chunk_path.exists() {
+            if let Ok(metadata) = tokio::fs::metadata(&chunk_path).await {
+                chunk_paths.push(chunk_path);
+                total_size += metadata.len();
+            }
+        } else {
+            break;
+        }
+    }
+
+    (chunk_paths, total_size)
+}
+
 /// Detect chunk files for a given output path
 ///
 /// Supports both:
@@ -25,32 +70,20 @@ pub struct ChunkInfo {
 ///
 /// Returns the most recent chunk set (highest download ID)
 async fn detect_chunk_files(output_path: &Path) -> Option<ChunkInfo> {
-    let base_name = output_path.file_name()?.to_string_lossy();
+    // Validates the precondition every `ChunkSet` constructor below shares.
+    output_path.file_name()?;
     let parent_dir = output_path.parent().unwrap_or_else(|| Path::new("."));
 
     let mut all_chunks: Vec<ChunkInfo> = Vec::new();
 
     // 1. Check for new-style chunks: {filename}.{downloadid}.part{i}
-    // Scan for download IDs from 0 to 100 (reasonable upper bound)
-    for download_id in 0..100 {
-        let mut chunk_paths = Vec::new();
-        let mut total_size = 0u64;
-
-        // Scan for chunks with this download ID
-        // Check up to 10000 chunks (power-of-two chunking can create many small chunks)
-        for chunk_id in 0..10000 {
-            let chunk_path = parent_dir.join(format!("{base_name}.{download_id}.part{chunk_id}"));
-
-            if chunk_path.exists() {
-                if let Ok(metadata) = tokio::fs::metadata(&chunk_path).await {
-                    chunk_paths.push(chunk_path);
-                    total_size += metadata.len();
-                }
-            } else {
-                // No more chunks for this download ID
-                break;
-            }
-        }
+    for download_id in 0..MAX_DOWNLOAD_ID_SCAN {
+        // Precondition already validated above; a failure here can only mean
+        // `output_path` changed underneath us mid-scan, so skip rather than panic.
+        let Ok(set) = ChunkSet::for_attempt(output_path, download_id, ChunkKind::Fresh) else {
+            break;
+        };
+        let (chunk_paths, total_size) = collect_contiguous_chunks(&set, parent_dir).await;
 
         if !chunk_paths.is_empty() {
             all_chunks.push(ChunkInfo {
@@ -61,24 +94,14 @@ async fn detect_chunk_files(output_path: &Path) -> Option<ChunkInfo> {
         }
     }
 
-    // 2. Check for old-style chunks: {filename}.part{i}
-    let mut old_chunk_paths = Vec::new();
-    let mut old_total_size = 0u64;
-
-    for i in 0..10 {
-        // Old system used max 10 chunks (concurrent_fragments capped at 10)
-        let chunk_path = parent_dir.join(format!("{base_name}.part{i}"));
-
-        if chunk_path.exists() {
-            if let Ok(metadata) = tokio::fs::metadata(&chunk_path).await {
-                old_chunk_paths.push(chunk_path);
-                old_total_size += metadata.len();
-            }
-        } else {
-            // Old chunks are sequential
-            break;
-        }
-    }
+    // 2. Check for old-style (legacy) chunks: {filename}.part{i}
+    let Ok(legacy_set) = ChunkSet::legacy(output_path) else {
+        return all_chunks
+            .into_iter()
+            .max_by_key(|info| (info.download_id.is_some(), info.download_id.unwrap_or(0)));
+    };
+    let (old_chunk_paths, old_total_size) =
+        collect_contiguous_chunks(&legacy_set, parent_dir).await;
 
     if !old_chunk_paths.is_empty() {
         all_chunks.push(ChunkInfo {
@@ -157,24 +180,82 @@ pub async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo) -> an
     Ok(total_size)
 }
 
-/// Clean up old-style chunks when new-style chunks are used
+/// Clean up legacy-grammar chunks (`{filename}.part{i}`) when they are no
+/// longer going to be used for resume (a complete/oversized/simple-partial
+/// file was found, or new-style chunks were used instead).
+///
+/// Deletes only exact paths computed via [`ChunkSet::path_in`] — never a
+/// directory sweep (`scripts/check-no-dir-sweep-delete.sh`, #558).
 async fn cleanup_old_chunks(output_path: &Path) {
-    let Some(name) = output_path.file_name() else {
+    let Ok(set) = ChunkSet::legacy(output_path) else {
         return;
     };
-    let base_name = name.to_string_lossy();
     let parent_dir = output_path.parent().unwrap_or_else(|| Path::new("."));
 
     let mut deleted = 0;
-    for i in 0..10 {
-        let chunk_path = parent_dir.join(format!("{base_name}.part{i}"));
+    for chunk_id in 0..CHUNK_SCAN_CEILING {
+        let chunk_path = set.path_in(parent_dir, chunk_id);
         if chunk_path.exists() && tokio::fs::remove_file(&chunk_path).await.is_ok() {
             deleted += 1;
         }
     }
 
     if deleted > 0 {
-        debug!(deleted; "Cleaned up old-style chunk files");
+        debug!(deleted; "Cleaned up legacy-style chunk files");
+    }
+
+    cleanup_orphaned_resume_chunks(output_path).await;
+}
+
+/// Clean up orphaned resume-kind chunk sets (`{filename}.{download_id}.resume{i}`)
+/// left behind by an abandoned resume attempt (refs #568, #559).
+///
+/// A resume chunk set encodes only a chunk index *relative* to the resume
+/// attempt's byte offset — the offset itself is never persisted in the file
+/// name or anywhere on disk (see `Attempt::Resume` in
+/// `rdlp_downloader::http::parallel`), so a resume chunk set discovered here
+/// can never be safely merged: there is no way to recover which byte offset
+/// its `chunk_id 0` continues from, and the base file it was meant to extend
+/// may since have been deleted (an oversized-file restart) or already
+/// resumed independently at a different offset. Discover-and-delete is the
+/// safe contract; the bytes are simply re-downloaded by whatever fresh
+/// attempt follows.
+///
+/// Deletes only exact paths computed via [`ChunkSet::path_in`] — never a
+/// directory sweep (`scripts/check-no-dir-sweep-delete.sh`, #558).
+async fn cleanup_orphaned_resume_chunks(output_path: &Path) {
+    let parent_dir = output_path.parent().unwrap_or_else(|| Path::new("."));
+
+    let mut deleted = 0;
+    for download_id in 0..MAX_DOWNLOAD_ID_SCAN {
+        let Ok(set) = ChunkSet::for_attempt(output_path, download_id, ChunkKind::Resume) else {
+            return;
+        };
+
+        let mut deleted_for_id = 0;
+        for chunk_id in 0..CHUNK_SCAN_CEILING {
+            let chunk_path = set.path_in(parent_dir, chunk_id);
+            if chunk_path.exists() {
+                if tokio::fs::remove_file(&chunk_path).await.is_ok() {
+                    deleted_for_id += 1;
+                }
+            } else {
+                break;
+            }
+        }
+
+        if deleted_for_id > 0 {
+            warn!(
+                download_id, deleted_for_id;
+                "Deleting orphaned resume chunk set: safely merging requires the \
+                 original byte offset, which chunk file names don't encode"
+            );
+            deleted += deleted_for_id;
+        }
+    }
+
+    if deleted > 0 {
+        debug!(deleted; "Cleaned up orphaned resume-style chunk files");
     }
 }
 
@@ -277,6 +358,11 @@ impl Orchestrator {
                 }
             }
         } else {
+            // No main file, and no legacy/new-style Fresh chunk set found
+            // either. Still clean up any orphaned resume chunks so they
+            // don't leak indefinitely (#568/#559 item 4) — nothing else on
+            // this path would ever reach them.
+            cleanup_orphaned_resume_chunks(output_path).await;
             Ok(0)
         }
     }
