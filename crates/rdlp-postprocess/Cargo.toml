@@ -28,6 +28,7 @@ fs4 = "0.13"
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 tempfile = { workspace = true }
 filetime = "0.2"
+strum = { workspace = true }
 
 [lints.rust]
 missing_docs = "warn"

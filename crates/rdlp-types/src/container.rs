@@ -1,12 +1,14 @@
 //! Container format types for video/audio files
 
 use serde::{Deserialize, Serialize};
-use strum_macros::{Display, EnumString};
+use strum_macros::{Display, EnumIter, EnumString};
 
 /// Supported container formats for video/audio files.
 ///
 /// Used for merge output, remux targets, and video recode targets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString, EnumIter,
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive)]
 pub enum ContainerFormat {
@@ -23,6 +25,9 @@ pub enum ContainerFormat {
     /// Apple `QuickTime`, good for editing
     #[strum(serialize = "mov", serialize = "quicktime")]
     Mov,
+    /// MPEG-4 Part 14, video variant (iTunes video) — audio-only sibling is [`Self::M4a`]
+    #[strum(serialize = "m4v")]
+    M4v,
     /// MPEG Transport Stream, broadcast/streaming
     #[strum(serialize = "ts", serialize = "mpegts")]
     Ts,
@@ -109,6 +114,7 @@ impl ContainerFormat {
             Self::Mkv => "mkv",
             Self::WebM => "webm",
             Self::Mov => "mov",
+            Self::M4v => "m4v",
             Self::Ts => "ts",
             Self::Flv => "flv",
             Self::Avi => "avi",
@@ -140,7 +146,7 @@ impl ContainerFormat {
     #[inline]
     #[must_use]
     pub const fn supports_faststart(&self) -> bool {
-        matches!(self, Self::Mp4 | Self::Mov | Self::F4v)
+        matches!(self, Self::Mp4 | Self::Mov | Self::M4v | Self::F4v)
     }
 
     /// Whether this is an audio-only container format.
@@ -168,42 +174,11 @@ impl ContainerFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// All variants for exhaustive testing.
-    const ALL_FORMATS: [ContainerFormat; 28] = [
-        ContainerFormat::Mp4,
-        ContainerFormat::Mkv,
-        ContainerFormat::WebM,
-        ContainerFormat::Mov,
-        ContainerFormat::Ts,
-        ContainerFormat::Flv,
-        ContainerFormat::Avi,
-        ContainerFormat::ThreeGp,
-        ContainerFormat::Mpg,
-        ContainerFormat::F4v,
-        ContainerFormat::Asf,
-        ContainerFormat::Mxf,
-        ContainerFormat::Vob,
-        ContainerFormat::Dv,
-        ContainerFormat::Nut,
-        ContainerFormat::Ivf,
-        ContainerFormat::Ogg,
-        ContainerFormat::M4a,
-        ContainerFormat::Mp3,
-        ContainerFormat::Wav,
-        ContainerFormat::Flac,
-        ContainerFormat::Opus,
-        ContainerFormat::Aac,
-        ContainerFormat::Aiff,
-        ContainerFormat::Mka,
-        ContainerFormat::Wv,
-        ContainerFormat::Caf,
-        ContainerFormat::Ac3,
-    ];
+    use strum::IntoEnumIterator as _;
 
     #[test]
     fn test_display_roundtrip() {
-        for fmt in ALL_FORMATS {
+        for fmt in ContainerFormat::iter() {
             let s = fmt.to_string();
             let parsed: ContainerFormat = s.parse().unwrap();
             assert_eq!(fmt, parsed, "roundtrip failed for {s}");
@@ -291,9 +266,28 @@ mod tests {
     fn test_faststart() {
         assert!(ContainerFormat::Mp4.supports_faststart());
         assert!(ContainerFormat::Mov.supports_faststart());
+        assert!(ContainerFormat::M4v.supports_faststart());
         assert!(ContainerFormat::F4v.supports_faststart());
         assert!(!ContainerFormat::Mkv.supports_faststart());
         assert!(!ContainerFormat::Avi.supports_faststart());
+    }
+
+    /// `m4v` (MPEG-4 video) parses to its own variant rather than silently
+    /// aliasing `Mp4`/`Mov` — it is a distinct extension already used by the
+    /// MP4-family thumbnail-embed strategy (`rdlp-postprocess`,
+    /// `rdlp-ffmpeg`) before this variant existed.
+    #[test]
+    fn test_m4v_parses_to_its_own_variant() {
+        assert_eq!(
+            "m4v".parse::<ContainerFormat>().unwrap(),
+            ContainerFormat::M4v
+        );
+        assert_eq!(
+            "M4V".parse::<ContainerFormat>().unwrap(),
+            ContainerFormat::M4v
+        );
+        assert_eq!(ContainerFormat::M4v.as_ext(), "m4v");
+        assert!(!ContainerFormat::M4v.is_audio_only());
     }
 
     #[test]

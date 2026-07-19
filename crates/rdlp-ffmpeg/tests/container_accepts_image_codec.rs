@@ -159,12 +159,18 @@ async fn jpeg_and_png_are_accepted_by_every_supported_container() {
     // Containers where the jpeg/png baseline is VERIFIED to embed.
     //
     // Deliberately narrower than SUPPORTED_CONTAINERS: `ogg` and `opus` are
-    // listed there but cannot carry an image stream at all, failing with
-    // "Unsupported codec id in stream 1" even for jpeg/png (#531, pre-existing
-    // — the previous whitelist reached the same failure). Do NOT "complete"
-    // this list with them: the gate returns `true` for jpeg/png there via the
-    // baseline, so the assertions would PASS while the embed stays broken,
-    // turning a known bug into a test that certifies it as correct.
+    // listed there but genuinely cannot carry an image STREAM at all — their
+    // muxer's `ogg_init()` hard-rejects any stream whose codec isn't
+    // Vorbis/Theora/Speex/FLAC/Opus/VP8, which is exactly the question this
+    // function asks. #531 fixed the actual embed by carrying the cover as a
+    // `METADATA_BLOCK_PICTURE` VorbisComment field instead of an
+    // `ATTACHED_PIC` stream (see `rdlp-ffmpeg/src/ffmpeg/thumbnail/
+    // vorbis_picture.rs`), so the embed itself no longer fails — but that
+    // path bypasses this stream-codec query entirely, the same situation as
+    // Matroska's attachment path documented above. Do NOT "complete" this
+    // list with ogg/opus: the gate would still (correctly) answer `true` for
+    // jpeg/png here via the baseline, which says nothing about whether the
+    // embed works — asserting on it would test the wrong mechanism.
     let containers = ["mp4", "m4a", "m4v", "mov", "mkv", "mka", "mp3", "flac"];
 
     for format in ["jpg", "png"] {

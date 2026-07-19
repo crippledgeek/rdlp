@@ -4,7 +4,14 @@
 //! - **MP4/MOV/M4A/M4V**: Map all streams + thumbnail as video with `ATTACHED_PIC`
 //! - **MKV/MKA**: Native Matroska attachment via raw FFI
 //! - **MP3**: Map audio only + thumbnail as video with `ID3v2` metadata
-//! - **FLAC/OGG/Opus**: Map all streams + thumbnail with `ATTACHED_PIC`
+//! - **FLAC**: Map all streams + thumbnail as video with `ATTACHED_PIC` (the
+//!   FLAC muxer accepts an attached-pic stream and converts it internally to
+//!   a native FLAC `PICTURE` block)
+//! - **OGG/Opus**: Map all streams; the thumbnail rides a base64
+//!   `METADATA_BLOCK_PICTURE` `VorbisComment` field (see [`vorbis_picture`])
+//!   instead of a stream — `FFmpeg`'s Ogg muxer hard-rejects any stream whose
+//!   codec isn't Vorbis/Theora/Speex/FLAC/Opus/VP8, so an `ATTACHED_PIC`
+//!   image stream fails with `Unsupported codec id in stream N` (#531)
 //!
 //! # Lint allowances
 //!
@@ -25,16 +32,22 @@
     clippy::option_if_let_else, // ok_or_else pattern with complex closures is clearer as if let
 )]
 
+mod embed_strategy;
 mod mkv_raw_ffi;
+mod vorbis_picture;
 
 use std::path::Path;
+use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::Context as _;
 use rdlp_core::PostProcessCallback;
+use rdlp_types::ContainerFormat;
 
 use crate::error::{PostProcessError, Result};
 
+use self::embed_strategy::ThumbnailEmbedStrategy;
+pub use self::embed_strategy::supports_thumbnail_embed;
 use super::{FFmpegRunner, ensure_init};
 
 impl FFmpegRunner {
@@ -199,7 +212,9 @@ impl FFmpegRunner {
     /// - **MP4/MOV/M4A/M4V**: Map all streams + thumbnail as video with `ATTACHED_PIC`
     /// - **MKV/MKA**: Map all streams + thumbnail as attachment with mimetype metadata
     /// - **MP3**: Map audio only + thumbnail as video with `ID3v2` metadata
-    /// - **FLAC/OGG/Opus**: Map all streams + thumbnail with `ATTACHED_PIC`
+    /// - **FLAC**: Map all streams + thumbnail as video with `ATTACHED_PIC`
+    /// - **OGG/Opus**: Map all streams; thumbnail carried as a
+    ///   `METADATA_BLOCK_PICTURE` metadata field, no video stream added (#531)
     #[allow(clippy::too_many_lines)]
     fn embed_thumbnail_sync(
         media: &Path,
@@ -210,6 +225,20 @@ impl FFmpegRunner {
         encoding_tool_override: Option<&str>,
     ) -> anyhow::Result<()> {
         ensure_init()?;
+
+        // Parse the container ONCE, at the boundary, into the typed
+        // `ContainerFormat` + the strategy it implies — every downstream
+        // decision matches on `strategy`, never on a raw string.
+        let format = ContainerFormat::from_str(container).map_err(|_| {
+            PostProcessError::ffmpeg_failed(format!(
+                "unrecognized container '{container}' for thumbnail embed"
+            ))
+        })?;
+        let strategy = ThumbnailEmbedStrategy::for_container(format).ok_or_else(|| {
+            PostProcessError::ffmpeg_failed(format!(
+                "container '{container}' does not support thumbnail embedding"
+            ))
+        })?;
 
         // When a callback is provided, capture FFmpeg logs and forward them;
         // otherwise suppress muxer trace/debug spam.
@@ -225,8 +254,7 @@ impl FFmpegRunner {
         };
 
         // MKV: use raw FFI with proper stream property copying for VLC compatibility
-        let is_mkv = container.eq_ignore_ascii_case("mkv") || container.eq_ignore_ascii_case("mka");
-        if is_mkv {
+        if strategy == ThumbnailEmbedStrategy::MatroskaAttachment {
             let result =
                 Self::embed_thumbnail_mkv_raw_ffi(media, thumbnail, output, encoding_tool_override);
             // Forward captured logs before returning
@@ -259,7 +287,11 @@ impl FFmpegRunner {
                 )
             })?;
 
-        let is_mp3 = container.eq_ignore_ascii_case("mp3");
+        let is_mp3 = strategy == ThumbnailEmbedStrategy::Id3Apic;
+        // Ogg/Opus reject any stream whose codec isn't in a small fixed set
+        // (Vorbis/Theora/Speex/FLAC/Opus/VP8) at `write_header` time, so the
+        // thumbnail must NEVER become a stream for these containers (#531).
+        let is_ogg_opus = strategy == ThumbnailEmbedStrategy::VorbisComment;
 
         // Map media streams to output
         let stream_count = ictx.streams().count();
@@ -293,32 +325,45 @@ impl FFmpegRunner {
                 .set_metadata(ist.metadata().to_owned());
         }
 
-        // Add thumbnail stream
+        // Probe the thumbnail's video stream up front: every strategy below
+        // needs its dimensions and/or codec. Note this probe does NOT supply
+        // the metadata-block-picture strategy's raw bytes — those come from a
+        // separate `std::fs::read` further down, for the reason documented at
+        // that call site.
         let thumb_ist = thumb_ictx
             .streams()
             .best(ffmpeg_the_third::media::Type::Video)
             .ok_or_else(|| PostProcessError::ffmpeg_failed("no video stream found in thumbnail"))?;
         let thumb_ist_index = thumb_ist.index();
         let thumb_ist_time_base = thumb_ist.time_base();
-        let thumb_params = thumb_ist.parameters();
+        let thumb_width = thumb_ist.parameters().width();
+        let thumb_height = thumb_ist.parameters().height();
 
-        // Add thumbnail as video stream with ATTACHED_PIC disposition
-        let thumb_ost_index = Self::add_stream_copy(&mut octx, thumb_params, "for thumbnail")?;
-        {
-            let mut thumb_ost = octx
-                .stream_mut(thumb_ost_index)
-                .expect("just-added thumbnail stream");
-            // SAFETY: thumb_ost is a valid output stream in a live output context.
-            Self::set_attached_pic_disposition(unsafe { thumb_ost.as_mut_ptr() });
+        // Ogg/Opus: carry the cover as a `METADATA_BLOCK_PICTURE` VorbisComment
+        // field (see `vorbis_picture`) instead of an `ATTACHED_PIC` stream — no
+        // video stream is added for these containers at all (#531).
+        let thumb_ost_index = if is_ogg_opus {
+            None
+        } else {
+            let ost_idx =
+                Self::add_stream_copy(&mut octx, thumb_ist.parameters(), "for thumbnail")?;
+            {
+                let mut thumb_ost = octx
+                    .stream_mut(ost_idx)
+                    .expect("just-added thumbnail stream");
+                // SAFETY: thumb_ost is a valid output stream in a live output context.
+                Self::set_attached_pic_disposition(unsafe { thumb_ost.as_mut_ptr() });
 
-            // For MP3: set ID3v2 metadata on the thumbnail stream
-            if is_mp3 {
-                let mut dict = ffmpeg_the_third::Dictionary::new();
-                dict.set("title", "Album cover");
-                dict.set("comment", "Cover (Front)");
-                thumb_ost.set_metadata(dict);
+                // For MP3: set ID3v2 metadata on the thumbnail stream
+                if is_mp3 {
+                    let mut dict = ffmpeg_the_third::Dictionary::new();
+                    dict.set("title", "Album cover");
+                    dict.set("comment", "Cover (Front)");
+                    thumb_ost.set_metadata(dict);
+                }
             }
-        }
+            Some(ost_idx)
+        };
 
         // Copy format-level metadata from media input
         octx.set_metadata(ictx.metadata().to_owned());
@@ -328,15 +373,58 @@ impl FFmpegRunner {
             crate::ffmpeg::encoding_tag::set_encoding_tool_if_missing(&mut octx, "thumbnail");
         }
 
+        // Ogg/Opus: build and set the METADATA_BLOCK_PICTURE tag BEFORE
+        // `write_header` — the Ogg muxer copies format-level metadata into
+        // the header it writes, and `avformat_write_header` is the point at
+        // which a stream-based ATTACHED_PIC would otherwise be rejected.
+        if is_ogg_opus {
+            // Deliberate second read of `thumbnail`, not an oversight: the
+            // `thumb_ictx`/`thumb_ist` probe above exists only to learn the
+            // image's dimensions (needed for the PICTURE block's width/height
+            // fields; the MIME comes from sniffing the bytes read below, not
+            // from the probe's codec); its demuxed packets are never
+            // consumed here. Recovering the encoded bytes from those packets
+            // instead of re-reading the file is demuxer/format-dependent —
+            // "packet bytes equal the original file bytes" only holds for a
+            // single-frame image2-demuxed still, not in general — so relying
+            // on it would couple this Vorbis-comment path to the same
+            // packet-equals-file assumption `write_thumbnail_packets` makes
+            // for the stream-copy paths below, for no benefit here.
+            //
+            // Safe: sync FFmpeg wrapper — all callers invoke via spawn_blocking
+            // from async boundaries (see rdlp-ffmpeg/src/ffmpeg/mod.rs spawn_blocking helper).
+            #[allow(clippy::disallowed_methods)]
+            let image_bytes = std::fs::read(thumbnail)
+                .with_context(|| format!("failed to read thumbnail {}", thumbnail.display()))?;
+            let image_format =
+                rdlp_types::sniff_thumbnail_format(&image_bytes).ok_or_else(|| {
+                    PostProcessError::ffmpeg_failed(format!(
+                        "thumbnail {} is not a recognized image format",
+                        thumbnail.display()
+                    ))
+                })?;
+            let picture = vorbis_picture::build_metadata_block_picture(
+                vorbis_picture::mime_type(image_format),
+                thumb_width,
+                thumb_height,
+                &image_bytes,
+            )
+            .map_err(|e| {
+                PostProcessError::ffmpeg_failed(format!(
+                    "failed to build METADATA_BLOCK_PICTURE for thumbnail {}: {e:#}",
+                    thumbnail.display()
+                ))
+            })?;
+            let mut meta = octx.metadata().to_owned();
+            meta.set("METADATA_BLOCK_PICTURE", &picture);
+            octx.set_metadata(meta);
+        }
+
         // Build muxer options dictionary
         let mut dict = ffmpeg_the_third::Dictionary::new();
 
-        // MP4/MOV: enable faststart (moov atom at beginning) for Windows Explorer thumbnail visibility
-        let is_mp4_mov = container.eq_ignore_ascii_case("mp4")
-            || container.eq_ignore_ascii_case("m4a")
-            || container.eq_ignore_ascii_case("m4v")
-            || container.eq_ignore_ascii_case("mov");
-        if is_mp4_mov {
+        // MP4/MOV family: enable faststart (moov atom at beginning) for Windows Explorer thumbnail visibility
+        if strategy == ThumbnailEmbedStrategy::Mp4FamilyAttachedPic {
             dict.set("movflags", "+faststart");
         }
 
@@ -345,21 +433,22 @@ impl FFmpegRunner {
             .map_err(PostProcessError::from)
             .context("failed to write output header for thumbnail embed")?;
 
-        // For FLAC/OGG/Opus: write thumbnail packets BEFORE media packets.
-        // These formats store picture metadata in the file header (METADATA_BLOCK_PICTURE
-        // for FLAC, Vorbis comment for OGG/Opus), so the muxer needs picture data before
-        // audio frames are flushed. For other formats (MP4, MP3), order doesn't matter.
-        let is_header_picture_format = container.eq_ignore_ascii_case("flac")
-            || container.eq_ignore_ascii_case("ogg")
-            || container.eq_ignore_ascii_case("opus");
+        // FLAC: write the thumbnail packet BEFORE media packets. FLAC stores
+        // the ATTACHED_PIC stream as a native FLAC PICTURE block in the file
+        // header, so the muxer needs the picture data before audio frames are
+        // flushed. For other stream-based formats (MP4, MP3), order doesn't
+        // matter. Ogg/Opus need no packet at all — their picture already rode
+        // into the header as METADATA_BLOCK_PICTURE metadata above.
+        let needs_thumbnail_packet_before_header =
+            strategy == ThumbnailEmbedStrategy::FlacAttachedPic;
 
-        if is_header_picture_format {
+        if needs_thumbnail_packet_before_header && let Some(ost_idx) = thumb_ost_index {
             Self::write_thumbnail_packets(
                 &mut thumb_ictx,
                 &mut octx,
                 thumb_ist_index,
                 thumb_ist_time_base,
-                thumb_ost_index,
+                ost_idx,
             )?;
         }
 
@@ -390,14 +479,15 @@ impl FFmpegRunner {
         }
 
         // Copy thumbnail packet(s) for formats that don't need them in the header.
-        // MKV: handled by embed_thumbnail_mkv_raw_ffi. FLAC/OGG/Opus: already written above.
-        if !is_header_picture_format {
+        // MKV: handled by embed_thumbnail_mkv_raw_ffi. FLAC: already written above.
+        // Ogg/Opus: no stream was ever added, so there is no packet to write.
+        if !needs_thumbnail_packet_before_header && let Some(ost_idx) = thumb_ost_index {
             Self::write_thumbnail_packets(
                 &mut thumb_ictx,
                 &mut octx,
                 thumb_ist_index,
                 thumb_ist_time_base,
-                thumb_ost_index,
+                ost_idx,
             )?;
         }
 

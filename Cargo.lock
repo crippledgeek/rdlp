@@ -6195,6 +6195,7 @@ name = "rdlp-ffmpeg"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "ffmpeg-the-third",
  "log",
  "openssl-sys",
@@ -6301,6 +6302,7 @@ dependencies = [
  "rdlp-core",
  "rdlp-ffmpeg",
  "rdlp-types",
+ "strum",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",
