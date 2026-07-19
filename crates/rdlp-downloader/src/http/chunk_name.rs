@@ -5,17 +5,17 @@
 //! the divergence already produced two live defects this module closes
 //! (refs #568, #559):
 //!
-//! 1. **Kind-blind cleanup** (`parallel.rs::cleanup_chunk_files`) hardcodes
-//!    the `.part{chunk_id}` marker while the chunk writer interpolates a
-//!    `suffix` that is `"resume"` on the resume path — so a failed *resumed*
-//!    download's cleanup pass silently deletes nothing. This is #568's live
-//!    leak and the reason chunk kind ([`ChunkKind`]) is part of the grammar,
-//!    not an afterthought.
-//! 2. **Range-bounded cleanup**: the same function bounds deletion by
+//! 1. **Kind-blind cleanup** (`parallel.rs`'s pre-fix cleanup function)
+//!    hardcoded the `.part{chunk_id}` marker while the chunk writer
+//!    interpolates a `suffix` that is `"resume"` on the resume path — so a
+//!    failed *resumed* download's cleanup pass silently deleted nothing.
+//!    This is #568's live leak and the reason chunk kind ([`ChunkKind`]) is
+//!    part of the grammar, not an afterthought.
+//! 2. **Range-bounded cleanup**: the same function bounded deletion by
 //!    `total_chunks`, a count the adaptive controller doesn't have — it
 //!    generates chunk ids lazily via `stream::try_unfold` (`parallel.rs`) —
-//!    so an adaptive download can exceed any a-priori bound, and the
-//!    adaptive path calls no cleanup function at all.
+//!    so an adaptive download could exceed any a-priori bound, and the
+//!    adaptive path called no cleanup function at all.
 //!
 //! Cleanup of a failed download no longer scans a directory at all: the
 //! writer registers each chunk path with a [`super::chunk_ledger::ChunkLedger`]
@@ -53,7 +53,7 @@ use std::path::{Path, PathBuf};
 /// Modeled as an enum (not a raw `&str` marker) because the set of markers is
 /// closed and a typo in a string literal would silently create an
 /// unclaimable chunk file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChunkKind {
     /// A chunk written by a brand-new download attempt.
     Fresh,
@@ -82,7 +82,7 @@ impl ChunkKind {
 /// chunk set has no producer anywhere in the tree, so it is deliberately
 /// unreachable through this type's public constructors rather than merely
 /// undocumented.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChunkSet {
     filename: String,
     download_id: Option<u64>,
@@ -166,39 +166,6 @@ impl ChunkSet {
     pub fn path_in(&self, dir: &Path, chunk_id: u64) -> PathBuf {
         dir.join(format!("{}{chunk_id}", self.prefix()))
     }
-
-    /// If `file_name` belongs to this set, return its chunk id.
-    ///
-    /// A match requires the exact prefix for this set's filename,
-    /// download id, and kind, followed by one or more ASCII digits and
-    /// nothing else — so a foreign file, a different download id, a
-    /// different [`ChunkKind`], or a non-numeric/empty suffix are all
-    /// rejected.
-    ///
-    /// **Not a strict inverse of [`Self::path_in`].** `path_in` never emits
-    /// a leading-zero chunk id, but `claims` parses the digit run with
-    /// ordinary decimal parsing, so e.g. `"part007"` also claims chunk id
-    /// `7` (see the `claims_lenient_leading_zeros_alias_to_same_chunk_id`
-    /// test). This is deliberate, not an oversight: resume detection
-    /// (rdlp-api, #559) must recognize whatever file it claims by name, and
-    /// a stricter parse could leave a chunk file written with leading zeros
-    /// by some other rdlp version unrecognized.
-    #[must_use]
-    pub fn claims(&self, file_name: &str) -> Option<u64> {
-        Self::claims_with_prefix(&self.prefix(), file_name)
-    }
-
-    /// Shared matching logic behind [`Self::claims`], taking an
-    /// already-built `prefix` so a caller checking many file names against
-    /// the same set (e.g. resume detection scanning a directory read-only)
-    /// can compute it once instead of once per entry.
-    fn claims_with_prefix(prefix: &str, file_name: &str) -> Option<u64> {
-        let rest = file_name.strip_prefix(prefix)?;
-        if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
-            return None;
-        }
-        rest.parse().ok()
-    }
 }
 
 #[cfg(test)]
@@ -206,7 +173,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn round_trip_new_style_fresh() {
+    fn path_in_builds_new_style_fresh_name() {
         let set = ChunkSet::for_attempt("Title.mp4", 7, ChunkKind::Fresh).expect("valid filename");
         let dir = Path::new("/tmp/does-not-need-to-exist-for-this-test");
         let path = set.path_in(dir, 3);
@@ -214,115 +181,36 @@ mod tests {
             path.file_name().unwrap().to_str().unwrap(),
             "Title.mp4.7.part3"
         );
-        let name = path.file_name().unwrap().to_str().unwrap();
-        assert_eq!(set.claims(name), Some(3));
     }
 
     #[test]
-    fn round_trip_new_style_resume() {
+    fn path_in_builds_new_style_resume_name() {
         let set = ChunkSet::for_attempt("Title.mp4", 7, ChunkKind::Resume).expect("valid filename");
         let dir = Path::new("/tmp/does-not-need-to-exist-for-this-test");
         let path = set.path_in(dir, 3);
         let name = path.file_name().unwrap().to_str().unwrap();
         assert_eq!(name, "Title.mp4.7.resume3");
-        assert_eq!(set.claims(name), Some(3));
     }
 
     #[test]
-    fn round_trip_legacy() {
+    fn path_in_builds_legacy_name() {
         let set = ChunkSet::legacy("Title.mp4").expect("valid filename");
         let dir = Path::new("/tmp/does-not-need-to-exist-for-this-test");
         let path = set.path_in(dir, 4);
         let name = path.file_name().unwrap().to_str().unwrap();
         assert_eq!(name, "Title.mp4.part4");
-        assert_eq!(set.claims(name), Some(4));
-    }
-
-    #[test]
-    fn claims_rejects_different_download_id() {
-        let set = ChunkSet::for_attempt("Title.mp4", 7, ChunkKind::Fresh).expect("valid filename");
-        assert_eq!(set.claims("Title.mp4.8.part3"), None);
-    }
-
-    #[test]
-    fn claims_rejects_different_filename() {
-        let set = ChunkSet::for_attempt("Title.mp4", 7, ChunkKind::Fresh).expect("valid filename");
-        assert_eq!(set.claims("Other.mp4.7.part3"), None);
-    }
-
-    #[test]
-    fn claims_rejects_bare_marker_with_no_digits() {
-        let set = ChunkSet::legacy("Title.mp4").expect("valid filename");
-        assert_eq!(set.claims("Title.mp4.part"), None);
-    }
-
-    #[test]
-    fn claims_rejects_non_numeric_suffix() {
-        let set = ChunkSet::legacy("Title.mp4").expect("valid filename");
-        assert_eq!(set.claims("Title.mp4.part1x"), None);
-    }
-
-    #[test]
-    fn claims_rejects_foreign_file() {
-        let set = ChunkSet::for_attempt("Title.mp4", 7, ChunkKind::Fresh).expect("valid filename");
-        assert_eq!(set.claims("Title.mp4"), None);
-    }
-
-    #[test]
-    fn fresh_set_does_not_claim_resume_chunk() {
-        let set = ChunkSet::for_attempt("Title.mp4", 7, ChunkKind::Fresh).expect("valid filename");
-        assert_eq!(set.claims("Title.mp4.7.resume3"), None);
-    }
-
-    #[test]
-    fn resume_set_does_not_claim_fresh_chunk() {
-        let set = ChunkSet::for_attempt("Title.mp4", 7, ChunkKind::Resume).expect("valid filename");
-        assert_eq!(set.claims("Title.mp4.7.part3"), None);
-    }
-
-    #[test]
-    fn claims_unbounded_index_beyond_legacy_ten_chunk_cap() {
-        // #559: the legacy scanner bounded chunk ids to 0..10. This set must
-        // claim chunk ids well beyond that bound.
-        let set = ChunkSet::for_attempt("Title.mp4", 7, ChunkKind::Fresh).expect("valid filename");
-        assert_eq!(set.claims("Title.mp4.7.part12"), Some(12));
-        assert_eq!(set.claims("Title.mp4.7.part100"), Some(100));
-    }
-
-    #[test]
-    fn claims_lenient_leading_zeros_alias_to_same_chunk_id() {
-        // N2: `claims` is deliberately not a strict inverse of `path_in` —
-        // see the doc comment on `claims`. Pinned here so the aliasing is a
-        // recorded decision, not an accident a future refactor "fixes" away.
-        let set = ChunkSet::legacy("Title.mp4").expect("valid filename");
-        assert_eq!(set.claims("Title.mp4.part007"), Some(7));
-        // `path_in` itself never produces the leading-zero form.
-        let dir = Path::new("/tmp/does-not-need-to-exist-for-this-test");
-        assert_eq!(
-            set.path_in(dir, 7).file_name().unwrap().to_str().unwrap(),
-            "Title.mp4.part7"
-        );
     }
 
     #[test]
     fn for_attempt_rejects_empty_filename() {
         // N4: an empty filename would otherwise build a set whose prefix is
-        // bare `.{download_id}.part`, claiming any foreign `.partN` file
-        // sharing that download id.
+        // bare `.{download_id}.part`, wide enough to build a path colliding
+        // with any foreign `.partN` file sharing that download id.
         assert!(ChunkSet::for_attempt("", 7, ChunkKind::Fresh).is_err());
     }
 
     #[test]
     fn legacy_rejects_empty_filename() {
-        assert!(ChunkSet::legacy("").is_err());
-    }
-
-    #[test]
-    fn empty_filename_error_prevents_claiming_a_foreign_part_file() {
-        // N4b: construction fails outright, so there is no `ChunkSet` in
-        // existence that could claim a foreign `.part1` via the empty-prefix
-        // hazard described above.
-        assert!(ChunkSet::for_attempt("", 1, ChunkKind::Fresh).is_err());
         assert!(ChunkSet::legacy("").is_err());
     }
 }

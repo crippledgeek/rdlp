@@ -1951,9 +1951,9 @@ async fn resume_rejects_response_starting_at_wrong_offset() {
 }
 
 // ---------------------------------------------------------------------------
-// #568 — chunk sweep on failed parallel downloads
+// #568 — chunk cleanup on failed parallel downloads
 //
-// Before this fix, `cleanup_chunk_files` hardcoded the `.part{N}` marker
+// Before this fix, the pre-fix cleaner hardcoded the `.part{N}` marker
 // while a resumed download's writer used `.resume{N}` — so a failed resumed
 // download's cleanup pass deleted nothing (D1). The adaptive path called no
 // cleanup at all (D2). All three tests below assert directly on the
@@ -1972,13 +1972,13 @@ async fn dir_entries(dir: &Path) -> std::collections::HashSet<String> {
 }
 
 /// Regression guard: a failed FRESH parallel download (static chunking, i.e.
-/// adaptive disabled via `Legacy` strategy) must still sweep its `.part{N}`
-/// chunk files. This path's suffix already matched pre-#568 (both writer and
-/// cleaner used `"part"`), so — unlike the two tests below — this one is
-/// expected to ALREADY PASS against the unpatched code; it pins the
+/// adaptive disabled via `Legacy` strategy) must still clean up its
+/// `.part{N}` chunk files. This path's suffix already matched pre-#568 (both
+/// writer and cleaner used `"part"`), so — unlike the two tests below — this
+/// one is expected to ALREADY PASS against the unpatched code; it pins the
 /// behavior so the migration to `ChunkSet` does not regress it.
 #[tokio::test]
-async fn static_fresh_failure_sweeps_part_chunks_regression_guard() {
+async fn static_fresh_failure_cleans_up_part_chunks_regression_guard() {
     use mockito::Server;
     use tempfile::TempDir;
 
@@ -2049,17 +2049,17 @@ async fn static_fresh_failure_sweeps_part_chunks_regression_guard() {
     assert_eq!(
         names,
         std::collections::HashSet::from(["unrelated.txt".to_string()]),
-        "chunk files must be swept after a failed fresh/static download; \
+        "chunk files must be cleaned up after a failed fresh/static download; \
          only the foreign file may remain, found: {names:?}"
     );
 }
 
 /// D1 (the live #568 leak): a failed RESUMED parallel download (static
-/// chunking) must sweep its `.resume{N}` chunk files, not the `.part{N}`
+/// chunking) must clean up its `.resume{N}` chunk files, not the `.part{N}`
 /// marker the pre-fix cleaner hardcoded. Must FAIL against the unpatched
 /// code (the stray `.resumeN` files are left behind).
 #[tokio::test]
-async fn static_resume_failure_sweeps_resume_chunks_d1() {
+async fn static_resume_failure_cleans_up_resume_chunks_d1() {
     use mockito::Server;
     use tempfile::TempDir;
 
@@ -2141,7 +2141,7 @@ async fn static_resume_failure_sweeps_resume_chunks_d1() {
     assert_eq!(
         names,
         std::collections::HashSet::from(["video.mp4".to_string(), "unrelated.txt".to_string()]),
-        "resume chunk files must be swept after a failed resumed download; \
+        "resume chunk files must be cleaned up after a failed resumed download; \
          only the output file and the foreign file may remain, found: {names:?}"
     );
 }
@@ -2149,7 +2149,7 @@ async fn static_resume_failure_sweeps_resume_chunks_d1() {
 /// D2: the adaptive path called no cleanup function at all, so a failed
 /// adaptive download leaked every chunk already written to disk regardless
 /// of how many sibling chunks had already completed successfully. Must FAIL
-/// against the unpatched code (no sweep call exists on this path at all).
+/// against the unpatched code (no cleanup call exists on this path at all).
 ///
 /// Uses the default adaptive config (no `with_chunk_strategy` override, so
 /// `config.adaptive` stays `true`). `AdaptiveConfig::initial_chunk_level` is
@@ -2159,7 +2159,7 @@ async fn static_resume_failure_sweeps_resume_chunks_d1() {
 /// `PROBE_WINDOW_BYTES` exactly (so the F3 probe and chunk 0 share one Range
 /// request/response).
 #[tokio::test]
-async fn adaptive_failure_sweeps_chunks_d2() {
+async fn adaptive_failure_cleans_up_chunks_d2() {
     use mockito::Server;
     use tempfile::TempDir;
 
@@ -2227,7 +2227,7 @@ async fn adaptive_failure_sweeps_chunks_d2() {
     assert_eq!(
         names,
         std::collections::HashSet::from(["unrelated.txt".to_string()]),
-        "chunk files must be swept after a failed adaptive download; \
+        "chunk files must be cleaned up after a failed adaptive download; \
          only the foreign file may remain, found: {names:?}"
     );
 }

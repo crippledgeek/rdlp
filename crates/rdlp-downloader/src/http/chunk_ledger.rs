@@ -1,8 +1,8 @@
 //! Owned-path tracking for parallel-download chunk files.
 //!
-//! Replaces the pattern-sweep deletion [`super::chunk_name::ChunkSet`] used to
-//! perform (`ChunkSet::sweep`, removed): that scanned the temp directory for
-//! names matching this download's grammar and deleted every match. The
+//! Replaces an earlier pattern-sweep design, rejected before merge, that
+//! would have scanned the temp directory for names matching
+//! [`super::chunk_name::ChunkSet`]'s grammar and deleted every match. The
 //! grammar alone cannot distinguish "a chunk this run wrote" from "a chunk a
 //! concurrent process with the same `download_id` wrote" — `DOWNLOAD_ID_COUNTER`
 //! (`parallel.rs`) is a per-process atomic starting at 0, so two concurrent
@@ -134,17 +134,18 @@ mod tests {
         ChunkLedger::new().cleanup().await;
     }
 
-    /// This is the whole point of replacing `ChunkSet::sweep` with a ledger.
+    /// This is the whole point of replacing the earlier pattern-sweep design
+    /// with a ledger.
     ///
     /// `DOWNLOAD_ID_COUNTER` (`parallel.rs`) is a per-*process* atomic
     /// starting at 0, so two concurrent rdlp processes downloading the same
     /// filename into the same directory can both compute `download_id == 0`
     /// — at which point their chunk files are named identically
     /// (`ChunkSet::path_in` depends only on filename + `download_id` + kind +
-    /// `chunk_id`). The removed `ChunkSet::sweep` deleted every directory
-    /// entry matching that shared name grammar, so process A's sweep would
-    /// also delete process B's live, in-progress chunk file of the same
-    /// name. A `ChunkLedger` cannot make that mistake: it deletes only the
+    /// `chunk_id`). The rejected pattern-sweep design would have deleted
+    /// every directory entry matching that shared name grammar, so process
+    /// A's sweep would also delete process B's live, in-progress chunk file
+    /// of the same name. A `ChunkLedger` cannot make that mistake: it deletes only the
     /// paths THIS run explicitly registered, so a file this run never
     /// registered survives even when its name is indistinguishable from an
     /// owned chunk's.
@@ -184,8 +185,8 @@ mod tests {
             tokio::fs::metadata(&foreign_chunk).await.is_ok(),
             "a same-grammar, same-download-id chunk this run never \
              registered (standing in for a concurrent process's live chunk) \
-             must survive cleanup — the removed ChunkSet::sweep could not \
-             guarantee this"
+             must survive cleanup — the rejected pattern-sweep design could \
+             not guarantee this"
         );
     }
 }
