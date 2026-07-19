@@ -2,9 +2,28 @@
 //!
 //! Before this module existed, the chunk-name grammar was duplicated as five
 //! independent `format!` strings across `rdlp-downloader` and `rdlp-api`, and
-//! the divergence already produced a live data leak (refs #568, #559): the
-//! `rdlp-api` cleaner bounded its directory scan to `0..10` chunks, silently
-//! leaking every chunk beyond that when a download used more connections.
+//! the divergence already produced two live defects this module closes
+//! (refs #568, #559):
+//!
+//! 1. **Kind-blind cleanup** (`parallel.rs::cleanup_chunk_files`) hardcodes
+//!    the `.part{chunk_id}` marker while the chunk writer interpolates a
+//!    `suffix` that is `"resume"` on the resume path — so a failed *resumed*
+//!    download's cleanup pass silently deletes nothing. This is #568's live
+//!    leak and the reason chunk kind ([`ChunkKind`]) is part of the grammar,
+//!    not an afterthought.
+//! 2. **Range-bounded cleanup**: the same function bounds deletion by
+//!    `total_chunks`, a count the adaptive controller doesn't have — it
+//!    generates chunk ids lazily via `stream::try_unfold` (`parallel.rs`) —
+//!    so an adaptive download can exceed any a-priori bound, and the
+//!    adaptive path calls no cleanup function at all. [`ChunkSet::sweep`]
+//!    replaces the bounded loop with a directory scan, so the final chunk
+//!    count need never be known up front.
+//!
+//! (The `rdlp-api` legacy-chunk cleaner's `0..10` scan bound, by contrast,
+//! never leaked in practice: the legacy grammar predates power-of-two
+//! chunking, when `concurrent_fragments` was capped at 10 — see
+//! `orchestrator/resume.rs`. It's included here only because [`ChunkSet`]
+//! now also owns that grammar's parsing.)
 //!
 //! [`ChunkSet`] is the one place a chunk file name is built or parsed. Two
 //! grammars are represented:
@@ -16,6 +35,7 @@
 //! `Title.mp4`), so a real chunk looks like `Title.mp4.7.resume3`.
 
 use anyhow::Context;
+use log::warn;
 use std::path::{Path, PathBuf};
 
 /// Origin of a chunk within its download attempt: a fresh transfer or one
@@ -44,23 +64,52 @@ impl ChunkKind {
 }
 
 /// Report of a [`ChunkSet::sweep`] pass over a directory.
-#[derive(Debug, Clone, Default)]
+///
+/// `std::io::Error` implements neither `Clone` nor `PartialEq` (it may wrap
+/// an arbitrary boxed source), so this type's equality is hand-written
+/// below rather than derived: two reports are equal when they deleted the
+/// same count and their errors match pairwise by path and
+/// [`std::io::ErrorKind`] (the part of an `io::Error` that is meaningfully
+/// comparable).
+#[derive(Debug, Default)]
+#[must_use]
 pub struct SweepReport {
     /// Number of chunk files this set claimed and successfully deleted.
     pub deleted: usize,
-    /// Per-file errors encountered while deleting a claimed chunk. A
-    /// `NotFound` on removal is not recorded here (the file is already gone,
-    /// which is the desired end state); every other I/O error is.
-    pub errors: Vec<String>,
+    /// Per-file errors encountered while deleting a claimed chunk, paired
+    /// with the path that failed. A `NotFound` on removal is not recorded
+    /// here (the file is already gone, which is the desired end state);
+    /// every other I/O error is, kept as a typed [`std::io::Error`] so a
+    /// caller can distinguish e.g. `PermissionDenied` from a transient
+    /// failure rather than pattern-matching a formatted string.
+    pub errors: Vec<(PathBuf, std::io::Error)>,
 }
+
+impl PartialEq for SweepReport {
+    fn eq(&self, other: &Self) -> bool {
+        self.deleted == other.deleted
+            && self.errors.len() == other.errors.len()
+            && self.errors.iter().zip(&other.errors).all(
+                |((path, err), (other_path, other_err))| {
+                    path == other_path && err.kind() == other_err.kind()
+                },
+            )
+    }
+}
+
+impl Eq for SweepReport {}
 
 /// A named, addressable set of parallel-download chunk files sharing one
 /// output filename, one download attempt (or the legacy "no id" attempt),
 /// and one [`ChunkKind`].
 ///
 /// `download_id: None` denotes the legacy pre-Phase-2.5 grammar
-/// (`{filename}.part{chunk_id}`, no download id segment).
-#[derive(Debug, Clone)]
+/// (`{filename}.part{chunk_id}`, no download id segment). The legacy
+/// grammar is Fresh-only (see [`ChunkSet::legacy`]); a legacy *resumed*
+/// chunk set has no producer anywhere in the tree, so it is deliberately
+/// unreachable through this type's public constructors rather than merely
+/// undocumented.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct ChunkSet {
     filename: String,
     download_id: Option<u64>,
@@ -68,12 +117,26 @@ pub struct ChunkSet {
 }
 
 impl ChunkSet {
-    /// Construct a chunk set descriptor. Does not touch the filesystem.
-    pub fn new(filename: impl Into<String>, download_id: Option<u64>, kind: ChunkKind) -> Self {
+    /// Construct the descriptor for a chunk belonging to a specific,
+    /// numbered download attempt. Does not touch the filesystem.
+    pub fn for_attempt(filename: impl Into<String>, download_id: u64, kind: ChunkKind) -> Self {
         Self {
             filename: filename.into(),
-            download_id,
+            download_id: Some(download_id),
             kind,
+        }
+    }
+
+    /// Construct the descriptor for the legacy pre-Phase-2.5 grammar
+    /// (`{filename}.part{chunk_id}`, no download-id segment). Always
+    /// [`ChunkKind::Fresh`] — the legacy grammar predates resume support,
+    /// so a legacy chunk set is read/delete-only against files nothing in
+    /// the tree still writes. Does not touch the filesystem.
+    pub fn legacy(filename: impl Into<String>) -> Self {
+        Self {
+            filename: filename.into(),
+            download_id: None,
+            kind: ChunkKind::Fresh,
         }
     }
 
@@ -101,7 +164,14 @@ impl ChunkSet {
     /// rejected.
     #[must_use]
     pub fn claims(&self, file_name: &str) -> Option<u64> {
-        let rest = file_name.strip_prefix(self.prefix().as_str())?;
+        Self::claims_with_prefix(&self.prefix(), file_name)
+    }
+
+    /// Shared matching logic behind [`Self::claims`], taking an
+    /// already-built `prefix` so [`Self::sweep`] can compute it once per
+    /// directory scan instead of once per entry.
+    fn claims_with_prefix(prefix: &str, file_name: &str) -> Option<u64> {
+        let rest = file_name.strip_prefix(prefix)?;
         if rest.is_empty() || !rest.bytes().all(|b| b.is_ascii_digit()) {
             return None;
         }
@@ -119,7 +189,15 @@ impl ChunkSet {
     /// I/O error reading the directory is surfaced. Per-file deletion
     /// errors are collected in the returned [`SweepReport`] rather than
     /// aborting the sweep, so one locked/foreign-owned file doesn't stop
-    /// cleanup of the rest.
+    /// cleanup of the rest — but each is also logged at `warn!` level here,
+    /// matching the severity the pre-existing bounded cleanup used, so a
+    /// failed delete stays operator-visible even though it no longer aborts
+    /// the sweep.
+    ///
+    /// `std::fs::remove_file` (and its `tokio::fs` equivalent used here)
+    /// removes a symlink itself rather than following it, so a hostile
+    /// symlink named to match this set's grammar cannot be used to delete
+    /// an arbitrary target through this pattern-based sweep.
     ///
     /// # Errors
     ///
@@ -137,15 +215,17 @@ impl ChunkSet {
             }
         };
 
+        let prefix = self.prefix();
         while let Some(entry) = entries
             .next_entry()
             .await
             .with_context(|| format!("iterating directory {}", dir.display()))?
         {
-            let Some(name) = entry.file_name().to_str().map(str::to_owned) else {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
                 continue;
             };
-            if self.claims(&name).is_none() {
+            if Self::claims_with_prefix(&prefix, name).is_none() {
                 continue;
             }
 
@@ -153,7 +233,10 @@ impl ChunkSet {
             match tokio::fs::remove_file(&path).await {
                 Ok(()) => report.deleted += 1,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => report.errors.push(format!("{}: {e}", path.display())),
+                Err(e) => {
+                    warn!(path:? = path; "Failed to delete chunk file: {e}");
+                    report.errors.push((path, e));
+                }
             }
         }
 
@@ -165,9 +248,9 @@ impl ChunkSet {
 mod tests {
     use super::*;
 
-    #[tokio::test]
-    async fn round_trip_new_style_fresh() {
-        let set = ChunkSet::new("Title.mp4", Some(7), ChunkKind::Fresh);
+    #[test]
+    fn round_trip_new_style_fresh() {
+        let set = ChunkSet::for_attempt("Title.mp4", 7, ChunkKind::Fresh);
         let dir = Path::new("/tmp/does-not-need-to-exist-for-this-test");
         let path = set.path_in(dir, 3);
         assert_eq!(
@@ -178,9 +261,9 @@ mod tests {
         assert_eq!(set.claims(name), Some(3));
     }
 
-    #[tokio::test]
-    async fn round_trip_new_style_resume() {
-        let set = ChunkSet::new("Title.mp4", Some(7), ChunkKind::Resume);
+    #[test]
+    fn round_trip_new_style_resume() {
+        let set = ChunkSet::for_attempt("Title.mp4", 7, ChunkKind::Resume);
         let dir = Path::new("/tmp/does-not-need-to-exist-for-this-test");
         let path = set.path_in(dir, 3);
         let name = path.file_name().unwrap().to_str().unwrap();
@@ -188,9 +271,9 @@ mod tests {
         assert_eq!(set.claims(name), Some(3));
     }
 
-    #[tokio::test]
-    async fn round_trip_legacy() {
-        let set = ChunkSet::new("Title.mp4", None, ChunkKind::Fresh);
+    #[test]
+    fn round_trip_legacy() {
+        let set = ChunkSet::legacy("Title.mp4");
         let dir = Path::new("/tmp/does-not-need-to-exist-for-this-test");
         let path = set.path_in(dir, 4);
         let name = path.file_name().unwrap().to_str().unwrap();
@@ -198,53 +281,53 @@ mod tests {
         assert_eq!(set.claims(name), Some(4));
     }
 
-    #[tokio::test]
-    async fn claims_rejects_different_download_id() {
-        let set = ChunkSet::new("Title.mp4", Some(7), ChunkKind::Fresh);
+    #[test]
+    fn claims_rejects_different_download_id() {
+        let set = ChunkSet::for_attempt("Title.mp4", 7, ChunkKind::Fresh);
         assert_eq!(set.claims("Title.mp4.8.part3"), None);
     }
 
-    #[tokio::test]
-    async fn claims_rejects_different_filename() {
-        let set = ChunkSet::new("Title.mp4", Some(7), ChunkKind::Fresh);
+    #[test]
+    fn claims_rejects_different_filename() {
+        let set = ChunkSet::for_attempt("Title.mp4", 7, ChunkKind::Fresh);
         assert_eq!(set.claims("Other.mp4.7.part3"), None);
     }
 
-    #[tokio::test]
-    async fn claims_rejects_bare_marker_with_no_digits() {
-        let set = ChunkSet::new("Title.mp4", None, ChunkKind::Fresh);
+    #[test]
+    fn claims_rejects_bare_marker_with_no_digits() {
+        let set = ChunkSet::legacy("Title.mp4");
         assert_eq!(set.claims("Title.mp4.part"), None);
     }
 
-    #[tokio::test]
-    async fn claims_rejects_non_numeric_suffix() {
-        let set = ChunkSet::new("Title.mp4", None, ChunkKind::Fresh);
+    #[test]
+    fn claims_rejects_non_numeric_suffix() {
+        let set = ChunkSet::legacy("Title.mp4");
         assert_eq!(set.claims("Title.mp4.part1x"), None);
     }
 
-    #[tokio::test]
-    async fn claims_rejects_foreign_file() {
-        let set = ChunkSet::new("Title.mp4", Some(7), ChunkKind::Fresh);
+    #[test]
+    fn claims_rejects_foreign_file() {
+        let set = ChunkSet::for_attempt("Title.mp4", 7, ChunkKind::Fresh);
         assert_eq!(set.claims("Title.mp4"), None);
     }
 
-    #[tokio::test]
-    async fn fresh_set_does_not_claim_resume_chunk() {
-        let set = ChunkSet::new("Title.mp4", Some(7), ChunkKind::Fresh);
+    #[test]
+    fn fresh_set_does_not_claim_resume_chunk() {
+        let set = ChunkSet::for_attempt("Title.mp4", 7, ChunkKind::Fresh);
         assert_eq!(set.claims("Title.mp4.7.resume3"), None);
     }
 
-    #[tokio::test]
-    async fn resume_set_does_not_claim_fresh_chunk() {
-        let set = ChunkSet::new("Title.mp4", Some(7), ChunkKind::Resume);
+    #[test]
+    fn resume_set_does_not_claim_fresh_chunk() {
+        let set = ChunkSet::for_attempt("Title.mp4", 7, ChunkKind::Resume);
         assert_eq!(set.claims("Title.mp4.7.part3"), None);
     }
 
-    #[tokio::test]
-    async fn claims_unbounded_index_beyond_legacy_ten_chunk_cap() {
+    #[test]
+    fn claims_unbounded_index_beyond_legacy_ten_chunk_cap() {
         // #559: the legacy scanner bounded chunk ids to 0..10. This set must
         // claim chunk ids well beyond that bound.
-        let set = ChunkSet::new("Title.mp4", Some(7), ChunkKind::Fresh);
+        let set = ChunkSet::for_attempt("Title.mp4", 7, ChunkKind::Fresh);
         assert_eq!(set.claims("Title.mp4.7.part12"), Some(12));
         assert_eq!(set.claims("Title.mp4.7.part100"), Some(100));
     }
@@ -252,7 +335,7 @@ mod tests {
     #[tokio::test]
     async fn sweep_deletes_only_claimed_chunks() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let set = ChunkSet::new("Title.mp4", Some(7), ChunkKind::Fresh);
+        let set = ChunkSet::for_attempt("Title.mp4", 7, ChunkKind::Fresh);
 
         // 12 chunks belonging to this set — well past the legacy 0..10 bound.
         for chunk_id in 0..12u64 {
@@ -288,12 +371,34 @@ mod tests {
 
     #[tokio::test]
     async fn sweep_missing_directory_is_not_an_error() {
-        let set = ChunkSet::new("Title.mp4", Some(7), ChunkKind::Fresh);
+        let set = ChunkSet::for_attempt("Title.mp4", 7, ChunkKind::Fresh);
         let report = set
             .sweep(Path::new("/nonexistent/rdlp-chunk-name-test-dir"))
             .await
             .expect("missing dir sweeps clean");
         assert_eq!(report.deleted, 0);
         assert!(report.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn sweep_records_typed_error_for_undeletable_entry() {
+        // A directory that matches this set's grammar can never be removed
+        // by `remove_file`, so it deterministically exercises the
+        // `SweepReport::errors` path with a real `io::ErrorKind` rather
+        // than a synthetic one.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let set = ChunkSet::for_attempt("Title.mp4", 7, ChunkKind::Fresh);
+        let undeletable = set.path_in(dir.path(), 0);
+        tokio::fs::create_dir(&undeletable)
+            .await
+            .expect("create dir standing in for the chunk file");
+
+        let report = set.sweep(dir.path()).await.expect("sweep");
+
+        assert_eq!(report.deleted, 0);
+        assert_eq!(report.errors.len(), 1);
+        let (path, err) = &report.errors[0];
+        assert_eq!(path, &undeletable);
+        assert_ne!(err.kind(), std::io::ErrorKind::NotFound);
     }
 }
