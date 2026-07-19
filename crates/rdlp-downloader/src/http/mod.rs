@@ -3,6 +3,7 @@
 //! Provides HTTP downloading with parallel chunk support, resume capability,
 //! and automatic retry logic using the backon crate.
 
+pub mod chunk_name;
 mod config;
 mod parallel;
 mod trait_impl;
