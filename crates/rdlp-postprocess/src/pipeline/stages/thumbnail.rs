@@ -9,6 +9,7 @@
 //! 2. `mp4ameta` iTunes `covr` atom (Windows Explorer visibility)
 
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::Arc;
 
 use anyhow::Context;
@@ -16,18 +17,9 @@ use async_trait::async_trait;
 use log::{debug, info, warn};
 
 use rdlp_ffmpeg::{FFmpegRunner, RemuxOptions};
-use rdlp_types::{THUMBNAIL_EXTENSIONS, ThumbnailFormat, sniff_thumbnail_format};
+use rdlp_types::{ContainerFormat, THUMBNAIL_EXTENSIONS, ThumbnailFormat, sniff_thumbnail_format};
 
 use crate::pipeline::{PipelineMessage, PipelineStage};
-
-/// Containers that support thumbnail embedding via `FFmpeg`.
-const SUPPORTED_CONTAINERS: &[&str] = &[
-    "mp4", "m4a", "m4v", "mov", "mkv", "mka", "mp3", "flac", "ogg", "opus",
-];
-
-/// Containers that attach the thumbnail's source codec natively (Matroska) and
-/// therefore never need image normalization.
-const NATIVE_ATTACHMENT_CONTAINERS: &[&str] = &["mkv", "mka"];
 
 /// Embeds thumbnail into the primary current file.
 ///
@@ -73,35 +65,106 @@ impl ThumbnailStage {
         None
     }
 
-    /// Check if the container supports thumbnail embedding.
+    /// Whether `extension`'s container can hold an iTunes `covr` metadata
+    /// atom via `mp4ameta`.
+    ///
+    /// This is NOT the same question as thumbnail-embed support
+    /// (`rdlp_ffmpeg::supports_thumbnail_embed`) or native-attachment support
+    /// (`rdlp_ffmpeg::uses_native_attachment`): `write_covr_atom` never
+    /// touches `FFmpeg` at all — it is pure `mp4ameta`, whose real
+    /// precondition is a parseable ISO-BMFF `ftyp` atom (`mp4ameta` returns
+    /// `ErrorKind::NoFtyp` otherwise). The four containers accepted here
+    /// happen to coincide with `rdlp-ffmpeg`'s `Mp4FamilyAttachedPic`
+    /// strategy today, but that is incidental, not an identity — so this
+    /// predicate is NOT derived from `rdlp-ffmpeg` and must be kept in sync
+    /// with `mp4ameta`'s own container support, not `FFmpeg`'s.
+    ///
+    /// `.mov` is the weak member of this set: `QuickTime`'s native metadata
+    /// atom is `udta`, not the iTunes `ilst` atom `mp4ameta` writes, so a
+    /// `.mov` file may or may not expose the cover the same way a real `.mp4`
+    /// does. The existing call site already hedges for exactly this kind of
+    /// uncertainty — `Tag::read_from_path` falls back to `Tag::default()` on
+    /// read failure, and a write failure only logs a `warn!` (non-fatal).
+    ///
+    /// `ThreeGp` is `false` here, but NOT because `mp4ameta` rejects it as a
+    /// capability matter — `mp4ameta`'s own `ftyp` parsing
+    /// (`atom/ftyp.rs:13`) only errors when the atom is entirely missing, so
+    /// a `.3gp` file would very likely be accepted if this predicate were
+    /// ever consulted for one. It never is: the call site (~line 478) asks
+    /// this question using the POST-REMUX extension, and `ThreeGp` fails
+    /// `rdlp_ffmpeg::supports_thumbnail_embed`, so any `.3gp` input is
+    /// auto-remuxed to `.mp4` before `supports_covr_atom` is ever reached —
+    /// the value can never actually be tested for `ThreeGp`. `false` is kept
+    /// here as the conservative, unreachable placeholder rather than `true`,
+    /// so a future reader doesn't mistake it for a verified capability claim
+    /// and "fix" it to `true` believing they changed real behavior.
+    ///
+    /// Matched exhaustively over every [`ContainerFormat`] variant (no
+    /// catch-all arm), mirroring the discipline `write_covr_atom`'s own
+    /// `ThumbnailFormat` match already uses: a newly-added container format
+    /// fails to compile here, forcing an explicit decision about whether
+    /// `mp4ameta` can represent it, rather than silently inheriting `false`
+    /// (or, worse, `true`) from a catch-all.
+    const fn supports_covr_atom(format: ContainerFormat) -> bool {
+        match format {
+            ContainerFormat::Mp4
+            | ContainerFormat::Mov
+            | ContainerFormat::M4v
+            | ContainerFormat::M4a => true,
+            ContainerFormat::Mkv
+            | ContainerFormat::WebM
+            | ContainerFormat::Ts
+            | ContainerFormat::Flv
+            | ContainerFormat::Avi
+            | ContainerFormat::ThreeGp
+            | ContainerFormat::Mpg
+            | ContainerFormat::F4v
+            | ContainerFormat::Asf
+            | ContainerFormat::Mxf
+            | ContainerFormat::Vob
+            | ContainerFormat::Dv
+            | ContainerFormat::Nut
+            | ContainerFormat::Ivf
+            | ContainerFormat::Ogg
+            | ContainerFormat::Mp3
+            | ContainerFormat::Wav
+            | ContainerFormat::Flac
+            | ContainerFormat::Opus
+            | ContainerFormat::Aac
+            | ContainerFormat::Aiff
+            | ContainerFormat::Mka
+            | ContainerFormat::Wv
+            | ContainerFormat::Caf
+            | ContainerFormat::Ac3 => false,
+        }
+    }
+
+    /// Whether `extension`'s container attaches the thumbnail's source codec
+    /// natively (Matroska), and therefore never needs image normalization.
+    ///
+    /// Thin wrapper over `rdlp_ffmpeg::uses_native_attachment` — the
+    /// production-code gateway to the real strategy table (#533). An
+    /// unparseable extension answers `false`, the safe direction: it routes
+    /// into the normal transcode-to-jpeg path rather than assuming native
+    /// support for a container `rdlp-ffmpeg` doesn't recognize at all.
+    fn is_native_attachment(extension: &str) -> bool {
+        ContainerFormat::from_str(extension).is_ok_and(rdlp_ffmpeg::uses_native_attachment)
+    }
+
+    /// Whether `extension`'s container can carry an embedded thumbnail at all.
+    /// Thin wrapper over `rdlp_ffmpeg::supports_thumbnail_embed` (#533).
     fn supports_thumbnail(extension: &str) -> bool {
-        SUPPORTED_CONTAINERS
-            .iter()
-            .any(|c| c.eq_ignore_ascii_case(extension))
-    }
-
-    /// Check if the container is an MP4-family format (supports `covr` atom).
-    fn is_mp4_family(extension: &str) -> bool {
-        ["mp4", "m4a", "m4v", "mov"]
-            .iter()
-            .any(|c| c.eq_ignore_ascii_case(extension))
-    }
-
-    /// Check if the container attaches the thumbnail's source codec natively
-    /// (Matroska), so it never needs image normalization.
-    fn is_native_attachment_container(extension: &str) -> bool {
-        NATIVE_ATTACHMENT_CONTAINERS
-            .iter()
-            .any(|c| c.eq_ignore_ascii_case(extension))
+        ContainerFormat::from_str(extension).is_ok_and(rdlp_ffmpeg::supports_thumbnail_embed)
     }
 
     /// Normalize `thumbnail_file` to a tracker-owned temp `.jpg` when the
     /// target container can't consume its codec directly.
     ///
-    /// Matroska is handled entirely separately (see
-    /// [`Self::mkv_attachment_renders_natively`]): it carries the image as a
-    /// file attachment rather than a stream, so the stream-codec-tag question
-    /// below does not govern it at all. `jpeg`/`png`/`gif`/`tiff` attachments
+    /// Matroska (`rdlp_ffmpeg::uses_native_attachment`) is handled entirely
+    /// separately (see [`Self::mkv_attachment_renders_natively`]): it carries
+    /// the image as a file attachment rather than a stream, so the
+    /// stream-codec-tag question below does not govern it at all.
+    /// `jpeg`/`png`/`gif`/`tiff` attachments
     /// render natively and return early untouched; `bmp`/`webp` are not
     /// recognized by `FFmpeg`'s own attachment-mimetype read-back table
     /// (`ThumbnailFormat::matroska_attachment`) and are unconditionally
@@ -128,7 +191,7 @@ impl ThumbnailStage {
         extension: &str,
         thumbnail_file: &Path,
     ) -> PathBuf {
-        if Self::is_native_attachment_container(extension) {
+        if Self::is_native_attachment(extension) {
             return if Self::mkv_attachment_renders_natively(thumbnail_file).await {
                 thumbnail_file.to_path_buf()
             } else {
@@ -311,7 +374,18 @@ impl PipelineStage for ThumbnailStage {
             .to_string();
 
         // Auto-remux containers that don't support thumbnail embedding (e.g. .ts → .mp4).
-        let (media_file, extension) = if Self::supports_thumbnail(&extension) {
+        // The gate is the REAL strategy table in `rdlp-ffmpeg`
+        // (`ContainerFormat::from_str` + `supports_thumbnail_embed`), not a
+        // hand-copied string list — full consolidation of what used to be
+        // two independently-maintained container lists (#533). This widens
+        // accepted input over the old list: `ContainerFormat` is
+        // ascii-case-insensitive WITH ALIASES (`"matroska"` → `Mkv`,
+        // `"quicktime"` → `Mov`), so a `.matroska`/`.quicktime` extension now
+        // takes the embed path instead of auto-remuxing to mp4. See
+        // `matroska_and_quicktime_aliases_now_resolve_to_embed_support` for the
+        // pinned behavior.
+        let supports_thumbnail = Self::supports_thumbnail(&extension);
+        let (media_file, extension) = if supports_thumbnail {
             (media_file, extension)
         } else {
             let remuxed_path = msg.tracker.temp_path(&media_file, "mp4");
@@ -417,7 +491,9 @@ impl PipelineStage for ThumbnailStage {
                 // transcode fails. `write_covr_atom` therefore re-checks the
                 // bytes itself and refuses what mp4ameta cannot represent,
                 // rather than trusting an invariant that can be violated.
-                if Self::is_mp4_family(&extension) {
+                let supports_covr =
+                    ContainerFormat::from_str(&extension).is_ok_and(Self::supports_covr_atom);
+                if supports_covr {
                     Self::write_covr_atom(&temp_output, &embed_source).await;
                 }
 
@@ -517,67 +593,91 @@ mod tests {
         assert!(!ThumbnailStage::supports_thumbnail("avi"));
     }
 
-    /// Forward direction: every string `SUPPORTED_CONTAINERS` (the REAL
-    /// const, not a copy) advertises as thumbnail-capable must actually
-    /// resolve to an embed strategy in `rdlp-ffmpeg`.
-    ///
-    /// This and the reverse-direction test below replace what used to be a
-    /// same-crate agreement test in `rdlp-ffmpeg` asserting `for_container`
-    /// against `MIRRORED_SUPPORTED_CONTAINERS` — a hand-copied duplicate of
-    /// this very list. That guarded against nothing: editing the real
-    /// `SUPPORTED_CONTAINERS` below left both the copy and the test green.
-    /// Asserting against `rdlp_ffmpeg::supports_thumbnail_embed` here closes
-    /// that gap (full consolidation of the two lists tracked by #533).
+    /// Behavior-widening regression pin (#533): `ContainerFormat` is
+    /// `#[strum(ascii_case_insensitive)]` WITH ALIASES — `"matroska"` parses
+    /// to `Mkv` and `"quicktime"` parses to `Mov`. The old hand-copied
+    /// `SUPPORTED_CONTAINERS` string list only ever matched the short
+    /// extensions (`"mkv"`, `"mov"`), so `.matroska`/`.quicktime` files
+    /// previously fell into the ".ts → .mp4"-style auto-remux branch. Under
+    /// the typed gate they now resolve directly to the embed path instead.
+    /// A `.matroska`/`.quicktime` file extension is unrealistic in practice
+    /// (real files use `.mkv`/`.mov`), and taking the embed path is safe —
+    /// but it is a real, deliberate behavior change, pinned here rather than
+    /// left as an unstated side effect of the migration.
     #[test]
-    fn supported_containers_all_resolve_to_a_strategy() {
-        use std::str::FromStr as _;
-
-        use rdlp_types::ContainerFormat;
-
-        for container in SUPPORTED_CONTAINERS {
-            let format = ContainerFormat::from_str(container)
-                .unwrap_or_else(|_| panic!("'{container}' must parse as a ContainerFormat"));
-            assert!(
-                rdlp_ffmpeg::supports_thumbnail_embed(format),
-                "'{container}' is listed in SUPPORTED_CONTAINERS but \
-                 rdlp_ffmpeg::supports_thumbnail_embed returned false"
-            );
-        }
+    fn matroska_and_quicktime_aliases_now_resolve_to_embed_support() {
+        assert!(
+            ThumbnailStage::supports_thumbnail("matroska"),
+            "'matroska' aliases to ContainerFormat::Mkv and must now take the embed path"
+        );
+        assert!(
+            ThumbnailStage::supports_thumbnail("quicktime"),
+            "'quicktime' aliases to ContainerFormat::Mov and must now take the embed path"
+        );
     }
 
-    /// Reverse direction: every container `rdlp-ffmpeg` resolves an embed
-    /// strategy for must be advertised by `SUPPORTED_CONTAINERS` — otherwise
-    /// `ThumbnailStage` would never reach this code for that container at
-    /// all, and the two would have quietly diverged.
+    /// Every container the real `rdlp-ffmpeg` strategy table resolves an
+    /// embed strategy for must be reachable via `supports_thumbnail` — this
+    /// is the identity the typed gate is now defined by, so it holds by
+    /// construction; kept as an explicit assertion so a future change to
+    /// either side that breaks the identity is caught here.
     #[test]
-    fn every_strategy_supported_format_is_in_supported_containers() {
+    fn every_strategy_supported_format_is_reachable() {
         use strum::IntoEnumIterator as _;
-
-        use rdlp_types::ContainerFormat;
 
         for format in ContainerFormat::iter() {
             if rdlp_ffmpeg::supports_thumbnail_embed(format) {
-                // `as_ext()` (not `Display`/`to_string()`) is the canonical
-                // extension string: `ContainerFormat`'s `Display` impl does
-                // not necessarily print the same alias `SUPPORTED_CONTAINERS`
-                // uses (e.g. `Mkv`'s `Display` is "matroska", not "mkv").
-                let name = format.as_ext();
                 assert!(
-                    SUPPORTED_CONTAINERS.contains(&name),
-                    "'{name}' resolves to a thumbnail strategy but is missing from \
-                     SUPPORTED_CONTAINERS"
+                    ThumbnailStage::supports_thumbnail(format.as_ext()),
+                    "'{}' resolves to a thumbnail strategy but supports_thumbnail returned false",
+                    format.as_ext()
                 );
             }
         }
     }
 
     #[test]
-    fn is_mp4_family() {
-        assert!(ThumbnailStage::is_mp4_family("mp4"));
-        assert!(ThumbnailStage::is_mp4_family("m4a"));
-        assert!(ThumbnailStage::is_mp4_family("mov"));
-        assert!(!ThumbnailStage::is_mp4_family("mkv"));
-        assert!(!ThumbnailStage::is_mp4_family("mp3"));
+    fn supports_covr_atom_accepts_mp4_family() {
+        assert!(ThumbnailStage::supports_covr_atom(ContainerFormat::Mp4));
+        assert!(ThumbnailStage::supports_covr_atom(ContainerFormat::M4a));
+        assert!(ThumbnailStage::supports_covr_atom(ContainerFormat::M4v));
+        assert!(ThumbnailStage::supports_covr_atom(ContainerFormat::Mov));
+        // Behavior-widening regression pin (#533): "quicktime" aliases to
+        // ContainerFormat::Mov via `from_str`, so a `.quicktime` extension
+        // now also resolves to covr-atom support, same as `.mov`.
+        assert!(
+            ContainerFormat::from_str("quicktime").is_ok_and(ThumbnailStage::supports_covr_atom),
+            "'quicktime' aliases to ContainerFormat::Mov and must resolve to covr-atom support"
+        );
+    }
+
+    /// Negative: Matroska is rejected (different atom mechanism entirely —
+    /// `covr` is an iTunes/ISO-BMFF concept, Matroska carries attachments).
+    #[test]
+    fn supports_covr_atom_rejects_mkv() {
+        assert!(!ThumbnailStage::supports_covr_atom(ContainerFormat::Mkv));
+    }
+
+    /// Negative: MP3 is rejected — it uses `ID3v2` APIC, not a covr atom.
+    #[test]
+    fn supports_covr_atom_rejects_mp3() {
+        assert!(!ThumbnailStage::supports_covr_atom(ContainerFormat::Mp3));
+    }
+
+    /// Negative, and the load-bearing case for this predicate's existence:
+    /// `F4v` is ISO-BMFF (an MP4 variant — `ContainerFormat::
+    /// supports_faststart` groups it with `Mp4`/`Mov`/`M4v`) yet is NOT
+    /// covr-gated today (nor, independently, does `rdlp-ffmpeg`'s
+    /// `ThumbnailEmbedStrategy` resolve a thumbnail-embed strategy for it at
+    /// all). This pins current behavior explicitly so a future change to
+    /// widen `supports_covr_atom` to "any ISO-BMFF container" is a
+    /// deliberate decision, not an accidental consequence of conflating the
+    /// covr-atom axis with `rdlp-ffmpeg`'s embed-strategy axis — the two
+    /// questions are independent, which is the entire point of keeping this
+    /// predicate un-derived from `rdlp-ffmpeg`.
+    #[test]
+    fn supports_covr_atom_rejects_f4v_despite_iso_bmff_kinship() {
+        assert!(!ThumbnailStage::supports_covr_atom(ContainerFormat::F4v));
     }
 
     #[test]
@@ -711,8 +811,30 @@ mod tests {
 
     #[test]
     fn native_attachment_container_accepts_mkv_mka() {
-        assert!(ThumbnailStage::is_native_attachment_container("mkv"));
-        assert!(ThumbnailStage::is_native_attachment_container("MKA"));
+        assert!(ThumbnailStage::is_native_attachment("mkv"));
+        assert!(ThumbnailStage::is_native_attachment("mka"));
+        // Behavior-widening regression pin (#533): "matroska" aliases to
+        // ContainerFormat::Mkv, so a `.matroska` file now also skips
+        // normalization via the native-attachment path, same as `.mkv`.
+        assert!(
+            ThumbnailStage::is_native_attachment("matroska"),
+            "'matroska' aliases to ContainerFormat::Mkv and must resolve to native attachment support"
+        );
+    }
+
+    /// Boundary test: an uppercase `.MKA` extension must still resolve to
+    /// native-attachment support end to end. Under the string-list design
+    /// this was `is_native_attachment_container`'s own case-insensitive
+    /// comparison; under the typed design that behavior has moved into
+    /// `ContainerFormat::from_str`'s `#[strum(ascii_case_insensitive)]`
+    /// parsing. Kept as an explicit test so this coverage isn't silently
+    /// lost in the migration (#533).
+    #[test]
+    fn uppercase_extension_still_resolves_native_attachment() {
+        assert!(
+            ThumbnailStage::is_native_attachment("MKA"),
+            "an uppercase .MKA extension must still parse and resolve to native attachment support"
+        );
     }
 
     /// Negative: MP4-family (and other non-Matroska) containers must NOT be
@@ -721,9 +843,9 @@ mod tests {
     /// exempted "mp4" would silently re-introduce the webp mux failure.
     #[test]
     fn native_attachment_container_rejects_mp4_family() {
-        assert!(!ThumbnailStage::is_native_attachment_container("mp4"));
-        assert!(!ThumbnailStage::is_native_attachment_container("mov"));
-        assert!(!ThumbnailStage::is_native_attachment_container("mp3"));
+        assert!(!ThumbnailStage::is_native_attachment("mp4"));
+        assert!(!ThumbnailStage::is_native_attachment("mov"));
+        assert!(!ThumbnailStage::is_native_attachment("mp3"));
     }
 
     // #530 end-to-end coverage (gif/tiff attach natively, bmp/webp get
