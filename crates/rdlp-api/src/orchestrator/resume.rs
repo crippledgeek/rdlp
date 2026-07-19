@@ -50,6 +50,12 @@ pub struct ChunkInfo {
 /// the first missing id (or at [`CHUNK_SCAN_CEILING`]). Read-only: builds
 /// each candidate path via [`ChunkSet::path_in`] and checks existence, never
 /// enumerating the directory's contents.
+///
+/// No chunk-0 sentinel is needed here (unlike [`cleanup_old_chunks`] and
+/// [`log_orphaned_resume_chunks`]): breaking on the first missing id is
+/// already the cheapest possible short-circuit for the "nothing here" case
+/// — an absent chunk 0 is itself the first miss, so the loop below exits
+/// after exactly one probe.
 async fn collect_contiguous_chunks(set: &ChunkSet, parent_dir: &Path) -> (Vec<PathBuf>, u64) {
     let mut chunk_paths = Vec::new();
     let mut total_size = 0u64;
@@ -199,6 +205,29 @@ pub async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo) -> an
 ///
 /// Deletes only exact paths computed via [`ChunkSet::path_in`] — never a
 /// directory sweep (`scripts/check-no-dir-sweep-delete.sh`, #558).
+///
+/// # Sentinel gate
+///
+/// This runs on essentially every `detect_resume_point` call (up to 3x per
+/// call — see the branches below), so its cost has to be bounded for the
+/// overwhelmingly common case where there is no legacy chunk set at all.
+/// Chunk id 0 is checked first: a legacy download always writes id 0 first,
+/// so its absence means there is nothing here to clean up, and the rest of
+/// [`CHUNK_SCAN_CEILING`] is skipped entirely rather than attempting up to
+/// 10,000 `remove_file` calls that all resolve to `NotFound`. This mirrors
+/// the sentinel [`log_orphaned_resume_chunks`] already uses for the same
+/// reason.
+///
+/// When chunk 0 IS present, the full ceiling is scanned without breaking on
+/// a hole: an interrupted adaptive/resume download completes chunks out of
+/// order, so a holed set (e.g. `part0`, `part2`, `part5`) is the normal case,
+/// and breaking on the first gap would leak the remainder (#568 C1).
+///
+/// Narrow limitation, shared with `log_orphaned_resume_chunks`: a set that
+/// has lost chunk 0 specifically (to some other partial cleanup) is not
+/// cleaned by this pass. That trade is acceptable — it bounds the cost of
+/// the common "nothing here" case to a single syscall, and a legacy chunk
+/// set missing its first chunk is itself an unusual, already-degraded state.
 async fn cleanup_old_chunks(output_path: &Path) {
     let Ok(set) = ChunkSet::legacy(output_path) else {
         return;
@@ -206,7 +235,14 @@ async fn cleanup_old_chunks(output_path: &Path) {
     let parent_dir = output_path.parent().unwrap_or_else(|| Path::new("."));
 
     let mut deleted = 0;
-    for chunk_id in 0..CHUNK_SCAN_CEILING {
+    let sentinel = set.path_in(parent_dir, 0);
+    match tokio::fs::remove_file(&sentinel).await {
+        Ok(()) => deleted += 1,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
+        Err(e) => debug!("Failed to remove legacy chunk {}: {e}", sentinel.display()),
+    }
+
+    for chunk_id in 1..CHUNK_SCAN_CEILING {
         let chunk_path = set.path_in(parent_dir, chunk_id);
         // Attempt the delete directly instead of probing with a synchronous
         // `exists()` first: `NotFound` tells us exactly what the probe

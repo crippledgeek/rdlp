@@ -309,6 +309,99 @@ mod resume_compatibility_tests {
         }
     }
 
+    /// #571 MEDIUM follow-up: `cleanup_old_chunks` gates its
+    /// [`resume::CHUNK_SCAN_CEILING`]-wide scan on chunk 0's presence (same
+    /// sentinel as `log_orphaned_resume_chunks`), but MUST NOT reintroduce
+    /// break-on-first-hole *within* a set that does exist — an interrupted
+    /// parallel download completes chunks out of order, so `part0`, `part2`,
+    /// `part5` present with `part1`/`part3`/`part4` missing is the normal
+    /// shape, not evidence the set ends at `part0`. A break-on-first-miss
+    /// scan would only remove `part0` here; the fix must remove all three.
+    #[tokio::test]
+    async fn test_cleanup_legacy_chunks_across_holes_when_chunk_zero_present() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+
+        let complete_data = vec![7u8; 4096];
+        tokio::fs::write(&output_path, &complete_data)
+            .await
+            .unwrap();
+
+        tokio::fs::write(temp_dir.path().join("video.mp4.part0"), &[1u8; 64])
+            .await
+            .unwrap();
+        // part1 deliberately absent.
+        tokio::fs::write(temp_dir.path().join("video.mp4.part2"), &[2u8; 64])
+            .await
+            .unwrap();
+        // part3, part4 deliberately absent.
+        tokio::fs::write(temp_dir.path().join("video.mp4.part5"), &[3u8; 64])
+            .await
+            .unwrap();
+
+        let orchestrator = create_test_orchestrator();
+        let resume_offset = orchestrator
+            .detect_resume_point(&output_path, Some(4096))
+            .await
+            .unwrap();
+
+        assert_eq!(resume_offset, 4096);
+        assert!(
+            !temp_dir.path().join("video.mp4.part0").exists(),
+            "part0 should have been cleaned up"
+        );
+        assert!(
+            !temp_dir.path().join("video.mp4.part2").exists(),
+            "part2 should have been cleaned up despite the hole at part1"
+        );
+        assert!(
+            !temp_dir.path().join("video.mp4.part5").exists(),
+            "part5 should have been cleaned up despite the holes at part3/part4"
+        );
+    }
+
+    /// The chunk-0 sentinel must short-circuit the full scan when chunk 0 is
+    /// absent: a legacy set that never wrote id 0 is not a real set to clean
+    /// up, and later ids belonging to some other (foreign) file must survive
+    /// untouched. This is the observable side effect of the short-circuit —
+    /// with the gate skipped, `cleanup_old_chunks` would fall through to the
+    /// unconditional `0..CHUNK_SCAN_CEILING` loop and delete these files too.
+    #[tokio::test]
+    async fn test_cleanup_short_circuits_when_chunk_zero_absent() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+
+        let complete_data = vec![7u8; 4096];
+        tokio::fs::write(&output_path, &complete_data)
+            .await
+            .unwrap();
+
+        // part0 deliberately absent -- part1/part2 exist but must NOT be
+        // reached by the scan once the chunk-0 sentinel gate is in place.
+        tokio::fs::write(temp_dir.path().join("video.mp4.part1"), &[1u8; 64])
+            .await
+            .unwrap();
+        tokio::fs::write(temp_dir.path().join("video.mp4.part2"), &[2u8; 64])
+            .await
+            .unwrap();
+
+        let orchestrator = create_test_orchestrator();
+        let resume_offset = orchestrator
+            .detect_resume_point(&output_path, Some(4096))
+            .await
+            .unwrap();
+
+        assert_eq!(resume_offset, 4096);
+        assert!(
+            temp_dir.path().join("video.mp4.part1").exists(),
+            "part1 must survive: the chunk-0 sentinel gate should skip the scan entirely"
+        );
+        assert!(
+            temp_dir.path().join("video.mp4.part2").exists(),
+            "part2 must survive: the chunk-0 sentinel gate should skip the scan entirely"
+        );
+    }
+
     /// A foreign file that merely shares the output file's prefix must never
     /// be deleted by chunk cleanup — cleanup only removes exact computed
     /// chunk paths, never a directory sweep.
