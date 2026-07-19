@@ -77,7 +77,7 @@ DELETE='remove_file|remove_dir'
 # Scan one directory tree; echo any offending files. Shared by the real run and
 # the self-test so the self-test exercises the SAME matcher, not a copy of it.
 scan() {
-    local root="$1" file prod
+    local file prod
     while IFS= read -r file; do
         # Exact match, not substring: a substring test would let a new file whose
         # path contains an allowlisted path slip through unexamined.
@@ -94,8 +94,14 @@ scan() {
             && printf '%s' "$prod" | grep -qE "$DELETE"; then
             printf '%s\n' "$file"
         fi
-    done < <(find "$root" -name '*.rs' -type f)
+    done < <(find "$@" -name '*.rs' -type f)
 }
+
+# The one place the scan scope is defined. `crates/*/src` deliberately excludes
+# `crates/*/tests/` — an integration test has no `#[cfg(test)]` attribute (the
+# whole file is test code), so the stripping above would not apply and a
+# legitimate TempDir-cleanup test would be flagged as a #558 violation.
+SCAN_ROOTS=(crates/*/src)
 
 if [ "$SELF_TEST" -eq 1 ]; then
     tmp=$(mktemp -d)
@@ -116,14 +122,15 @@ FIXTURE
     exit 1
 fi
 
-# Guard against scanning nothing and calling it a pass.
-file_count=$(find crates/*/src -name '*.rs' -type f | wc -l)
+# Guard against scanning nothing and calling it a pass. Counted over the SAME
+# roots the scan walks, so the reported number is the number actually examined.
+file_count=$(find "${SCAN_ROOTS[@]}" -name '*.rs' -type f | wc -l)
 if [ "$file_count" -eq 0 ]; then
     echo "ERROR: found no .rs files under crates/*/src — refusing to report OK."
     exit 1
 fi
 
-violations=$(scan "crates")
+violations=$(scan "${SCAN_ROOTS[@]}")
 
 if [ -n "$violations" ]; then
     echo "ERROR: directory enumeration co-located with file deletion:"

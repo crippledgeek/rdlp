@@ -23,6 +23,19 @@ for script in scripts/check-*.sh; do
     fi
 done
 
+# A gate passing is not the same as a gate still working. The dir-sweep gate is
+# a textual matcher that could rot into a no-op, so verify it still fires --
+# otherwise the local checklist would be weaker than CI, which is the asymmetry
+# this aggregate exists to close.
+printf '%-44s' "check-no-dir-sweep-delete --self-test"
+if output=$(bash scripts/check-no-dir-sweep-delete.sh --self-test 2>&1); then
+    echo "OK"
+else
+    echo "FAILED"
+    printf '%s\n' "$output" | sed 's/^/    /'
+    FAILED=1
+fi
+
 if [ "$FAILED" -eq 1 ]; then
     echo ""
     echo "One or more invariant gates failed."

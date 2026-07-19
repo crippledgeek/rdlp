@@ -185,13 +185,33 @@ async fn foreign_part_files_survive_an_episode_download() {
         None,
     );
 
-    let _ = orch
+    let result = orch
         .download_from_info_to_dir(&info, false, dir.path(), &[], None, None)
         .await;
 
-    // The assertions are about the foreign files, not the download's outcome:
-    // the sweep ran before the download, so it destroyed these even on paths
-    // where the download itself later failed.
+    // Reachability guard. The foreign-file assertions below are deliberately
+    // independent of the download's outcome — the sweep ran BEFORE the
+    // download, so it destroyed these even when the download later failed. But
+    // that independence means all three would pass vacuously if a future change
+    // made this call bail BEFORE the former sweep site, so pin how far we got.
+    //
+    // The download cannot actually succeed here: mockito serves on loopback and
+    // `validate_url_security` rejects private hosts for format URLs. That
+    // rejection is itself the proof we need — it happens at download dispatch,
+    // which is downstream of where the sweep ran (`episode.rs`, right after the
+    // output path was computed). An earlier bail-out would surface as a
+    // different variant and fail this assertion.
+    let err = result.expect_err("loopback format URL must be rejected by the SSRF gate");
+    assert!(
+        matches!(
+            err,
+            crate::orchestrator::errors::OrchestratorError::DownloadFailed(_)
+        ),
+        "expected to reach download dispatch (downstream of the old sweep site); \
+         a different error means this test no longer exercises that path and the \
+         assertions below are vacuous. Got: {err:?}"
+    );
+
     assert!(
         foreign_part.exists(),
         "a foreign .part1 file must survive — deleting it is #558"
