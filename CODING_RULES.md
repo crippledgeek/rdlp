@@ -440,8 +440,23 @@ Before committing, ensure:
 - ✅ `cargo test` passes
 - ✅ `cargo clippy` has zero warnings
 - ✅ `cargo fmt` has been run
+- ✅ `bash scripts/check-all.sh` passes (the invariant gates — see below)
 - ✅ No secrets or credentials in code
 - ✅ Documentation updated if API changed
+
+### Invariant Gates
+
+`scripts/check-*.sh` enforce invariants the compiler cannot: no external CLI
+spawning, URL redaction in logs, WIT contract drift, TypeScript enum drift, and
+no deletion of files discovered by directory scan (#558). Run them all with:
+
+```bash
+bash scripts/check-all.sh
+```
+
+Each script is also wired into `.github/workflows/ci.yml`. Run the aggregate
+locally before pushing — a gate that only exists in CI is a gate that does not
+run when CI is dormant.
 
 ## Documentation Standards
 

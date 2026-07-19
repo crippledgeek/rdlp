@@ -222,57 +222,6 @@ impl Orchestrator {
             Err(e) => Err(classify_pipeline_err(&e)),
         }
     }
-
-    /// Clean up leftover HLS segment files from interrupted downloads
-    ///
-    /// When HLS downloads are interrupted via Ctrl+C, segment files like
-    /// `filename.part0`, `filename.part1`, etc. may be left behind.
-    /// This function removes them before starting a new download.
-    pub(super) async fn cleanup_leftover_segments(&self, dir: &std::path::Path, base_name: &str) {
-        if !dir.exists() {
-            return;
-        }
-
-        let mut entries = match tokio::fs::read_dir(dir).await {
-            Ok(entries) => entries,
-            Err(e) => {
-                log::warn!(
-                    "cleanup_leftover_segments: could not enumerate {} ({e}); \
-                     stale .partN files may persist and confuse the next download's \
-                     resume detection",
-                    dir.display()
-                );
-                return;
-            }
-        };
-
-        let mut deleted = 0;
-        while let Ok(Some(entry)) = entries.next_entry().await {
-            let path = entry.path();
-            let Some(filename) = path.file_name().and_then(|f| f.to_str()) else {
-                continue;
-            };
-
-            // Match pattern: base_name.part{number}
-            if !filename.starts_with(base_name) || !filename.contains(".part") {
-                continue;
-            }
-
-            // Verify it's a segment file (has numeric suffix after .part)
-            if let Some(part_idx) = filename.rfind(".part") {
-                let suffix = &filename[part_idx + 5..];
-                if suffix.chars().all(|c| c.is_ascii_digit())
-                    && tokio::fs::remove_file(&path).await.is_ok()
-                {
-                    deleted += 1;
-                }
-            }
-        }
-
-        if deleted > 0 {
-            debug!(deleted; "Cleaned up leftover segment files");
-        }
-    }
 }
 
 #[cfg(test)]
