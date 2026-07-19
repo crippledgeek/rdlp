@@ -30,28 +30,21 @@ use rdlp_types::ContainerFormat;
 
 mod common;
 use common::{
-    FIXTURE_FAILED, MsgOptions, build_jpeg_fixture, build_video_fixture, ffmpeg_cli_available,
-    make_msg,
+    FIXTURE_FAILED, build_jpeg_fixture, build_video_fixture, ffmpeg_cli_available, make_msg, opts,
 };
 
-/// Every test here post-processes a USER-OWNED local file.
-fn borrowed_opts() -> MsgOptions {
-    MsgOptions {
-        borrowing: true,
-        original_stem: "myvideo",
-        ..MsgOptions::default()
-    }
+/// A run over the user's OWN local file.
+fn borrowed_opts() -> common::MsgOptions {
+    opts("myvideo", true)
 }
 
-/// The download path, for the regression guard: rdlp owns the sidecar.
-fn owned_opts() -> MsgOptions {
-    MsgOptions {
-        original_stem: "myvideo",
-        ..MsgOptions::default()
-    }
+/// A run over a file rdlp downloaded, sidecar included.
+fn owned_opts() -> common::MsgOptions {
+    opts("myvideo", false)
 }
 
-/// The embed-success path (`thumbnail.rs` ~line 546): an mp4 CAN carry the
+/// The embed-success path (`thumbnail.rs`'s `mark_temp(path)` after a
+/// successful embed): an mp4 CAN carry the
 /// thumbnail, so the embed runs and then cleans up the sidecar. With a
 /// borrowed input that sidecar is the user's own file. Fails against the
 /// unpatched code, which deletes it.
@@ -86,7 +79,8 @@ async fn embed_path_never_deletes_a_user_owned_sidecar() {
     );
 }
 
-/// The keep-container guard path (`thumbnail.rs` ~line 455, added by #548 and
+/// The keep-container guard path (`ThumbnailStage::process`'s early return
+/// for an explicitly-requested container, added by #548 and
 /// widened by #551): `.ts` cannot carry a thumbnail, so the guard returns
 /// early and cleans up the sidecar on the way out. Same data loss, different
 /// branch — both sites need the check.
@@ -185,10 +179,16 @@ async fn downloaded_sidecar_is_still_cleaned_up_when_not_borrowed() {
     );
 }
 
-/// `--write-thumbnail` retains the sidecar on the borrowed path too (it must
-/// never have been a deletion candidate in the first place).
+/// Pins the OTHER half of the embed-path gate: `--write-thumbnail` must
+/// retain the sidecar on the DOWNLOAD path, where ownership alone would
+/// happily delete it. Deliberately NOT the borrowed path — with
+/// `borrowing: true` the ownership term already makes
+/// `!write_thumbnail && is_disposable()` false, so the assertion holds no
+/// matter what the `write_thumbnail` term does, and deleting that term from
+/// the embed-success site leaves the whole suite green (verified by
+/// mutation — the same trap that was caught in the subtitle suite).
 #[tokio::test]
-async fn write_thumbnail_retains_user_owned_sidecar() {
+async fn write_thumbnail_retains_downloaded_sidecar() {
     if !ffmpeg_cli_available() {
         eprintln!("[SKIP] ffmpeg CLI not available");
         return;
@@ -207,7 +207,7 @@ async fn write_thumbnail_retains_user_owned_sidecar() {
         write_thumbnail: true,
         ..PostProcess::default()
     };
-    let msg = make_msg(vec![media], config, borrowed_opts());
+    let msg = make_msg(vec![media], config, owned_opts());
 
     let mut result = stage.process(msg).await.expect("non-fatal stage");
     result.tracker.cleanup();

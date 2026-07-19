@@ -91,7 +91,7 @@ impl ThumbnailStage {
     /// capability matter — `mp4ameta`'s own `ftyp` parsing
     /// (`atom/ftyp.rs:13`) only errors when the atom is entirely missing, so
     /// a `.3gp` file would very likely be accepted if this predicate were
-    /// ever consulted for one. It never is: the call site (~line 478) asks
+    /// ever consulted for one. It never is: the `write_covr_atom` call site asks
     /// this question using the POST-REMUX extension, and `ThreeGp` fails
     /// `rdlp_ffmpeg::supports_thumbnail_embed`, so any `.3gp` input is
     /// auto-remuxed to `.mp4` before `supports_covr_atom` is ever reached —
