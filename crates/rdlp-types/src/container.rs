@@ -17,19 +17,19 @@ pub enum ContainerFormat {
     #[strum(serialize = "mp4")]
     Mp4,
     /// Matroska — supports all codecs, efficient cues index
-    #[strum(serialize = "mkv", serialize = "matroska")]
+    #[strum(to_string = "mkv", serialize = "matroska")]
     Mkv,
     /// Web-optimized, VP8/VP9/AV1 + Opus/Vorbis
     #[strum(serialize = "webm")]
     WebM,
     /// Apple `QuickTime`, good for editing
-    #[strum(serialize = "mov", serialize = "quicktime")]
+    #[strum(to_string = "mov", serialize = "quicktime")]
     Mov,
     /// MPEG-4 Part 14, video variant (iTunes video) — audio-only sibling is [`Self::M4a`]
     #[strum(serialize = "m4v")]
     M4v,
     /// MPEG Transport Stream, broadcast/streaming
-    #[strum(serialize = "ts", serialize = "mpegts")]
+    #[strum(to_string = "ts", serialize = "mpegts")]
     Ts,
     /// Flash Video, legacy format
     #[strum(serialize = "flv")]
@@ -38,16 +38,16 @@ pub enum ContainerFormat {
     #[strum(serialize = "avi")]
     Avi,
     /// 3GPP mobile video
-    #[strum(serialize = "3gp", serialize = "3gpp")]
+    #[strum(to_string = "3gp", serialize = "3gpp")]
     ThreeGp,
     /// MPEG-1/2 program stream
-    #[strum(serialize = "mpg", serialize = "mpeg")]
+    #[strum(to_string = "mpg", serialize = "mpeg")]
     Mpg,
     /// Flash Video (MP4 variant)
     #[strum(serialize = "f4v")]
     F4v,
     /// Advanced Streaming Format / Windows Media
-    #[strum(serialize = "asf", serialize = "wmv", serialize = "wma")]
+    #[strum(to_string = "asf", serialize = "wmv", serialize = "wma")]
     Asf,
     /// Material eXchange Format (broadcast/professional)
     #[strum(serialize = "mxf")]
@@ -76,7 +76,7 @@ pub enum ContainerFormat {
     #[strum(serialize = "mp3")]
     Mp3,
     /// Waveform Audio (PCM)
-    #[strum(serialize = "wav", serialize = "wave")]
+    #[strum(to_string = "wav", serialize = "wave")]
     Wav,
     /// Free Lossless Audio Codec
     #[strum(serialize = "flac")]
@@ -85,7 +85,7 @@ pub enum ContainerFormat {
     #[strum(serialize = "opus")]
     Opus,
     /// Raw ADTS AAC
-    #[strum(serialize = "aac", serialize = "adts")]
+    #[strum(to_string = "aac", serialize = "adts")]
     Aac,
     /// Audio Interchange File Format (Apple)
     #[strum(serialize = "aiff", serialize = "aif")]
@@ -94,7 +94,7 @@ pub enum ContainerFormat {
     #[strum(serialize = "mka")]
     Mka,
     /// `WavPack` lossless
-    #[strum(serialize = "wv", serialize = "wavpack")]
+    #[strum(to_string = "wv", serialize = "wavpack")]
     Wv,
     /// Core Audio Format (Apple)
     #[strum(serialize = "caf")]
@@ -185,52 +185,71 @@ mod tests {
         }
     }
 
+    /// `Display` must render the file extension, not an alias.
+    ///
+    /// strum picks the longest `serialize` value when no `to_string` is set, so
+    /// without an explicit `to_string` this silently returns `"matroska"` for
+    /// `Mkv`, `"quicktime"` for `Mov`, and so on (#545). Anything that formats a
+    /// `ContainerFormat` into a filename or an `FFmpeg` extension probe then gets a
+    /// string no muxer lookup recognises.
     #[test]
-    fn test_alias_parsing() {
-        assert_eq!(
-            "matroska".parse::<ContainerFormat>().unwrap(),
-            ContainerFormat::Mkv
-        );
-        assert_eq!(
-            "quicktime".parse::<ContainerFormat>().unwrap(),
-            ContainerFormat::Mov
-        );
-        assert_eq!(
-            "mpegts".parse::<ContainerFormat>().unwrap(),
-            ContainerFormat::Ts
-        );
-        assert_eq!(
-            "3gpp".parse::<ContainerFormat>().unwrap(),
-            ContainerFormat::ThreeGp
-        );
-        assert_eq!(
-            "mpeg".parse::<ContainerFormat>().unwrap(),
-            ContainerFormat::Mpg
-        );
-        assert_eq!(
-            "wmv".parse::<ContainerFormat>().unwrap(),
-            ContainerFormat::Asf
-        );
-        assert_eq!(
-            "wma".parse::<ContainerFormat>().unwrap(),
-            ContainerFormat::Asf
-        );
-        assert_eq!(
-            "wave".parse::<ContainerFormat>().unwrap(),
-            ContainerFormat::Wav
-        );
-        assert_eq!(
-            "adts".parse::<ContainerFormat>().unwrap(),
-            ContainerFormat::Aac
-        );
-        assert_eq!(
-            "aif".parse::<ContainerFormat>().unwrap(),
-            ContainerFormat::Aiff
-        );
-        assert_eq!(
-            "wavpack".parse::<ContainerFormat>().unwrap(),
-            ContainerFormat::Wv
-        );
+    fn test_display_is_the_file_extension() {
+        for fmt in ContainerFormat::iter() {
+            assert_eq!(
+                fmt.to_string(),
+                fmt.as_ext(),
+                "Display for {fmt:?} must equal as_ext()"
+            );
+        }
+    }
+
+    /// Every alias must still parse after `to_string` is added.
+    ///
+    /// strum unions `to_string` into the `FromStr` set rather than replacing the
+    /// `serialize` list, so this holds — but it is the exact way the #545 fix
+    /// could have silently narrowed the accepted CLI vocabulary, so it is pinned.
+    #[test]
+    fn test_every_alias_still_parses() {
+        const ALIASES: &[(&str, ContainerFormat)] = &[
+            ("matroska", ContainerFormat::Mkv),
+            ("quicktime", ContainerFormat::Mov),
+            ("mpegts", ContainerFormat::Ts),
+            ("3gpp", ContainerFormat::ThreeGp),
+            ("mpeg", ContainerFormat::Mpg),
+            ("wmv", ContainerFormat::Asf),
+            ("wma", ContainerFormat::Asf),
+            ("wave", ContainerFormat::Wav),
+            ("adts", ContainerFormat::Aac),
+            ("aif", ContainerFormat::Aiff),
+            ("wavpack", ContainerFormat::Wv),
+        ];
+
+        for (alias, expected) in ALIASES {
+            assert_eq!(
+                alias.parse::<ContainerFormat>().ok(),
+                Some(*expected),
+                "alias '{alias}' must keep parsing"
+            );
+            // Case-insensitivity must cover the alias set too.
+            assert_eq!(
+                alias.to_uppercase().parse::<ContainerFormat>().ok(),
+                Some(*expected),
+                "alias '{alias}' must keep parsing case-insensitively"
+            );
+        }
+    }
+
+    /// Each variant's own extension parses back to that variant.
+    #[test]
+    fn test_as_ext_roundtrips() {
+        for fmt in ContainerFormat::iter() {
+            let ext = fmt.as_ext();
+            assert_eq!(
+                ext.parse::<ContainerFormat>().ok(),
+                Some(fmt),
+                "as_ext() '{ext}' must parse back to {fmt:?}"
+            );
+        }
     }
 
     #[test]
