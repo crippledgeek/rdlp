@@ -251,29 +251,39 @@ impl ThumbnailStage {
     /// decision**, not an `FFmpeg`-verified capability like
     /// [`Self::mkv_attachment_renders_natively`]'s Matroska read-back table.
     ///
-    /// `gif`/`jpeg`/`png`/`tiff` are accepted outright — they were the
-    /// baseline behavior before #549's `> 0` widening (jpeg/png always
-    /// embedded natively via the universal `MJPEG`/`PNG` baseline in
-    /// `container_accepts_image_codec`; gif/tiff were previously transcoded
-    /// under the stricter `== 1` gate, so passing them through here is a
-    /// deliberate, accepted widening, not an oversight). `bmp`/`webp` stay
-    /// normalized: #530 is the concrete precedent for "a muxer/tag mechanism
-    /// answering yes" not implying "a player renders it", and nothing in
-    /// this codebase has verified an `ID3v2` reader displaying a bmp/webp
-    /// `APIC` frame. A read failure or unrecognized signature answers
-    /// `false`, the same safe direction.
+    /// Only `jpeg`/`png` are accepted; everything else is normalized.
+    ///
+    /// ID3v2.3 §4.15 / ID3v2.4 §4.14 (id3.org): *"The 'image/png' or
+    /// 'image/jpeg' picture format should be used when interoperability is
+    /// wanted."* Advisory rather than mandatory, but every maintained reader
+    /// converges on it — `TagLib`'s `AttachedPictureFrame` docs restate it
+    /// verbatim, `mutagen` and `jaudiotagger` expose only JPEG/PNG MIME
+    /// constants, and `Mp3tag`'s "Adjust Cover" offers exactly Original,
+    /// JPEG, PNG as conversion targets. No surveyed tool treats `gif`/`tiff`
+    /// as a safer tier than `bmp`/`webp`.
+    ///
+    /// An earlier version of this predicate did, passing `gif`/`tiff`
+    /// through. That tier was imported from `FFmpeg`'s `matroskadec.c`
+    /// `mkv_image_mime_tags[]` (#530), which is a Matroska **decoder** table
+    /// resolving attachments into `attached_pic` streams. The mp3 muxer has
+    /// no analogue: it writes whatever MIME string and bytes it is handed,
+    /// so acceptance rests entirely on third-party `ID3v2` readers that have
+    /// no such table. The carve-out does not transfer between the two
+    /// mechanisms, so it is not reused here.
+    ///
+    /// `FFmpeg` muxes all six formats as valid, correctly-typed `APIC`
+    /// frames — verified, including read-back by a non-`FFmpeg` parser. That
+    /// establishes well-formedness, not that a player decodes the payload;
+    /// #530 is the precedent for those being different questions. A read
+    /// failure or unrecognized signature answers `false`, the same safe
+    /// direction.
     async fn mp3_apic_renders_natively(thumbnail_file: &Path) -> bool {
         let Ok(bytes) = tokio::fs::read(thumbnail_file).await else {
             return false;
         };
         matches!(
             rdlp_types::sniff_thumbnail_format(&bytes),
-            Some(
-                ThumbnailFormat::Jpeg
-                    | ThumbnailFormat::Png
-                    | ThumbnailFormat::Gif
-                    | ThumbnailFormat::Tiff
-            )
+            Some(ThumbnailFormat::Jpeg | ThumbnailFormat::Png)
         )
     }
 

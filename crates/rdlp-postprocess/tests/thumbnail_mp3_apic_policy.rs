@@ -1,13 +1,23 @@
-//! #549 follow-up: mp3's `ID3v2` `APIC` cover embed must mirror the #530
-//! Matroska policy — `container_accepts_image_codec`'s `> 0` fix means mp3's
-//! own `query_codec` callback now reports gif/jpeg/png/tiff/bmp/webp as
-//! representable (it answers via the shared `APIC` tag rather than a bare
-//! `1`), but that only answers "can the muxer store these bytes", not "will
-//! an `ID3v2` reader display them as a cover". Nothing in this codebase
-//! verifies a player renders a bmp/webp `APIC` frame, so mp3 stays
-//! conservative in the same direction #530 established for Matroska:
-//! gif/jpeg/png/tiff pass through untouched, bmp/webp are normalized to
-//! mjpeg first.
+//! #549 follow-up: only `jpeg`/`png` embed natively as mp3 `ID3v2` `APIC`
+//! covers; `gif`, `tiff`, `bmp` and `webp` are all normalized to mjpeg first.
+//!
+//! `container_accepts_image_codec`'s `> 0` fix means mp3's `query_codec`
+//! callback reports all six as representable (it answers via the shared
+//! `APIC` tag rather than a bare `1`). But that answers only "can the muxer
+//! store these bytes", not "will an `ID3v2` reader display them as a cover" —
+//! the distinction #530 established for Matroska.
+//!
+//! ID3v2.3 §4.15 / ID3v2.4 §4.14 (id3.org): *"The 'image/png' or
+//! 'image/jpeg' picture format should be used when interoperability is
+//! wanted."* Advisory, but every maintained reader converges on it: `TagLib`
+//! restates it verbatim, `mutagen`/`jaudiotagger` expose only JPEG/PNG MIME
+//! constants, and `Mp3tag`'s "Adjust Cover" offers only Original/JPEG/PNG.
+//!
+//! An earlier revision passed `gif`/`tiff` through, inheriting the tier from
+//! `FFmpeg`'s `matroskadec.c` `mkv_image_mime_tags[]`. That is a Matroska
+//! *decoder* table for turning attachments into `attached_pic` streams; the
+//! mp3 muxer has none, so the carve-out does not transfer and no surveyed
+//! reader treats gif/tiff as safer than bmp/webp.
 //!
 //! Self-skips when the system `ffmpeg` CLI is absent (used only to build the
 //! image/mp3 fixtures).
@@ -172,29 +182,51 @@ async fn process_normalizes_webp_thumbnail_into_mp3_as_mjpeg() {
     );
 }
 
-/// Positive: gif/tiff/jpeg/png must pass through into mp3 WITHOUT
-/// transcoding — the mp3 carve-out must not over-normalize formats the
-/// baseline/query already accept.
+/// gif and tiff are normalized too. They were briefly passed through on the
+/// strength of `FFmpeg`'s `matroskadec.c` `mkv_image_mime_tags[]` table
+/// (#530), but that is a Matroska *decoder* table for resolving attachments
+/// into `attached_pic` streams; the mp3 muxer has no equivalent, so the
+/// carve-out does not transfer to `ID3v2` `APIC`. No surveyed reader
+/// (`TagLib`, `mutagen`, `jaudiotagger`, `Mp3tag`) treats gif/tiff as safer
+/// than bmp/webp — all four sit outside the spec's recommended set.
 #[tokio::test]
-async fn process_embeds_gif_tiff_jpeg_png_thumbnails_into_mp3_without_normalizing() {
+async fn process_normalizes_gif_and_tiff_thumbnails_into_mp3_as_mjpeg() {
     if !ffmpeg_cli_available() {
         eprintln!("[SKIP] ffmpeg CLI not available");
         return;
     }
-    for (format, expected_codec) in [
-        ("gif", "gif"),
-        ("tiff", "tiff"),
-        ("jpg", "mjpeg"),
-        ("png", "png"),
-    ] {
+    for format in ["gif", "tiff"] {
+        let Some(codec) = thumbnail_codec_in_mp3(format).await else {
+            eprintln!("[SKIP] fixture build failed for {format}");
+            continue;
+        };
+        assert_eq!(
+            codec, "mjpeg",
+            "{format} under mp3 must be normalized to mjpeg — ID3v2.3 §4.15 / \
+             ID3v2.4 §4.14 recommend image/png or image/jpeg for \
+             interoperability, and no surveyed ID3v2 reader treats {format} as \
+             a safer tier than bmp/webp"
+        );
+    }
+}
+
+/// Positive: the two formats the `ID3v2` spec actually recommends must pass
+/// through untouched — the policy must not over-normalize those.
+#[tokio::test]
+async fn process_embeds_jpeg_and_png_thumbnails_into_mp3_without_normalizing() {
+    if !ffmpeg_cli_available() {
+        eprintln!("[SKIP] ffmpeg CLI not available");
+        return;
+    }
+    for (format, expected_codec) in [("jpg", "mjpeg"), ("png", "png")] {
         let Some(codec) = thumbnail_codec_in_mp3(format).await else {
             eprintln!("[SKIP] fixture build failed for {format}");
             continue;
         };
         assert_eq!(
             codec, expected_codec,
-            "{format} must embed into mp3 as its own codec, not be \
-             transcoded by the conservative bmp/webp-only carve-out"
+            "{format} is spec-recommended for APIC and must embed natively, \
+             not be transcoded"
         );
     }
 }
