@@ -39,7 +39,7 @@ use rdlp_types::InfoDict;
 use rdlp_types::PostProcess;
 
 pub use registry::TempRegistry;
-pub use sidecar::SidecarOwnership;
+pub use sidecar::{DiscoveredSidecar, SidecarOwnership};
 pub use tracker::FileTracker;
 
 // ---------------------------------------------------------------------------

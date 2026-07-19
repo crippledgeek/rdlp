@@ -19,7 +19,7 @@ use log::{debug, info, warn};
 use rdlp_ffmpeg::{FFmpegRunner, RemuxOptions};
 use rdlp_types::{ContainerFormat, THUMBNAIL_EXTENSIONS, ThumbnailFormat, sniff_thumbnail_format};
 
-use crate::pipeline::{PipelineMessage, PipelineStage, SidecarOwnership};
+use crate::pipeline::{DiscoveredSidecar, PipelineMessage, PipelineStage, SidecarOwnership};
 
 /// Embeds thumbnail into the primary current file.
 ///
@@ -41,7 +41,7 @@ impl ThumbnailStage {
     /// Searches `{parent}/{original_stem}.{ext}` for each `ext` in
     /// [`rdlp_types::THUMBNAIL_EXTENSIONS`]. Also tries the current file's stem
     /// as a fallback.
-    fn find_thumbnail(media_file: &Path, original_stem: &str) -> Option<PathBuf> {
+    fn find_thumbnail(media_file: &Path, original_stem: &str) -> Option<DiscoveredSidecar> {
         let parent = media_file.parent()?;
 
         // Try original_stem first (most accurate after UUID renames).
@@ -50,7 +50,7 @@ impl ThumbnailStage {
             .map(|ext| parent.join(format!("{original_stem}.{ext}")))
             .find(|path| path.exists())
         {
-            return Some(path);
+            return Some(DiscoveredSidecar::new(path));
         }
 
         // Fallback: try current file stem.
@@ -59,7 +59,8 @@ impl ThumbnailStage {
             return THUMBNAIL_EXTENSIONS
                 .iter()
                 .map(|ext| parent.join(format!("{current_stem}.{ext}")))
-                .find(|path| path.exists());
+                .find(|path| path.exists())
+                .map(DiscoveredSidecar::new);
         }
 
         None
@@ -422,10 +423,10 @@ impl PipelineStage for ThumbnailStage {
             // that hits this guard with the default `--write-thumbnail=false`
             // leaves a stray sidecar image next to the kept-container output.
             if !msg.config.write_thumbnail
-                && SidecarOwnership::of(&msg).is_disposable()
                 && let Some(sidecar) = Self::find_thumbnail(&media_file, &msg.original_stem)
+                && let Some(path) = sidecar.into_disposable(SidecarOwnership::of(&msg))
             {
-                msg.tracker.mark_temp(sidecar);
+                msg.tracker.mark_temp(path);
             }
 
             return Ok(msg);
@@ -465,7 +466,7 @@ impl PipelineStage for ThumbnailStage {
         };
 
         // Use original_stem for thumbnail discovery (per architecture constraint 5).
-        let Some(thumbnail_file) = Self::find_thumbnail(&media_file, &msg.original_stem) else {
+        let Some(thumbnail_sidecar) = Self::find_thumbnail(&media_file, &msg.original_stem) else {
             debug!(
                 "ThumbnailStage: no thumbnail file found for stem '{}'",
                 msg.original_stem
@@ -479,12 +480,12 @@ impl PipelineStage for ThumbnailStage {
 
         info!(
             "ThumbnailStage: embedding thumbnail {} into {}",
-            thumbnail_file.display(),
+            thumbnail_sidecar.path().display(),
             media_file.display()
         );
 
         let embed_source = self
-            .normalize_thumbnail_for_embed(&mut msg, &extension, &thumbnail_file)
+            .normalize_thumbnail_for_embed(&mut msg, &extension, thumbnail_sidecar.path())
             .await;
 
         let temp_output = msg.tracker.temp_path(&media_file, &extension);
@@ -546,8 +547,11 @@ impl PipelineStage for ThumbnailStage {
                 // Clean up thumbnail unless --write-thumbnail was requested —
                 // and never when it is the user's own file sitting next to a
                 // borrowed input (see `sidecar_is_disposable`).
-                if !msg.config.write_thumbnail && SidecarOwnership::of(&msg).is_disposable() {
-                    msg.tracker.mark_temp(thumbnail_file);
+                if !msg.config.write_thumbnail
+                    && let Some(path) =
+                        thumbnail_sidecar.into_disposable(SidecarOwnership::of(&msg))
+                {
+                    msg.tracker.mark_temp(path);
                 }
             }
             Err(e) => {
@@ -754,7 +758,7 @@ mod tests {
             let media = dir.path().join("clip.rdlp-tmp-abc123.mp4");
             let result = ThumbnailStage::find_thumbnail(&media, "clip");
             assert_eq!(
-                result,
+                result.map(|s| s.path().to_path_buf()),
                 Some(thumb),
                 "find_thumbnail must discover a .{ext} sidecar via original_stem"
             );
@@ -772,7 +776,7 @@ mod tests {
 
         let media = dir.path().join("original-title.rdlp-tmp-abc123.mp4");
         let result = ThumbnailStage::find_thumbnail(&media, "original-title");
-        assert_eq!(result, Some(thumb));
+        assert_eq!(result.map(|s| s.path().to_path_buf()), Some(thumb));
     }
 
     /// Slice 2 (#406 Task 3): `original_stem` is the CLEAN stem (marker-stripped
@@ -799,7 +803,7 @@ mod tests {
 
         let result = ThumbnailStage::find_thumbnail(&seam_media, original_stem);
         assert_eq!(
-            result,
+            result.map(|s| s.path().to_path_buf()),
             Some(thumb),
             "find_thumbnail must find My.Video.jpg via original_stem \
              even when the media file is seam-named"

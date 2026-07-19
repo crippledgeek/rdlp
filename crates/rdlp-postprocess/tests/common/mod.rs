@@ -1,10 +1,12 @@
-//! Shared fixtures for the `ThumbnailStage` integration suites.
+//! Shared fixtures for the `ThumbnailStage` / `SubtitleStage` integration
+//! suites.
 //!
-//! `thumbnail_explicit_container_548.rs` (#548), `..._551.rs` (#551) and
-//! `thumbnail_borrowed_sidecar.rs` each need the same three things: a real
-//! ffmpeg-built media fixture, a real JPEG sidecar, and a `PipelineMessage`
-//! wrapping them. Those helpers were copied per-file as the suites were added;
-//! this module is the single definition.
+//! `thumbnail_explicit_container_548.rs` (#548), `..._551.rs` (#551),
+//! `thumbnail_borrowed_sidecar.rs` and `subtitle_borrowed_sidecar.rs` each need
+//! the same three things: a real ffmpeg-built media fixture, a real image or
+//! subtitle sidecar, and a `PipelineMessage` wrapping them. Those helpers were
+//! copied per-file as the suites were added; this module is the single
+//! definition.
 //!
 //! Real, decodable fixtures are mandatory across all three suites. #548 shipped
 //! tests that passed against UNPATCHED code because their fixtures were
@@ -109,6 +111,22 @@ impl Default for MsgOptions {
             borrowing: false,
             original_stem: "video",
         }
+    }
+}
+
+/// `MsgOptions` for a run over a media file with the given stem, choosing
+/// whether the input is user-owned (`borrowing`) or rdlp-downloaded.
+///
+/// The sidecar suites all need exactly this pair, and BOTH values matter:
+/// a gate of the form `!write_x && ownership.is_disposable()` short-circuits
+/// on ownership, so a test that only ever passes `borrowing: true` cannot pin
+/// the `write_x` half of it (caught in review — all three subtitle tests
+/// stayed green with `!write_subtitles` deleted outright).
+pub fn opts(stem: &'static str, borrowing: bool) -> MsgOptions {
+    MsgOptions {
+        borrowing,
+        original_stem: stem,
+        ..MsgOptions::default()
     }
 }
 

@@ -18,7 +18,51 @@
 //! `SubtitleStage` had the identical defect and no gate at all, which is what
 //! prompted hoisting it.
 
+use std::path::{Path, PathBuf};
+
 use crate::pipeline::PipelineMessage;
+
+/// A companion file located by stem-matching next to the media file.
+///
+/// Wraps the path so its ownership CANNOT be skipped. `FileTracker::mark_temp`
+/// takes a `PathBuf`, so a `DiscoveredSidecar` cannot reach it without first
+/// going through [`Self::into_disposable`] — a stage that forgets to ask who
+/// owns the file gets a type error instead of silently deleting a user's file.
+///
+/// This exists because the convention alone was not enough: the same defect
+/// shipped or nearly shipped three times in one session (#548's keep-container
+/// guard, the thumbnail embed path, and `SubtitleStage`), each time as "a stage
+/// discovers a companion file, then deletes it without asking whose it is".
+/// Two of the three were caught only because a reviewer went looking (#553).
+///
+/// Reading the path for any NON-destructive purpose (embedding, probing,
+/// logging) is unrestricted via [`Self::path`] — the type constrains deletion,
+/// not use.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DiscoveredSidecar(PathBuf);
+
+impl DiscoveredSidecar {
+    /// Wrap a stem-matched companion file whose ownership is not yet known.
+    #[must_use]
+    pub const fn new(path: PathBuf) -> Self {
+        Self(path)
+    }
+
+    /// Borrow the path for non-destructive use.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        &self.0
+    }
+
+    /// Yield a deletable path, but only when rdlp owns the file.
+    ///
+    /// `None` means the file is the user's and must be left alone — the caller
+    /// simply has nothing to mark temp.
+    #[must_use]
+    pub fn into_disposable(self, ownership: SidecarOwnership) -> Option<PathBuf> {
+        ownership.is_disposable().then_some(self.0)
+    }
+}
 
 /// Who owns the sidecar files sitting next to the media file.
 ///
@@ -64,7 +108,8 @@ impl SidecarOwnership {
 
 #[cfg(test)]
 mod tests {
-    use super::SidecarOwnership;
+    use super::{DiscoveredSidecar, SidecarOwnership};
+    use std::path::{Path, PathBuf};
 
     #[test]
     fn rdlp_owned_sidecars_are_disposable() {
@@ -76,5 +121,30 @@ mod tests {
     #[test]
     fn user_owned_sidecars_are_never_disposable() {
         assert!(!SidecarOwnership::UserOwned.is_disposable());
+    }
+
+    #[test]
+    fn rdlp_owned_sidecar_yields_a_deletable_path() {
+        let sidecar = DiscoveredSidecar::new(PathBuf::from("/tmp/video.jpg"));
+        assert_eq!(
+            sidecar.into_disposable(SidecarOwnership::RdlpOwned),
+            Some(PathBuf::from("/tmp/video.jpg"))
+        );
+    }
+
+    /// The data-loss direction: a user-owned sidecar yields NO path, so there
+    /// is nothing the caller could hand to `mark_temp`.
+    #[test]
+    fn user_owned_sidecar_yields_no_deletable_path() {
+        let sidecar = DiscoveredSidecar::new(PathBuf::from("/home/me/myvideo.jpg"));
+        assert_eq!(sidecar.into_disposable(SidecarOwnership::UserOwned), None);
+    }
+
+    /// Non-destructive reads stay unrestricted — the type constrains deletion,
+    /// not use (the embed path still needs to read the image).
+    #[test]
+    fn path_is_readable_without_resolving_ownership() {
+        let sidecar = DiscoveredSidecar::new(PathBuf::from("/tmp/video.jpg"));
+        assert_eq!(sidecar.path(), Path::new("/tmp/video.jpg"));
     }
 }

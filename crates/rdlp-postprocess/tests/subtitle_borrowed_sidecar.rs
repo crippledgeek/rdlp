@@ -20,14 +20,10 @@ use rdlp_postprocess::pipeline::PipelineStage;
 use rdlp_postprocess::{FFmpegRunner, PostProcess, SubtitleStage};
 
 mod common;
-use common::{FIXTURE_FAILED, MsgOptions, build_video_fixture, ffmpeg_cli_available, make_msg};
+use common::{FIXTURE_FAILED, build_video_fixture, ffmpeg_cli_available, make_msg, opts};
 
-fn opts(borrowing: bool) -> MsgOptions {
-    MsgOptions {
-        borrowing,
-        original_stem: "myvideo",
-        ..MsgOptions::default()
-    }
+fn subs_opts(borrowing: bool) -> common::MsgOptions {
+    opts("myvideo", borrowing)
 }
 
 /// The user's own `myvideo.en.srt` next to their own `myvideo.mp4` must
@@ -53,7 +49,7 @@ async fn subtitle_stage_never_deletes_a_user_owned_sidecar() {
         write_subtitles: false,
         ..PostProcess::default()
     };
-    let msg = make_msg(vec![media], config, opts(true));
+    let msg = make_msg(vec![media], config, subs_opts(true));
 
     let mut result = stage.process(msg).await.expect("non-fatal stage");
     result.tracker.cleanup();
@@ -87,7 +83,7 @@ async fn downloaded_subtitle_sidecar_is_still_cleaned_up() {
         write_subtitles: false,
         ..PostProcess::default()
     };
-    let msg = make_msg(vec![media], config, opts(false));
+    let msg = make_msg(vec![media], config, subs_opts(false));
 
     let mut result = stage.process(msg).await.expect("non-fatal stage");
     result.tracker.cleanup();
@@ -98,9 +94,16 @@ async fn downloaded_subtitle_sidecar_is_still_cleaned_up() {
     );
 }
 
-/// `--write-subtitles` retains the user's sidecar too.
+/// Pins the OTHER half of the gate: `--write-subtitles` must retain the
+/// sidecar on the DOWNLOAD path, where ownership alone would happily delete
+/// it. Deliberately NOT the borrowed path — with `borrowing: true` the
+/// ownership term already makes `!write_subtitles && is_disposable()` false,
+/// so the assertion holds no matter what the `write_subtitles` term does, and
+/// deleting that term from the guard leaves the test green (verified by
+/// mutation). A test whose subject is short-circuited before it is reached
+/// tests nothing.
 #[tokio::test]
-async fn write_subtitles_retains_user_owned_sidecar() {
+async fn write_subtitles_retains_downloaded_sidecar() {
     if !ffmpeg_cli_available() {
         eprintln!("[SKIP] ffmpeg CLI not available");
         return;
@@ -119,7 +122,7 @@ async fn write_subtitles_retains_user_owned_sidecar() {
         write_subtitles: true,
         ..PostProcess::default()
     };
-    let msg = make_msg(vec![media], config, opts(true));
+    let msg = make_msg(vec![media], config, subs_opts(false));
 
     let mut result = stage.process(msg).await.expect("non-fatal stage");
     result.tracker.cleanup();
