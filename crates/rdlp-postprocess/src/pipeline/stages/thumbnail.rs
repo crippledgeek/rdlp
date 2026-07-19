@@ -418,7 +418,7 @@ impl PipelineStage for ThumbnailStage {
             // This early return bypasses the normal embed path below, which is
             // the ONLY other place the orchestrator-downloaded thumbnail
             // sidecar is marked temp for cleanup (the embed-success path's own
-            // `mark_temp(thumbnail_file)` below, guarded on the
+            // `thumbnail_sidecar.into_disposable(..)` below, guarded on the
             // same `!write_thumbnail` condition). Without this, every run
             // that hits this guard with the default `--write-thumbnail=false`
             // leaves a stray sidecar image next to the kept-container output.
@@ -546,7 +546,7 @@ impl PipelineStage for ThumbnailStage {
 
                 // Clean up thumbnail unless --write-thumbnail was requested —
                 // and never when it is the user's own file sitting next to a
-                // borrowed input (see `sidecar_is_disposable`).
+                // borrowed input (see `SidecarOwnership`).
                 if !msg.config.write_thumbnail
                     && let Some(path) =
                         thumbnail_sidecar.into_disposable(SidecarOwnership::of(&msg))
@@ -559,6 +559,20 @@ impl PipelineStage for ThumbnailStage {
                 msg.warnings
                     .push(format!("Thumbnail embedding failed: {e}"));
                 msg.tracker.mark_temp(temp_output);
+
+                // The sidecar needs the same disposal as on the success path.
+                // Marking only `temp_output` here left an rdlp-downloaded
+                // thumbnail on disk whenever the embed failed — a disk leak
+                // (found by the pre-push security review of #553), relying on
+                // `TempRegistry`'s stale sweep to eventually collect it.
+                // Ownership still governs: a user's own file is retained,
+                // failure or not.
+                if !msg.config.write_thumbnail
+                    && let Some(path) =
+                        thumbnail_sidecar.into_disposable(SidecarOwnership::of(&msg))
+                {
+                    msg.tracker.mark_temp(path);
+                }
             }
         }
 

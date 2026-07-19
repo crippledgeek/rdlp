@@ -24,10 +24,22 @@ use crate::pipeline::PipelineMessage;
 
 /// A companion file located by stem-matching next to the media file.
 ///
-/// Wraps the path so its ownership CANNOT be skipped. `FileTracker::mark_temp`
-/// takes a `PathBuf`, so a `DiscoveredSidecar` cannot reach it without first
-/// going through [`Self::into_disposable`] — a stage that forgets to ask who
-/// owns the file gets a type error instead of silently deleting a user's file.
+/// Wraps the path so ownership is not skipped by ACCIDENT. The inner field is
+/// private, so the only routine way to obtain a deletable `PathBuf` is
+/// [`Self::into_disposable`]: a stage that forgets to ask who owns the file
+/// gets `error[E0308]: expected PathBuf, found DiscoveredSidecar` from
+/// `FileTracker::mark_temp` rather than silently deleting a user's file.
+///
+/// This is a strong speed bump, NOT a capability boundary — be precise about
+/// which, because this doc is what a future maintainer will trust when
+/// deciding whether they still have to think about ownership. A deliberate
+/// `sidecar.path().to_path_buf()` handed to `mark_temp` still compiles
+/// (verified). What the type buys is that the bypass has to be *written out
+/// explicitly*, where a reviewer can see it, instead of being the default
+/// thing that happens when someone forgets. Closing that last gap would mean
+/// `mark_temp` itself taking a `Disposable` newtype, which would force
+/// wrapping at the legitimate tracker-created callers (`fixup.rs`,
+/// `metadata.rs`) for no further safety — the cost exceeds the benefit.
 ///
 /// This exists because the convention alone was not enough: the same defect
 /// shipped or nearly shipped three times in one session (#548's keep-container

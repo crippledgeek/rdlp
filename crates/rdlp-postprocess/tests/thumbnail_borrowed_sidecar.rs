@@ -179,6 +179,81 @@ async fn downloaded_sidecar_is_still_cleaned_up_when_not_borrowed() {
     );
 }
 
+/// Disk-leak guard on the embed-FAILURE branch (found by the pre-push
+/// security review of #553). The `Err(..)` arm marked the stage's own
+/// `temp_output` temp but never the discovered sidecar, so an rdlp-downloaded
+/// thumbnail that failed to embed was left on disk next to the output.
+///
+/// Deliberately on the DOWNLOAD path: with a user-owned sidecar the correct
+/// behaviour is to retain it, so a borrowed fixture could not distinguish the
+/// leak from the intended retention. The embed is made to fail deterministically
+/// by giving the sidecar a valid image EXTENSION but garbage bytes — nothing
+/// can decode it, so both the transcode and the embed fail.
+#[tokio::test]
+async fn embed_failure_still_cleans_up_a_downloaded_sidecar() {
+    if !ffmpeg_cli_available() {
+        eprintln!("[SKIP] ffmpeg CLI not available");
+        return;
+    }
+    let dir = TempDir::new().unwrap();
+    let media = dir.path().join("myvideo.mp4");
+    build_video_fixture(&media, "mp4").expect(FIXTURE_FAILED);
+    let thumb = dir.path().join("myvideo.jpg");
+    std::fs::write(&thumb, b"not-a-decodable-image").unwrap();
+
+    let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
+    let stage = ThumbnailStage::new(ffmpeg);
+
+    let config = PostProcess {
+        embed_thumbnail: true,
+        write_thumbnail: false,
+        ..PostProcess::default()
+    };
+    let msg = make_msg(vec![media], config, owned_opts());
+
+    let mut result = stage.process(msg).await.expect("non-fatal stage");
+    result.tracker.cleanup();
+
+    assert!(
+        !thumb.exists(),
+        "an rdlp-downloaded sidecar must not be left on disk when the embed fails"
+    );
+}
+
+/// Companion: the same failure on the BORROWED path must still retain the
+/// user's file. This is what stops the leak fix from becoming a data-loss fix
+/// in disguise.
+#[tokio::test]
+async fn embed_failure_still_retains_a_user_owned_sidecar() {
+    if !ffmpeg_cli_available() {
+        eprintln!("[SKIP] ffmpeg CLI not available");
+        return;
+    }
+    let dir = TempDir::new().unwrap();
+    let media = dir.path().join("myvideo.mp4");
+    build_video_fixture(&media, "mp4").expect(FIXTURE_FAILED);
+    let thumb = dir.path().join("myvideo.jpg");
+    std::fs::write(&thumb, b"not-a-decodable-image").unwrap();
+
+    let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
+    let stage = ThumbnailStage::new(ffmpeg);
+
+    let config = PostProcess {
+        embed_thumbnail: true,
+        write_thumbnail: false,
+        ..PostProcess::default()
+    };
+    let msg = make_msg(vec![media], config, borrowed_opts());
+
+    let mut result = stage.process(msg).await.expect("non-fatal stage");
+    result.tracker.cleanup();
+
+    assert!(
+        thumb.exists(),
+        "the user's own sidecar must survive even when the embed fails"
+    );
+}
+
 /// Pins the OTHER half of the embed-path gate: `--write-thumbnail` must
 /// retain the sidecar on the DOWNLOAD path, where ownership alone would
 /// happily delete it. Deliberately NOT the borrowed path — with
