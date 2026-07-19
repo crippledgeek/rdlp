@@ -27,16 +27,24 @@ use super::FFmpegRunner;
 
 /// What to do with a stream's copied codec tag for the target container.
 ///
-/// Decided once, by [`FFmpegRunner::resolve_codec_tag`], and applied by
-/// [`FFmpegRunner::add_stream_copy`] — the single call site for both.
+/// Decided once, by [`FFmpegRunner::resolve_codec_tag`] — the single decision
+/// point every stream-copy call site consults, whether through the safe
+/// wrapper ([`FFmpegRunner::add_stream_copy`]) or a raw-FFI mux path
+/// (`remux_mkv_raw_ffi`, `merge_mkv_raw_ffi`, `embed_thumbnail_mkv_raw_ffi`).
+/// `pub(crate)`: those raw-FFI sites live in sibling modules and need to name
+/// this type to match on the result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum CodecTagAction {
+pub(crate) enum CodecTagAction {
     /// The muxer's codec-tag table has an entry for this codec: keep the
     /// tag `avcodec_parameters_copy` already copied from the source stream.
     Preserve,
-    /// The muxer isn't tag-driven (no codec-tag table at all, e.g.
-    /// MPEG-TS): zeroing has no effect either way; zero for consistency
-    /// with this crate's historical behavior.
+    /// Zero the tag and let `FFmpeg` auto-fill from the muxer's own table.
+    ///
+    /// Two cases reach here: the muxer isn't tag-driven at all (no
+    /// codec-tag table, e.g. MPEG-TS), where zeroing is inert; or the
+    /// muxer does have an entry for this codec but under a different tag
+    /// than the source's, where preserving would write a tag the muxer's
+    /// own validation rejects (AAC `mp4a` into AVI, H.264 `avc1` into FLV).
     Clear,
 }
 
@@ -93,25 +101,30 @@ impl FFmpegRunner {
     /// (see [`CodecTagAction`]) — the single decision point `add_stream_copy`
     /// consults; no other call site re-implements this predicate.
     ///
-    /// Uses `av_codec_get_tag`/`av_codec_get_id` — the same public `FFmpeg`
-    /// API the muxer's own header-validation path uses internally — against
-    /// `oformat.codec_tag`, since `ffmpeg-the-third` has no safe wrapper for
-    /// either. (`avformat_query_codec` was tried first and rejected: it only
-    /// asks "does this muxer support this `codec_id` at all", not "does it
-    /// accept *this specific* tag" — reporting `1` for e.g. AAC-in-AVI even
-    /// though the source's `mp4a` tag isn't one the AVI table recognizes,
-    /// which broke real audio/FLV streams in this fix's own test matrix.)
+    /// Two distinct questions, two distinct `FFmpeg` APIs — conflating them
+    /// is the bug this fix corrects:
+    ///
+    /// - **"Which tag should this stream be written under?"** —
+    ///   `av_codec_get_tag`/`av_codec_get_id` against `oformat.codec_tag`,
+    ///   the muxer's own static fourcc table. `ffmpeg-the-third` has no safe
+    ///   wrapper for either.
+    /// - **"Can this muxer represent the codec at all?"** — `avformat_query_codec`,
+    ///   which (per `avformat.c`) dispatches to the muxer's own
+    ///   `query_codec` callback when one exists, falling back to the tag
+    ///   table only when it doesn't. `matroskaenc` defines `mkv_query_codec`
+    ///   and reports HEVC/SubRip as representable even though `mkv`'s
+    ///   *tag table* (keyed off `CodecID` strings, not a fourcc) has no
+    ///   entry for either — so gating rejection on the tag table alone
+    ///   (this fix's first attempt) hard-failed HEVC-into-MKV and any
+    ///   subtitled input, an actual regression this predicate must not
+    ///   reintroduce. `avienc` defines no `query_codec`, so AVI genuinely
+    ///   falls back to its tag table and HEVC-into-AVI stays rejected.
+    ///
+    /// Decision:
     ///
     /// - The muxer has no codec-tag table at all (`oformat.codec_tag` is
     ///   null, e.g. MPEG-TS): tag-clearing is inert either way ->
     ///   [`CodecTagAction::Clear`].
-    /// - The table has no entry for this codec's `codec_id` whatsoever
-    ///   (`av_codec_get_tag` returns 0): the pairing cannot be represented in
-    ///   this container by this `FFmpeg` build (a convention gap, not a
-    ///   documented standard — no spec covers HEVC-in-AVI). Reject before
-    ///   writing rather than let a zeroed tag silently decode as something
-    ///   else (AVI + HEVC: tag stays 0, `riff.c` maps a zero fourcc to raw
-    ///   video — exit 0, corrupt file).
     /// - The table has an entry for `codec_id`, and the source's specific
     ///   tag maps back to that same `codec_id` (`av_codec_get_id` round-trips)
     ///   -> [`CodecTagAction::Preserve`]. Zeroing here would make `FFmpeg`
@@ -124,17 +137,30 @@ impl FFmpegRunner {
     ///   write a tag the muxer's own validation rejects outright (observed
     ///   for AAC's `mp4a` into AVI, and H.264's `avc1` into FLV); zeroing
     ///   lets `FFmpeg` auto-fill the muxer's own preferred tag instead.
+    /// - The table has **no** entry for `codec_id`: fall back to
+    ///   `avformat_query_codec` (representability, not tag choice). If it
+    ///   reports the codec is supported (MKV+HEVC, MKV+SubRip) ->
+    ///   [`CodecTagAction::Clear`] — there is no tag-table entry to preserve
+    ///   or auto-fill from, so clearing is simply inert here too. If it
+    ///   reports unsupported (AVI+HEVC): the pairing cannot be represented
+    ///   in this container by this `FFmpeg` build (a convention gap, not a
+    ///   documented standard — no spec covers HEVC-in-AVI). Reject before
+    ///   writing rather than let a zeroed tag silently decode as something
+    ///   else (AVI + HEVC: tag stays 0, `riff.c` maps a zero fourcc to raw
+    ///   video — exit 0, corrupt file).
     ///
     /// # Errors
     ///
     /// Returns [`crate::error::PostProcessError::IncompatibleContainerCodec`]
-    /// when the muxer's tag table has no entry for the stream's codec.
-    fn resolve_codec_tag(
+    /// when the muxer cannot represent the stream's codec under any tag.
+    ///
+    /// `pub(crate)`: called directly (not through [`Self::add_stream_copy`])
+    /// by the raw-FFI mux paths, which build `AVStream`/`AVCodecParameters`
+    /// by hand and have no `add_stream_copy` call site to route through.
+    pub(crate) fn resolve_codec_tag(
         oformat: *const ffmpeg_the_third::ffi::AVOutputFormat,
         params_ptr: *const ffmpeg_the_third::ffi::AVCodecParameters,
     ) -> Result<CodecTagAction> {
-        use crate::error::PostProcessError;
-
         // SAFETY: `oformat` is the live output context's format descriptor
         // (see the SAFETY note at the `add_stream_copy` call site);
         // `params_ptr` is the just-copied codecpar of the stream we added to
@@ -172,7 +198,35 @@ impl FFmpegRunner {
             });
         }
 
-        // No entry for this codec at all, under any tag: unrepresentable.
+        // No tag-table entry: ask representability, not tag choice.
+        // SAFETY: `oformat` is the same live, non-null descriptor read above.
+        let query = unsafe {
+            ffmpeg_the_third::ffi::avformat_query_codec(
+                oformat,
+                codec_id,
+                ffmpeg_the_third::ffi::FF_COMPLIANCE_NORMAL,
+            )
+        };
+        if query != 0 {
+            return Ok(CodecTagAction::Clear);
+        }
+
+        Err(Self::unrepresentable_codec_error(
+            oformat, codec_id, codec_type,
+        ))
+    }
+
+    /// Build the [`crate::error::PostProcessError::IncompatibleContainerCodec`]
+    /// for a codec/container pairing `resolve_codec_tag` has already decided
+    /// is unrepresentable — kept separate so `resolve_codec_tag` stays a pure
+    /// decision (the message-building is not part of the predicate).
+    fn unrepresentable_codec_error(
+        oformat: *const ffmpeg_the_third::ffi::AVOutputFormat,
+        codec_id: ffmpeg_the_third::ffi::AVCodecID,
+        codec_type: ffmpeg_the_third::ffi::AVMediaType,
+    ) -> crate::error::PostProcessError {
+        use crate::error::{Medium, PostProcessError};
+
         // SAFETY: every registered muxer descriptor has a non-null,
         // NUL-terminated `name`.
         let container = unsafe {
@@ -180,28 +234,37 @@ impl FFmpegRunner {
                 .to_string_lossy()
                 .into_owned()
         };
-        let codec = ffmpeg_the_third::codec::Id::from(codec_id)
-            .name()
-            .to_string();
-        let medium = match codec_type {
-            ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_VIDEO => "video",
-            ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_AUDIO => "audio",
-            _ => "stream",
-        }
-        .to_string();
+        // `avcodec_get_name` rather than `codec::Id::from(codec_id).name()`:
+        // `codec_id` comes from a remote, attacker-influenced file, and
+        // `ffmpeg-the-third`'s `From<AVCodecID>` ends in `_ => unimplemented!()`
+        // under its default `non-exhaustive-enums` feature — so any codec the
+        // crate's compiled-in table doesn't know (one newer than the binding,
+        // or a malformed stream) would panic here. The C API always yields a
+        // valid string, falling back to "unknown_codec".
+        // SAFETY: `avcodec_get_name` accepts any AVCodecID and is documented to
+        // return a static, NUL-terminated string; it never returns NULL.
+        let codec = unsafe {
+            std::ffi::CStr::from_ptr(ffmpeg_the_third::ffi::avcodec_get_name(codec_id))
+                .to_string_lossy()
+                .into_owned()
+        };
 
-        Err(PostProcessError::IncompatibleContainerCodec {
+        PostProcessError::IncompatibleContainerCodec {
             container,
             codec,
-            medium,
-        })
+            medium: Medium::from(codec_type),
+        }
     }
 
     /// Reset the codec tag to 0 for container compatibility.
     ///
-    /// Only correct to call when the target muxer isn't tag-driven at all
-    /// (see [`Self::resolve_codec_tag`]) — zeroing then has no effect, since
-    /// there is no table for `FFmpeg` to auto-fill a tag from.
+    /// Correct to call only for the cases [`CodecTagAction::Clear`] covers
+    /// (see [`Self::resolve_codec_tag`]): either the muxer has no codec-tag
+    /// table, or it has no entry matching the source's specific tag. Calling
+    /// it unconditionally is the bug #549 fixed — for a tag-driven muxer that
+    /// *does* recognize the source tag, zeroing makes `FFmpeg` substitute its
+    /// own (for AVI + H.264, the literal `'H264'` fourcc, which then demands
+    /// Annex-B start codes that AVCC-packaged streams do not carry).
     pub(crate) fn clear_codec_tag(params_ptr: *const ffmpeg_the_third::ffi::AVCodecParameters) {
         // SAFETY: `params_ptr` points to a valid AVCodecParameters allocated by FFmpeg.
         // Setting codec_tag to 0 is always valid — it tells FFmpeg to auto-select.
@@ -540,5 +603,133 @@ mod tests {
             let rate = FFmpegRunner::pick_audio_sample_rate(&codec, 44100);
             assert_eq!(rate, 44100);
         }
+    }
+
+    /// Build a zeroed `AVCodecParameters` naming only `codec_id`/`codec_type` —
+    /// the only fields `resolve_codec_tag` reads.
+    ///
+    /// SAFETY: zero-initializing `AVCodecParameters` mirrors what
+    /// `avcodec_parameters_alloc` does internally (`av_mallocz`); every field
+    /// this test leaves zeroed (extradata pointers, side-data lists, etc.) is
+    /// never read by `resolve_codec_tag`.
+    fn fake_params(
+        codec_id: ffmpeg_the_third::ffi::AVCodecID,
+        codec_type: ffmpeg_the_third::ffi::AVMediaType,
+    ) -> ffmpeg_the_third::ffi::AVCodecParameters {
+        let mut params: ffmpeg_the_third::ffi::AVCodecParameters = unsafe { std::mem::zeroed() };
+        params.codec_id = codec_id;
+        params.codec_type = codec_type;
+        params
+    }
+
+    /// Get the live `AVOutputFormat*` for a freshly-opened output context
+    /// targeting the given extension (mirrors the capture in `add_stream_copy`).
+    fn oformat_for_extension(
+        dir: &std::path::Path,
+        ext: &str,
+    ) -> *const ffmpeg_the_third::ffi::AVOutputFormat {
+        let octx = ffmpeg_the_third::format::output(dir.join(format!("probe.{ext}")))
+            .expect("open probe output context");
+        // SAFETY: `octx` is a live output context just opened above; `oformat`
+        // is a read-only static descriptor set at alloc time.
+        unsafe { (*octx.as_ptr()).oformat }
+    }
+
+    /// CRITICAL #1/#2 regression guard: MKV's codec-tag table has no entry
+    /// for HEVC at all (Matroska keys tags off `CodecID` strings, not a
+    /// fourcc table), so the old predicate — reject whenever
+    /// `av_codec_get_tag` returns 0 — hard-failed HEVC into MKV even though
+    /// `matroskaenc` defines `mkv_query_codec` and demonstrably supports it.
+    /// Fails against the unpatched predicate (which returns
+    /// `IncompatibleContainerCodec` here).
+    #[test]
+    fn resolve_codec_tag_permits_hevc_into_mkv() {
+        crate::ffmpeg::ensure_init().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let oformat = oformat_for_extension(dir.path(), "mkv");
+        let params = fake_params(
+            ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_HEVC,
+            ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_VIDEO,
+        );
+
+        let action = FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params)).expect(
+            "MKV must represent HEVC: matroskaenc defines mkv_query_codec even though \
+             its static codec-tag table has no HEVC entry",
+        );
+        assert_eq!(
+            action,
+            CodecTagAction::Clear,
+            "no tag-table entry for HEVC in mkv -> Clear (not Preserve, not Err)"
+        );
+    }
+
+    /// Same predicate bug, subtitle-medium variant: MKV's tag table has no
+    /// entry for `SubRip` either, but subtitled inputs (routed through
+    /// `salvage::salvage_remux_sync`, which copies every stream with no
+    /// media-type filter) must still be representable in MKV.
+    #[test]
+    fn resolve_codec_tag_permits_subrip_into_mkv() {
+        crate::ffmpeg::ensure_init().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let oformat = oformat_for_extension(dir.path(), "mkv");
+        let params = fake_params(
+            ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_SUBRIP,
+            ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_SUBTITLE,
+        );
+
+        FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params))
+            .expect("MKV must represent SubRip subtitles despite no tag-table entry");
+    }
+
+    /// Hypothesis check for the raw-FFI routing change: an AAC stream tagged
+    /// with its MP4 `mp4a` fourcc, going into MKV, must resolve to
+    /// [`CodecTagAction::Clear`] — not `Preserve`. MKV's tag table *does*
+    /// carry an AAC entry, but under Matroska's own tag, not `mp4a`, so
+    /// `av_codec_get_id(tags, mp4a)` must NOT round-trip to
+    /// `AV_CODEC_ID_AAC`. This is the exact case an earlier blunt experiment
+    /// (preserving every source tag unconditionally) got wrong: preserving
+    /// `mp4a` on Matroska-bound AAC is what regressed `mp4_to_mkv`/
+    /// `ts_to_mkv`/`hevc_to_mkv` (all AAC-bearing fixtures) in that
+    /// experiment. Routing through the real predicate must NOT reproduce it.
+    #[test]
+    fn resolve_codec_tag_clears_mp4a_tagged_aac_into_mkv() {
+        crate::ffmpeg::ensure_init().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let oformat = oformat_for_extension(dir.path(), "mkv");
+        let mut params = fake_params(
+            ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_AAC,
+            ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_AUDIO,
+        );
+        // MP4/ISOBMFF's fourcc for AAC ('mp4a'), packed the same way FFmpeg's
+        // `MKTAG` macro does (`u32::from_le_bytes` of the ASCII bytes).
+        params.codec_tag = u32::from_le_bytes(*b"mp4a");
+
+        let action = FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params))
+            .expect("MKV must represent AAC");
+        assert_eq!(
+            action,
+            CodecTagAction::Clear,
+            "mp4a does not round-trip to AAC in mkv's tag table -> Clear, not Preserve"
+        );
+    }
+
+    /// Sanity check on the other side of the same predicate: AVI's tag table
+    /// genuinely has no representation for HEVC (`avienc` defines no
+    /// `query_codec`, so it falls back to its own tag table, which is the
+    /// case the fix must still reject).
+    #[test]
+    fn resolve_codec_tag_rejects_hevc_into_avi() {
+        crate::ffmpeg::ensure_init().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let oformat = oformat_for_extension(dir.path(), "avi");
+        let params = fake_params(
+            ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_HEVC,
+            ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_VIDEO,
+        );
+
+        let err = FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params))
+            .expect_err("AVI cannot represent HEVC under this FFmpeg build");
+        let msg = err.to_string().to_lowercase();
+        assert!(msg.contains("avi") && msg.contains("hevc"), "got: {msg}");
     }
 }

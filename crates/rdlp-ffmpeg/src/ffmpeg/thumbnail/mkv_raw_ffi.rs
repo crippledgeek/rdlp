@@ -36,6 +36,7 @@ use ffmpeg_the_third::ffi;
 use crate::error::{PostProcessError, Result};
 
 use super::super::FFmpegRunner;
+use super::super::ffi_helpers::CodecTagAction;
 
 impl FFmpegRunner {
     /// Embed thumbnail in MKV using raw FFI with full stream property copying.
@@ -175,7 +176,26 @@ impl FFmpegRunner {
                         ),
                     });
                 }
-                (*(*out_stream).codecpar).codec_tag = 0;
+                // Resolve the codec tag through the same decision point the
+                // safe `add_stream_copy` path uses, rather than
+                // unconditionally zeroing (see the equivalent site in
+                // `remux.rs` for why the raw-FFI/`add_stream_copy` asymmetry
+                // mattered).
+                match Self::resolve_codec_tag(
+                    (*ofmt_ctx).oformat,
+                    (*out_stream).codecpar.cast_const(),
+                ) {
+                    Ok(CodecTagAction::Preserve) => {}
+                    Ok(CodecTagAction::Clear) => {
+                        Self::clear_codec_tag((*out_stream).codecpar.cast_const());
+                    }
+                    Err(e) => {
+                        ffi::avformat_close_input(&mut media_ctx);
+                        ffi::avformat_close_input(&mut thumb_ctx);
+                        ffi::avformat_free_context(ofmt_ctx);
+                        return Err(e);
+                    }
+                }
 
                 // Copy per-stream metadata (preserves encoder tags set by RecodeStage)
                 ffi::av_dict_copy(&mut (*out_stream).metadata, (*in_stream).metadata, 0);
