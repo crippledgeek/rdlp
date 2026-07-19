@@ -68,6 +68,12 @@ jobs:
         # stale mirror.
         run: bash scripts/check-ts-enum-drift.sh
 
+      - name: Check no directory-sweep deletion
+        # #558: deleting files found by scanning a directory cannot tell "a file
+        # rdlp created" from "a file the user already had". CERT FIO21-C; no
+        # comparable tool (yt-dlp/aria2/curl/wget/rsync) deletes by pattern match.
+        run: bash scripts/check-no-dir-sweep-delete.sh
+
       - name: Install semgrep
         run: pipx install semgrep || pip install semgrep
 

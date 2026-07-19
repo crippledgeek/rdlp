@@ -147,9 +147,6 @@ impl Orchestrator {
                         let filename = format!("{sanitized_title}.{file_ext}");
                         let path = output_dir.join(&filename);
 
-                        self.cleanup_leftover_segments(output_dir, &sanitized_title)
-                            .await;
-
                         debug!(path:? = path.display(); "Downloading to");
                         output_path = Some(path);
                     }
@@ -249,9 +246,6 @@ impl Orchestrator {
                         let sanitized_title = Self::sanitize_filename(&info_ref.title);
                         let filename = format!("{sanitized_title}.{file_ext}");
                         let path = output_dir.join(&filename);
-
-                        self.cleanup_leftover_segments(output_dir, &sanitized_title)
-                            .await;
 
                         debug!(path:? = path.display(); "Downloading merge to");
                         output_path = Some(path);
