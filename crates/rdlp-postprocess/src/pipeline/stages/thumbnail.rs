@@ -385,6 +385,40 @@ impl PipelineStage for ThumbnailStage {
         // `matroska_and_quicktime_aliases_now_resolve_to_embed_support` for the
         // pinned behavior.
         let supports_thumbnail = Self::supports_thumbnail(&extension);
+
+        // #548: an explicit `--remux` container must never be silently
+        // discarded by the auto-remux-to-mp4 fallback below. `remux_container`
+        // is `Some` ONLY when the user explicitly requested a container
+        // (`RemuxStage`'s own gate); `None` means rdlp picked the container
+        // itself (e.g. post-HLS `.ts` with no explicit `--remux`), where the
+        // auto-remux-to-mp4 fallback is correct and unaffected by this guard.
+        // Compared as `ContainerFormat`, never a raw extension string.
+        if !supports_thumbnail
+            && let Ok(current) = ContainerFormat::from_str(&extension)
+            && msg.config.remux_container == Some(current)
+        {
+            let reason = format!(
+                "kept explicit --remux={current} container; thumbnail embed skipped \
+                 because {current} cannot carry an embedded thumbnail"
+            );
+            warn!("ThumbnailStage: {reason}");
+            msg.warnings.push(reason);
+
+            // This early return bypasses the normal embed path below, which is
+            // the ONLY other place the orchestrator-downloaded thumbnail
+            // sidecar is marked temp for cleanup (~line 522, guarded on the
+            // same `!write_thumbnail` condition). Without this, every run
+            // that hits this guard with the default `--write-thumbnail=false`
+            // leaves a stray sidecar image next to the kept-container output.
+            if !msg.config.write_thumbnail
+                && let Some(sidecar) = Self::find_thumbnail(&media_file, &msg.original_stem)
+            {
+                msg.tracker.mark_temp(sidecar);
+            }
+
+            return Ok(msg);
+        }
+
         let (media_file, extension) = if supports_thumbnail {
             (media_file, extension)
         } else {
@@ -854,4 +888,55 @@ mod tests {
     // build real decodable image fixtures, which `scripts/check-no-cli.sh`
     // forbids under `src/` (production-code CLI-usage gate); only files under
     // `tests/` are exempt.
+
+    // #548: an explicit `--remux` container must never be silently
+    // overridden by the thumbnail stage's auto-remux-to-mp4 fallback.
+    //
+    // The "kept container" positive cases and the "no explicit container
+    // still auto-remuxes" regression guard need a REAL, decodable fixture to
+    // be trustworthy: a fake/nonexistent path makes the pre-existing
+    // auto-remux-failure warning ("Auto-remux for thumbnail embedding
+    // failed: ...") happen to contain the fixture's own extension and the
+    // word "thumbnail", passing for the wrong reason even against the
+    // unpatched code. Those cases live in
+    // `crates/rdlp-postprocess/tests/thumbnail_explicit_container_548.rs`
+    // (real `ffmpeg` CLI fixtures; self-skips when the CLI is absent), same
+    // pattern as `thumbnail_webp_mp4_embed.rs`.
+
+    /// Negative companion: an explicit container that DOES support embedding
+    /// (e.g. `--remux=mp4`) must still take the normal embed path — the
+    /// keep-container guard must not intercept it. Verified by asserting the
+    /// normal "thumbnail not found" warning fires (proving the embed path
+    /// ran), not the keep-container skip message.
+    #[tokio::test]
+    async fn process_embeds_normally_when_explicit_container_supports_thumbnail() {
+        let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
+        let stage = ThumbnailStage::new(ffmpeg);
+
+        let config = PostProcess {
+            embed_thumbnail: true,
+            remux_container: Some(ContainerFormat::Mp4),
+            ..PostProcess::default()
+        };
+        let mut msg = make_msg(vec![PathBuf::from("/tmp/issue548-video.mp4")], config);
+        msg.original_stem = "issue548-nonexistent-stem".to_string();
+
+        let result = stage.process(msg).await.unwrap();
+
+        assert!(
+            result
+                .warnings
+                .iter()
+                .any(|w| w.contains("Thumbnail file not found")),
+            "expected the normal embed path (missing-thumbnail warning), got: {:?}",
+            result.warnings
+        );
+        assert!(
+            !result
+                .warnings
+                .iter()
+                .any(|w| w.contains("cannot carry an embedded thumbnail")),
+            "the keep-container guard must not fire for a container that supports embedding"
+        );
+    }
 }
