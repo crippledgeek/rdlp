@@ -29,26 +29,37 @@ pub enum ContainerRequest {
     RecodeVideo,
     /// `--remux` / `postprocess.remux_container`.
     Remux,
+    /// `postprocess.merge_output_format`. The only source with NO CLI flag —
+    /// it is settable from the config file or by an API caller (including the
+    /// desktop GUI) but not from the command line.
+    MergeOutputFormat,
 }
 
 impl ContainerRequest {
-    /// The CLI flag a user would type to make this request.
+    /// How to name this request back to an operator: the CLI flag where one
+    /// exists, else the config key.
+    ///
+    /// Deliberately NOT called `cli_flag` — `MergeOutputFormat` has no flag,
+    /// and a method promising one would have to invent a string that the user
+    /// could not actually type. Naming the config key is the honest answer,
+    /// and it is what the operator would edit to change the behaviour.
     ///
     /// Rendering only — see the type doc for why this is a method rather than
     /// a stored field.
     #[must_use]
-    pub const fn cli_flag(self) -> &'static str {
+    pub const fn setting_name(self) -> &'static str {
         match self {
             Self::RecodeContainer => "--recode-container",
             Self::RecodeVideo => "--recode-video",
             Self::Remux => "--remux",
+            Self::MergeOutputFormat => "postprocess.merge_output_format",
         }
     }
 }
 
 impl std::fmt::Display for ContainerRequest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.cli_flag())
+        f.write_str(self.setting_name())
     }
 }
 
@@ -173,16 +184,14 @@ impl PostProcess {
     /// *which* default is a per-consumer concern, and `ThumbnailStage`
     /// genuinely wants the `None`.
     ///
-    /// `merge_output_format` is deliberately NOT in this chain, and the
-    /// omission is scoped rather than settled: `MergeStage` (index 0) runs
-    /// before every container-changing stage, so its output is an
-    /// *intermediate* container that a later `--remux`/`--recode` is free to
-    /// replace — unlike a recode/remux target, it is not a statement about the
-    /// FINAL container. It nonetheless reaches `ThumbnailStage` unchanged when
-    /// no other flag is set, which is the same defect shape as #551 via the
-    /// config TOML instead of a CLI flag; tracked separately rather than
-    /// widened into this fix. Note `rdlp-api`'s `ResolvedContainer::resolve`
-    /// ranks it second, so the two chains intentionally disagree here.
+    /// `merge_output_format` is the LOWEST-precedence arm (#554). `MergeStage`
+    /// runs at index 0, before every container-changing stage, so anything
+    /// later overrides it — which is exactly why it ranks last, by the same
+    /// later-stage-wins rule that puts recode above remux. But when nothing
+    /// later is set, the merged container IS the final container, and
+    /// discarding it is the same silent override as #551, reached through the
+    /// config file instead of a CLI flag.
+    ///
     #[must_use]
     pub fn explicit_container(&self) -> Option<ExplicitContainer> {
         // Deliberately NOT a destructuring pattern: `PostProcess` has ~35
@@ -198,6 +207,10 @@ impl PostProcess {
                     .map(request(ContainerRequest::RecodeVideo))
             })
             .or_else(|| self.remux_container.map(request(ContainerRequest::Remux)))
+            .or_else(|| {
+                self.merge_output_format
+                    .map(request(ContainerRequest::MergeOutputFormat))
+            })
     }
 }
 
@@ -335,13 +348,60 @@ mod tests {
         assert_eq!(explicit.source, ContainerRequest::RecodeContainer);
     }
 
-    /// All three set at once — the full chain resolves to the head.
     #[test]
-    fn recode_container_wins_the_full_three_way_chain() {
+    fn explicit_container_resolves_merge_output_format_alone() {
+        let config = PostProcess {
+            merge_output_format: Some(ContainerFormat::Ts),
+            ..PostProcess::default()
+        };
+        let explicit = config.explicit_container().expect("some");
+        assert_eq!(explicit.format, ContainerFormat::Ts);
+        assert_eq!(explicit.source, ContainerRequest::MergeOutputFormat);
+    }
+
+    /// `MergeStage` runs at index 0, before every container-changing stage, so
+    /// merge output ranks LAST — the same later-stage-wins rule that puts
+    /// recode above remux.
+    #[test]
+    fn remux_outranks_merge_output_format() {
+        let config = PostProcess {
+            remux_container: Some(ContainerFormat::Ts),
+            merge_output_format: Some(ContainerFormat::Mkv),
+            ..PostProcess::default()
+        };
+        let explicit = config.explicit_container().expect("some");
+        assert_eq!(explicit.format, ContainerFormat::Ts);
+        assert_eq!(explicit.source, ContainerRequest::Remux);
+    }
+
+    #[test]
+    fn recode_video_outranks_merge_output_format() {
+        let config = PostProcess {
+            recode_video: Some(ContainerFormat::Ts),
+            merge_output_format: Some(ContainerFormat::Mkv),
+            ..PostProcess::default()
+        };
+        let explicit = config.explicit_container().expect("some");
+        assert_eq!(explicit.source, ContainerRequest::RecodeVideo);
+    }
+
+    /// A config-only source must name the config key, never invent a flag.
+    #[test]
+    fn merge_output_format_setting_name_is_the_config_key() {
+        assert_eq!(
+            ContainerRequest::MergeOutputFormat.setting_name(),
+            "postprocess.merge_output_format"
+        );
+    }
+
+    /// All four set at once — the full chain resolves to the head.
+    #[test]
+    fn recode_container_wins_the_full_chain() {
         let config = PostProcess {
             recode_container: Some(ContainerFormat::Ts),
             recode_video: Some(ContainerFormat::Mkv),
             remux_container: Some(ContainerFormat::F4v),
+            merge_output_format: Some(ContainerFormat::Avi),
             ..PostProcess::default()
         };
         let explicit = config.explicit_container().expect("some");

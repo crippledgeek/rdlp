@@ -296,3 +296,81 @@ async fn recode_guard_path_cleans_up_sidecar_thumbnail() {
         "the downloaded sidecar must be cleaned up on the recode keep-container path"
     );
 }
+
+/// #554: `merge_output_format` is an explicit container request too. It is
+/// the LOWEST-precedence one — `MergeStage` runs at index 0, before every
+/// container-changing stage, so anything later overrides it — but when
+/// nothing later is set, the merged container IS the final container and
+/// must not be silently auto-remuxed away.
+///
+/// Reached via config TOML rather than a CLI flag, which is why #551's fix
+/// did not cover it.
+#[tokio::test]
+async fn merge_output_format_alone_is_an_explicit_container() {
+    if !ffmpeg_cli_available() {
+        eprintln!("[SKIP] ffmpeg CLI not available");
+        return;
+    }
+    let dir = TempDir::new().unwrap();
+    let media = dir.path().join("video.ts");
+    build_video_fixture(&media, "mpegts").expect(FIXTURE_FAILED);
+
+    let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
+    let stage = ThumbnailStage::new(ffmpeg);
+
+    let config = PostProcess {
+        embed_thumbnail: true,
+        merge_output_format: Some(ContainerFormat::Ts),
+        ..PostProcess::default()
+    };
+    let msg = make_msg(vec![media.clone()], config, MsgOptions::default());
+
+    let result = stage.process(msg).await.expect("non-fatal stage");
+
+    assert_eq!(
+        result.tracker.primary(),
+        media,
+        "an explicit merge_output_format must not be auto-remuxed to mp4"
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.contains("merge_output_format") && w.contains("thumbnail")),
+        "expected a warning naming the config key that won, got: {:?}",
+        result.warnings
+    );
+}
+
+/// Precedence pin: an explicit `--remux` outranks `merge_output_format`,
+/// because `RemuxStage` (index 3) runs after `MergeStage` (index 0) and so
+/// owns the container by the time this stage sees it.
+#[tokio::test]
+async fn remux_outranks_merge_output_format() {
+    if !ffmpeg_cli_available() {
+        eprintln!("[SKIP] ffmpeg CLI not available");
+        return;
+    }
+    let dir = TempDir::new().unwrap();
+    let media = dir.path().join("video.ts");
+    build_video_fixture(&media, "mpegts").expect(FIXTURE_FAILED);
+
+    let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
+    let stage = ThumbnailStage::new(ffmpeg);
+
+    let config = PostProcess {
+        embed_thumbnail: true,
+        remux_container: Some(ContainerFormat::Ts),
+        merge_output_format: Some(ContainerFormat::Mkv),
+        ..PostProcess::default()
+    };
+    let msg = make_msg(vec![media], config, MsgOptions::default());
+
+    let result = stage.process(msg).await.expect("non-fatal stage");
+
+    assert!(
+        result.warnings.iter().any(|w| w.contains("--remux=ts")),
+        "the remux target must win over merge_output_format, got: {:?}",
+        result.warnings
+    );
+}

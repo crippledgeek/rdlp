@@ -407,7 +407,7 @@ impl PipelineStage for ThumbnailStage {
             && let Some(explicit) = msg.config.explicit_container()
             && explicit.format == current
         {
-            let flag = explicit.source.cli_flag();
+            let flag = explicit.source.setting_name();
             let reason = format!(
                 "kept explicit {flag}={current} container; thumbnail embed skipped \
                  because {current} cannot carry an embedded thumbnail"
