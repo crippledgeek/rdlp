@@ -95,20 +95,23 @@ async fn detect_chunk_files(output_path: &Path) -> Option<ChunkInfo> {
     }
 
     // 2. Check for old-style (legacy) chunks: {filename}.part{i}
-    let Ok(legacy_set) = ChunkSet::legacy(output_path) else {
-        return all_chunks
-            .into_iter()
-            .max_by_key(|info| (info.download_id.is_some(), info.download_id.unwrap_or(0)));
-    };
-    let (old_chunk_paths, old_total_size) =
-        collect_contiguous_chunks(&legacy_set, parent_dir).await;
+    // Precondition already validated above, so `Err` can only mean `output_path`
+    // changed underneath us mid-scan: skip the legacy grammar and report whatever
+    // the new-style scan already found, rather than duplicating the reduction.
+    match ChunkSet::legacy(output_path) {
+        Ok(legacy_set) => {
+            let (old_chunk_paths, old_total_size) =
+                collect_contiguous_chunks(&legacy_set, parent_dir).await;
 
-    if !old_chunk_paths.is_empty() {
-        all_chunks.push(ChunkInfo {
-            download_id: None,
-            chunk_paths: old_chunk_paths,
-            total_size: old_total_size,
-        });
+            if !old_chunk_paths.is_empty() {
+                all_chunks.push(ChunkInfo {
+                    download_id: None,
+                    chunk_paths: old_chunk_paths,
+                    total_size: old_total_size,
+                });
+            }
+        }
+        Err(_) => debug!("Skipping legacy chunk scan: output path lost its filename mid-scan"),
     }
 
     // 3. Return the most recent chunk set (highest download ID)
