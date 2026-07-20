@@ -249,6 +249,13 @@ pub fn merge_config(
     // config file survives an invocation that does not mention it (#540). The
     // vocabulary itself is `RecodeAudioMode`'s to define, not the CLI's.
     if let Some(recode_audio) = &args.recode_audio {
+        // An empty value would become `Encoder { name: "" }` and fail inside
+        // FFmpeg long after the download finished. Reject it here, where the
+        // message can name the flag.
+        anyhow::ensure!(
+            !recode_audio.trim().is_empty(),
+            "--recode-audio requires a value: copy, auto, or an FFmpeg encoder name"
+        );
         config.postprocess.recode_audio = RecodeAudioMode::from(recode_audio.as_str());
     }
 
@@ -308,21 +315,11 @@ pub fn merge_config(
             .map_err(|e| anyhow::anyhow!("--proxy validation failed: {e}"))?;
         config.proxy = Some(proxy.clone());
     }
-    if let Some(secs) = args.socket_timeout {
-        config.socket_timeout = Some(secs);
-    }
-    if let Some(secs) = args.read_timeout {
-        config.read_timeout = Some(secs);
-    }
-    if let Some(secs) = args.pool_idle_timeout {
-        config.pool_idle_timeout = Some(secs);
-    }
-    if let Some(secs) = args.download_timeout {
-        config.download_timeout = Some(secs);
-    }
-    if let Some(secs) = args.merge_timeout {
-        config.merge_timeout = Some(secs);
-    }
+    merge_opt!(config, args, socket_timeout);
+    merge_opt!(config, args, read_timeout);
+    merge_opt!(config, args, pool_idle_timeout);
+    merge_opt!(config, args, download_timeout);
+    merge_opt!(config, args, merge_timeout);
     // Browser emulation: CLI flag > env var > default (ChromeLatest).
     if let Some(ref cli_browser) = args.browser {
         config.browser_emulation = parse_browser_emulation(cli_browser);

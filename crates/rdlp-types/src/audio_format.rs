@@ -5,6 +5,7 @@ use serde::Serialize;
 use crate::parse_error::ParseEnumError;
 use serde_with::DeserializeFromStr;
 use strum_macros::{Display, EnumIter, EnumString};
+
 /// Builds the `FromStr` error for [`AudioFormat`].
 ///
 /// Named by `#[strum(parse_err_fn = ...)]`. Replaces strum's default
@@ -12,10 +13,7 @@ use strum_macros::{Display, EnumIter, EnumString};
 /// "Matching variant not found" — that told a user editing `config.toml`
 /// neither which value was rejected nor which field it came from (#540).
 fn audio_format_parse_err(input: &str) -> ParseEnumError {
-    ParseEnumError {
-        type_name: "audio format",
-        input: input.to_owned(),
-    }
+    ParseEnumError::new("audio format", input)
 }
 
 /// Supported audio formats for extraction and conversion.

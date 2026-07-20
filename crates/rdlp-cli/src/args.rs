@@ -213,12 +213,13 @@ pub struct Args {
     /// (e.g., libopus, aac, libmp3lame).
     /// `copy` copies audio unchanged; `auto` selects the best encoder for the
     /// target container; any other value is treated as an explicit encoder name.
-    ///
-    /// Omitted means "not specified on the command line", so a `recode_audio`
-    /// set in the config file survives. Carrying a clap `default_value` here
-    /// instead made the default indistinguishable from an explicit `copy`, and
-    /// the unconditional assignment downstream silently discarded the config
-    /// file's value on every run (#540).
+    //
+    // Deliberately no clap `default_value`: absent must mean "not specified on
+    // the command line" so a `recode_audio` set in the config file survives. A
+    // default made that indistinguishable from an explicit `copy`, and the
+    // unconditional assignment downstream then discarded the config value on
+    // every run (#540). Plain `//` — a `///` here would print this note in
+    // `rdlp --help`.
     #[arg(long, value_name = "MODE")]
     pub recode_audio: Option<String>,
 

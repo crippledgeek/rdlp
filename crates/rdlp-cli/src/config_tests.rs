@@ -958,3 +958,23 @@ fn test_merge_config_optional_args_still_override_when_passed() {
     assert_eq!(merged.postprocess.recode_cpu_used, Some(-8));
     assert_eq!(merged.postprocess.recode_speed_level, Some(7));
 }
+
+/// An empty `--recode-audio=` must fail at parse time, not inside `FFmpeg`.
+///
+/// It would otherwise become `Encoder { name: "" }` and surface much later as
+/// an "unknown encoder" failure after the download completed — the same
+/// late-failure mode that made `--recode-audio=COPY` confusing (#540).
+#[test]
+fn test_merge_config_rejects_empty_recode_audio() {
+    for empty in ["", "   ", "\t"] {
+        let mut args = default_args();
+        args.recode_audio = Some(empty.to_string());
+        let err = merge_config(&args, Config::default(), no_interactive())
+            .expect_err("an empty --recode-audio must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("--recode-audio"),
+            "the error must name the flag so the user knows what to fix; got: {msg}"
+        );
+    }
+}

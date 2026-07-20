@@ -71,7 +71,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn from_str_maps_the_mode_keywords_case_insensitively() {
+    fn from_maps_the_mode_keywords_case_insensitively() {
         for spelling in ["copy", "COPY", "Copy", "cOpY"] {
             assert_eq!(RecodeAudioMode::from(spelling), RecodeAudioMode::Copy);
         }
@@ -81,7 +81,7 @@ mod tests {
     }
 
     #[test]
-    fn from_str_preserves_encoder_name_case() {
+    fn from_preserves_encoder_name_case() {
         assert_eq!(
             RecodeAudioMode::from("libOpus"),
             RecodeAudioMode::Encoder {
@@ -94,7 +94,7 @@ mod tests {
     /// A keyword with surrounding content is an encoder name, not a mode —
     /// the match is on the whole value, never a substring.
     #[test]
-    fn from_str_does_not_match_keywords_as_substrings() {
+    fn from_does_not_match_keywords_as_substrings() {
         for name in ["copycat", "autotune", "libcopy", "copy2"] {
             assert_eq!(
                 RecodeAudioMode::from(name),
