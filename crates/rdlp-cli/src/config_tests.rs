@@ -797,3 +797,54 @@ fn negative_cpu_used_parses_both_forms() {
         Some(-8)
     );
 }
+
+/// `--recode-audio` must accept `copy`/`auto` in any case, like every
+/// neighbouring format flag (#540).
+///
+/// Before the fix the match was case-sensitive, so `--recode-audio=COPY`
+/// silently became `RecodeAudioMode::Encoder { name: "COPY" }` and failed much
+/// later inside `FFmpeg` with a confusing "unknown encoder" error, rather than
+/// being recognised as the stream-copy mode the user asked for.
+#[test]
+fn test_merge_config_recode_audio_mode_is_case_insensitive() {
+    for spelling in ["copy", "COPY", "Copy", "cOpY"] {
+        let mut args = default_args();
+        args.recode_audio = spelling.to_string();
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+        assert_eq!(
+            config.postprocess.recode_audio,
+            RecodeAudioMode::Copy,
+            "--recode-audio={spelling} must mean Copy"
+        );
+    }
+
+    for spelling in ["auto", "AUTO", "Auto"] {
+        let mut args = default_args();
+        args.recode_audio = spelling.to_string();
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+        assert_eq!(
+            config.postprocess.recode_audio,
+            RecodeAudioMode::Auto,
+            "--recode-audio={spelling} must mean Auto"
+        );
+    }
+}
+
+/// An explicit encoder name must survive verbatim — case-folding the mode
+/// keywords must not case-fold the encoder name, which `FFmpeg` matches exactly.
+#[test]
+fn test_merge_config_recode_audio_encoder_name_preserved() {
+    let mut args = default_args();
+    args.recode_audio = "libOpus".to_string();
+    let config =
+        merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+    assert_eq!(
+        config.postprocess.recode_audio,
+        RecodeAudioMode::Encoder {
+            name: "libOpus".to_string()
+        },
+        "encoder names are passed to FFmpeg verbatim and must not be lowercased"
+    );
+}

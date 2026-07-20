@@ -228,16 +228,26 @@ pub fn merge_config(
     config.postprocess.recode_cpu_used = args.recode_cpu_used;
     config.postprocess.recode_speed_level = args.recode_speed_level;
 
-    // recode_audio: "copy", "auto", or an encoder name
-    match args.recode_audio.as_str() {
-        "copy" => config.postprocess.recode_audio = RecodeAudioMode::Copy,
-        "auto" => config.postprocess.recode_audio = RecodeAudioMode::Auto,
-        name => {
-            config.postprocess.recode_audio = RecodeAudioMode::Encoder {
-                name: name.to_string(),
-            };
+    // recode_audio: "copy", "auto", or an encoder name.
+    //
+    // The two mode keywords are matched case-insensitively, like every
+    // neighbouring format flag (which get it from `#[strum(ascii_case_insensitive)]`).
+    // Before #540 this was case-sensitive, so `--recode-audio=COPY` fell through
+    // to the encoder arm and failed much later inside FFmpeg with a confusing
+    // "unknown encoder" error.
+    //
+    // The encoder name itself is NOT case-folded: FFmpeg matches encoder names
+    // exactly, so `libOpus` must reach it unchanged.
+    let recode_audio = &args.recode_audio;
+    config.postprocess.recode_audio = if recode_audio.eq_ignore_ascii_case("copy") {
+        RecodeAudioMode::Copy
+    } else if recode_audio.eq_ignore_ascii_case("auto") {
+        RecodeAudioMode::Auto
+    } else {
+        RecodeAudioMode::Encoder {
+            name: recode_audio.clone(),
         }
-    }
+    };
 
     // Audio normalization: --normalize-boost / --normalize-boost-db implies --loudnorm
     // implies --normalize-audio
