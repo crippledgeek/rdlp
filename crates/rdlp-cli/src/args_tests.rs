@@ -145,3 +145,34 @@ fn every_option_is_classified_into_a_help_group() {
         );
     }
 }
+
+/// All 10 group headings, for asserting they actually render in emitted help
+/// text (the structural test above only inspects the `Command` model).
+const ALL_HEADINGS: &[&str] = &[
+    HELP_HEADING_GENERAL,
+    HELP_HEADING_INFO,
+    HELP_HEADING_POSTPROCESS,
+    HELP_HEADING_SUBTITLES,
+    HELP_HEADING_RECODE,
+    HELP_HEADING_AUDIO_NORM,
+    HELP_HEADING_NETWORK,
+    HELP_HEADING_DOWNLOAD,
+    HELP_HEADING_SEARCH,
+    HELP_HEADING_CONFIG,
+];
+
+#[test]
+fn all_headings_render_in_short_and_long_help() {
+    let short = Args::command().render_help().to_string();
+    let long = Args::command().render_long_help().to_string();
+    for heading in ALL_HEADINGS {
+        assert!(
+            short.contains(heading),
+            "`-h` output is missing heading `{heading}`"
+        );
+        assert!(
+            long.contains(heading),
+            "`--help` output is missing heading `{heading}`"
+        );
+    }
+}
