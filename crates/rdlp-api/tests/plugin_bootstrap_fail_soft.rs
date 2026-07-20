@@ -53,7 +53,6 @@ fn malformed_plugin_toml_does_not_break_client() {
         std::fs::write(plug_dir.join("plugin.wasm"), b"not actual wasm").unwrap();
 
         let config = Config {
-            progress: false,
             plugin_directories: vec![tmpdir.join("plugins")],
             ..Default::default()
         };
@@ -72,7 +71,6 @@ fn missing_plugin_dir_does_not_break_client() {
         let nonexistent = tmpdir.join("does-not-exist");
 
         let config = Config {
-            progress: false,
             plugin_directories: vec![nonexistent],
             ..Default::default()
         };
@@ -100,7 +98,6 @@ fn corrupted_disabled_list_blocks_bootstrap() {
         std::fs::create_dir_all(&plug_dir).unwrap();
 
         let config = Config {
-            progress: false,
             plugin_directories: vec![plug_dir],
             ..Default::default()
         };

@@ -87,7 +87,6 @@ async fn test_process_local_file_keeps_source_on_success() {
     // `source.mp4`. This forces at least one pipeline stage (RemuxStage) to run
     // and exercise the replace() → cleanup() path.
     let config = Config {
-        progress: false,
         postprocess: PostProcess {
             remux_container: Some(ContainerFormat::Mkv),
             ..PostProcess::default()

@@ -26,7 +26,6 @@ use rdlp_types::Config;
 
 fn test_client() -> RdlpClient {
     let config = Config {
-        progress: false,
         ..Default::default()
     };
     RdlpClient::new(config).expect("client should build")

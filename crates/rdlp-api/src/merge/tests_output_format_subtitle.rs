@@ -52,7 +52,6 @@ fn test_output_stdout_disables_incompatible_defaults() {
     opts.merge_into(&mut config);
     assert!(config.output_to_stdout);
     assert!(config.quiet);
-    assert!(!config.progress);
     assert!(!config.postprocess.embed_thumbnail);
 }
 
