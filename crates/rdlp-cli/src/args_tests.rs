@@ -438,3 +438,32 @@ fn every_option_is_tiered_common_or_expert() {
         );
     }
 }
+
+#[test]
+fn short_help_footer_fits_80_columns() {
+    // clap wraps after_help at terminal width; keep the -h footer on one line.
+    assert!(
+        super::HELP_SHORT_FOOTER.chars().count() <= 78,
+        "HELP_SHORT_FOOTER is {} chars (>78, wraps at 80)",
+        super::HELP_SHORT_FOOTER.chars().count(),
+    );
+}
+
+#[test]
+fn short_help_footer_only_in_short_help() {
+    let short = Args::command().render_help().to_string();
+    let long = Args::command().render_long_help().to_string();
+    assert!(
+        short.contains("Run 'rdlp --help' for the full list"),
+        "`-h` output is missing the footer pointing to --help",
+    );
+    assert!(
+        !long.contains("Run 'rdlp --help' for the full list"),
+        "`--help` should NOT carry the short-help footer (it already lists everything)",
+    );
+    // The empty `after_long_help` must not leak a trailing blank block into --help.
+    assert!(
+        !long.ends_with("\n\n"),
+        "--help gained a stray trailing blank line from after_long_help = \"\"",
+    );
+}

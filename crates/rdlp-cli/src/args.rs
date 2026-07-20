@@ -52,6 +52,12 @@ Examples:
   rdlp --cookies-from-browser chrome URL   Use browser cookies (login-gated)
   rdlp --recode-video=mkv URL              Recode video to MKV";
 
+// Shown only in `-h` (via after_help), suppressed in `--help` by an empty
+// after_long_help — `--help` already lists every option so the pointer would be
+// noise there. Keep the line <= 78 chars (clap wraps after_help at term width).
+const HELP_SHORT_FOOTER: &str =
+    "Showing common options. Run 'rdlp --help' for the full list of options.";
+
 /// Rejects an empty or whitespace-only argument value.
 ///
 /// The shared rule behind [`non_blank`] and [`non_blank_path`]. A blank value
@@ -146,6 +152,8 @@ pub enum PluginCmd {
 #[command(version)]
 #[command(help_template = HELP_TEMPLATE)]
 #[command(before_help = HELP_EXAMPLES)]
+#[command(after_help = HELP_SHORT_FOOTER)]
+#[command(after_long_help = "")]
 pub struct Args {
     /// Video URL to download
     #[arg(value_parser = non_blank)]
