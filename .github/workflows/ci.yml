@@ -79,6 +79,20 @@ jobs:
         # decays into an unchecked claim as the matcher evolves.
         run: bash scripts/check-no-dir-sweep-delete.sh --self-test
 
+      - name: Check CLI arguments reject blank values
+        # #540: a blank value reaches the domain layer looking like a real one --
+        # `--recode-audio=` became `Encoder { name: "" }` and failed inside
+        # FFmpeg after the download completed. clap has no built-in for this and
+        # applies value_parser per field, so the risk is the next argument
+        # silently omitting the rule.
+        run: bash scripts/check-arg-blank-validation.sh
+
+      - name: Verify the blank-value gate still fires
+        # Same reasoning as the dir-sweep canary: the matcher must be proven to
+        # flag an unvalidated argument, and to STOP on a field type it cannot
+        # classify rather than skipping it and reporting OK.
+        run: bash scripts/check-arg-blank-validation.sh --self-test
+
       - name: Install semgrep
         run: pipx install semgrep || pip install semgrep
 

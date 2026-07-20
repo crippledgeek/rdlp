@@ -249,13 +249,6 @@ pub fn merge_config(
     // config file survives an invocation that does not mention it (#540). The
     // vocabulary itself is `RecodeAudioMode`'s to define, not the CLI's.
     if let Some(recode_audio) = &args.recode_audio {
-        // An empty value would become `Encoder { name: "" }` and fail inside
-        // FFmpeg long after the download finished. Reject it here, where the
-        // message can name the flag.
-        anyhow::ensure!(
-            !recode_audio.trim().is_empty(),
-            "--recode-audio requires a value: copy, auto, or an FFmpeg encoder name"
-        );
         config.postprocess.recode_audio = RecodeAudioMode::from(recode_audio.as_str());
     }
 

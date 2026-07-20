@@ -959,22 +959,138 @@ fn test_merge_config_optional_args_still_override_when_passed() {
     assert_eq!(merged.postprocess.recode_speed_level, Some(7));
 }
 
-/// An empty `--recode-audio=` must fail at parse time, not inside `FFmpeg`.
+/// Empty and whitespace-only values are rejected by clap, for every string- and
+/// path-valued arg — not just the one where the problem was first noticed.
 ///
-/// It would otherwise become `Encoder { name: "" }` and surface much later as
-/// an "unknown encoder" failure after the download completed — the same
-/// late-failure mode that made `--recode-audio=COPY` confusing (#540).
+/// A blank value otherwise reaches the domain layer as a real-looking value:
+/// `--recode-audio=` became `Encoder { name: "" }` and failed inside `FFmpeg`
+/// after the download completed. Validating at the parse boundary means clap
+/// reports it with the flag name, the offending value and usage text (#540).
 #[test]
-fn test_merge_config_rejects_empty_recode_audio() {
-    for empty in ["", "   ", "\t"] {
-        let mut args = default_args();
-        args.recode_audio = Some(empty.to_string());
-        let err = merge_config(&args, Config::default(), no_interactive())
-            .expect_err("an empty --recode-audio must be rejected");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("--recode-audio"),
-            "the error must name the flag so the user knows what to fix; got: {msg}"
+fn test_blank_values_are_rejected_at_the_parse_boundary() {
+    use clap::Parser;
+
+    let blank_forms = ["", "   ", "\t"];
+    let string_flags = [
+        "--recode-audio",
+        "--format",
+        "--output",
+        "--audio-quality",
+        "--sub-langs",
+        "--video-encoder",
+        "--recode-preset",
+        "--proxy",
+        "--limit-rate",
+        "--search",
+    ];
+    for flag in string_flags {
+        for blank in blank_forms {
+            let result = Args::try_parse_from(["rdlp", &format!("{flag}={blank}"), "URL"]);
+            assert!(
+                result.is_err(),
+                "{flag}={blank:?} must be rejected at parse time"
+            );
+        }
+    }
+
+    // Path-valued args need the same rule — a blank path is equally meaningless.
+    for flag in ["--cookies", "--download-archive", "--ffmpeg-location", "-P"] {
+        for blank in blank_forms {
+            let result = Args::try_parse_from(["rdlp", &format!("{flag}={blank}"), "URL"]);
+            assert!(
+                result.is_err(),
+                "{flag}={blank:?} must be rejected at parse time"
+            );
+        }
+    }
+}
+
+/// The rejection must name the flag and the offending value, which is what
+/// clap's `ValueValidation` error shape provides.
+#[test]
+fn test_blank_rejection_message_names_flag_and_value() {
+    use clap::Parser;
+
+    let Err(err) = Args::try_parse_from(["rdlp", "--recode-audio=   ", "URL"]) else {
+        panic!("blank must be rejected");
+    };
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains("--recode-audio"),
+        "must name the flag; got: {rendered}"
+    );
+    assert!(
+        rendered.contains("empty or whitespace-only"),
+        "must explain what was wrong; got: {rendered}"
+    );
+}
+
+/// Ordinary values must still parse — the guard must not reject real input.
+#[test]
+fn test_non_blank_values_still_parse() {
+    use clap::Parser;
+
+    let Ok(args) = Args::try_parse_from([
+        "rdlp",
+        "--recode-audio=libOpus",
+        "--format=bv+ba",
+        "--cookies=/tmp/c.txt",
+        "URL",
+    ]) else {
+        panic!("ordinary values must parse");
+    };
+    assert_eq!(args.recode_audio.as_deref(), Some("libOpus"));
+    assert_eq!(args.format.as_deref(), Some("bv+ba"));
+}
+
+/// The bare-flag forms must survive the blank-value parser.
+///
+/// `--audio-format`, `--recode-video` and `--remux` use
+/// `default_missing_value = "interactive"`, so the value clap substitutes also
+/// flows through `value_parser`. That value is non-blank, but the interaction
+/// is worth pinning: breaking it would silently disable interactive selection.
+#[test]
+fn test_bare_interactive_flags_still_parse() {
+    use clap::Parser;
+
+    for (flag, get) in [
+        ("--audio-format", 0usize),
+        ("--recode-video", 1),
+        ("--remux", 2),
+    ] {
+        let Ok(args) = Args::try_parse_from(["rdlp", flag, "URL"]) else {
+            panic!("{flag} with no value must still parse");
+        };
+        let actual = match get {
+            0 => args.audio_format.clone(),
+            1 => args.recode_video.clone(),
+            _ => args.remux.clone(),
+        };
+        assert_eq!(
+            actual.as_deref(),
+            Some("interactive"),
+            "{flag} with no value must yield the interactive sentinel"
         );
+    }
+}
+
+/// The same three flags must still REJECT an explicitly blank value.
+///
+/// `require_equals` + `default_missing_value` means bare `--remux` and
+/// `--remux=` take different paths through clap: the first substitutes the
+/// sentinel, the second supplies an empty value that must reach the parser.
+/// Pinning only the bare form would leave the rejection untested.
+#[test]
+fn test_interactive_flags_still_reject_an_explicit_blank() {
+    use clap::Parser;
+
+    for flag in ["--audio-format", "--recode-video", "--remux"] {
+        for blank in ["", "   "] {
+            let result = Args::try_parse_from(["rdlp", &format!("{flag}={blank}"), "URL"]);
+            assert!(
+                result.is_err(),
+                "{flag}={blank:?} must be rejected even though the bare flag is valid"
+            );
+        }
     }
 }
