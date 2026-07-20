@@ -264,22 +264,24 @@ mod tests {
     /// shipped a file with `moov` at the end.
     #[test]
     fn faststart_follows_the_container_type_for_every_remux_target() {
-        for (container, want) in [
-            (ContainerFormat::Mp4, true),
-            (ContainerFormat::Mov, true),
-            (ContainerFormat::M4v, true),
-            (ContainerFormat::F4v, true),
-            (ContainerFormat::Mkv, false),
-            (ContainerFormat::WebM, false),
-            (ContainerFormat::Avi, false),
-            // #538: the ASF family at the stage boundary. The
-            // `output_format == as_ext()` assertion below is the one that
-            // matters here — it pins the extension the stage propagates
-            // toward the output filename, one layer closer to the user than
+        // The third column is the expected extension as a LITERAL. Asserting
+        // against `container.as_ext()` instead would be tautological — both
+        // sides would derive from the same function, so a wrong `as_ext()`
+        // (e.g. #538's `Wmv => "asf"`) would keep this test green while the
+        // stage propagated the wrong extension toward the output filename.
+        for (container, want, want_ext) in [
+            (ContainerFormat::Mp4, true, "mp4"),
+            (ContainerFormat::Mov, true, "mov"),
+            (ContainerFormat::M4v, true, "m4v"),
+            (ContainerFormat::F4v, true, "f4v"),
+            (ContainerFormat::Mkv, false, "mkv"),
+            (ContainerFormat::WebM, false, "webm"),
+            (ContainerFormat::Avi, false, "avi"),
+            // #538: the ASF family, pinned one layer closer to the user than
             // the `rdlp-types` unit tests reach.
-            (ContainerFormat::Wmv, false),
-            (ContainerFormat::Wma, false),
-            (ContainerFormat::Asf, false),
+            (ContainerFormat::Wmv, false, "wmv"),
+            (ContainerFormat::Wma, false, "wma"),
+            (ContainerFormat::Asf, false, "asf"),
         ] {
             let config = PostProcess {
                 remux_container: Some(container),
@@ -298,7 +300,11 @@ mod tests {
                 opts.faststart, want,
                 "faststart for {container:?} must follow supports_faststart()"
             );
-            assert_eq!(opts.output_format.as_deref(), Some(container.as_ext()));
+            assert_eq!(
+                opts.output_format.as_deref(),
+                Some(want_ext),
+                "the stage must propagate the literal extension for {container:?}"
+            );
         }
     }
 
