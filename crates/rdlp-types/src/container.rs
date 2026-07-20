@@ -432,5 +432,23 @@ mod tests {
         assert!(!ContainerFormat::Mp4.is_audio_only());
         assert!(!ContainerFormat::Mkv.is_audio_only());
         assert!(!ContainerFormat::Avi.is_audio_only());
+
+        // ASF family (#538). The negative pair carries more weight than the
+        // positive: `is_audio_only` is a `matches!`, so it can never be made
+        // exhaustive — a misclassified `Wmv`/`Asf` would be silent by
+        // construction, and dropping `| Self::Wma` from the predicate must not
+        // leave the suite green.
+        assert!(
+            ContainerFormat::Wma.is_audio_only(),
+            "wma names ASF content with no supported video streams"
+        );
+        assert!(
+            !ContainerFormat::Wmv.is_audio_only(),
+            "wmv is the ASF spelling that carries video"
+        );
+        assert!(
+            !ContainerFormat::Asf.is_audio_only(),
+            "asf is the general fallback and may carry video"
+        );
     }
 }
