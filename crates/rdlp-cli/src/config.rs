@@ -88,11 +88,15 @@ fn resolve_interactive_values(args: &Args) -> Result<ResolvedInteractiveValues> 
 /// - `bool_pp: FIELD` — same, under `config.postprocess`
 /// - `opt: FIELD` — `if let Some(v) = args.FIELD.clone() { config.FIELD = Some(v); }`
 /// - `opt_pp: FIELD` — same, under `config.postprocess`
-/// - `set: FIELD` — `if let Some(v) = args.FIELD.clone() { config.FIELD = v; }`
+/// - `set: FIELD <- ARG` — `if let Some(v) = args.ARG.clone() { config.FIELD = v; }`
 ///   (config field is NOT `Option`-typed; equivalent to `.clone_from(&v)`)
 ///
-/// Each arm accepts an optional `<- arg_name` when the CLI arg name differs
-/// from the config field name (e.g. `opt: cookies_file <- cookies`).
+/// Only `opt:` and `set:` support an optional/required `<- arg_name` arrow for
+/// when the CLI arg name differs from the config field name (e.g.
+/// `opt: cookies_file <- cookies`). It is optional on `opt:` (defaults to the
+/// field name) but required on `set:` (no bare `set: FIELD` arm exists).
+/// `bool:`, `bool_pp:`, and `opt_pp:` have no arrow variant — they always read
+/// `args.FIELD` under the same name as the config field.
 macro_rules! merge_fields {
     ($config:expr, $args:expr, { $($arm:ident : $field:ident $(<- $arg:ident)?),+ $(,)? }) => {
         $(
