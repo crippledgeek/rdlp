@@ -173,24 +173,6 @@ pub fn merge_config(
 ) -> Result<Config> {
     let mut config = file_config;
 
-    // Output: -o - means stdout streaming
-    if args.output.as_deref() == Some("-") {
-        config.output_to_stdout = true;
-        // Force quiet mode — progress/log output would corrupt the byte stream.
-        // `quiet` is what actually suppresses the progress bar: the CLI event
-        // handler is constructed from it directly (see `main.rs`).
-        config.quiet = true;
-        // Disable embed_thumbnail before validation: the default is `true`, and
-        // Config::validate() would reject stdout + embed-thumbnail.
-        if config.postprocess.embed_thumbnail {
-            // Use eprintln, not warn!(): the tracing subscriber is not
-            // initialised yet (it happens after build_config returns).
-            eprintln!("Warning: disabling --embed-thumbnail (incompatible with -o -)");
-            config.postprocess.embed_thumbnail = false;
-        }
-    } else if let Some(ref output) = args.output {
-        config.output_template.clone_from(output);
-    }
     merge_fields!(config, args, {
         set: output_directory <- output_dir,
         opt: format,
@@ -226,6 +208,36 @@ pub fn merge_config(
         opt: cookies_file <- cookies,
         opt: download_archive,
     });
+
+    // === Exceptions: post-merge invariant restoration ===
+    //
+    // These are deliberately NOT in `merge_fields!`. Each depends on the
+    // merged value of another field, or combines layers rather than
+    // overwriting, so it cannot be expressed as an independent per-field
+    // rule. They run AFTER the mechanical pass so they see final values.
+    //
+    // Every field touched here must also appear in the canary
+    // (`every_config_field_is_classified`) — the canary is what proves the
+    // declared set and this set together cover all 97 fields.
+
+    // Output: -o - means stdout streaming
+    if args.output.as_deref() == Some("-") {
+        config.output_to_stdout = true;
+        // Force quiet mode — progress/log output would corrupt the byte stream.
+        // `quiet` is what actually suppresses the progress bar: the CLI event
+        // handler is constructed from it directly (see `main.rs`).
+        config.quiet = true;
+        // Disable embed_thumbnail before validation: the default is `true`, and
+        // Config::validate() would reject stdout + embed-thumbnail.
+        if config.postprocess.embed_thumbnail {
+            // Use eprintln, not warn!(): the tracing subscriber is not
+            // initialised yet (it happens after build_config returns).
+            eprintln!("Warning: disabling --embed-thumbnail (incompatible with -o -)");
+            config.postprocess.embed_thumbnail = false;
+        }
+    } else if let Some(ref output) = args.output {
+        config.output_template.clone_from(output);
+    }
 
     // Audio format: interactive (pre-resolved) or direct parse
     if let Some(fmt) = interactive_values.audio_format {
