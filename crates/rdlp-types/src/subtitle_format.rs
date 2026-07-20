@@ -1,10 +1,12 @@
 //! Subtitle format types
 
 use serde::{Deserialize, Serialize};
-use strum_macros::{Display, EnumString};
+use strum_macros::{Display, EnumIter, EnumString};
 
 /// Supported subtitle formats.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString, EnumIter,
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive)]
 pub enum SubtitleFormat {
@@ -12,7 +14,7 @@ pub enum SubtitleFormat {
     #[strum(serialize = "srt")]
     Srt,
     /// Web Video Text Tracks
-    #[strum(serialize = "vtt", serialize = "webvtt")]
+    #[strum(to_string = "vtt", serialize = "webvtt")]
     Vtt,
     /// Advanced `SubStation` Alpha
     #[strum(serialize = "ass")]
@@ -43,6 +45,35 @@ impl SubtitleFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use strum::IntoEnumIterator;
+
+    /// `Display` must render the file extension, not whichever strum alias
+    /// happens to be longest (#580, mirroring the `ContainerFormat` guard from
+    /// #545). Unlike `AudioFormat`, this enum has a single string projection,
+    /// so `as_ext` is the one `Display` must agree with.
+    #[test]
+    fn test_display_equals_as_ext() {
+        for fmt in SubtitleFormat::iter() {
+            assert_eq!(
+                fmt.to_string(),
+                fmt.as_ext(),
+                "Display for {fmt:?} must equal as_ext()"
+            );
+        }
+    }
+
+    /// Promoting `vtt` from `serialize` to `to_string` must not drop `webvtt`:
+    /// strum's `FromStr` table is `serialize` **plus** `to_string` (#580).
+    #[test]
+    fn test_to_string_promotion_preserved_every_spelling() {
+        for input in ["vtt", "webvtt", "VTT", "WebVTT"] {
+            assert_eq!(
+                input.parse::<SubtitleFormat>().unwrap(),
+                SubtitleFormat::Vtt,
+                "{input} must still parse after the to_string promotion"
+            );
+        }
+    }
 
     #[test]
     fn test_display_roundtrip() {
