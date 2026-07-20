@@ -236,3 +236,53 @@ fn every_value_flag_has_a_tight_explicit_placeholder() {
         "expected 43 value-taking flags; got {checked} — a flag was added or removed",
     );
 }
+
+#[test]
+fn examples_lead_the_help_before_options() {
+    let short = Args::command().render_help().to_string();
+    let long = Args::command().render_long_help().to_string();
+
+    for (label, help) in [("-h", &short), ("--help", &long)] {
+        // The examples block renders…
+        let ex = help
+            .find("Examples:")
+            .unwrap_or_else(|| panic!("`{label}` help is missing the Examples block"));
+        // …after the about line…
+        let about = help
+            .find("Rust Download Program")
+            .unwrap_or_else(|| panic!("`{label}` help is missing the about line"));
+        // …before the first option heading (General) and before the Usage line.
+        let general = help
+            .find("General")
+            .unwrap_or_else(|| panic!("`{label}` help is missing the General heading"));
+        let usage = help
+            .find("Usage:")
+            .unwrap_or_else(|| panic!("`{label}` help is missing the Usage line"));
+
+        assert!(about < ex, "`{label}`: about should precede Examples");
+        assert!(ex < usage, "`{label}`: Examples should precede Usage");
+        assert!(
+            ex < general,
+            "`{label}`: Examples should precede the option list"
+        );
+        // A representative example command is present.
+        assert!(
+            help.contains("--cookies-from-browser chrome"),
+            "`{label}` help is missing a representative example line",
+        );
+    }
+}
+
+#[test]
+fn help_examples_lines_fit_80_columns() {
+    // 80 cols is the conventional terminal default; a longer example line
+    // hard-wraps and breaks the aligned Examples table. clap does not
+    // re-indent wrapped before_help continuation lines.
+    for line in super::HELP_EXAMPLES.lines() {
+        assert!(
+            line.chars().count() <= 78,
+            "example line is {} chars (>78, wraps at 80): {line:?}",
+            line.chars().count(),
+        );
+    }
+}

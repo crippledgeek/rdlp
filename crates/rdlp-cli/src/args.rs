@@ -30,6 +30,28 @@ pub const HELP_HEADING_SEARCH: &str = "Search";
 /// Config file loading and plugin trust management.
 pub const HELP_HEADING_CONFIG: &str = "Configuration & Plugins";
 
+// Help layout: place the examples (`before_help`) AFTER the about line and
+// BEFORE usage — GNU tar / clig.dev "lead with examples" — in both `-h` and
+// `--help`. clap's default template has no slot there; this reorders the
+// standard placeholders (verified: clap_builder command.rs help_template).
+const HELP_TEMPLATE: &str = "\
+{about}
+
+{before-help}{usage-heading} {usage}
+
+{all-args}{after-help}";
+
+// Rendered in both `-h` and `--help` (before_help, not before_long_help). Every
+// line MUST stay <= 78 chars (guarded by `help_examples_lines_fit_80_columns`)
+// so it doesn't hard-wrap on an 80-col terminal — clap does not re-indent a
+// wrapped before_help continuation line, which would break the aligned table.
+const HELP_EXAMPLES: &str = "\
+Examples:
+  rdlp URL                                 Download a video (auto-resume)
+  rdlp -i URL                              Pick format/quality interactively
+  rdlp --cookies-from-browser chrome URL   Use browser cookies (login-gated)
+  rdlp --recode-video=mkv URL              Recode video to MKV";
+
 /// Rejects an empty or whitespace-only argument value.
 ///
 /// The shared rule behind [`non_blank`] and [`non_blank_path`]. A blank value
@@ -122,6 +144,8 @@ pub enum PluginCmd {
 #[command(name = "rdlp")]
 #[command(about = "Rust Download Program - A video downloader", long_about = None)]
 #[command(version)]
+#[command(help_template = HELP_TEMPLATE)]
+#[command(before_help = HELP_EXAMPLES)]
 pub struct Args {
     /// Video URL to download
     #[arg(value_parser = non_blank)]
