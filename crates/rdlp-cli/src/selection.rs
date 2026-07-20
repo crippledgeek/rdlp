@@ -29,7 +29,11 @@ pub fn select_remux_container() -> Result<Option<ContainerFormat>> {
         (ContainerFormat::ThreeGp, "3GPP mobile video"),
         (ContainerFormat::Mpg, "MPEG-1/2 program stream"),
         (ContainerFormat::F4v, "Flash Video (MP4 variant)"),
-        (ContainerFormat::Asf, "Windows Media / ASF"),
+        (ContainerFormat::Wmv, "Windows Media Video"),
+        (
+            ContainerFormat::Asf,
+            "Advanced Systems Format (third-party codecs)",
+        ),
         (
             ContainerFormat::Mxf,
             "Material eXchange, broadcast/professional",
@@ -51,6 +55,7 @@ pub fn select_remux_container() -> Result<Option<ContainerFormat>> {
         (ContainerFormat::Wv, "Audio only, WavPack lossless"),
         (ContainerFormat::Caf, "Audio only, Core Audio Format"),
         (ContainerFormat::Ac3, "Audio only, Dolby AC-3"),
+        (ContainerFormat::Wma, "Audio only, Windows Media Audio"),
     ];
 
     let items: Vec<String> = containers
@@ -110,7 +115,7 @@ pub fn select_recode_video() -> Result<Option<ContainerFormat>> {
         (ContainerFormat::Ts, "h264", "MPEG-TS, H.264"),
         (ContainerFormat::ThreeGp, "h264", "3GPP mobile, H.264"),
         (ContainerFormat::Flv, "h264", "Flash Video, H.264"),
-        (ContainerFormat::Asf, "wmv2", "Windows Media, WMV2"),
+        (ContainerFormat::Wmv, "wmv2", "Windows Media Video, WMV2"),
     ];
 
     let items: Vec<String> = formats

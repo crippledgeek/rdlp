@@ -75,7 +75,11 @@ impl RecodeStage {
             ContainerFormat::ThreeGp => {
                 video_codec.is_some_and(|c| codec_is(c, &["h264", "avc", "h263", "mpeg4"]))
             }
-            ContainerFormat::Asf => {
+            // All three ASF-family spellings share one muxer and therefore one
+            // codec-compatibility answer. Listed explicitly rather than left to
+            // the `other` arm below: falling through would silently swap this
+            // codec check for an extension compare when #538 split the variants.
+            ContainerFormat::Wmv | ContainerFormat::Wma | ContainerFormat::Asf => {
                 video_codec.is_some_and(|c| codec_is(c, &["wmv1", "wmv2", "h264", "avc", "mpeg4"]))
             }
             ContainerFormat::Mpg | ContainerFormat::Vob => video_codec.is_some_and(|c| {
