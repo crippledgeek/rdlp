@@ -5,7 +5,7 @@ use crate::args::Args;
 use rdlp_api::{AudioFormat, Config, FixupPolicy, SubtitleFormat};
 
 /// Helper: create default Args for testing (all fields at defaults).
-pub fn default_args() -> Args {
+fn default_args() -> Args {
     Args {
         url: None,
         output: None,

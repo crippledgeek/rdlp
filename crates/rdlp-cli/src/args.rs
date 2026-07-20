@@ -95,7 +95,6 @@ pub enum PluginCmd {
 // would obscure the one-to-one correspondence with CLI flags.
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Parser)]
-#[cfg_attr(test, derive(Debug))]
 #[command(name = "rdlp")]
 #[command(about = "Rust Download Program - A video downloader", long_about = None)]
 #[command(version)]

@@ -444,9 +444,5 @@ pub fn build_config(args: &Args) -> Result<Config> {
 }
 
 #[cfg(test)]
-#[path = "config_legacy.rs"]
-pub mod config_legacy;
-
-#[cfg(test)]
 #[path = "config_tests.rs"]
 pub mod tests;
