@@ -6,6 +6,43 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+/// Rejects an empty or whitespace-only argument value.
+///
+/// The shared rule behind [`non_blank`] and [`non_blank_path`]. A blank value
+/// otherwise reaches the domain layer looking like a real one: `--recode-audio=`
+/// became `RecodeAudioMode::Encoder { name: "" }` and failed inside `FFmpeg`
+/// after the download had already completed (#540).
+///
+/// clap's own [`NonEmptyStringValueParser`] is not enough — it tests
+/// `OsStr::is_empty()` only, so `--flag="   "` passes straight through it.
+///
+/// [`NonEmptyStringValueParser`]: clap::builder::NonEmptyStringValueParser
+fn reject_blank(value: &str) -> Result<&str, String> {
+    if value.trim().is_empty() {
+        Err("value must not be empty or whitespace-only".to_owned())
+    } else {
+        Ok(value)
+    }
+}
+
+/// `value_parser` for string-valued arguments.
+///
+/// A bare `Fn(&str) -> Result<T, E>` is itself a `TypedValueParser` (clap's
+/// blanket impl), so this needs no wrapper type. Rejections travel through
+/// `Error::value_validation`, which renders the flag name, the offending value
+/// and the usage line — context a post-parse check cannot recover.
+fn non_blank(value: &str) -> Result<String, String> {
+    reject_blank(value).map(ToOwned::to_owned)
+}
+
+/// `value_parser` for path-valued arguments.
+///
+/// Same rule as [`non_blank`], typed for the `PathBuf` args — a blank path is
+/// no more meaningful than a blank string.
+fn non_blank_path(value: &str) -> Result<PathBuf, String> {
+    reject_blank(value).map(PathBuf::from)
+}
+
 /// Plugin management subcommands.
 #[derive(Subcommand, Debug)]
 pub enum PluginCmd {
@@ -14,35 +51,41 @@ pub enum PluginCmd {
     /// Show details for a specific plugin.
     Info {
         /// Plugin name.
+        #[arg(value_parser = non_blank)]
         name: String,
     },
     /// Accept a new identity for an already-installed plugin (use after the
     /// publisher legitimately rotated their signing key).
     Retrust {
         /// Plugin name.
+        #[arg(value_parser = non_blank)]
         name: String,
     },
     /// Disable a plugin for future runs (writes to disabled list).
     Disable {
         /// Plugin name.
+        #[arg(value_parser = non_blank)]
         name: String,
     },
     /// Re-enable a previously disabled plugin.
     Enable {
         /// Plugin name.
+        #[arg(value_parser = non_blank)]
         name: String,
     },
     /// Remove a plugin entirely (deletes the plugin directory + trust entry).
     Uninstall {
         /// Plugin name.
+        #[arg(value_parser = non_blank)]
         name: String,
     },
     /// Build a `.wasm` plugin from a yt-dlp-style Python extractor.
     BuildFromYtdlp {
         /// Path to the yt-dlp extractor .py file.
+        #[arg(value_parser = non_blank_path)]
         plugin_py: std::path::PathBuf,
         /// Output directory (defaults to the parent of `plugin_py`).
-        #[arg(short = 'o', long)]
+        #[arg(short = 'o', long, value_parser = non_blank_path)]
         output_dir: Option<std::path::PathBuf>,
     },
 }
@@ -57,6 +100,7 @@ pub enum PluginCmd {
 #[command(version)]
 pub struct Args {
     /// Video URL to download
+    #[arg(value_parser = non_blank)]
     pub url: Option<String>,
 
     /// Output template or directory (e.g., "%(title)s.%(ext)s" or "./downloads/")
@@ -65,15 +109,15 @@ pub struct Args {
     /// `%(epoch)s` render a different name each run, so an interrupted download cannot
     /// be resumed and restarts from zero. Build the template from stable metadata
     /// (`title`, `id`, `uploader`, `ext`, `upload_date`) for resumable downloads.
-    #[arg(short, long)]
+    #[arg(short, long, value_parser = non_blank)]
     pub output: Option<String>,
 
     /// Output directory (always sets base directory, combinable with -o template)
-    #[arg(short = 'P', long = "paths")]
+    #[arg(short = 'P', long = "paths", value_parser = non_blank_path)]
     pub output_dir: Option<PathBuf>,
 
     /// Format selection (e.g., "best", "bestvideo+bestaudio")
-    #[arg(short, long)]
+    #[arg(short, long, value_parser = non_blank)]
     pub format: Option<String>,
 
     /// Require strict video-only + audio-only streams for merge.
@@ -115,7 +159,7 @@ pub struct Args {
 
     /// Print specific field(s) from metadata (no download)
     /// e.g., --print title or --print "id,title,extractor"
-    #[arg(long)]
+    #[arg(long, value_parser = non_blank)]
     pub print: Option<String>,
 
     /// Interactive format selection
@@ -129,11 +173,11 @@ pub struct Args {
 
     /// Audio format for extraction
     /// Use --audio-format for interactive, --audio-format=mp3 for direct
-    #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true)]
+    #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true, value_parser = non_blank)]
     pub audio_format: Option<String>,
 
     /// Audio quality (VBR level 0-9 or bitrate like "192K")
-    #[arg(long)]
+    #[arg(long, value_parser = non_blank)]
     pub audio_quality: Option<String>,
 
     /// Embed metadata (title, artist, etc.) in the file
@@ -159,11 +203,11 @@ pub struct Args {
 
     /// Subtitle languages to download (comma-separated, e.g., "en,es")
     /// Use "all" to download all available
-    #[arg(long, alias = "sub-langs")]
+    #[arg(long, alias = "sub-langs", value_parser = non_blank)]
     pub sub_langs: Option<String>,
 
     /// Preferred subtitle format (srt, vtt, ass, ssa, lrc)
-    #[arg(long, alias = "sub-format")]
+    #[arg(long, alias = "sub-format", value_parser = non_blank)]
     pub sub_format: Option<String>,
 
     /// Embed subtitles in video file (requires `FFmpeg`)
@@ -192,7 +236,7 @@ pub struct Args {
 
     /// Video encoder to use (e.g., libsvtav1, libx264).
     /// Overrides automatic encoder selection.
-    #[arg(long, value_name = "NAME")]
+    #[arg(long, value_name = "NAME", value_parser = non_blank)]
     pub video_encoder: Option<String>,
 
     /// List available video encoders and exit.
@@ -201,20 +245,27 @@ pub struct Args {
 
     /// Convert video to specified format
     /// Use --recode-video for interactive, --recode-video=mp4 for direct
-    #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true)]
+    #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true, value_parser = non_blank)]
     pub recode_video: Option<String>,
 
     /// Target container format for video recode (e.g., mp4, mkv, webm).
     /// Takes precedence over --recode-video when both are specified.
-    #[arg(long, value_name = "FMT")]
+    #[arg(long, value_name = "FMT", value_parser = non_blank)]
     pub recode_container: Option<String>,
 
     /// Audio mode during video recode: copy (default), auto, or an encoder name
     /// (e.g., libopus, aac, libmp3lame).
     /// `copy` copies audio unchanged; `auto` selects the best encoder for the
     /// target container; any other value is treated as an explicit encoder name.
-    #[arg(long, value_name = "MODE", default_value = "copy")]
-    pub recode_audio: String,
+    //
+    // Deliberately no clap `default_value`: absent must mean "not specified on
+    // the command line" so a `recode_audio` set in the config file survives. A
+    // default made that indistinguishable from an explicit `copy`, and the
+    // unconditional assignment downstream then discarded the config value on
+    // every run (#540). Plain `//` — a `///` here would print this note in
+    // `rdlp --help`.
+    #[arg(long, value_name = "MODE", value_parser = non_blank)]
+    pub recode_audio: Option<String>,
 
     // Help text hardcodes the bounds: keep `1-64` in sync with
     // `rdlp_types::config::MAX_RECODE_THREADS` and `8` in sync with
@@ -225,11 +276,11 @@ pub struct Args {
 
     /// Encoder preset override for video recode (e.g. `faster`, `medium`, `slow`).
     /// Omit to use the per-codec default. `libvvenc`: try `faster` for speed.
-    #[arg(long, value_name = "PRESET")]
+    #[arg(long, value_name = "PRESET", value_parser = non_blank)]
     pub recode_preset: Option<String>,
 
     /// libvpx deadline for VP8/VP9 recode: best | good | realtime.
-    #[arg(long, value_name = "MODE")]
+    #[arg(long, value_name = "MODE", value_parser = non_blank)]
     pub recode_deadline: Option<String>,
 
     /// libvpx cpu-used for VP8/VP9 recode (VP9: -8..8, VP8: -16..16).
@@ -242,7 +293,7 @@ pub struct Args {
 
     /// Remux to container for better seeking - no re-encoding
     /// Use --remux for interactive, --remux=mp4 for direct
-    #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true)]
+    #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true, value_parser = non_blank)]
     pub remux: Option<String>,
 
     /// Normalize audio levels (peak mode: volume + limiter)
@@ -258,7 +309,7 @@ pub struct Args {
     pub audio_gain_target: Option<f64>,
 
     /// Loudnorm preset: broadcast (-23 LUFS), streaming (-14 LUFS), loud (-11 LUFS)
-    #[arg(long)]
+    #[arg(long, value_parser = non_blank)]
     pub loudnorm_preset: Option<String>,
 
     /// Target integrated loudness in LUFS for loudnorm (e.g., -14)
@@ -291,7 +342,7 @@ pub struct Args {
     pub normalize_boost_db: Option<f64>,
 
     /// Fixup policy: never, warn, `detect_or_warn` (default: `detect_or_warn`)
-    #[arg(long, default_value = "detect_or_warn")]
+    #[arg(long, default_value = "detect_or_warn", value_parser = non_blank)]
     pub fixup: String,
 
     /// Keep original video file after post-processing
@@ -299,12 +350,12 @@ pub struct Args {
     pub keep_video: bool,
 
     /// Path to `FFmpeg` executable (if not in PATH)
-    #[arg(long)]
+    #[arg(long, value_parser = non_blank_path)]
     pub ffmpeg_location: Option<PathBuf>,
 
     // === Network options ===
     /// HTTP/HTTPS/SOCKS proxy URL (e.g., <socks5://127.0.0.1:1080>)
-    #[arg(long)]
+    #[arg(long, value_parser = non_blank)]
     pub proxy: Option<String>,
 
     /// Connect/handshake timeout in seconds.
@@ -340,42 +391,42 @@ pub struct Args {
     /// identifier like chrome-137). Controls JA4 / JA4H fingerprint.
     /// Falls back to the `RDLP_BROWSER_EMULATION` env var, then
     /// `ChromeLatest`.
-    #[arg(long, value_name = "PROFILE")]
+    #[arg(long, value_name = "PROFILE", value_parser = non_blank)]
     pub browser: Option<String>,
 
     /// Limit download speed (e.g., "1M", "500K", "10M", "2.5M")
-    #[arg(long, short = 'r')]
+    #[arg(long, short = 'r', value_parser = non_blank)]
     pub limit_rate: Option<String>,
 
     // === Cookie options ===
     /// Load cookies from browser (chrome, firefox)
-    #[arg(long)]
+    #[arg(long, value_parser = non_blank)]
     pub cookies_from_browser: Option<String>,
 
     /// Path to Netscape-format cookies file
-    #[arg(long)]
+    #[arg(long, value_parser = non_blank_path)]
     pub cookies: Option<PathBuf>,
 
     /// Path to download archive file (skip already-downloaded videos)
-    #[arg(long)]
+    #[arg(long, value_parser = non_blank_path)]
     pub download_archive: Option<PathBuf>,
 
     /// Filter videos by metadata (yt-dlp syntax). Repeatable (OR logic between filters).
     /// Examples: "duration > 60", "!`is_live`", "title *= cats", "`like_count` >? 100"
-    #[arg(long = "match-filter", action = clap::ArgAction::Append)]
+    #[arg(long = "match-filter", action = clap::ArgAction::Append, value_parser = non_blank)]
     pub match_filter: Vec<String>,
 
     // === Search options ===
     /// Perform a keyword search instead of downloading a URL
-    #[arg(long)]
+    #[arg(long, value_parser = non_blank)]
     pub search: Option<String>,
 
     /// Site to search (required with --search, e.g., "xhamster")
-    #[arg(long)]
+    #[arg(long, value_parser = non_blank)]
     pub search_site: Option<String>,
 
     /// Search filter in key=value format (repeatable)
-    #[arg(long = "search-filter")]
+    #[arg(long = "search-filter", value_parser = non_blank)]
     pub search_filter: Vec<String>,
 
     // === Config file options ===
@@ -384,14 +435,14 @@ pub struct Args {
     pub ignore_config: bool,
 
     /// Path to config file (TOML format)
-    #[arg(long)]
+    #[arg(long, value_parser = non_blank_path)]
     pub config_location: Option<PathBuf>,
 
     // === Plugin options ===
     /// Pre-trust a publisher identity for non-interactive plugin install.
     /// Pass repeatedly for multiple identities.
     /// Format: `sigstore:github:user/repo` or `ed25519:<8-byte-hex>`.
-    #[arg(long, global = true)]
+    #[arg(long, global = true, value_parser = non_blank)]
     pub trust_publisher: Vec<String>,
 
     /// Plugin management subcommand.

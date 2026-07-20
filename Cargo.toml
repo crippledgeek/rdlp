@@ -87,6 +87,10 @@ url = "2.5"
 scraper = "0.25"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+# `DeserializeFromStr` lets the format enums derive Deserialize from their strum
+# `FromStr`, so the config file and the CLI cannot accept different vocabularies
+# (#540). Already in the tree transitively via dash-mpd/sigstore/tauri-utils.
+serde_with = { version = "3.18", default-features = false, features = ["macros"] }
 m3u8-rs = "6.0"  # HLS playlist parser
 dash-mpd = { version = "0.20", default-features = false }  # DASH MPD parser
 
@@ -101,7 +105,7 @@ backon = { version = "1.6", features = ["tokio-sleep"] }
 boa_engine = "0.21"
 
 # CLI
-clap = { version = "4.5", features = ["derive", "cargo"] }
+clap = { version = "4.6", features = ["derive", "cargo"] }
 indicatif = "0.18.3"
 inquire = "0.9"
 

@@ -8,6 +8,11 @@
 
 mod args;
 mod commands;
+// Must stay private and absent from `lib.rs`. `merge_config` trusts that its
+// `Args` came from clap, which is where blank-value rejection now lives (#540);
+// the post-parse guard was removed as redundant. Re-declaring this as
+// `pub mod config` in lib.rs is a one-line change that would hand any dependent
+// crate an unvalidated `merge_config`.
 mod config;
 mod plugin_cmd;
 mod selection;

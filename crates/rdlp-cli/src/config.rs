@@ -70,6 +70,27 @@ fn resolve_interactive_values(args: &Args) -> Result<ResolvedInteractiveValues> 
     })
 }
 
+/// Merge an optional CLI arg into config, leaving the config-file value intact
+/// when the flag was not passed.
+///
+/// An omitted flag is `None`, so assigning it unconditionally writes `None` over
+/// whatever the config file set — silently discarding the user's value. That is
+/// exactly what `recode_cpu_used` and `recode_speed_level` did before #540,
+/// while their neighbours hand-wrote the correct `if let Some(..)` guard. This
+/// macro exists so the correct behaviour is the shorter thing to write.
+macro_rules! merge_opt {
+    ($config:expr, $args:expr, $field:ident) => {
+        if let Some(value) = $args.$field.clone() {
+            $config.$field = Some(value);
+        }
+    };
+    ($config:expr, $args:expr, postprocess.$field:ident) => {
+        if let Some(value) = $args.$field.clone() {
+            $config.postprocess.$field = Some(value);
+        }
+    };
+}
+
 /// Merge a boolean CLI flag into config (sets to true if flag is set).
 macro_rules! merge_bool {
     ($config:expr, $args:expr, $field:ident) => {
@@ -212,12 +233,8 @@ pub fn merge_config(
         );
     }
 
-    if let Some(threads) = args.recode_threads {
-        config.postprocess.recode_threads = Some(threads);
-    }
-    if let Some(ref preset) = args.recode_preset {
-        config.postprocess.recode_preset = Some(preset.clone());
-    }
+    merge_opt!(config, args, postprocess.recode_threads);
+    merge_opt!(config, args, postprocess.recode_preset);
     if let Some(ref deadline) = args.recode_deadline {
         config.postprocess.recode_deadline = Some(
             deadline
@@ -225,18 +242,14 @@ pub fn merge_config(
                 .map_err(|e| anyhow::anyhow!("invalid --recode-deadline: {e}"))?,
         );
     }
-    config.postprocess.recode_cpu_used = args.recode_cpu_used;
-    config.postprocess.recode_speed_level = args.recode_speed_level;
+    merge_opt!(config, args, postprocess.recode_cpu_used);
+    merge_opt!(config, args, postprocess.recode_speed_level);
 
-    // recode_audio: "copy", "auto", or an encoder name
-    match args.recode_audio.as_str() {
-        "copy" => config.postprocess.recode_audio = RecodeAudioMode::Copy,
-        "auto" => config.postprocess.recode_audio = RecodeAudioMode::Auto,
-        name => {
-            config.postprocess.recode_audio = RecodeAudioMode::Encoder {
-                name: name.to_string(),
-            };
-        }
+    // Assigned only when the flag is present, so a `recode_audio` set in the
+    // config file survives an invocation that does not mention it (#540). The
+    // vocabulary itself is `RecodeAudioMode`'s to define, not the CLI's.
+    if let Some(recode_audio) = &args.recode_audio {
+        config.postprocess.recode_audio = RecodeAudioMode::from(recode_audio.as_str());
     }
 
     // Audio normalization: --normalize-boost / --normalize-boost-db implies --loudnorm
@@ -295,21 +308,11 @@ pub fn merge_config(
             .map_err(|e| anyhow::anyhow!("--proxy validation failed: {e}"))?;
         config.proxy = Some(proxy.clone());
     }
-    if let Some(secs) = args.socket_timeout {
-        config.socket_timeout = Some(secs);
-    }
-    if let Some(secs) = args.read_timeout {
-        config.read_timeout = Some(secs);
-    }
-    if let Some(secs) = args.pool_idle_timeout {
-        config.pool_idle_timeout = Some(secs);
-    }
-    if let Some(secs) = args.download_timeout {
-        config.download_timeout = Some(secs);
-    }
-    if let Some(secs) = args.merge_timeout {
-        config.merge_timeout = Some(secs);
-    }
+    merge_opt!(config, args, socket_timeout);
+    merge_opt!(config, args, read_timeout);
+    merge_opt!(config, args, pool_idle_timeout);
+    merge_opt!(config, args, download_timeout);
+    merge_opt!(config, args, merge_timeout);
     // Browser emulation: CLI flag > env var > default (ChromeLatest).
     if let Some(ref cli_browser) = args.browser {
         config.browser_emulation = parse_browser_emulation(cli_browser);

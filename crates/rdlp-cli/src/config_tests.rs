@@ -69,7 +69,7 @@ fn default_args() -> Args {
         video_encoder: None,
         list_encoders: false,
         recode_container: None,
-        recode_audio: "copy".to_string(),
+        recode_audio: None,
         recode_threads: None,
         recode_preset: None,
         recode_deadline: None,
@@ -796,4 +796,301 @@ fn negative_cpu_used_parses_both_forms() {
         Args::parse_from(["rdlp", "--recode-cpu-used", "-8", "URL"]).recode_cpu_used,
         Some(-8)
     );
+}
+
+/// `--recode-audio` must accept `copy`/`auto` in any case, like every
+/// neighbouring format flag (#540).
+///
+/// Before the fix the match was case-sensitive, so `--recode-audio=COPY`
+/// silently became `RecodeAudioMode::Encoder { name: "COPY" }` and failed much
+/// later inside `FFmpeg` with a confusing "unknown encoder" error, rather than
+/// being recognised as the stream-copy mode the user asked for.
+#[test]
+fn test_merge_config_recode_audio_mode_is_case_insensitive() {
+    for spelling in ["copy", "COPY", "Copy", "cOpY"] {
+        let mut args = default_args();
+        args.recode_audio = Some(spelling.to_string());
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+        assert_eq!(
+            config.postprocess.recode_audio,
+            RecodeAudioMode::Copy,
+            "--recode-audio={spelling} must mean Copy"
+        );
+    }
+
+    for spelling in ["auto", "AUTO", "Auto"] {
+        let mut args = default_args();
+        args.recode_audio = Some(spelling.to_string());
+        let config =
+            merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+        assert_eq!(
+            config.postprocess.recode_audio,
+            RecodeAudioMode::Auto,
+            "--recode-audio={spelling} must mean Auto"
+        );
+    }
+}
+
+/// An explicit encoder name must survive verbatim — case-folding the mode
+/// keywords must not case-fold the encoder name, which `FFmpeg` matches exactly.
+#[test]
+fn test_merge_config_recode_audio_encoder_name_preserved() {
+    let mut args = default_args();
+    args.recode_audio = Some("libOpus".to_string());
+    let config =
+        merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
+    assert_eq!(
+        config.postprocess.recode_audio,
+        RecodeAudioMode::Encoder {
+            name: "libOpus".to_string()
+        },
+        "encoder names are passed to FFmpeg verbatim and must not be lowercased"
+    );
+}
+
+/// A `recode_audio` set in `config.toml` must survive when the flag is omitted.
+///
+/// The arg carried `default_value = "copy"` and was assigned unconditionally,
+/// so the clap default silently overwrote the config file's value on every run
+/// — the user's setting was discarded with no error. The adjacent `fixup` arg
+/// avoids this by guarding on its default; this one did not (#540).
+#[test]
+fn test_merge_config_file_recode_audio_survives_when_flag_omitted() {
+    let args = default_args(); // no --recode-audio passed
+    let mut file_config = Config::default();
+    file_config.postprocess.recode_audio = RecodeAudioMode::Encoder {
+        name: "libopus".to_string(),
+    };
+
+    let merged = merge_config(&args, file_config, no_interactive()).expect("merge should succeed");
+
+    assert_eq!(
+        merged.postprocess.recode_audio,
+        RecodeAudioMode::Encoder {
+            name: "libopus".to_string()
+        },
+        "config.toml's recode_audio must not be clobbered by the CLI default"
+    );
+}
+
+/// The flag must still win when it IS passed — including when the user
+/// explicitly asks for the same value as the old default.
+///
+/// A naive `if args.recode_audio != "copy"` guard would fix the clobber but
+/// break this: an explicit `--recode-audio=copy` would be indistinguishable
+/// from the default and the config file would wrongly win.
+#[test]
+fn test_merge_config_explicit_recode_audio_overrides_file() {
+    let mut file_config = Config::default();
+    file_config.postprocess.recode_audio = RecodeAudioMode::Encoder {
+        name: "libopus".to_string(),
+    };
+
+    let mut args = default_args();
+    args.recode_audio = Some("copy".to_string());
+    let merged =
+        merge_config(&args, file_config.clone(), no_interactive()).expect("merge should succeed");
+    assert_eq!(
+        merged.postprocess.recode_audio,
+        RecodeAudioMode::Copy,
+        "an explicit --recode-audio=copy must override the config file"
+    );
+
+    let mut args = default_args();
+    args.recode_audio = Some("libfdk_aac".to_string());
+    let merged = merge_config(&args, file_config, no_interactive()).expect("merge should succeed");
+    assert_eq!(
+        merged.postprocess.recode_audio,
+        RecodeAudioMode::Encoder {
+            name: "libfdk_aac".to_string()
+        },
+        "an explicit encoder must override the config file"
+    );
+}
+
+/// Optional CLI args must not overwrite config-file values when omitted.
+///
+/// `recode_cpu_used` and `recode_speed_level` were assigned unconditionally, so
+/// running with no flags wrote `None` over whatever the config file had set —
+/// silently discarding the user's tuning. Their immediate neighbours
+/// (`recode_threads`, `recode_preset`) guard correctly, which is what made the
+/// omission easy to miss (#540).
+#[test]
+fn test_merge_config_optional_args_do_not_clobber_config_file() {
+    let args = default_args(); // no flags passed
+    let mut file_config = Config::default();
+    file_config.postprocess.recode_cpu_used = Some(4);
+    file_config.postprocess.recode_speed_level = Some(3);
+    file_config.postprocess.recode_threads = Some(8);
+    file_config.postprocess.recode_preset = Some("slow".to_string());
+
+    let merged = merge_config(&args, file_config, no_interactive()).expect("merge should succeed");
+
+    assert_eq!(
+        merged.postprocess.recode_cpu_used,
+        Some(4),
+        "config.toml's recode_cpu_used must survive an invocation without the flag"
+    );
+    assert_eq!(
+        merged.postprocess.recode_speed_level,
+        Some(3),
+        "config.toml's recode_speed_level must survive an invocation without the flag"
+    );
+    assert_eq!(merged.postprocess.recode_threads, Some(8));
+    assert_eq!(merged.postprocess.recode_preset, Some("slow".to_string()));
+}
+
+/// The flag must still win when passed — the guard must not make config-file
+/// values sticky.
+#[test]
+fn test_merge_config_optional_args_still_override_when_passed() {
+    let mut file_config = Config::default();
+    file_config.postprocess.recode_cpu_used = Some(4);
+    file_config.postprocess.recode_speed_level = Some(3);
+
+    let mut args = default_args();
+    args.recode_cpu_used = Some(-8);
+    args.recode_speed_level = Some(7);
+
+    let merged = merge_config(&args, file_config, no_interactive()).expect("merge should succeed");
+
+    assert_eq!(merged.postprocess.recode_cpu_used, Some(-8));
+    assert_eq!(merged.postprocess.recode_speed_level, Some(7));
+}
+
+/// Empty and whitespace-only values are rejected by clap, for every string- and
+/// path-valued arg — not just the one where the problem was first noticed.
+///
+/// A blank value otherwise reaches the domain layer as a real-looking value:
+/// `--recode-audio=` became `Encoder { name: "" }` and failed inside `FFmpeg`
+/// after the download completed. Validating at the parse boundary means clap
+/// reports it with the flag name, the offending value and usage text (#540).
+#[test]
+fn test_blank_values_are_rejected_at_the_parse_boundary() {
+    use clap::Parser;
+
+    let blank_forms = ["", "   ", "\t"];
+    let string_flags = [
+        "--recode-audio",
+        "--format",
+        "--output",
+        "--audio-quality",
+        "--sub-langs",
+        "--video-encoder",
+        "--recode-preset",
+        "--proxy",
+        "--limit-rate",
+        "--search",
+    ];
+    for flag in string_flags {
+        for blank in blank_forms {
+            let result = Args::try_parse_from(["rdlp", &format!("{flag}={blank}"), "URL"]);
+            assert!(
+                result.is_err(),
+                "{flag}={blank:?} must be rejected at parse time"
+            );
+        }
+    }
+
+    // Path-valued args need the same rule — a blank path is equally meaningless.
+    for flag in ["--cookies", "--download-archive", "--ffmpeg-location", "-P"] {
+        for blank in blank_forms {
+            let result = Args::try_parse_from(["rdlp", &format!("{flag}={blank}"), "URL"]);
+            assert!(
+                result.is_err(),
+                "{flag}={blank:?} must be rejected at parse time"
+            );
+        }
+    }
+}
+
+/// The rejection must name the flag and the offending value, which is what
+/// clap's `ValueValidation` error shape provides.
+#[test]
+fn test_blank_rejection_message_names_flag_and_value() {
+    use clap::Parser;
+
+    let Err(err) = Args::try_parse_from(["rdlp", "--recode-audio=   ", "URL"]) else {
+        panic!("blank must be rejected");
+    };
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains("--recode-audio"),
+        "must name the flag; got: {rendered}"
+    );
+    assert!(
+        rendered.contains("empty or whitespace-only"),
+        "must explain what was wrong; got: {rendered}"
+    );
+}
+
+/// Ordinary values must still parse — the guard must not reject real input.
+#[test]
+fn test_non_blank_values_still_parse() {
+    use clap::Parser;
+
+    let Ok(args) = Args::try_parse_from([
+        "rdlp",
+        "--recode-audio=libOpus",
+        "--format=bv+ba",
+        "--cookies=/tmp/c.txt",
+        "URL",
+    ]) else {
+        panic!("ordinary values must parse");
+    };
+    assert_eq!(args.recode_audio.as_deref(), Some("libOpus"));
+    assert_eq!(args.format.as_deref(), Some("bv+ba"));
+}
+
+/// The bare-flag forms must survive the blank-value parser.
+///
+/// `--audio-format`, `--recode-video` and `--remux` use
+/// `default_missing_value = "interactive"`, so the value clap substitutes also
+/// flows through `value_parser`. That value is non-blank, but the interaction
+/// is worth pinning: breaking it would silently disable interactive selection.
+#[test]
+fn test_bare_interactive_flags_still_parse() {
+    use clap::Parser;
+
+    for (flag, get) in [
+        ("--audio-format", 0usize),
+        ("--recode-video", 1),
+        ("--remux", 2),
+    ] {
+        let Ok(args) = Args::try_parse_from(["rdlp", flag, "URL"]) else {
+            panic!("{flag} with no value must still parse");
+        };
+        let actual = match get {
+            0 => args.audio_format.clone(),
+            1 => args.recode_video.clone(),
+            _ => args.remux.clone(),
+        };
+        assert_eq!(
+            actual.as_deref(),
+            Some("interactive"),
+            "{flag} with no value must yield the interactive sentinel"
+        );
+    }
+}
+
+/// The same three flags must still REJECT an explicitly blank value.
+///
+/// `require_equals` + `default_missing_value` means bare `--remux` and
+/// `--remux=` take different paths through clap: the first substitutes the
+/// sentinel, the second supplies an empty value that must reach the parser.
+/// Pinning only the bare form would leave the rejection untested.
+#[test]
+fn test_interactive_flags_still_reject_an_explicit_blank() {
+    use clap::Parser;
+
+    for flag in ["--audio-format", "--recode-video", "--remux"] {
+        for blank in ["", "   "] {
+            let result = Args::try_parse_from(["rdlp", &format!("{flag}={blank}"), "URL"]);
+            assert!(
+                result.is_err(),
+                "{flag}={blank:?} must be rejected even though the bare flag is valid"
+            );
+        }
+    }
 }

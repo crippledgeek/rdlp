@@ -1,16 +1,40 @@
 //! Container format types for video/audio files
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+
+use crate::parse_error::ParseEnumError;
+use serde_with::DeserializeFromStr;
 use strum_macros::{Display, EnumIter, EnumString};
+
+/// Builds the `FromStr` error for [`ContainerFormat`].
+///
+/// Named by `#[strum(parse_err_fn = ...)]`. Replaces strum's default
+/// `ParseError::VariantNotFound`, whose `Display` is the fixed string
+/// "Matching variant not found" — that told a user editing `config.toml`
+/// neither which value was rejected nor which field it came from (#540).
+fn container_format_parse_err(input: &str) -> ParseEnumError {
+    ParseEnumError::new("container format", input)
+}
 
 /// Supported container formats for video/audio files.
 ///
 /// Used for merge output, remux targets, and video recode targets.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString, EnumIter,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    DeserializeFromStr,
+    Display,
+    EnumString,
+    EnumIter,
 )]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive)]
+#[strum(parse_err_ty = ParseEnumError, parse_err_fn = container_format_parse_err)]
 pub enum ContainerFormat {
     // === Video containers ===
     /// MPEG-4 Part 14 — best compatibility, supports faststart
@@ -38,7 +62,12 @@ pub enum ContainerFormat {
     #[strum(serialize = "avi")]
     Avi,
     /// 3GPP mobile video
-    #[strum(to_string = "3gp", serialize = "3gpp")]
+    ///
+    /// `threegp` is not a real-world spelling — it is the lowercased *variant
+    /// identifier* that `#[serde(rename_all = "lowercase")]` accepted before
+    /// #540 delegated `Deserialize` to `FromStr`. It is kept as a parse-only
+    /// alias so configs persisted under the old vocabulary keep loading.
+    #[strum(to_string = "3gp", serialize = "3gpp", serialize = "threegp")]
     ThreeGp,
     /// MPEG-1/2 program stream
     #[strum(to_string = "mpg", serialize = "mpeg")]
@@ -209,6 +238,8 @@ mod tests {
     use super::*;
     use crate::enum_test_support::{
         assert_all_parse_to, assert_display_matches, assert_display_roundtrips,
+        assert_serde_spellings_are_parseable, assert_toml_accepts_every_from_str_spelling,
+        assert_toml_rejects_unknown_spelling,
     };
     use strum::IntoEnumIterator as _;
 
@@ -252,6 +283,85 @@ mod tests {
 
         // Case-insensitivity across the alias set is asserted by the helper.
         assert_all_parse_to(ALIASES);
+    }
+
+    /// Every spelling the *current* serde representation accepts must also be
+    /// in the `FromStr` table.
+    ///
+    /// This is the back-compat precondition for #540, which delegates
+    /// `Deserialize` to `FromStr` so the config file and the CLI stop accepting
+    /// different vocabularies. Until that lands, `#[serde(rename_all =
+    /// "lowercase")]` accepts the lowercased *variant identifier*, which for
+    /// `ThreeGp` is `"threegp"` — a spelling `FromStr` rejects, because strum's
+    /// table holds only `3gp`/`3gpp`. Delegating without first adding `threegp`
+    /// as an alias would silently break every persisted config that wrote it.
+    ///
+    /// Derived from the serialized form rather than a hand-listed set, so it
+    /// cannot drift as variants are added.
+    #[test]
+    fn test_serde_spellings_are_all_parseable() {
+        assert_serde_spellings_are_parseable::<ContainerFormat>();
+    }
+
+    /// #540 changed only `Deserialize`. The serialized form is a Tauri IPC
+    /// contract, mirrored by a TypeScript union and gated by
+    /// `scripts/check-ts-enum-drift.sh`, so it must not move.
+    ///
+    /// `ThreeGp` is where a regression would surface: `Serialize` still emits
+    /// the `rename_all` spelling `"threegp"`, while `Display`/`as_ext` render
+    /// `"3gp"`. That asymmetry is deliberate — the wire keeps the old value,
+    /// the filesystem gets the real extension, and `FromStr` now accepts both.
+    #[test]
+    fn test_serialize_still_emits_the_wire_spelling() {
+        assert_eq!(
+            serde_json::to_string(&ContainerFormat::ThreeGp).expect("serialize"),
+            "\"threegp\"",
+            "the IPC wire value must not change; only Deserialize was widened"
+        );
+        assert_eq!(ContainerFormat::ThreeGp.to_string(), "3gp");
+        assert_eq!(ContainerFormat::ThreeGp.as_ext(), "3gp");
+    }
+
+    /// An unknown spelling must still be an error, and the message must name it.
+    #[test]
+    fn test_toml_rejects_unknown_spelling() {
+        assert_toml_rejects_unknown_spelling::<ContainerFormat>(
+            "mkvv",
+            "unsupported container format: mkvv",
+        );
+    }
+
+    /// The config file must accept every spelling the CLI accepts (#540).
+    #[test]
+    fn test_toml_accepts_every_cli_spelling() {
+        assert_toml_accepts_every_from_str_spelling::<ContainerFormat>(&[
+            // canonical extensions
+            "mp4",
+            "mkv",
+            "3gp",
+            "wav",
+            "aac",
+            "wv",
+            "mov",
+            "ts",
+            "mpg",
+            // strum aliases the config file used to reject outright
+            "matroska",
+            "quicktime",
+            "mpegts",
+            "3gpp",
+            "mpeg",
+            "wave",
+            "adts",
+            "aif",
+            "wavpack",
+            // the pre-#540 serde-only spelling, kept for persisted configs
+            "threegp",
+            // case-insensitivity, which serde's rename_all never honoured
+            "MP4",
+            "Mkv",
+            "MATROSKA",
+        ]);
     }
 
     /// Each variant's own extension parses back to that variant.
