@@ -1,11 +1,22 @@
 //! Audio format types for extraction and conversion
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+use serde_with::DeserializeFromStr;
 use strum_macros::{Display, EnumIter, EnumString};
 
 /// Supported audio formats for extraction and conversion.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString, EnumIter,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    DeserializeFromStr,
+    Display,
+    EnumString,
+    EnumIter,
 )]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive)]
@@ -104,7 +115,7 @@ mod tests {
     use super::*;
     use crate::enum_test_support::{
         assert_all_parse_to, assert_display_matches, assert_display_roundtrips,
-        assert_serde_spellings_are_parseable,
+        assert_serde_spellings_are_parseable, assert_toml_accepts_every_from_str_spelling,
     };
 
     #[test]
@@ -166,6 +177,18 @@ mod tests {
     #[test]
     fn test_serde_spellings_are_all_parseable() {
         assert_serde_spellings_are_parseable::<AudioFormat>();
+    }
+
+    /// The config file must accept every spelling the CLI accepts (#540).
+    #[test]
+    fn test_toml_accepts_every_cli_spelling() {
+        assert_toml_accepts_every_from_str_spelling::<AudioFormat>(&[
+            "mp3", "aac", "m4a", "opus", "flac", "alac", "wav", "ac3", "mp2", "tta",
+            // aliases the config file used to reject outright
+            "vorbis", "ogg", "wavpack", "wv", "eac3", "e-ac-3", "e-ac3", "dts", "dca",
+            // case-insensitivity, which serde's rename_all never honoured
+            "MP3", "Ogg", "E-AC-3",
+        ]);
     }
 
     #[test]

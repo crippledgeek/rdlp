@@ -24,6 +24,48 @@ use std::str::FromStr;
 use serde::Serialize;
 use strum::IntoEnumIterator;
 
+/// Asserts the config-file (serde) and CLI (`FromStr`) surfaces accept exactly
+/// the same vocabulary.
+///
+/// This is #540's central invariant. Before it, `#[serde(rename_all =
+/// "lowercase")]` honoured neither strum's aliases nor its
+/// `ascii_case_insensitive`, so `remux_container = "3gp"` was a parse error in
+/// `config.toml` while `--remux=3gp` worked.
+///
+/// Deliberately driven through `toml`, not `serde_json`: the config file is the
+/// surface that diverged, and the two crates make different borrowed-vs-owned
+/// choices when handing a string to a `Visitor`. A delegation that works under
+/// `serde_json` can still fail under `toml` (measured — `toml` 0.9 never yields
+/// a borrowed `&str` through `from_str`), so the guard must exercise the real
+/// format.
+pub fn assert_toml_accepts_every_from_str_spelling<T>(spellings: &[&str])
+where
+    T: FromStr + PartialEq + Debug + serde::de::DeserializeOwned,
+    <T as FromStr>::Err: Debug,
+{
+    #[derive(serde::Deserialize)]
+    struct Wrapper<U> {
+        value: U,
+    }
+
+    for spelling in spellings {
+        let expected = spelling
+            .parse::<T>()
+            .unwrap_or_else(|e| panic!("test bug: {spelling:?} must parse via FromStr: {e:?}"));
+
+        let doc = format!("value = \"{spelling}\"");
+        let parsed = toml::from_str::<Wrapper<T>>(&doc).unwrap_or_else(|e| {
+            panic!("TOML rejects {spelling:?}, which the CLI accepts: {e}");
+        });
+
+        assert!(
+            parsed.value == expected,
+            "TOML parsed {spelling:?} to {:?}, but FromStr yields {expected:?}",
+            parsed.value
+        );
+    }
+}
+
 /// Asserts every spelling the serde representation accepts is also in the
 /// `FromStr` table.
 ///

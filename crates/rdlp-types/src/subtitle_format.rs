@@ -1,11 +1,22 @@
 //! Subtitle format types
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
+use serde_with::DeserializeFromStr;
 use strum_macros::{Display, EnumIter, EnumString};
 
 /// Supported subtitle formats.
 #[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString, EnumIter,
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    Hash,
+    Serialize,
+    DeserializeFromStr,
+    Display,
+    EnumString,
+    EnumIter,
 )]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive)]
@@ -47,7 +58,7 @@ mod tests {
     use super::*;
     use crate::enum_test_support::{
         assert_all_parse_to, assert_display_matches, assert_display_roundtrips,
-        assert_serde_spellings_are_parseable,
+        assert_serde_spellings_are_parseable, assert_toml_accepts_every_from_str_spelling,
     };
 
     /// `Display` must render the file extension, not whichever strum alias
@@ -79,6 +90,17 @@ mod tests {
     #[test]
     fn test_serde_spellings_are_all_parseable() {
         assert_serde_spellings_are_parseable::<SubtitleFormat>();
+    }
+
+    /// The config file must accept every spelling the CLI accepts (#540).
+    #[test]
+    fn test_toml_accepts_every_cli_spelling() {
+        assert_toml_accepts_every_from_str_spelling::<SubtitleFormat>(&[
+            "srt", "vtt", "ass", "ssa", "lrc",
+            // alias the config file used to reject outright
+            "webvtt", // case-insensitivity, which serde's rename_all never honoured
+            "SRT", "WebVTT",
+        ]);
     }
 
     #[test]
