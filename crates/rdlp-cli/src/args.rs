@@ -220,10 +220,13 @@ pub struct Args {
 
     /// Print specific field(s) from metadata (no download)
     /// e.g., --print title or --print "id,title,extractor"
-    #[arg(long, value_parser = non_blank, value_name = "FIELD", help_heading = HELP_HEADING_INFO, hide_short_help = true)]
+    #[arg(short = 'O', long, value_parser = non_blank, value_name = "FIELD", help_heading = HELP_HEADING_INFO)]
     pub print: Option<String>,
 
     /// Interactive format selection
+    // Note: rdlp's `-i` is --interactive (format selection). yt-dlp's `-i` is
+    // --ignore-errors, which rdlp has no equivalent for. Kept deliberately; do not
+    // reassign — `-i URL` is a shipped example (see HELP_EXAMPLES).
     #[arg(short = 'i', long, help_heading = HELP_HEADING_GENERAL)]
     pub interactive: bool,
 
@@ -264,11 +267,11 @@ pub struct Args {
 
     /// Subtitle languages to download (comma-separated, e.g., "en,es")
     /// Use "all" to download all available
-    #[arg(long, alias = "sub-langs", value_parser = non_blank, value_name = "LANGS", help_heading = HELP_HEADING_SUBTITLES)]
+    #[arg(long, value_parser = non_blank, value_name = "LANGS", help_heading = HELP_HEADING_SUBTITLES)]
     pub sub_langs: Option<String>,
 
     /// Preferred subtitle format (srt, vtt, ass, ssa, lrc)
-    #[arg(long, alias = "sub-format", value_parser = non_blank, value_name = "FORMAT", help_heading = HELP_HEADING_SUBTITLES, hide_short_help = true)]
+    #[arg(long, value_parser = non_blank, value_name = "FORMAT", help_heading = HELP_HEADING_SUBTITLES, hide_short_help = true)]
     pub sub_format: Option<String>,
 
     /// Embed subtitles in video file (requires `FFmpeg`)
@@ -276,11 +279,11 @@ pub struct Args {
     pub embed_subtitles: bool,
 
     /// Interactive subtitle selection + video download (implies --write-subtitles)
-    #[arg(long, alias = "list-subs", help_heading = HELP_HEADING_SUBTITLES, hide_short_help = true)]
+    #[arg(long, help_heading = HELP_HEADING_SUBTITLES, hide_short_help = true)]
     pub list_subs: bool,
 
     /// Show subtitle menu, download only subtitles (no video), then exit
-    #[arg(long, alias = "list-subs-only", help_heading = HELP_HEADING_SUBTITLES, hide_short_help = true)]
+    #[arg(long, help_heading = HELP_HEADING_SUBTITLES, hide_short_help = true)]
     pub list_subs_only: bool,
 
     /// Strict subtitle mode: fail download if requested subs are missing
@@ -416,7 +419,7 @@ pub struct Args {
     pub fixup: Option<String>,
 
     /// Keep original video file after post-processing
-    #[arg(long, help_heading = HELP_HEADING_POSTPROCESS, hide_short_help = true)]
+    #[arg(short = 'k', long, help_heading = HELP_HEADING_POSTPROCESS)]
     pub keep_video: bool,
 
     /// Path to `FFmpeg` executable (if not in PATH)

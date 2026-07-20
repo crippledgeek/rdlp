@@ -302,10 +302,12 @@ const HELP_SHORT_COMMON: &[&str] = &[
     "list_formats",
     "simulate",
     "dump_json",
+    "print",
     // Post-Processing
     "extract_audio",
     "remux",
     "embed_metadata",
+    "keep_video",
     // Subtitles
     "embed_subtitles",
     "sub_langs",
@@ -335,7 +337,6 @@ const HELP_SHORT_EXPERT: &[&str] = &[
     // General
     "audio_multistreams",
     // Simulation & Info
-    "print",
     "list_extractors",
     "list_downloaders",
     "list_codecs",
@@ -346,7 +347,6 @@ const HELP_SHORT_EXPERT: &[&str] = &[
     "no_thumbnail",
     "write_thumbnail",
     "fixup",
-    "keep_video",
     "ffmpeg_location",
     // Subtitles
     "write_auto_subtitles",
@@ -394,8 +394,8 @@ const HELP_SHORT_EXPERT: &[&str] = &[
 fn every_option_is_tiered_common_or_expert() {
     use std::collections::HashSet;
 
-    assert_eq!(HELP_SHORT_COMMON.len(), 27, "common set drifted");
-    assert_eq!(HELP_SHORT_EXPERT.len(), 46, "expert set drifted");
+    assert_eq!(HELP_SHORT_COMMON.len(), 29, "common set drifted");
+    assert_eq!(HELP_SHORT_EXPERT.len(), 44, "expert set drifted");
     let common: HashSet<&str> = HELP_SHORT_COMMON.iter().copied().collect();
     let expert: HashSet<&str> = HELP_SHORT_EXPERT.iter().copied().collect();
     assert!(
@@ -466,4 +466,87 @@ fn short_help_footer_only_in_short_help() {
         !long.ends_with("\n\n"),
         "--help gained a stray trailing blank line from after_long_help = \"\"",
     );
+}
+
+#[test]
+fn short_flags_k_and_o_parse() {
+    use clap::Parser;
+
+    // -k => keep_video (yt-dlp parity)
+    let a = Args::try_parse_from(["rdlp", "-k", "https://example.com/v"]).expect("-k should parse");
+    assert!(a.keep_video, "-k must set keep_video");
+
+    // -O => print (uppercase O; coexists with lowercase -o = --output, curl precedent)
+    let b = Args::try_parse_from(["rdlp", "-O", "title", "https://example.com/v"])
+        .expect("-O should parse");
+    assert_eq!(b.print.as_deref(), Some("title"), "-O must set print");
+
+    // -o (lowercase) still means --output, not print
+    let c = Args::try_parse_from(["rdlp", "-o", "out.mp4", "https://example.com/v"])
+        .expect("-o should parse");
+    assert_eq!(
+        c.output.as_deref(),
+        Some("out.mp4"),
+        "-o must still be --output"
+    );
+    assert_eq!(c.print, None);
+}
+
+#[test]
+fn renamed_and_removed_sub_aliases_still_parse() {
+    use clap::Parser;
+
+    // Removed no-op aliases: the derived long name still works (value-taking).
+    assert!(
+        Args::try_parse_from(["rdlp", "--sub-langs", "en", "u"]).is_ok(),
+        "--sub-langs must still parse"
+    );
+    assert!(
+        Args::try_parse_from(["rdlp", "--sub-format", "srt", "u"]).is_ok(),
+        "--sub-format must still parse"
+    );
+    // Removed no-op aliases: the derived long name still works (bool flags).
+    assert!(
+        Args::try_parse_from(["rdlp", "--list-subs", "u"]).is_ok(),
+        "--list-subs must still parse"
+    );
+    assert!(
+        Args::try_parse_from(["rdlp", "--list-subs-only", "u"]).is_ok(),
+        "--list-subs-only must still parse"
+    );
+
+    // Kept real aliases (yt-dlp spellings) still parse.
+    assert!(
+        Args::try_parse_from(["rdlp", "--embed-subs", "u"]).is_ok(),
+        "--embed-subs alias kept"
+    );
+    assert!(
+        Args::try_parse_from(["rdlp", "--write-subs", "u"]).is_ok(),
+        "--write-subs alias kept"
+    );
+    assert!(
+        Args::try_parse_from(["rdlp", "--write-auto-subs", "u"]).is_ok(),
+        "--write-auto-subs alias kept"
+    );
+}
+
+#[test]
+fn no_arg_aliases_its_own_long_name() {
+    // A hidden alias identical to the arg's own long name is a no-op (clap matches
+    // aliases against registered names). Guard against re-introducing the dead
+    // aliases this PR removed. Would fail on develop pre-PR (4 no-op aliases existed).
+    let cmd = Args::command();
+    for arg in cmd.get_arguments() {
+        let Some(long) = arg.get_long() else { continue };
+        if let Some(aliases) = arg.get_all_aliases() {
+            for a in aliases {
+                assert_ne!(
+                    a,
+                    long,
+                    "arg `{}` has a no-op alias equal to its long name `{long}`",
+                    arg.get_id(),
+                );
+            }
+        }
+    }
 }
