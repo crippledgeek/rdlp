@@ -428,4 +428,4 @@ pub fn build_config(args: &Args) -> Result<Config> {
 
 #[cfg(test)]
 #[path = "config_tests.rs"]
-mod tests;
+pub mod tests;

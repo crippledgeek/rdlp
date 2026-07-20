@@ -14,6 +14,8 @@ mod commands;
 // `pub mod config` in lib.rs is a one-line change that would hand any dependent
 // crate an unvalidated `merge_config`.
 mod config;
+#[cfg(test)]
+mod merge_arb;
 mod plugin_cmd;
 mod selection;
 
