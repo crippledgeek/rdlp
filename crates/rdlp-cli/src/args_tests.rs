@@ -286,3 +286,155 @@ fn help_examples_lines_fit_80_columns() {
         );
     }
 }
+
+/// Ids visible in `-h` (short help). Everything else that takes part in tiering
+/// is EXPERT and hidden from `-h` (still shown in `--help`). Keep in sync with
+/// the `hide_short_help = true` annotations in args.rs.
+const HELP_SHORT_COMMON: &[&str] = &[
+    // General
+    "output",
+    "output_dir",
+    "format",
+    "quiet",
+    "verbose",
+    "interactive",
+    // Simulation & Info
+    "list_formats",
+    "simulate",
+    "dump_json",
+    // Post-Processing
+    "extract_audio",
+    "remux",
+    "embed_metadata",
+    // Subtitles
+    "embed_subtitles",
+    "sub_langs",
+    "write_subtitles",
+    // Recode & Encoding
+    "recode_video",
+    "recode_audio",
+    // Audio Normalization
+    "normalize_audio",
+    "loudnorm",
+    // Network & Cookies
+    "cookies_from_browser",
+    "cookies",
+    "proxy",
+    // Download Behaviour
+    "limit_rate",
+    "download_archive",
+    // Search
+    "search",
+    "search_site",
+    // Configuration & Plugins
+    "config_location",
+];
+
+/// Ids hidden from `-h` (present only in `--help`).
+const HELP_SHORT_EXPERT: &[&str] = &[
+    // General
+    "audio_multistreams",
+    // Simulation & Info
+    "print",
+    "list_extractors",
+    "list_downloaders",
+    "list_codecs",
+    "list_encoders",
+    // Post-Processing
+    "audio_format",
+    "audio_quality",
+    "no_thumbnail",
+    "write_thumbnail",
+    "fixup",
+    "keep_video",
+    "ffmpeg_location",
+    // Subtitles
+    "write_auto_subtitles",
+    "sub_format",
+    "list_subs",
+    "list_subs_only",
+    "strict_subs",
+    "verify_sub_urls",
+    "retry_subs",
+    // Recode & Encoding
+    "video_encoder",
+    "recode_container",
+    "recode_threads",
+    "recode_preset",
+    "recode_deadline",
+    "recode_cpu_used",
+    "recode_speed_level",
+    // Audio Normalization
+    "audio_gain_target",
+    "loudnorm_preset",
+    "loudnorm_i",
+    "loudnorm_tp",
+    "loudnorm_lra",
+    "loudnorm_dynamic",
+    "loudnorm_precompress",
+    "normalize_boost",
+    "normalize_boost_db",
+    // Network & Cookies
+    "socket_timeout",
+    "read_timeout",
+    "pool_idle_timeout",
+    "download_timeout",
+    "merge_timeout",
+    "browser",
+    // Download Behaviour
+    "match_filter",
+    // Search
+    "search_filter",
+    // Configuration & Plugins
+    "ignore_config",
+    "trust_publisher",
+];
+
+#[test]
+fn every_option_is_tiered_common_or_expert() {
+    use std::collections::HashSet;
+
+    assert_eq!(HELP_SHORT_COMMON.len(), 27, "common set drifted");
+    assert_eq!(HELP_SHORT_EXPERT.len(), 46, "expert set drifted");
+    let common: HashSet<&str> = HELP_SHORT_COMMON.iter().copied().collect();
+    let expert: HashSet<&str> = HELP_SHORT_EXPERT.iter().copied().collect();
+    assert!(
+        common.is_disjoint(&expert),
+        "an id is in both COMMON and EXPERT"
+    );
+
+    let cmd = Args::command();
+    let mut seen = HashSet::new();
+
+    for arg in cmd.get_arguments() {
+        let id = arg.get_id().as_str();
+        if arg.is_positional() || id == "help" || id == "version" {
+            continue;
+        }
+        seen.insert(id.to_owned());
+        let hidden = arg.is_hide_short_help_set();
+        if common.contains(id) {
+            assert!(
+                !hidden,
+                "`{id}` is COMMON but is hidden from -h (drop its hide_short_help)"
+            );
+        } else if expert.contains(id) {
+            assert!(
+                hidden,
+                "`{id}` is EXPERT but visible in -h (add hide_short_help = true)"
+            );
+        } else {
+            panic!(
+                "flag `{id}` is not tiered. Add it to HELP_SHORT_COMMON (visible in -h) or \
+                 HELP_SHORT_EXPERT + `hide_short_help = true` (—help only). #585 PR 3b.",
+            );
+        }
+    }
+
+    for id in HELP_SHORT_COMMON.iter().chain(HELP_SHORT_EXPERT) {
+        assert!(
+            seen.contains(*id),
+            "tier map lists `{id}`, not a real Args option"
+        );
+    }
+}
