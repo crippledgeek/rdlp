@@ -1139,3 +1139,122 @@ fn test_interactive_flags_still_reject_an_explicit_blank() {
         }
     }
 }
+
+/// Compile-time canary: adding a field to `Config` or `PostProcess` breaks
+/// this until someone decides whether `merge_config` should merge it.
+///
+/// A struct pattern without `..` must name every field (Rust Reference,
+/// Patterns), so a new field is `E0027: pattern does not mention field`.
+///
+/// DO NOT ADD `..` TO THESE PATTERNS. rustc's own E0027 help suggests it
+/// ("or always ignore missing fields here") and taking that suggestion
+/// silently disables this guarantee forever. The correct fix for E0027 here
+/// is to classify the new field: add it to `merge_fields!` if the CLI should
+/// merge it, or to the exceptions block if it needs bespoke handling, then
+/// name it below. `scripts/check-merge-exhaustive.sh` enforces the no-`..`
+/// rule.
+#[test]
+fn every_config_field_is_classified() {
+    let rdlp_api::Config {
+        output_to_stdout: _,
+        output_template: _,
+        output_directory: _,
+        restrict_filenames: _,
+        overwrite: _,
+        continue_downloads: _,
+        no_part: _,
+        format: _,
+        audio_multistreams: _,
+        concurrent_fragments: _,
+        rate_limit: _,
+        retries: _,
+        fragment_retries: _,
+        retry_initial_delay_ms: _,
+        retry_max_delay_ms: _,
+        retry_backoff_multiplier: _,
+        buffer_size: _,
+        proxy: _,
+        socket_timeout: _,
+        read_timeout: _,
+        pool_idle_timeout: _,
+        download_timeout: _,
+        merge_timeout: _,
+        hls_head_probe_timeout: _,
+        parallel_threshold: _,
+        source_address: _,
+        user_agent: _,
+        browser_emulation: _,
+        http_headers: _,
+        write_auto_subtitles: _,
+        subtitle_langs: _,
+        subtitle_format: _,
+        list_subs: _,
+        strict_subs: _,
+        verify_sub_urls: _,
+        retry_subs: _,
+        quiet: _,
+        verbose: _,
+        simulate: _,
+        skip_download: _,
+        extract_playlist: _,
+        playlist_start: _,
+        playlist_end: _,
+        playlist_items: _,
+        username: _,
+        password: _,
+        two_factor: _,
+        netrc: _,
+        cookies_from_browser: _,
+        cookies_file: _,
+        download_archive: _,
+        match_filters: _,
+        plugin_directories: _,
+        enabled_plugins: _,
+        load_plugins: _,
+        plugin_timeout_metadata_ms: _,
+        plugin_timeout_extract_s: _,
+        plugin_timeout_search_s: _,
+        plugin_memory_limit_mb: _,
+        plugin_stack_limit_mb: _,
+        plugin_trusted_publishers: _,
+        adaptive_downloads: _,
+        postprocess,
+    } = Config::default();
+
+    let rdlp_api::PostProcess {
+        extract_audio: _,
+        audio_format: _,
+        audio_quality: _,
+        recode_video: _,
+        remux_container: _,
+        merge_output_format: _,
+        embed_thumbnail: _,
+        write_thumbnail: _,
+        embed_metadata: _,
+        embed_subtitles: _,
+        write_subtitles: _,
+        keep_video: _,
+        ffmpeg_location: _,
+        ffmpeg_args: _,
+        normalize_audio: _,
+        loudnorm: _,
+        audio_gain_target: _,
+        loudnorm_preset: _,
+        loudnorm_target_i: _,
+        loudnorm_target_tp: _,
+        loudnorm_target_lra: _,
+        loudnorm_dynamic: _,
+        loudnorm_precompress: _,
+        normalize_boost: _,
+        normalize_boost_db: _,
+        video_encoder: _,
+        recode_audio: _,
+        recode_container: _,
+        recode_threads: _,
+        recode_preset: _,
+        recode_deadline: _,
+        recode_cpu_used: _,
+        recode_speed_level: _,
+        fixup: _,
+    } = postprocess;
+}
