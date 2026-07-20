@@ -30,6 +30,28 @@ pub const HELP_HEADING_SEARCH: &str = "Search";
 /// Config file loading and plugin trust management.
 pub const HELP_HEADING_CONFIG: &str = "Configuration & Plugins";
 
+// Help layout: place the examples (`before_help`) AFTER the about line and
+// BEFORE usage — GNU tar / clig.dev "lead with examples" — in both `-h` and
+// `--help`. clap's default template has no slot there; this reorders the
+// standard placeholders (verified: clap_builder command.rs help_template).
+const HELP_TEMPLATE: &str = "\
+{about}
+
+{before-help}{usage-heading} {usage}
+
+{all-args}{after-help}";
+
+// Rendered in both `-h` and `--help` (before_help, not before_long_help). Every
+// line MUST stay <= 78 chars (guarded by `help_examples_lines_fit_80_columns`)
+// so it doesn't hard-wrap on an 80-col terminal — clap does not re-indent a
+// wrapped before_help continuation line, which would break the aligned table.
+const HELP_EXAMPLES: &str = "\
+Examples:
+  rdlp URL                                 Download a video (auto-resume)
+  rdlp -i URL                              Pick format/quality interactively
+  rdlp --cookies-from-browser chrome URL   Use browser cookies (login-gated)
+  rdlp --recode-video=mkv URL              Recode video to MKV";
+
 /// Rejects an empty or whitespace-only argument value.
 ///
 /// The shared rule behind [`non_blank`] and [`non_blank_path`]. A blank value
@@ -122,26 +144,33 @@ pub enum PluginCmd {
 #[command(name = "rdlp")]
 #[command(about = "Rust Download Program - A video downloader", long_about = None)]
 #[command(version)]
+#[command(help_template = HELP_TEMPLATE)]
+#[command(before_help = HELP_EXAMPLES)]
 pub struct Args {
     /// Video URL to download
     #[arg(value_parser = non_blank)]
     pub url: Option<String>,
 
+    // Deliberately two paragraphs: para 1 renders in `-h`; the resume-determinism
+    // caveat below renders only in `--help` (clap doc-comment split). Do not merge.
     /// Output template or directory (e.g., "%(title)s.%(ext)s" or "./downloads/")
     ///
     /// Note: resume across restarts requires a deterministic name. Templates using
     /// `%(epoch)s` render a different name each run, so an interrupted download cannot
     /// be resumed and restarts from zero. Build the template from stable metadata
     /// (`title`, `id`, `uploader`, `ext`, `upload_date`) for resumable downloads.
-    #[arg(short, long, value_parser = non_blank, help_heading = HELP_HEADING_GENERAL)]
+    #[arg(short, long, value_parser = non_blank, value_name = "TEMPLATE", help_heading = HELP_HEADING_GENERAL)]
     pub output: Option<String>,
 
     /// Output directory (always sets base directory, combinable with -o template)
-    #[arg(short = 'P', long = "paths", value_parser = non_blank_path, help_heading = HELP_HEADING_GENERAL)]
+    #[arg(short = 'P', long = "paths", value_parser = non_blank_path, value_name = "DIR", help_heading = HELP_HEADING_GENERAL)]
     pub output_dir: Option<PathBuf>,
 
     /// Format selection (e.g., "best", "bestvideo+bestaudio")
-    #[arg(short, long, value_parser = non_blank, help_heading = HELP_HEADING_GENERAL)]
+    // SELECTOR, not FORMAT: `format`.to_uppercase() == "FORMAT" is
+    // indistinguishable from clap's inferred echo and would defeat the
+    // placeholder canary.
+    #[arg(short, long, value_parser = non_blank, value_name = "SELECTOR", help_heading = HELP_HEADING_GENERAL)]
     pub format: Option<String>,
 
     /// Require strict video-only + audio-only streams for merge.
@@ -183,7 +212,7 @@ pub struct Args {
 
     /// Print specific field(s) from metadata (no download)
     /// e.g., --print title or --print "id,title,extractor"
-    #[arg(long, value_parser = non_blank, help_heading = HELP_HEADING_INFO)]
+    #[arg(long, value_parser = non_blank, value_name = "FIELD", help_heading = HELP_HEADING_INFO)]
     pub print: Option<String>,
 
     /// Interactive format selection
@@ -197,11 +226,11 @@ pub struct Args {
 
     /// Audio format for extraction
     /// Use --audio-format for interactive, --audio-format=mp3 for direct
-    #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true, value_parser = non_blank, help_heading = HELP_HEADING_POSTPROCESS)]
+    #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true, value_parser = non_blank, value_name = "FORMAT", help_heading = HELP_HEADING_POSTPROCESS)]
     pub audio_format: Option<String>,
 
     /// Audio quality (VBR level 0-9 or bitrate like "192K")
-    #[arg(long, value_parser = non_blank, help_heading = HELP_HEADING_POSTPROCESS)]
+    #[arg(long, value_parser = non_blank, value_name = "QUALITY", help_heading = HELP_HEADING_POSTPROCESS)]
     pub audio_quality: Option<String>,
 
     /// Embed metadata (title, artist, etc.) in the file
@@ -227,11 +256,11 @@ pub struct Args {
 
     /// Subtitle languages to download (comma-separated, e.g., "en,es")
     /// Use "all" to download all available
-    #[arg(long, alias = "sub-langs", value_parser = non_blank, help_heading = HELP_HEADING_SUBTITLES)]
+    #[arg(long, alias = "sub-langs", value_parser = non_blank, value_name = "LANGS", help_heading = HELP_HEADING_SUBTITLES)]
     pub sub_langs: Option<String>,
 
     /// Preferred subtitle format (srt, vtt, ass, ssa, lrc)
-    #[arg(long, alias = "sub-format", value_parser = non_blank, help_heading = HELP_HEADING_SUBTITLES)]
+    #[arg(long, alias = "sub-format", value_parser = non_blank, value_name = "FORMAT", help_heading = HELP_HEADING_SUBTITLES)]
     pub sub_format: Option<String>,
 
     /// Embed subtitles in video file (requires `FFmpeg`)
@@ -269,7 +298,7 @@ pub struct Args {
 
     /// Convert video to specified format
     /// Use --recode-video for interactive, --recode-video=mp4 for direct
-    #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true, value_parser = non_blank, help_heading = HELP_HEADING_RECODE)]
+    #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true, value_parser = non_blank, value_name = "FORMAT", help_heading = HELP_HEADING_RECODE)]
     pub recode_video: Option<String>,
 
     /// Target container format for video recode (e.g., mp4, mkv, webm).
@@ -317,7 +346,7 @@ pub struct Args {
 
     /// Remux to container for better seeking - no re-encoding
     /// Use --remux for interactive, --remux=mp4 for direct
-    #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true, value_parser = non_blank, help_heading = HELP_HEADING_POSTPROCESS)]
+    #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true, value_parser = non_blank, value_name = "FORMAT", help_heading = HELP_HEADING_POSTPROCESS)]
     pub remux: Option<String>,
 
     /// Normalize audio levels (peak mode: volume + limiter)
@@ -329,23 +358,23 @@ pub struct Args {
     pub loudnorm: bool,
 
     /// Target peak level in dBFS for peak normalization (default: -1.0)
-    #[arg(long, allow_hyphen_values = true, help_heading = HELP_HEADING_AUDIO_NORM)]
+    #[arg(long, allow_hyphen_values = true, value_name = "DBFS", help_heading = HELP_HEADING_AUDIO_NORM)]
     pub audio_gain_target: Option<f64>,
 
     /// Loudnorm preset: broadcast (-23 LUFS), streaming (-14 LUFS), loud (-11 LUFS)
-    #[arg(long, value_parser = non_blank, help_heading = HELP_HEADING_AUDIO_NORM)]
+    #[arg(long, value_parser = non_blank, value_name = "PRESET", help_heading = HELP_HEADING_AUDIO_NORM)]
     pub loudnorm_preset: Option<String>,
 
     /// Target integrated loudness in LUFS for loudnorm (e.g., -14)
-    #[arg(long, allow_hyphen_values = true, help_heading = HELP_HEADING_AUDIO_NORM)]
+    #[arg(long, allow_hyphen_values = true, value_name = "LUFS", help_heading = HELP_HEADING_AUDIO_NORM)]
     pub loudnorm_i: Option<f64>,
 
     /// Target true peak in dBTP for loudnorm (e.g., -1)
-    #[arg(long, allow_hyphen_values = true, help_heading = HELP_HEADING_AUDIO_NORM)]
+    #[arg(long, allow_hyphen_values = true, value_name = "DBTP", help_heading = HELP_HEADING_AUDIO_NORM)]
     pub loudnorm_tp: Option<f64>,
 
     /// Target loudness range in LU for loudnorm (e.g., 11)
-    #[arg(long, help_heading = HELP_HEADING_AUDIO_NORM)]
+    #[arg(long, value_name = "LU", help_heading = HELP_HEADING_AUDIO_NORM)]
     pub loudnorm_lra: Option<f64>,
 
     /// Force dynamic (per-frame compression) mode in loudnorm pass 2
@@ -362,7 +391,7 @@ pub struct Args {
     pub normalize_boost: bool,
 
     /// Gain in dB for limiter-boost fallback (default: 12.0)
-    #[arg(long, allow_hyphen_values = true, help_heading = HELP_HEADING_AUDIO_NORM)]
+    #[arg(long, allow_hyphen_values = true, value_name = "DB", help_heading = HELP_HEADING_AUDIO_NORM)]
     pub normalize_boost_db: Option<f64>,
 
     /// Fixup policy: never, warn, `detect_or_warn` [default: `detect_or_warn`]
@@ -375,7 +404,7 @@ pub struct Args {
     // is builder-only, so the derive API expresses it as `Option`, with the
     // default supplied by `Config::default()`. Plain `//` — a `///` here would
     // print this note in `rdlp --help`.
-    #[arg(long, value_parser = non_blank, help_heading = HELP_HEADING_POSTPROCESS)]
+    #[arg(long, value_parser = non_blank, value_name = "POLICY", help_heading = HELP_HEADING_POSTPROCESS)]
     pub fixup: Option<String>,
 
     /// Keep original video file after post-processing
@@ -383,12 +412,12 @@ pub struct Args {
     pub keep_video: bool,
 
     /// Path to `FFmpeg` executable (if not in PATH)
-    #[arg(long, value_parser = non_blank_path, help_heading = HELP_HEADING_POSTPROCESS)]
+    #[arg(long, value_parser = non_blank_path, value_name = "PATH", help_heading = HELP_HEADING_POSTPROCESS)]
     pub ffmpeg_location: Option<PathBuf>,
 
     // === Network options ===
     /// HTTP/HTTPS/SOCKS proxy URL (e.g., <socks5://127.0.0.1:1080>)
-    #[arg(long, value_parser = non_blank, help_heading = HELP_HEADING_NETWORK)]
+    #[arg(long, value_parser = non_blank, value_name = "URL", help_heading = HELP_HEADING_NETWORK)]
     pub proxy: Option<String>,
 
     /// Connect/handshake timeout in seconds.
@@ -428,38 +457,38 @@ pub struct Args {
     pub browser: Option<String>,
 
     /// Limit download speed (e.g., "1M", "500K", "10M", "2.5M")
-    #[arg(long, short = 'r', value_parser = non_blank, help_heading = HELP_HEADING_DOWNLOAD)]
+    #[arg(long, short = 'r', value_parser = non_blank, value_name = "RATE", help_heading = HELP_HEADING_DOWNLOAD)]
     pub limit_rate: Option<String>,
 
     // === Cookie options ===
     /// Load cookies from browser (chrome, firefox)
-    #[arg(long, value_parser = non_blank, help_heading = HELP_HEADING_NETWORK)]
+    #[arg(long, value_parser = non_blank, value_name = "BROWSER", help_heading = HELP_HEADING_NETWORK)]
     pub cookies_from_browser: Option<String>,
 
     /// Path to Netscape-format cookies file
-    #[arg(long, value_parser = non_blank_path, help_heading = HELP_HEADING_NETWORK)]
+    #[arg(long, value_parser = non_blank_path, value_name = "FILE", help_heading = HELP_HEADING_NETWORK)]
     pub cookies: Option<PathBuf>,
 
     /// Path to download archive file (skip already-downloaded videos)
-    #[arg(long, value_parser = non_blank_path, help_heading = HELP_HEADING_DOWNLOAD)]
+    #[arg(long, value_parser = non_blank_path, value_name = "FILE", help_heading = HELP_HEADING_DOWNLOAD)]
     pub download_archive: Option<PathBuf>,
 
     /// Filter videos by metadata (yt-dlp syntax). Repeatable (OR logic between filters).
     /// Examples: "duration > 60", "!`is_live`", "title *= cats", "`like_count` >? 100"
-    #[arg(long = "match-filter", action = clap::ArgAction::Append, value_parser = non_blank, help_heading = HELP_HEADING_DOWNLOAD)]
+    #[arg(long = "match-filter", action = clap::ArgAction::Append, value_parser = non_blank, value_name = "FILTER", help_heading = HELP_HEADING_DOWNLOAD)]
     pub match_filter: Vec<String>,
 
     // === Search options ===
     /// Perform a keyword search instead of downloading a URL
-    #[arg(long, value_parser = non_blank, help_heading = HELP_HEADING_SEARCH)]
+    #[arg(long, value_parser = non_blank, value_name = "QUERY", help_heading = HELP_HEADING_SEARCH)]
     pub search: Option<String>,
 
     /// Site to search (required with --search, e.g., "xhamster")
-    #[arg(long, value_parser = non_blank, help_heading = HELP_HEADING_SEARCH)]
+    #[arg(long, value_parser = non_blank, value_name = "SITE", help_heading = HELP_HEADING_SEARCH)]
     pub search_site: Option<String>,
 
     /// Search filter in key=value format (repeatable)
-    #[arg(long = "search-filter", value_parser = non_blank, help_heading = HELP_HEADING_SEARCH)]
+    #[arg(long = "search-filter", value_parser = non_blank, value_name = "KEY=VALUE", help_heading = HELP_HEADING_SEARCH)]
     pub search_filter: Vec<String>,
 
     // === Config file options ===
@@ -468,14 +497,14 @@ pub struct Args {
     pub ignore_config: bool,
 
     /// Path to config file (TOML format)
-    #[arg(long, value_parser = non_blank_path, help_heading = HELP_HEADING_CONFIG)]
+    #[arg(long, value_parser = non_blank_path, value_name = "FILE", help_heading = HELP_HEADING_CONFIG)]
     pub config_location: Option<PathBuf>,
 
     // === Plugin options ===
     /// Pre-trust a publisher identity for non-interactive plugin install.
     /// Pass repeatedly for multiple identities.
     /// Format: `sigstore:github:user/repo` or `ed25519:<8-byte-hex>`.
-    #[arg(long, global = true, value_parser = non_blank, help_heading = HELP_HEADING_CONFIG)]
+    #[arg(long, global = true, value_parser = non_blank, value_name = "PUBLISHER", help_heading = HELP_HEADING_CONFIG)]
     pub trust_publisher: Vec<String>,
 
     /// Plugin management subcommand.

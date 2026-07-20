@@ -176,3 +176,113 @@ fn all_headings_render_in_short_and_long_help() {
         );
     }
 }
+
+/// Maximum width for an option's value placeholder. A wider one inflates clap's
+/// shared `longest` column and flips the whole option block to next-line
+/// rendering (verified: `clap_builder` `help_template.rs` `will_args_wrap`) — the
+/// measured cause of the pre-PR-3 239-line `--help`.
+const MAX_VALUE_NAME_LEN: usize = 12;
+
+#[test]
+fn every_value_flag_has_a_tight_explicit_placeholder() {
+    let cmd = Args::command();
+    let mut checked = 0usize;
+
+    for arg in cmd.get_arguments() {
+        let id = arg.get_id().as_str();
+        // Skip positionals (e.g. `url` — its `<URL>` echo reads fine), clap's
+        // auto help/version, and flags that take no value (bools/counters
+        // render no placeholder).
+        if arg.is_positional()
+            || id == "help"
+            || id == "version"
+            || !arg.get_action().takes_values()
+        {
+            continue;
+        }
+
+        let names: Vec<&str> = arg
+            .get_value_names()
+            .map(|ns| ns.iter().map(std::convert::AsRef::as_ref).collect())
+            .unwrap_or_default();
+
+        assert!(
+            !names.is_empty(),
+            "value flag `{id}` has no value_name (clap would echo its \
+             field name). Add `value_name = \"…\"` (#585 PR 3).",
+        );
+
+        for name in names {
+            assert_ne!(
+                name,
+                id.to_uppercase(),
+                "value flag `{id}` still renders clap's inferred `<{}>` \
+                 placeholder — add an explicit tight `value_name` (#585 PR 3).",
+                id.to_uppercase(),
+            );
+            assert!(
+                name.len() <= MAX_VALUE_NAME_LEN,
+                "value_name `<{name}>` for `{id}` is {} chars (> {MAX_VALUE_NAME_LEN}); \
+                 a wide placeholder flips the whole help block to next-line rendering.",
+                name.len(),
+            );
+        }
+        checked += 1;
+    }
+
+    // Sanity: 29 annotated in this PR + 14 pre-existing tight value_names = 43.
+    assert_eq!(
+        checked, 43,
+        "expected 43 value-taking flags; got {checked} — a flag was added or removed",
+    );
+}
+
+#[test]
+fn examples_lead_the_help_before_options() {
+    let short = Args::command().render_help().to_string();
+    let long = Args::command().render_long_help().to_string();
+
+    for (label, help) in [("-h", &short), ("--help", &long)] {
+        // The examples block renders…
+        let ex = help
+            .find("Examples:")
+            .unwrap_or_else(|| panic!("`{label}` help is missing the Examples block"));
+        // …after the about line…
+        let about = help
+            .find("Rust Download Program")
+            .unwrap_or_else(|| panic!("`{label}` help is missing the about line"));
+        // …before the first option heading (General) and before the Usage line.
+        let general = help
+            .find("General")
+            .unwrap_or_else(|| panic!("`{label}` help is missing the General heading"));
+        let usage = help
+            .find("Usage:")
+            .unwrap_or_else(|| panic!("`{label}` help is missing the Usage line"));
+
+        assert!(about < ex, "`{label}`: about should precede Examples");
+        assert!(ex < usage, "`{label}`: Examples should precede Usage");
+        assert!(
+            ex < general,
+            "`{label}`: Examples should precede the option list"
+        );
+        // A representative example command is present.
+        assert!(
+            help.contains("--cookies-from-browser chrome"),
+            "`{label}` help is missing a representative example line",
+        );
+    }
+}
+
+#[test]
+fn help_examples_lines_fit_80_columns() {
+    // 80 cols is the conventional terminal default; a longer example line
+    // hard-wraps and breaks the aligned Examples table. clap does not
+    // re-indent wrapped before_help continuation lines.
+    for line in super::HELP_EXAMPLES.lines() {
+        assert!(
+            line.chars().count() <= 78,
+            "example line is {} chars (>78, wraps at 80): {line:?}",
+            line.chars().count(),
+        );
+    }
+}
