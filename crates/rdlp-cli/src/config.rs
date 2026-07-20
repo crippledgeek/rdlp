@@ -127,11 +127,9 @@ pub fn merge_config(
     if args.output.as_deref() == Some("-") {
         config.output_to_stdout = true;
         // Force quiet mode — progress/log output would corrupt the byte stream.
+        // `quiet` is what actually suppresses the progress bar: the CLI event
+        // handler is constructed from it directly (see `main.rs`).
         config.quiet = true;
-        // Explicitly suppress progress as well: config.progress is derived from
-        // config.quiet further below, but setting it here guards against future
-        // refactors that might add an early return between here and the derivation.
-        config.progress = false;
         // Disable embed_thumbnail before validation: the default is `true`, and
         // Config::validate() would reject stdout + embed-thumbnail.
         if config.postprocess.embed_thumbnail {
@@ -285,13 +283,13 @@ pub fn merge_config(
     merge_bool!(config, args, postprocess.loudnorm_dynamic);
     merge_bool!(config, args, postprocess.loudnorm_precompress);
 
-    // Fixup policy
-    if args.fixup != "detect_or_warn" {
-        config.postprocess.fixup = args
-            .fixup
+    // Fixup policy — assign only when the flag was actually passed, so an
+    // explicit `--fixup=detect_or_warn` still beats a config-file value (#583).
+    if let Some(ref fixup) = args.fixup {
+        config.postprocess.fixup = fixup
             .parse::<FixupPolicy>()
             .map_err(|e| anyhow::anyhow!(e))
-            .with_context(|| format!("invalid fixup policy '{}'", args.fixup))?;
+            .with_context(|| format!("invalid fixup policy '{fixup}'"))?;
     }
 
     merge_bool!(config, args, postprocess.keep_video);
@@ -368,9 +366,6 @@ pub fn merge_config(
             .map_err(|e| anyhow::anyhow!(e))
             .with_context(|| format!("invalid match filter '{filter_str}'"))?;
     }
-
-    // Derived settings
-    config.progress = !config.quiet;
 
     if config.postprocess.extract_audio && config.postprocess.audio_format.is_none() {
         config.postprocess.audio_format = Some(AudioFormat::Mp3);

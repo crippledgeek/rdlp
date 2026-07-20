@@ -105,7 +105,6 @@ fn run_uninstall_rejects_path_traversal_name() {
         let plugin_dir = tmpdir.join("plugins");
         std::fs::create_dir_all(&plugin_dir).unwrap();
         let config = Config {
-            progress: false,
             plugin_directories: vec![plugin_dir],
             ..Default::default()
         };

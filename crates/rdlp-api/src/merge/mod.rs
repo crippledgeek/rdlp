@@ -37,7 +37,6 @@ impl MergeOverrides for OutputOptions {
                 // Mirror CLI behaviour: silence output and disable incompatible
                 // defaults so Config::validate() won't reject the combination.
                 config.quiet = true;
-                config.progress = false;
                 config.postprocess.embed_thumbnail = false;
             }
         }

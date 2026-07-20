@@ -264,9 +264,6 @@ pub struct Config {
     /// Verbose mode (detailed output)
     pub verbose: bool,
 
-    /// Print progress bar
-    pub progress: bool,
-
     // === Simulation ===
     /// Simulate download (don't download anything)
     pub simulate: bool,
@@ -428,7 +425,6 @@ impl Default for Config {
             // Verbosity
             quiet: false,
             verbose: false,
-            progress: true,
 
             // Simulation
             simulate: false,

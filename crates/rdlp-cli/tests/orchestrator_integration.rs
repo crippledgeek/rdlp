@@ -22,7 +22,6 @@ use tempfile::TempDir;
 fn create_test_config(temp_dir: &TempDir) -> Config {
     Config {
         output_directory: temp_dir.path().to_path_buf(),
-        progress: false,
         ..Default::default()
     }
 }
@@ -111,7 +110,6 @@ fn test_client_with_custom_config() {
 
     let config = Config {
         output_directory: temp_dir.path().to_path_buf(),
-        progress: false,
         format: Some("best".to_string()),
         concurrent_fragments: 8,
         ..Default::default()

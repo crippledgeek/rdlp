@@ -109,7 +109,6 @@ signature = "PLACEHOLDER"
             let identity = format!("ed25519:{pub_hash_hex}");
 
             let config = Config {
-                progress: false,
                 plugin_directories: vec![tempdir.path().to_path_buf()],
                 plugin_trusted_publishers: vec![identity],
                 ..Default::default()

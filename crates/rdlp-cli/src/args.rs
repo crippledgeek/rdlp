@@ -341,9 +341,18 @@ pub struct Args {
     #[arg(long, allow_hyphen_values = true)]
     pub normalize_boost_db: Option<f64>,
 
-    /// Fixup policy: never, warn, `detect_or_warn` (default: `detect_or_warn`)
-    #[arg(long, default_value = "detect_or_warn", value_parser = non_blank)]
-    pub fixup: String,
+    /// Fixup policy: never, warn, `detect_or_warn` [default: `detect_or_warn`]
+    //
+    // Deliberately no clap `default_value`, for the mirror-image reason to
+    // `recode_audio` above: a default made an explicit `--fixup=detect_or_warn`
+    // indistinguishable from an omitted flag, so the sentinel guard downstream
+    // skipped the assignment and a config-file `fixup` wrongly won (#583).
+    // clap's `ArgMatches::value_source` answers "was this passed?" directly but
+    // is builder-only, so the derive API expresses it as `Option`, with the
+    // default supplied by `Config::default()`. Plain `//` — a `///` here would
+    // print this note in `rdlp --help`.
+    #[arg(long, value_parser = non_blank)]
+    pub fixup: Option<String>,
 
     /// Keep original video file after post-processing
     #[arg(long)]

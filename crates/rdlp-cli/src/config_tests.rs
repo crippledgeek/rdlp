@@ -2,7 +2,7 @@
 
 use super::*;
 use crate::args::Args;
-use rdlp_api::{AudioFormat, Config, SubtitleFormat};
+use rdlp_api::{AudioFormat, Config, FixupPolicy, SubtitleFormat};
 
 /// Helper: create default Args for testing (all fields at defaults).
 fn default_args() -> Args {
@@ -75,7 +75,7 @@ fn default_args() -> Args {
         recode_deadline: None,
         recode_cpu_used: None,
         recode_speed_level: None,
-        fixup: "detect_or_warn".to_string(),
+        fixup: None,
         match_filter: vec![],
         browser: None,
         trust_publisher: vec![],
@@ -425,7 +425,6 @@ fn test_merge_config_stdout_sets_flags() {
 
     assert!(config.output_to_stdout);
     assert!(config.quiet);
-    assert!(!config.progress);
     assert!(!config.postprocess.embed_thumbnail);
 }
 
@@ -854,7 +853,8 @@ fn test_merge_config_recode_audio_encoder_name_preserved() {
 /// The arg carried `default_value = "copy"` and was assigned unconditionally,
 /// so the clap default silently overwrote the config file's value on every run
 /// — the user's setting was discarded with no error. The adjacent `fixup` arg
-/// avoids this by guarding on its default; this one did not (#540).
+/// guarded on its default, which avoided *this* direction but broke the other
+/// one (#583); both now use the same `Option` treatment.
 #[test]
 fn test_merge_config_file_recode_audio_survives_when_flag_omitted() {
     let args = default_args(); // no --recode-audio passed
@@ -871,6 +871,51 @@ fn test_merge_config_file_recode_audio_survives_when_flag_omitted() {
             name: "libopus".to_string()
         },
         "config.toml's recode_audio must not be clobbered by the CLI default"
+    );
+}
+
+/// An explicit `--fixup=detect_or_warn` must beat a config-file `fixup`.
+///
+/// `fixup` carried `default_value = "detect_or_warn"` and was merged behind
+/// `if args.fixup != "detect_or_warn"`, so the one value a user could not
+/// express on the CLI was the default itself: passing it explicitly was
+/// byte-identical to not passing the flag, and `fixup = "never"` in
+/// `config.toml` silently won (#583). This is the mirror image of the
+/// `recode_audio` clobber above — same class, opposite direction.
+#[test]
+fn test_merge_config_explicit_fixup_overrides_file() {
+    let mut args = default_args();
+    args.fixup = Some("detect_or_warn".to_string());
+    let mut file_config = Config::default();
+    file_config.postprocess.fixup = FixupPolicy::Never;
+
+    let merged = merge_config(&args, file_config, no_interactive()).expect("merge should succeed");
+
+    assert_eq!(
+        merged.postprocess.fixup,
+        FixupPolicy::DetectOrWarn,
+        "an explicitly passed --fixup must win over config.toml, even when the \
+         value happens to equal the documented default"
+    );
+}
+
+/// A `fixup` set in `config.toml` must survive when the flag is omitted.
+///
+/// The direction the old sentinel guard got right — pinned so the #583 fix
+/// cannot regress it. Dropping `default_value` without guarding on `Option`
+/// would break exactly this.
+#[test]
+fn test_merge_config_file_fixup_survives_when_flag_omitted() {
+    let args = default_args(); // no --fixup passed
+    let mut file_config = Config::default();
+    file_config.postprocess.fixup = FixupPolicy::Never;
+
+    let merged = merge_config(&args, file_config, no_interactive()).expect("merge should succeed");
+
+    assert_eq!(
+        merged.postprocess.fixup,
+        FixupPolicy::Never,
+        "config.toml's fixup must not be clobbered by the CLI default"
     );
 }
 
