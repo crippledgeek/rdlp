@@ -1,8 +1,22 @@
 //! Audio format types for extraction and conversion
 
 use serde::Serialize;
+
+use crate::parse_error::ParseEnumError;
 use serde_with::DeserializeFromStr;
 use strum_macros::{Display, EnumIter, EnumString};
+/// Builds the `FromStr` error for [`AudioFormat`].
+///
+/// Named by `#[strum(parse_err_fn = ...)]`. Replaces strum's default
+/// `ParseError::VariantNotFound`, whose `Display` is the fixed string
+/// "Matching variant not found" — that told a user editing `config.toml`
+/// neither which value was rejected nor which field it came from (#540).
+fn audio_format_parse_err(input: &str) -> ParseEnumError {
+    ParseEnumError {
+        type_name: "audio format",
+        input: input.to_owned(),
+    }
+}
 
 /// Supported audio formats for extraction and conversion.
 #[derive(
@@ -20,6 +34,7 @@ use strum_macros::{Display, EnumIter, EnumString};
 )]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive)]
+#[strum(parse_err_ty = ParseEnumError, parse_err_fn = audio_format_parse_err)]
 pub enum AudioFormat {
     /// MPEG Audio Layer 3
     #[strum(serialize = "mp3")]
@@ -116,6 +131,7 @@ mod tests {
     use crate::enum_test_support::{
         assert_all_parse_to, assert_display_matches, assert_display_roundtrips,
         assert_serde_spellings_are_parseable, assert_toml_accepts_every_from_str_spelling,
+        assert_toml_rejects_unknown_spelling,
     };
 
     #[test]
@@ -177,6 +193,15 @@ mod tests {
     #[test]
     fn test_serde_spellings_are_all_parseable() {
         assert_serde_spellings_are_parseable::<AudioFormat>();
+    }
+
+    /// An unknown spelling must still be an error, and the message must name it.
+    #[test]
+    fn test_toml_rejects_unknown_spelling() {
+        assert_toml_rejects_unknown_spelling::<AudioFormat>(
+            "mp3x",
+            "unsupported audio format: mp3x",
+        );
     }
 
     /// The config file must accept every spelling the CLI accepts (#540).

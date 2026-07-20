@@ -1,8 +1,22 @@
 //! Container format types for video/audio files
 
 use serde::Serialize;
+
+use crate::parse_error::ParseEnumError;
 use serde_with::DeserializeFromStr;
 use strum_macros::{Display, EnumIter, EnumString};
+/// Builds the `FromStr` error for [`ContainerFormat`].
+///
+/// Named by `#[strum(parse_err_fn = ...)]`. Replaces strum's default
+/// `ParseError::VariantNotFound`, whose `Display` is the fixed string
+/// "Matching variant not found" — that told a user editing `config.toml`
+/// neither which value was rejected nor which field it came from (#540).
+fn container_format_parse_err(input: &str) -> ParseEnumError {
+    ParseEnumError {
+        type_name: "container format",
+        input: input.to_owned(),
+    }
+}
 
 /// Supported container formats for video/audio files.
 ///
@@ -22,6 +36,7 @@ use strum_macros::{Display, EnumIter, EnumString};
 )]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive)]
+#[strum(parse_err_ty = ParseEnumError, parse_err_fn = container_format_parse_err)]
 pub enum ContainerFormat {
     // === Video containers ===
     /// MPEG-4 Part 14 — best compatibility, supports faststart
@@ -226,6 +241,7 @@ mod tests {
     use crate::enum_test_support::{
         assert_all_parse_to, assert_display_matches, assert_display_roundtrips,
         assert_serde_spellings_are_parseable, assert_toml_accepts_every_from_str_spelling,
+        assert_toml_rejects_unknown_spelling,
     };
     use strum::IntoEnumIterator as _;
 
@@ -306,6 +322,15 @@ mod tests {
         );
         assert_eq!(ContainerFormat::ThreeGp.to_string(), "3gp");
         assert_eq!(ContainerFormat::ThreeGp.as_ext(), "3gp");
+    }
+
+    /// An unknown spelling must still be an error, and the message must name it.
+    #[test]
+    fn test_toml_rejects_unknown_spelling() {
+        assert_toml_rejects_unknown_spelling::<ContainerFormat>(
+            "mkvv",
+            "unsupported container format: mkvv",
+        );
     }
 
     /// The config file must accept every spelling the CLI accepts (#540).

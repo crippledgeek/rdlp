@@ -24,6 +24,16 @@ use std::str::FromStr;
 use serde::Serialize;
 use strum::IntoEnumIterator;
 
+/// Minimal TOML document shape for the config-surface guards: `value = "..."`.
+///
+/// Shared by the accept and reject helpers so the field is genuinely read —
+/// two local copies meant the reject helper's was write-only and tripped
+/// `dead_code` under `-D warnings`.
+#[derive(serde::Deserialize, Debug)]
+struct Wrapper<U> {
+    value: U,
+}
+
 /// Asserts the config-file (serde) and CLI (`FromStr`) surfaces accept exactly
 /// the same vocabulary.
 ///
@@ -43,11 +53,6 @@ where
     T: FromStr + PartialEq + Debug + serde::de::DeserializeOwned,
     <T as FromStr>::Err: Debug,
 {
-    #[derive(serde::Deserialize)]
-    struct Wrapper<U> {
-        value: U,
-    }
-
     for spelling in spellings {
         let expected = spelling
             .parse::<T>()
@@ -64,6 +69,38 @@ where
             parsed.value
         );
     }
+}
+
+/// Asserts TOML still *rejects* a spelling that is not in the vocabulary, and
+/// that the reported error names the offending value.
+///
+/// The positive parity guards would all still pass if the delegation silently
+/// fell back to a default instead of failing, so the widened surface needs a
+/// negative case. The message assertion additionally pins the diagnostic:
+/// routing deserialization through `FromStr` means the error text now comes
+/// from `FromStr::Err`, and a bare "matching variant not found" would be a
+/// regression against the derived `Deserialize` it replaced, which named both
+/// the bad value and the accepted set.
+pub fn assert_toml_rejects_unknown_spelling<T>(unknown: &str, expected_message: &str)
+where
+    T: FromStr + Debug + serde::de::DeserializeOwned,
+    <T as FromStr>::Err: Debug,
+{
+    let doc = format!("value = \"{unknown}\"");
+    let err = toml::from_str::<Wrapper<T>>(&doc)
+        .err()
+        .unwrap_or_else(|| panic!("TOML must reject {unknown:?}, but it parsed"));
+
+    // Asserted against the *message*, not merely the rendered error: `toml`
+    // echoes the offending source line, so a `contains(unknown)` check would
+    // pass even when the message itself says nothing useful — which is exactly
+    // what `strum::ParseError`'s "Matching variant not found" did.
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains(expected_message),
+        "the error message must be {expected_message:?} so the user learns what \
+         was wrong, not just where; got:\n{rendered}"
+    );
 }
 
 /// Asserts every spelling the serde representation accepts is also in the
