@@ -9,15 +9,25 @@ use std::path::PathBuf;
 // Task-oriented `--help` section headings. clap buckets arguments by exact
 // heading-string match, so these live as named consts to prevent a typo
 // silently splitting a group.
+/// Core download options: output paths, format selection, verbosity.
 pub const HELP_HEADING_GENERAL: &str = "General";
+/// Simulation and info-listing flags that inspect metadata without downloading.
 pub const HELP_HEADING_INFO: &str = "Simulation & Info";
+/// Post-download processing: audio extraction, metadata/thumbnail embedding, remux.
 pub const HELP_HEADING_POSTPROCESS: &str = "Post-Processing";
+/// Subtitle discovery, selection, format, and embedding options.
 pub const HELP_HEADING_SUBTITLES: &str = "Subtitles";
+/// Video/audio recode target, encoder, and per-codec tuning flags.
 pub const HELP_HEADING_RECODE: &str = "Recode & Encoding";
+/// Peak and EBU R128 loudnorm audio-level normalization options.
 pub const HELP_HEADING_AUDIO_NORM: &str = "Audio Normalization";
+/// Proxy, timeouts, browser TLS emulation, and cookie sourcing.
 pub const HELP_HEADING_NETWORK: &str = "Network & Cookies";
+/// Rate limiting, download archive, and per-video metadata filters.
 pub const HELP_HEADING_DOWNLOAD: &str = "Download Behaviour";
+/// Keyword search and per-site search filter options.
 pub const HELP_HEADING_SEARCH: &str = "Search";
+/// Config file loading and plugin trust management.
 pub const HELP_HEADING_CONFIG: &str = "Configuration & Plugins";
 
 /// Rejects an empty or whitespace-only argument value.
