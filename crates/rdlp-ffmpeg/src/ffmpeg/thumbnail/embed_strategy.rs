@@ -65,6 +65,8 @@ impl ThumbnailEmbedStrategy {
             | ContainerFormat::ThreeGp
             | ContainerFormat::Mpg
             | ContainerFormat::F4v
+            | ContainerFormat::Wmv
+            | ContainerFormat::Wma
             | ContainerFormat::Asf
             | ContainerFormat::Mxf
             | ContainerFormat::Vob

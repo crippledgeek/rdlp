@@ -46,8 +46,33 @@ pub enum ContainerFormat {
     /// Flash Video (MP4 variant)
     #[strum(serialize = "f4v")]
     F4v,
-    /// Advanced Streaming Format / Windows Media
-    #[strum(to_string = "asf", serialize = "wmv", serialize = "wma")]
+    /// Windows Media Video — ASF container carrying a video stream.
+    ///
+    /// Shares `FFmpeg`'s `asf` muxer with [`Self::Wma`] and [`Self::Asf`]
+    /// (the muxer declares `Common extensions: asf,wmv,wma`), but is a
+    /// distinct variant so the extension survives to the output filename —
+    /// the same shape as [`Self::Mkv`]/[`Self::Mka`] over the matroska muxer.
+    /// See [`Self::Asf`] for why the spelling is load-bearing (#538).
+    #[strum(serialize = "wmv")]
+    Wmv,
+    /// Windows Media Audio — ASF container carrying only audio.
+    ///
+    /// Audio-only sibling of [`Self::Wmv`], mirroring [`Self::Mka`] to
+    /// [`Self::Mkv`].
+    #[strum(serialize = "wma")]
+    Wma,
+    /// Advanced Systems Format — the *fallback* spelling of the ASF family.
+    ///
+    /// Microsoft's [File Name Extension Guidelines] make this the name for ASF
+    /// content carrying third-party or otherwise unsupported streams: a file is
+    /// `.wmv` when it holds video, `.wma` when it holds only audio, and `.asf`
+    /// only otherwise. Because `.asf` is the exception rather than the family
+    /// name, `wmv`/`wma` are separate variants instead of aliases that
+    /// canonicalize here — folding them in made `--remux=wmv` write
+    /// `Title.asf`, inverting Microsoft's rule (#538).
+    ///
+    /// [File Name Extension Guidelines]: https://learn.microsoft.com/en-us/windows/win32/wmformat/file-name-extension-guidelines
+    #[strum(serialize = "asf")]
     Asf,
     /// Material eXchange Format (broadcast/professional)
     #[strum(serialize = "mxf")]
@@ -121,6 +146,8 @@ impl ContainerFormat {
             Self::ThreeGp => "3gp",
             Self::Mpg => "mpg",
             Self::F4v => "f4v",
+            Self::Wmv => "wmv",
+            Self::Wma => "wma",
             Self::Asf => "asf",
             Self::Mxf => "mxf",
             Self::Vob => "vob",
@@ -164,6 +191,12 @@ impl ContainerFormat {
                 | Self::Aac
                 | Self::Aiff
                 | Self::Mka
+                // Microsoft's File Name Extension Guidelines are explicit that
+                // `.wma` names ASF content with "no supported video streams" —
+                // a video stream of any codec belongs in `.wmv` or `.asf`. This
+                // predicate records that classification; it does NOT yet drop
+                // video streams from a `--remux=wma` (see #538 follow-up).
+                | Self::Wma
                 | Self::Wv
                 | Self::Caf
                 | Self::Ac3
@@ -216,8 +249,8 @@ mod tests {
             ("mpegts", ContainerFormat::Ts),
             ("3gpp", ContainerFormat::ThreeGp),
             ("mpeg", ContainerFormat::Mpg),
-            ("wmv", ContainerFormat::Asf),
-            ("wma", ContainerFormat::Asf),
+            // `wmv`/`wma` were aliases of `Asf` until #538 gave them their own
+            // variants; they are covered by `test_wmv_wma_keep_their_own_extension`.
             ("wave", ContainerFormat::Wav),
             ("adts", ContainerFormat::Aac),
             ("aif", ContainerFormat::Aiff),
@@ -264,7 +297,7 @@ mod tests {
         );
         assert_eq!(
             "WMV".parse::<ContainerFormat>().unwrap(),
-            ContainerFormat::Asf
+            ContainerFormat::Wmv
         );
         assert_eq!(
             "FLAC".parse::<ContainerFormat>().unwrap(),
@@ -309,6 +342,79 @@ mod tests {
         assert!(!ContainerFormat::M4v.is_audio_only());
     }
 
+    /// `wmv` and `wma` keep their own extension instead of canonicalizing to
+    /// `asf` (#538).
+    ///
+    /// Microsoft's File Name Extension Guidelines make `.asf` the *fallback*
+    /// spelling — reserved for ASF content carrying third-party or unsupported
+    /// streams — while `.wmv` and `.wma` are the expected names for Windows
+    /// Media video and audio. Folding all three onto one variant whose
+    /// `as_ext()` is `"asf"` inverted that rule: `--remux=wmv` wrote
+    /// `Title.asf`. They are three variants over one `FFmpeg` muxer (`asf`
+    /// declares `Common extensions: asf,wmv,wma`), mirroring how `Mkv`/`Mka`
+    /// and `Mp4`/`M4a` already share a muxer while keeping distinct extensions.
+    #[test]
+    fn test_wmv_wma_keep_their_own_extension() {
+        const SPELLINGS: &[(&str, ContainerFormat, &str)] = &[
+            ("wmv", ContainerFormat::Wmv, "wmv"),
+            ("wma", ContainerFormat::Wma, "wma"),
+            ("asf", ContainerFormat::Asf, "asf"),
+        ];
+
+        for (spelling, expected, ext) in SPELLINGS {
+            let parsed: ContainerFormat = spelling
+                .parse()
+                .unwrap_or_else(|_| panic!("'{spelling}' must parse"));
+            assert_eq!(parsed, *expected, "'{spelling}' must parse to {expected:?}");
+            assert_eq!(
+                parsed.as_ext(),
+                *ext,
+                "'{spelling}' must keep its own extension, not canonicalize"
+            );
+        }
+
+        // The three are distinct containers, not aliases of one another.
+        assert_ne!(ContainerFormat::Wmv, ContainerFormat::Asf);
+        assert_ne!(ContainerFormat::Wma, ContainerFormat::Asf);
+        assert_ne!(ContainerFormat::Wmv, ContainerFormat::Wma);
+    }
+
+    /// The counter-direction guard for #538: aliases that are format *names*
+    /// rather than file extensions must keep canonicalizing.
+    ///
+    /// This is the regression this fix could most easily cause. A general
+    /// "preserve whatever the user typed" rule would fix `wmv` and
+    /// simultaneously start writing `Title.matroska` / `Title.quicktime` —
+    /// spellings no muxer lookup recognises and no player expects. Matroska's
+    /// own documentation uses only `.mkv`; Apple's uses `.mov`; `FFmpeg`'s mpegts
+    /// muxer lists `ts,m2t,m2ts,mts` and never `mpegts`.
+    #[test]
+    fn test_format_name_aliases_still_canonicalize() {
+        const CANONICALIZING: &[(&str, &str)] = &[
+            ("matroska", "mkv"),
+            ("quicktime", "mov"),
+            ("mpegts", "ts"),
+            ("3gpp", "3gp"),
+            ("mpeg", "mpg"),
+            ("wave", "wav"),
+            ("adts", "aac"),
+            ("aif", "aiff"),
+            ("wavpack", "wv"),
+        ];
+
+        for (alias, canonical_ext) in CANONICALIZING {
+            let parsed: ContainerFormat = alias
+                .parse()
+                .unwrap_or_else(|_| panic!("alias '{alias}' must parse"));
+            assert_eq!(
+                parsed.as_ext(),
+                *canonical_ext,
+                "alias '{alias}' is a format name, not an extension — it must \
+                 canonicalize to '{canonical_ext}', never be preserved verbatim"
+            );
+        }
+    }
+
     #[test]
     fn test_is_audio_only() {
         // Audio containers
@@ -326,5 +432,23 @@ mod tests {
         assert!(!ContainerFormat::Mp4.is_audio_only());
         assert!(!ContainerFormat::Mkv.is_audio_only());
         assert!(!ContainerFormat::Avi.is_audio_only());
+
+        // ASF family (#538). The negative pair carries more weight than the
+        // positive: `is_audio_only` is a `matches!`, so it can never be made
+        // exhaustive — a misclassified `Wmv`/`Asf` would be silent by
+        // construction, and dropping `| Self::Wma` from the predicate must not
+        // leave the suite green.
+        assert!(
+            ContainerFormat::Wma.is_audio_only(),
+            "wma names ASF content with no supported video streams"
+        );
+        assert!(
+            !ContainerFormat::Wmv.is_audio_only(),
+            "wmv is the ASF spelling that carries video"
+        );
+        assert!(
+            !ContainerFormat::Asf.is_audio_only(),
+            "asf is the general fallback and may carry video"
+        );
     }
 }

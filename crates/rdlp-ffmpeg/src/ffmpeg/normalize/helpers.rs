@@ -301,6 +301,11 @@ pub(super) const fn audio_only_extension_for(container: ContainerFormat) -> &'st
         | ContainerFormat::Mka
         | ContainerFormat::WebM
         // Reached the old `else` default; kept on MKA deliberately.
+        // The ASF family stays on MKA for its audio-only temp files: all three
+        // parsed to one variant before #538 and mapped here, so listing them
+        // together preserves that behaviour exactly.
+        | ContainerFormat::Wmv
+        | ContainerFormat::Wma
         | ContainerFormat::Asf
         | ContainerFormat::Mxf
         | ContainerFormat::Vob

@@ -264,14 +264,24 @@ mod tests {
     /// shipped a file with `moov` at the end.
     #[test]
     fn faststart_follows_the_container_type_for_every_remux_target() {
-        for (container, want) in [
-            (ContainerFormat::Mp4, true),
-            (ContainerFormat::Mov, true),
-            (ContainerFormat::M4v, true),
-            (ContainerFormat::F4v, true),
-            (ContainerFormat::Mkv, false),
-            (ContainerFormat::WebM, false),
-            (ContainerFormat::Avi, false),
+        // The third column is the expected extension as a LITERAL. Asserting
+        // against `container.as_ext()` instead would be tautological — both
+        // sides would derive from the same function, so a wrong `as_ext()`
+        // (e.g. #538's `Wmv => "asf"`) would keep this test green while the
+        // stage propagated the wrong extension toward the output filename.
+        for (container, want, want_ext) in [
+            (ContainerFormat::Mp4, true, "mp4"),
+            (ContainerFormat::Mov, true, "mov"),
+            (ContainerFormat::M4v, true, "m4v"),
+            (ContainerFormat::F4v, true, "f4v"),
+            (ContainerFormat::Mkv, false, "mkv"),
+            (ContainerFormat::WebM, false, "webm"),
+            (ContainerFormat::Avi, false, "avi"),
+            // #538: the ASF family, pinned one layer closer to the user than
+            // the `rdlp-types` unit tests reach.
+            (ContainerFormat::Wmv, false, "wmv"),
+            (ContainerFormat::Wma, false, "wma"),
+            (ContainerFormat::Asf, false, "asf"),
         ] {
             let config = PostProcess {
                 remux_container: Some(container),
@@ -290,7 +300,68 @@ mod tests {
                 opts.faststart, want,
                 "faststart for {container:?} must follow supports_faststart()"
             );
-            assert_eq!(opts.output_format.as_deref(), Some(container.as_ext()));
+            assert_eq!(
+                opts.output_format.as_deref(),
+                Some(want_ext),
+                "the stage must propagate the literal extension for {container:?}"
+            );
+        }
+    }
+
+    /// #538 flipped the already-in-target short-circuit for the ASF family,
+    /// in both directions, and neither direction was pinned.
+    ///
+    /// `target_container` skips the remux when the input extension already
+    /// equals `container.as_ext()`. While `wmv`/`wma`/`asf` shared one variant
+    /// whose `as_ext()` was `"asf"`, a `.wmv` input compared against `"asf"`:
+    /// `--remux=wmv` re-muxed a file that was already in the requested
+    /// container, and `--remux=asf` on a `.wmv` input wrongly skipped. Splitting
+    /// the variants corrects both, so both are asserted here.
+    #[test]
+    fn asf_family_short_circuits_per_spelling_not_per_muxer() {
+        // Same spelling in and out → nothing to do.
+        for (input_ext, container) in [
+            ("wmv", ContainerFormat::Wmv),
+            ("wma", ContainerFormat::Wma),
+            ("asf", ContainerFormat::Asf),
+        ] {
+            let config = PostProcess {
+                remux_container: Some(container),
+                ..PostProcess::default()
+            };
+            let msg = make_msg_with_config(
+                vec![PathBuf::from(format!("/tmp/v.{input_ext}"))],
+                config,
+                false,
+            );
+            assert!(
+                RemuxStage::target_container(&msg, input_ext).is_none(),
+                "{input_ext} input with --remux={input_ext} must skip the remux"
+            );
+        }
+
+        // Different spelling within the same muxer family → still a real remux,
+        // because the extension the user asked for is not the one on disk.
+        for (input_ext, container) in [
+            ("wmv", ContainerFormat::Asf),
+            ("asf", ContainerFormat::Wmv),
+            ("wmv", ContainerFormat::Wma),
+        ] {
+            let config = PostProcess {
+                remux_container: Some(container),
+                ..PostProcess::default()
+            };
+            let msg = make_msg_with_config(
+                vec![PathBuf::from(format!("/tmp/v.{input_ext}"))],
+                config,
+                false,
+            );
+            assert_eq!(
+                RemuxStage::target_container(&msg, input_ext),
+                Some(container),
+                "{input_ext} input with --remux={} must still remux",
+                container.as_ext()
+            );
         }
     }
 

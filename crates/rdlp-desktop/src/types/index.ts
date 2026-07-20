@@ -274,7 +274,7 @@ export interface DownloadJob {
  */
 export type ContainerFormat =
     | "mp4" | "mkv" | "webm" | "mov" | "m4v" | "ts" | "flv" | "avi"
-    | "threegp" | "mpg" | "f4v" | "asf" | "mxf" | "vob" | "dv"
+    | "threegp" | "mpg" | "f4v" | "wmv" | "wma" | "asf" | "mxf" | "vob" | "dv"
     | "nut" | "ivf" | "ogg" | "m4a" | "mp3" | "wav" | "flac"
     | "opus" | "aac" | "aiff" | "mka" | "wv" | "caf" | "ac3";
 

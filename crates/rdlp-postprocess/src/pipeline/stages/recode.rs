@@ -75,7 +75,11 @@ impl RecodeStage {
             ContainerFormat::ThreeGp => {
                 video_codec.is_some_and(|c| codec_is(c, &["h264", "avc", "h263", "mpeg4"]))
             }
-            ContainerFormat::Asf => {
+            // All three ASF-family spellings share one muxer and therefore one
+            // codec-compatibility answer. Listed explicitly rather than left to
+            // the `other` arm below: falling through would silently swap this
+            // codec check for an extension compare when #538 split the variants.
+            ContainerFormat::Wmv | ContainerFormat::Wma | ContainerFormat::Asf => {
                 video_codec.is_some_and(|c| codec_is(c, &["wmv1", "wmv2", "h264", "avc", "mpeg4"]))
             }
             ContainerFormat::Mpg | ContainerFormat::Vob => video_codec.is_some_and(|c| {
@@ -83,7 +87,31 @@ impl RecodeStage {
             }),
             // Audio-only and any-other-video containers fall back to the
             // input/output ext compare.
-            other => input_ext.eq_ignore_ascii_case(other.as_ext()),
+            //
+            // Enumerated rather than left as `other =>` so a newly-added
+            // `ContainerFormat` fails to compile here instead of silently
+            // inheriting an extension compare in place of a codec check. #538
+            // is why: splitting `Asf` into three variants added two containers
+            // to this match, and a catch-all would have swapped the ASF
+            // codec-compatibility list above for an ext compare with no build
+            // error and no test failure. Same discipline as
+            // `embed_strategy::for_container` (#525).
+            ContainerFormat::Mov
+            | ContainerFormat::M4v
+            | ContainerFormat::Ts
+            | ContainerFormat::Flv
+            | ContainerFormat::Dv
+            | ContainerFormat::Ogg
+            | ContainerFormat::M4a
+            | ContainerFormat::Mp3
+            | ContainerFormat::Wav
+            | ContainerFormat::Flac
+            | ContainerFormat::Opus
+            | ContainerFormat::Aac
+            | ContainerFormat::Aiff
+            | ContainerFormat::Wv
+            | ContainerFormat::Caf
+            | ContainerFormat::Ac3 => input_ext.eq_ignore_ascii_case(output.as_ext()),
         }
     }
 
