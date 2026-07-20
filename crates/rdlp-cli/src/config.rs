@@ -70,37 +70,63 @@ fn resolve_interactive_values(args: &Args) -> Result<ResolvedInteractiveValues> 
     })
 }
 
-/// Merge an optional CLI arg into config, leaving the config-file value intact
-/// when the flag was not passed.
+/// Merge a declaration list of uniform CLI-arg-to-config-field assignments.
 ///
-/// An omitted flag is `None`, so assigning it unconditionally writes `None` over
-/// whatever the config file set — silently discarding the user's value. That is
-/// exactly what `recode_cpu_used` and `recode_speed_level` did before #540,
-/// while their neighbours hand-wrote the correct `if let Some(..)` guard. This
-/// macro exists so the correct behaviour is the shorter thing to write.
-macro_rules! merge_opt {
-    ($config:expr, $args:expr, $field:ident) => {
-        if let Some(value) = $args.$field.clone() {
-            $config.$field = Some(value);
-        }
+/// Each entry names ONE field with an explicit arm keyword, so a same-typed
+/// transposition (assigning the wrong field, or reading the wrong arg) is a
+/// compile error or an obviously-wrong line, not a copy-paste footgun hiding
+/// in two near-identical macro invocations. Replaces the former `merge_opt!`
+/// / `merge_bool!` macros (see #540, #585).
+///
+/// An omitted flag is `None`/`false`, so a bare assignment would silently
+/// discard whatever the config file set — the `opt`/`opt_pp` arms guard with
+/// `if let Some(..)`, `bool`/`bool_pp` only set `true` (never reset to
+/// `false`), and `set` guards a plain (non-`Option`) field the same way.
+///
+/// Arms:
+/// - `bool: FIELD` — `if args.FIELD { config.FIELD = true; }`
+/// - `bool_pp: FIELD` — same, under `config.postprocess`
+/// - `opt: FIELD` — `if let Some(v) = args.FIELD.clone() { config.FIELD = Some(v); }`
+/// - `opt_pp: FIELD` — same, under `config.postprocess`
+/// - `set: FIELD` — `if let Some(v) = args.FIELD.clone() { config.FIELD = v; }`
+///   (config field is NOT `Option`-typed; equivalent to `.clone_from(&v)`)
+///
+/// Each arm accepts an optional `<- arg_name` when the CLI arg name differs
+/// from the config field name (e.g. `opt: cookies_file <- cookies`).
+macro_rules! merge_fields {
+    ($config:expr, $args:expr, { $($arm:ident : $field:ident $(<- $arg:ident)?),+ $(,)? }) => {
+        $(
+            merge_fields!(@arm $config, $args, $arm, $field $(<- $arg)?);
+        )+
     };
-    ($config:expr, $args:expr, postprocess.$field:ident) => {
-        if let Some(value) = $args.$field.clone() {
-            $config.postprocess.$field = Some(value);
-        }
-    };
-}
-
-/// Merge a boolean CLI flag into config (sets to true if flag is set).
-macro_rules! merge_bool {
-    ($config:expr, $args:expr, $field:ident) => {
+    (@arm $config:expr, $args:expr, bool, $field:ident) => {
         if $args.$field {
             $config.$field = true;
         }
     };
-    ($config:expr, $args:expr, postprocess.$field:ident) => {
+    (@arm $config:expr, $args:expr, bool_pp, $field:ident) => {
         if $args.$field {
             $config.postprocess.$field = true;
+        }
+    };
+    (@arm $config:expr, $args:expr, opt, $field:ident) => {
+        if let Some(value) = $args.$field.clone() {
+            $config.$field = Some(value);
+        }
+    };
+    (@arm $config:expr, $args:expr, opt, $field:ident <- $arg:ident) => {
+        if let Some(value) = $args.$arg.clone() {
+            $config.$field = Some(value);
+        }
+    };
+    (@arm $config:expr, $args:expr, opt_pp, $field:ident) => {
+        if let Some(value) = $args.$field.clone() {
+            $config.postprocess.$field = Some(value);
+        }
+    };
+    (@arm $config:expr, $args:expr, set, $field:ident <- $arg:ident) => {
+        if let Some(value) = $args.$arg.clone() {
+            $config.$field = value;
         }
     };
 }
@@ -161,17 +187,41 @@ pub fn merge_config(
     } else if let Some(ref output) = args.output {
         config.output_template.clone_from(output);
     }
-    if let Some(ref dir) = args.output_dir {
-        config.output_directory.clone_from(dir);
-    }
-    if let Some(ref format) = args.format {
-        config.format = Some(format.clone());
-    }
-    merge_bool!(config, args, audio_multistreams);
-    merge_bool!(config, args, quiet);
-    merge_bool!(config, args, verbose);
-    merge_bool!(config, args, simulate);
-    merge_bool!(config, args, postprocess.extract_audio);
+    merge_fields!(config, args, {
+        set: output_directory <- output_dir,
+        opt: format,
+        bool: audio_multistreams,
+        bool: quiet,
+        bool: verbose,
+        bool: simulate,
+        bool_pp: extract_audio,
+        opt_pp: audio_quality,
+        bool_pp: embed_metadata,
+        bool_pp: write_thumbnail,
+        bool_pp: write_subtitles,
+        bool: write_auto_subtitles,
+        bool_pp: embed_subtitles,
+        bool: strict_subs,
+        bool: verify_sub_urls,
+        bool: retry_subs,
+        opt_pp: video_encoder,
+        opt_pp: recode_threads,
+        opt_pp: recode_preset,
+        opt_pp: recode_cpu_used,
+        opt_pp: recode_speed_level,
+        bool_pp: loudnorm_dynamic,
+        bool_pp: loudnorm_precompress,
+        opt_pp: loudnorm_preset,
+        bool_pp: keep_video,
+        opt_pp: ffmpeg_location,
+        opt: socket_timeout,
+        opt: read_timeout,
+        opt: pool_idle_timeout,
+        opt: download_timeout,
+        opt: merge_timeout,
+        opt: cookies_file <- cookies,
+        opt: download_archive,
+    });
 
     // Audio format: interactive (pre-resolved) or direct parse
     if let Some(fmt) = interactive_values.audio_format {
@@ -183,25 +233,17 @@ pub fn merge_config(
             Some(parse_arg::<AudioFormat>(audio_format, "audio format")?);
     }
 
-    if let Some(ref audio_quality) = args.audio_quality {
-        config.postprocess.audio_quality = Some(audio_quality.clone());
-    }
-    merge_bool!(config, args, postprocess.embed_metadata);
     if args.no_thumbnail {
         config.postprocess.embed_thumbnail = false;
     }
-    merge_bool!(config, args, postprocess.write_thumbnail);
 
     // Subtitles
-    merge_bool!(config, args, postprocess.write_subtitles);
-    merge_bool!(config, args, write_auto_subtitles);
     if let Some(ref langs) = args.sub_langs {
         config.subtitle_langs = langs.split(',').map(|s| s.trim().to_string()).collect();
     }
     if let Some(ref format) = args.sub_format {
         config.subtitle_format = Some(parse_arg::<SubtitleFormat>(format, "subtitle format")?);
     }
-    merge_bool!(config, args, postprocess.embed_subtitles);
     // --list-subs implies --write-subtitles
     if args.list_subs || args.list_subs_only {
         config.postprocess.write_subtitles = true;
@@ -211,10 +253,6 @@ pub fn merge_config(
     if config.postprocess.embed_subtitles && !config.postprocess.write_subtitles {
         config.postprocess.write_subtitles = true;
     }
-    merge_bool!(config, args, strict_subs);
-    merge_bool!(config, args, verify_sub_urls);
-    merge_bool!(config, args, retry_subs);
-
     // Recode video: interactive (pre-resolved) or direct parse
     if let Some(fmt) = interactive_values.recode_video {
         config.postprocess.recode_video = Some(fmt);
@@ -227,18 +265,12 @@ pub fn merge_config(
         )?);
     }
 
-    if let Some(ref encoder) = args.video_encoder {
-        config.postprocess.video_encoder = Some(encoder.clone());
-    }
-
     // recode_container: explicit container for recode (overrides recode_video container)
     if let Some(ref fmt) = args.recode_container {
         config.postprocess.recode_container =
             Some(parse_arg::<ContainerFormat>(fmt, "recode container")?);
     }
 
-    merge_opt!(config, args, postprocess.recode_threads);
-    merge_opt!(config, args, postprocess.recode_preset);
     if let Some(ref deadline) = args.recode_deadline {
         config.postprocess.recode_deadline = Some(
             deadline
@@ -246,9 +278,6 @@ pub fn merge_config(
                 .map_err(|e| anyhow::anyhow!("invalid --recode-deadline: {e}"))?,
         );
     }
-    merge_opt!(config, args, postprocess.recode_cpu_used);
-    merge_opt!(config, args, postprocess.recode_speed_level);
-
     // Assigned only when the flag is present, so a `recode_audio` set in the
     // config file survives an invocation that does not mention it (#540). The
     // vocabulary itself is `RecodeAudioMode`'s to define, not the CLI's.
@@ -274,9 +303,6 @@ pub fn merge_config(
     if let Some(target) = args.audio_gain_target {
         config.postprocess.audio_gain_target = Some(target);
     }
-    if let Some(ref preset) = args.loudnorm_preset {
-        config.postprocess.loudnorm_preset = Some(preset.clone());
-    }
     if let Some(i) = args.loudnorm_i {
         config.postprocess.loudnorm_target_i = Some(i);
     }
@@ -286,19 +312,12 @@ pub fn merge_config(
     if let Some(lra) = args.loudnorm_lra {
         config.postprocess.loudnorm_target_lra = Some(lra);
     }
-    merge_bool!(config, args, postprocess.loudnorm_dynamic);
-    merge_bool!(config, args, postprocess.loudnorm_precompress);
-
     // Fixup policy — assign only when the flag was actually passed, so an
     // explicit `--fixup=detect_or_warn` still beats a config-file value (#583).
     if let Some(ref fixup) = args.fixup {
         config.postprocess.fixup = parse_arg::<FixupPolicy>(fixup, "fixup policy")?;
     }
 
-    merge_bool!(config, args, postprocess.keep_video);
-    if let Some(ref ffmpeg_location) = args.ffmpeg_location {
-        config.postprocess.ffmpeg_location = Some(ffmpeg_location.clone());
-    }
     if let Some(ref proxy) = args.proxy {
         // Hard-fail at config-build time when --proxy is set explicitly.
         // The HttpClientFactory previously logged a warn-level message and
@@ -309,11 +328,6 @@ pub fn merge_config(
             .map_err(|e| anyhow::anyhow!("--proxy validation failed: {e}"))?;
         config.proxy = Some(proxy.clone());
     }
-    merge_opt!(config, args, socket_timeout);
-    merge_opt!(config, args, read_timeout);
-    merge_opt!(config, args, pool_idle_timeout);
-    merge_opt!(config, args, download_timeout);
-    merge_opt!(config, args, merge_timeout);
     // Browser emulation: CLI flag > env var > default (ChromeLatest).
     if let Some(ref cli_browser) = args.browser {
         config.browser_emulation = parse_browser_emulation(cli_browser);
@@ -330,13 +344,6 @@ pub fn merge_config(
     if let Some(ref browser) = args.cookies_from_browser {
         config.cookies_from_browser = Some(parse_arg::<BrowserType>(browser, "browser type")?);
     }
-    if let Some(ref cookies) = args.cookies {
-        config.cookies_file = Some(cookies.clone());
-    }
-    if let Some(ref archive) = args.download_archive {
-        config.download_archive = Some(archive.clone());
-    }
-
     // Remux: interactive (pre-resolved) or direct parse
     if let Some(fmt) = interactive_values.remux_container {
         config.postprocess.remux_container = Some(fmt);
