@@ -70,6 +70,27 @@ fn resolve_interactive_values(args: &Args) -> Result<ResolvedInteractiveValues> 
     })
 }
 
+/// Merge an optional CLI arg into config, leaving the config-file value intact
+/// when the flag was not passed.
+///
+/// An omitted flag is `None`, so assigning it unconditionally writes `None` over
+/// whatever the config file set — silently discarding the user's value. That is
+/// exactly what `recode_cpu_used` and `recode_speed_level` did before #540,
+/// while their neighbours hand-wrote the correct `if let Some(..)` guard. This
+/// macro exists so the correct behaviour is the shorter thing to write.
+macro_rules! merge_opt {
+    ($config:expr, $args:expr, $field:ident) => {
+        if let Some(value) = $args.$field.clone() {
+            $config.$field = Some(value);
+        }
+    };
+    ($config:expr, $args:expr, postprocess.$field:ident) => {
+        if let Some(value) = $args.$field.clone() {
+            $config.postprocess.$field = Some(value);
+        }
+    };
+}
+
 /// Merge a boolean CLI flag into config (sets to true if flag is set).
 macro_rules! merge_bool {
     ($config:expr, $args:expr, $field:ident) => {
@@ -212,12 +233,8 @@ pub fn merge_config(
         );
     }
 
-    if let Some(threads) = args.recode_threads {
-        config.postprocess.recode_threads = Some(threads);
-    }
-    if let Some(ref preset) = args.recode_preset {
-        config.postprocess.recode_preset = Some(preset.clone());
-    }
+    merge_opt!(config, args, postprocess.recode_threads);
+    merge_opt!(config, args, postprocess.recode_preset);
     if let Some(ref deadline) = args.recode_deadline {
         config.postprocess.recode_deadline = Some(
             deadline
@@ -225,29 +242,15 @@ pub fn merge_config(
                 .map_err(|e| anyhow::anyhow!("invalid --recode-deadline: {e}"))?,
         );
     }
-    config.postprocess.recode_cpu_used = args.recode_cpu_used;
-    config.postprocess.recode_speed_level = args.recode_speed_level;
+    merge_opt!(config, args, postprocess.recode_cpu_used);
+    merge_opt!(config, args, postprocess.recode_speed_level);
 
-    // recode_audio: "copy", "auto", or an encoder name.
-    //
-    // The two mode keywords are matched case-insensitively, like every
-    // neighbouring format flag (which get it from `#[strum(ascii_case_insensitive)]`).
-    // Before #540 this was case-sensitive, so `--recode-audio=COPY` fell through
-    // to the encoder arm and failed much later inside FFmpeg with a confusing
-    // "unknown encoder" error.
-    //
-    // The encoder name itself is NOT case-folded: FFmpeg matches encoder names
-    // exactly, so `libOpus` must reach it unchanged.
-    let recode_audio = &args.recode_audio;
-    config.postprocess.recode_audio = if recode_audio.eq_ignore_ascii_case("copy") {
-        RecodeAudioMode::Copy
-    } else if recode_audio.eq_ignore_ascii_case("auto") {
-        RecodeAudioMode::Auto
-    } else {
-        RecodeAudioMode::Encoder {
-            name: recode_audio.clone(),
-        }
-    };
+    // Assigned only when the flag is present, so a `recode_audio` set in the
+    // config file survives an invocation that does not mention it (#540). The
+    // vocabulary itself is `RecodeAudioMode`'s to define, not the CLI's.
+    if let Some(recode_audio) = &args.recode_audio {
+        config.postprocess.recode_audio = RecodeAudioMode::from(recode_audio.as_str());
+    }
 
     // Audio normalization: --normalize-boost / --normalize-boost-db implies --loudnorm
     // implies --normalize-audio

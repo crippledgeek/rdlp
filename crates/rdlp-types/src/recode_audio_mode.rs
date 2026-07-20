@@ -40,9 +40,71 @@ pub enum RecodeAudioMode {
     },
 }
 
+impl From<&str> for RecodeAudioMode {
+    /// Parses the `--recode-audio` vocabulary: `copy`, `auto`, or an `FFmpeg`
+    /// encoder name.
+    ///
+    /// `From` rather than `FromStr` because the conversion cannot fail — any
+    /// string that is not a mode keyword *is* an encoder name, and whether that
+    /// encoder exists is `FFmpeg`'s question to answer, not this type's.
+    ///
+    /// The two mode keywords are matched case-insensitively, matching every
+    /// other format vocabulary in this crate (which gets it from
+    /// `#[strum(ascii_case_insensitive)]`). The encoder name is preserved
+    /// verbatim — `FFmpeg` matches encoder names exactly, so `libOpus` must
+    /// survive unchanged.
+    fn from(value: &str) -> Self {
+        if value.eq_ignore_ascii_case("copy") {
+            Self::Copy
+        } else if value.eq_ignore_ascii_case("auto") {
+            Self::Auto
+        } else {
+            Self::Encoder {
+                name: value.to_owned(),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn from_str_maps_the_mode_keywords_case_insensitively() {
+        for spelling in ["copy", "COPY", "Copy", "cOpY"] {
+            assert_eq!(RecodeAudioMode::from(spelling), RecodeAudioMode::Copy);
+        }
+        for spelling in ["auto", "AUTO", "Auto"] {
+            assert_eq!(RecodeAudioMode::from(spelling), RecodeAudioMode::Auto);
+        }
+    }
+
+    #[test]
+    fn from_str_preserves_encoder_name_case() {
+        assert_eq!(
+            RecodeAudioMode::from("libOpus"),
+            RecodeAudioMode::Encoder {
+                name: "libOpus".to_string()
+            },
+            "FFmpeg matches encoder names exactly; case must not be folded"
+        );
+    }
+
+    /// A keyword with surrounding content is an encoder name, not a mode —
+    /// the match is on the whole value, never a substring.
+    #[test]
+    fn from_str_does_not_match_keywords_as_substrings() {
+        for name in ["copycat", "autotune", "libcopy", "copy2"] {
+            assert_eq!(
+                RecodeAudioMode::from(name),
+                RecodeAudioMode::Encoder {
+                    name: name.to_string()
+                },
+                "{name} must be treated as an encoder name"
+            );
+        }
+    }
 
     #[test]
     fn default_is_copy() {

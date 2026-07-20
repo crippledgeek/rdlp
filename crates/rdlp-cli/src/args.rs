@@ -213,8 +213,14 @@ pub struct Args {
     /// (e.g., libopus, aac, libmp3lame).
     /// `copy` copies audio unchanged; `auto` selects the best encoder for the
     /// target container; any other value is treated as an explicit encoder name.
-    #[arg(long, value_name = "MODE", default_value = "copy")]
-    pub recode_audio: String,
+    ///
+    /// Omitted means "not specified on the command line", so a `recode_audio`
+    /// set in the config file survives. Carrying a clap `default_value` here
+    /// instead made the default indistinguishable from an explicit `copy`, and
+    /// the unconditional assignment downstream silently discarded the config
+    /// file's value on every run (#540).
+    #[arg(long, value_name = "MODE")]
+    pub recode_audio: Option<String>,
 
     // Help text hardcodes the bounds: keep `1-64` in sync with
     // `rdlp_types::config::MAX_RECODE_THREADS` and `8` in sync with

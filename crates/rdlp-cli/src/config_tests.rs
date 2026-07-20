@@ -69,7 +69,7 @@ fn default_args() -> Args {
         video_encoder: None,
         list_encoders: false,
         recode_container: None,
-        recode_audio: "copy".to_string(),
+        recode_audio: None,
         recode_threads: None,
         recode_preset: None,
         recode_deadline: None,
@@ -809,7 +809,7 @@ fn negative_cpu_used_parses_both_forms() {
 fn test_merge_config_recode_audio_mode_is_case_insensitive() {
     for spelling in ["copy", "COPY", "Copy", "cOpY"] {
         let mut args = default_args();
-        args.recode_audio = spelling.to_string();
+        args.recode_audio = Some(spelling.to_string());
         let config =
             merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
         assert_eq!(
@@ -821,7 +821,7 @@ fn test_merge_config_recode_audio_mode_is_case_insensitive() {
 
     for spelling in ["auto", "AUTO", "Auto"] {
         let mut args = default_args();
-        args.recode_audio = spelling.to_string();
+        args.recode_audio = Some(spelling.to_string());
         let config =
             merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
         assert_eq!(
@@ -837,7 +837,7 @@ fn test_merge_config_recode_audio_mode_is_case_insensitive() {
 #[test]
 fn test_merge_config_recode_audio_encoder_name_preserved() {
     let mut args = default_args();
-    args.recode_audio = "libOpus".to_string();
+    args.recode_audio = Some("libOpus".to_string());
     let config =
         merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
     assert_eq!(
@@ -847,4 +847,114 @@ fn test_merge_config_recode_audio_encoder_name_preserved() {
         },
         "encoder names are passed to FFmpeg verbatim and must not be lowercased"
     );
+}
+
+/// A `recode_audio` set in `config.toml` must survive when the flag is omitted.
+///
+/// The arg carried `default_value = "copy"` and was assigned unconditionally,
+/// so the clap default silently overwrote the config file's value on every run
+/// — the user's setting was discarded with no error. The adjacent `fixup` arg
+/// avoids this by guarding on its default; this one did not (#540).
+#[test]
+fn test_merge_config_file_recode_audio_survives_when_flag_omitted() {
+    let args = default_args(); // no --recode-audio passed
+    let mut file_config = Config::default();
+    file_config.postprocess.recode_audio = RecodeAudioMode::Encoder {
+        name: "libopus".to_string(),
+    };
+
+    let merged = merge_config(&args, file_config, no_interactive()).expect("merge should succeed");
+
+    assert_eq!(
+        merged.postprocess.recode_audio,
+        RecodeAudioMode::Encoder {
+            name: "libopus".to_string()
+        },
+        "config.toml's recode_audio must not be clobbered by the CLI default"
+    );
+}
+
+/// The flag must still win when it IS passed — including when the user
+/// explicitly asks for the same value as the old default.
+///
+/// A naive `if args.recode_audio != "copy"` guard would fix the clobber but
+/// break this: an explicit `--recode-audio=copy` would be indistinguishable
+/// from the default and the config file would wrongly win.
+#[test]
+fn test_merge_config_explicit_recode_audio_overrides_file() {
+    let mut file_config = Config::default();
+    file_config.postprocess.recode_audio = RecodeAudioMode::Encoder {
+        name: "libopus".to_string(),
+    };
+
+    let mut args = default_args();
+    args.recode_audio = Some("copy".to_string());
+    let merged =
+        merge_config(&args, file_config.clone(), no_interactive()).expect("merge should succeed");
+    assert_eq!(
+        merged.postprocess.recode_audio,
+        RecodeAudioMode::Copy,
+        "an explicit --recode-audio=copy must override the config file"
+    );
+
+    let mut args = default_args();
+    args.recode_audio = Some("libfdk_aac".to_string());
+    let merged = merge_config(&args, file_config, no_interactive()).expect("merge should succeed");
+    assert_eq!(
+        merged.postprocess.recode_audio,
+        RecodeAudioMode::Encoder {
+            name: "libfdk_aac".to_string()
+        },
+        "an explicit encoder must override the config file"
+    );
+}
+
+/// Optional CLI args must not overwrite config-file values when omitted.
+///
+/// `recode_cpu_used` and `recode_speed_level` were assigned unconditionally, so
+/// running with no flags wrote `None` over whatever the config file had set —
+/// silently discarding the user's tuning. Their immediate neighbours
+/// (`recode_threads`, `recode_preset`) guard correctly, which is what made the
+/// omission easy to miss (#540).
+#[test]
+fn test_merge_config_optional_args_do_not_clobber_config_file() {
+    let args = default_args(); // no flags passed
+    let mut file_config = Config::default();
+    file_config.postprocess.recode_cpu_used = Some(4);
+    file_config.postprocess.recode_speed_level = Some(3);
+    file_config.postprocess.recode_threads = Some(8);
+    file_config.postprocess.recode_preset = Some("slow".to_string());
+
+    let merged = merge_config(&args, file_config, no_interactive()).expect("merge should succeed");
+
+    assert_eq!(
+        merged.postprocess.recode_cpu_used,
+        Some(4),
+        "config.toml's recode_cpu_used must survive an invocation without the flag"
+    );
+    assert_eq!(
+        merged.postprocess.recode_speed_level,
+        Some(3),
+        "config.toml's recode_speed_level must survive an invocation without the flag"
+    );
+    assert_eq!(merged.postprocess.recode_threads, Some(8));
+    assert_eq!(merged.postprocess.recode_preset, Some("slow".to_string()));
+}
+
+/// The flag must still win when passed — the guard must not make config-file
+/// values sticky.
+#[test]
+fn test_merge_config_optional_args_still_override_when_passed() {
+    let mut file_config = Config::default();
+    file_config.postprocess.recode_cpu_used = Some(4);
+    file_config.postprocess.recode_speed_level = Some(3);
+
+    let mut args = default_args();
+    args.recode_cpu_used = Some(-8);
+    args.recode_speed_level = Some(7);
+
+    let merged = merge_config(&args, file_config, no_interactive()).expect("merge should succeed");
+
+    assert_eq!(merged.postprocess.recode_cpu_used, Some(-8));
+    assert_eq!(merged.postprocess.recode_speed_level, Some(7));
 }
