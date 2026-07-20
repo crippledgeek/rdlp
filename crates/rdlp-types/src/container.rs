@@ -207,15 +207,14 @@ impl ContainerFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::enum_test_support::{
+        assert_all_parse_to, assert_display_matches, assert_display_roundtrips,
+    };
     use strum::IntoEnumIterator as _;
 
     #[test]
     fn test_display_roundtrip() {
-        for fmt in ContainerFormat::iter() {
-            let s = fmt.to_string();
-            let parsed: ContainerFormat = s.parse().unwrap();
-            assert_eq!(fmt, parsed, "roundtrip failed for {s}");
-        }
+        assert_display_roundtrips::<ContainerFormat>();
     }
 
     /// `Display` must render the file extension, not an alias.
@@ -227,13 +226,7 @@ mod tests {
     /// string no muxer lookup recognises.
     #[test]
     fn test_display_is_the_file_extension() {
-        for fmt in ContainerFormat::iter() {
-            assert_eq!(
-                fmt.to_string(),
-                fmt.as_ext(),
-                "Display for {fmt:?} must equal as_ext()"
-            );
-        }
+        assert_display_matches::<ContainerFormat>(|fmt| fmt.as_ext(), "as_ext()");
     }
 
     /// Every alias must still parse after `to_string` is added.
@@ -257,19 +250,8 @@ mod tests {
             ("wavpack", ContainerFormat::Wv),
         ];
 
-        for (alias, expected) in ALIASES {
-            assert_eq!(
-                alias.parse::<ContainerFormat>().ok(),
-                Some(*expected),
-                "alias '{alias}' must keep parsing"
-            );
-            // Case-insensitivity must cover the alias set too.
-            assert_eq!(
-                alias.to_uppercase().parse::<ContainerFormat>().ok(),
-                Some(*expected),
-                "alias '{alias}' must keep parsing case-insensitively"
-            );
-        }
+        // Case-insensitivity across the alias set is asserted by the helper.
+        assert_all_parse_to(ALIASES);
     }
 
     /// Each variant's own extension parses back to that variant.

@@ -1,10 +1,12 @@
 //! Audio format types for extraction and conversion
 
 use serde::{Deserialize, Serialize};
-use strum_macros::{Display, EnumString};
+use strum_macros::{Display, EnumIter, EnumString};
 
 /// Supported audio formats for extraction and conversion.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString, EnumIter,
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive)]
 pub enum AudioFormat {
@@ -36,10 +38,10 @@ pub enum AudioFormat {
     #[strum(serialize = "ac3")]
     Ac3,
     /// Dolby Digital Plus (Enhanced AC-3)
-    #[strum(serialize = "eac3", serialize = "e-ac-3", serialize = "e-ac3")]
+    #[strum(to_string = "eac3", serialize = "e-ac-3", serialize = "e-ac3")]
     Eac3,
     /// DTS Coherent Acoustics
-    #[strum(serialize = "dts", serialize = "dca")]
+    #[strum(to_string = "dts", serialize = "dca")]
     Dts,
     /// MPEG Audio Layer 2
     #[strum(serialize = "mp2")]
@@ -100,38 +102,62 @@ impl AudioFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::enum_test_support::{
+        assert_all_parse_to, assert_display_matches, assert_display_roundtrips,
+    };
 
     #[test]
     fn test_display_roundtrip() {
-        for fmt in [
-            AudioFormat::Mp3,
-            AudioFormat::Aac,
-            AudioFormat::M4a,
-            AudioFormat::Opus,
-            AudioFormat::Vorbis,
-            AudioFormat::Flac,
-            AudioFormat::Alac,
-            AudioFormat::Wav,
-            AudioFormat::Ac3,
-            AudioFormat::Eac3,
-            AudioFormat::Dts,
-            AudioFormat::Mp2,
-            AudioFormat::WavPack,
-            AudioFormat::Tta,
-        ] {
-            let s = fmt.to_string();
-            let parsed: AudioFormat = s.parse().unwrap();
-            assert_eq!(fmt, parsed, "roundtrip failed for {s}");
-        }
+        assert_display_roundtrips::<AudioFormat>();
     }
 
+    /// Every alias still parses — including the spellings displaced from
+    /// `Display` when `eac3`/`dts` were promoted to `to_string` (#580). strum
+    /// unions `to_string` into the `FromStr` set rather than replacing the
+    /// `serialize` list, so nothing should be lost; this pins that.
+    ///
+    /// Case folding of each spelling is asserted by the helper.
     #[test]
     fn test_alias_parsing() {
-        assert_eq!("ogg".parse::<AudioFormat>().unwrap(), AudioFormat::Vorbis);
-        assert_eq!("e-ac-3".parse::<AudioFormat>().unwrap(), AudioFormat::Eac3);
-        assert_eq!("e-ac3".parse::<AudioFormat>().unwrap(), AudioFormat::Eac3);
-        assert_eq!("dca".parse::<AudioFormat>().unwrap(), AudioFormat::Dts);
-        assert_eq!("wv".parse::<AudioFormat>().unwrap(), AudioFormat::WavPack);
+        assert_all_parse_to(&[
+            ("ogg", AudioFormat::Vorbis),
+            ("wv", AudioFormat::WavPack),
+            ("eac3", AudioFormat::Eac3),
+            ("e-ac-3", AudioFormat::Eac3),
+            ("e-ac3", AudioFormat::Eac3),
+            ("dts", AudioFormat::Dts),
+            ("dca", AudioFormat::Dts),
+        ]);
+    }
+
+    /// The codec-vs-container split is intended, not a bug to "fix".
+    ///
+    /// These three variants are the reason this enum's `Display` guard is
+    /// pinned to `codec_name()` rather than `as_ext()` — a future reviewer
+    /// mirroring #545's `ContainerFormat` rule onto this enum would otherwise
+    /// make `Vorbis` render `ogg`. See #580.
+    #[test]
+    fn test_codec_name_and_ext_intentionally_differ() {
+        assert_eq!(AudioFormat::Vorbis.codec_name(), "vorbis");
+        assert_eq!(AudioFormat::Vorbis.as_ext(), "ogg");
+        assert_eq!(AudioFormat::Alac.codec_name(), "alac");
+        assert_eq!(AudioFormat::Alac.as_ext(), "m4a");
+        assert_eq!(AudioFormat::WavPack.codec_name(), "wavpack");
+        assert_eq!(AudioFormat::WavPack.as_ext(), "wv");
+    }
+
+    /// `Display` must render the codec name, not whichever strum alias happens
+    /// to be longest.
+    ///
+    /// `AudioFormat` is a *codec* enum: [`AudioFormat::as_ext`] deliberately
+    /// returns the **container** extension the codec is carried in (`Vorbis` →
+    /// `ogg`, `Alac` → `m4a`), so the projection `Display` must agree with is
+    /// [`AudioFormat::codec_name`], not `as_ext`. See #580; the
+    /// `ContainerFormat` sibling of this guard is pinned to `as_ext` instead
+    /// (#545) because that enum names containers.
+    #[test]
+    fn test_display_equals_codec_name() {
+        assert_display_matches::<AudioFormat>(|fmt| fmt.codec_name(), "codec_name()");
     }
 
     #[test]

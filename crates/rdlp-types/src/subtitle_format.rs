@@ -1,10 +1,12 @@
 //! Subtitle format types
 
 use serde::{Deserialize, Serialize};
-use strum_macros::{Display, EnumString};
+use strum_macros::{Display, EnumIter, EnumString};
 
 /// Supported subtitle formats.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Display, EnumString, EnumIter,
+)]
 #[serde(rename_all = "lowercase")]
 #[strum(ascii_case_insensitive)]
 pub enum SubtitleFormat {
@@ -12,7 +14,7 @@ pub enum SubtitleFormat {
     #[strum(serialize = "srt")]
     Srt,
     /// Web Video Text Tracks
-    #[strum(serialize = "vtt", serialize = "webvtt")]
+    #[strum(to_string = "vtt", serialize = "webvtt")]
     Vtt,
     /// Advanced `SubStation` Alpha
     #[strum(serialize = "ass")]
@@ -43,20 +45,32 @@ impl SubtitleFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::enum_test_support::{
+        assert_all_parse_to, assert_display_matches, assert_display_roundtrips,
+    };
+
+    /// `Display` must render the file extension, not whichever strum alias
+    /// happens to be longest (#580, mirroring the `ContainerFormat` guard from
+    /// #545). Unlike `AudioFormat`, this enum has a single string projection,
+    /// so `as_ext` is the one `Display` must agree with.
+    #[test]
+    fn test_display_equals_as_ext() {
+        assert_display_matches::<SubtitleFormat>(|fmt| fmt.as_ext(), "as_ext()");
+    }
+
+    /// Promoting `vtt` from `serialize` to `to_string` must not drop `webvtt`:
+    /// strum's `FromStr` table is `serialize` **plus** `to_string` (#580).
+    #[test]
+    fn test_alias_parsing() {
+        assert_all_parse_to(&[
+            ("vtt", SubtitleFormat::Vtt),
+            ("webvtt", SubtitleFormat::Vtt),
+        ]);
+    }
 
     #[test]
     fn test_display_roundtrip() {
-        for fmt in [
-            SubtitleFormat::Srt,
-            SubtitleFormat::Vtt,
-            SubtitleFormat::Ass,
-            SubtitleFormat::Ssa,
-            SubtitleFormat::Lrc,
-        ] {
-            let s = fmt.to_string();
-            let parsed: SubtitleFormat = s.parse().unwrap();
-            assert_eq!(fmt, parsed);
-        }
+        assert_display_roundtrips::<SubtitleFormat>();
     }
 
     #[test]
