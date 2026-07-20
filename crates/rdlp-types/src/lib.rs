@@ -29,6 +29,8 @@ pub mod browser_emulation;
 pub mod browser_type;
 pub mod config;
 pub mod container;
+#[cfg(test)]
+mod enum_test_support;
 pub mod fixup_policy;
 pub mod format;
 pub mod info_dict;

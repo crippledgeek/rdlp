@@ -102,74 +102,32 @@ impl AudioFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use strum::IntoEnumIterator;
+    use crate::enum_test_support::{
+        assert_all_parse_to, assert_display_matches, assert_display_roundtrips,
+    };
 
     #[test]
     fn test_display_roundtrip() {
-        for fmt in [
-            AudioFormat::Mp3,
-            AudioFormat::Aac,
-            AudioFormat::M4a,
-            AudioFormat::Opus,
-            AudioFormat::Vorbis,
-            AudioFormat::Flac,
-            AudioFormat::Alac,
-            AudioFormat::Wav,
-            AudioFormat::Ac3,
-            AudioFormat::Eac3,
-            AudioFormat::Dts,
-            AudioFormat::Mp2,
-            AudioFormat::WavPack,
-            AudioFormat::Tta,
-        ] {
-            let s = fmt.to_string();
-            let parsed: AudioFormat = s.parse().unwrap();
-            assert_eq!(fmt, parsed, "roundtrip failed for {s}");
-        }
+        assert_display_roundtrips::<AudioFormat>();
     }
 
+    /// Every alias still parses — including the spellings displaced from
+    /// `Display` when `eac3`/`dts` were promoted to `to_string` (#580). strum
+    /// unions `to_string` into the `FromStr` set rather than replacing the
+    /// `serialize` list, so nothing should be lost; this pins that.
+    ///
+    /// Case folding of each spelling is asserted by the helper.
     #[test]
     fn test_alias_parsing() {
-        assert_eq!("ogg".parse::<AudioFormat>().unwrap(), AudioFormat::Vorbis);
-        assert_eq!("e-ac-3".parse::<AudioFormat>().unwrap(), AudioFormat::Eac3);
-        assert_eq!("e-ac3".parse::<AudioFormat>().unwrap(), AudioFormat::Eac3);
-        assert_eq!("dca".parse::<AudioFormat>().unwrap(), AudioFormat::Dts);
-        assert_eq!("wv".parse::<AudioFormat>().unwrap(), AudioFormat::WavPack);
-    }
-
-    /// Promoting a spelling from `serialize` to `to_string` must not drop any
-    /// other spelling: strum builds the `FromStr` table from `serialize` **plus**
-    /// `to_string`, so every pre-#580 input stays accepted. The canonical
-    /// spellings are asserted alongside the aliases because `to_string` is what
-    /// moved.
-    #[test]
-    fn test_to_string_promotion_preserved_every_spelling() {
-        for (input, expected) in [
+        assert_all_parse_to(&[
+            ("ogg", AudioFormat::Vorbis),
+            ("wv", AudioFormat::WavPack),
             ("eac3", AudioFormat::Eac3),
             ("e-ac-3", AudioFormat::Eac3),
             ("e-ac3", AudioFormat::Eac3),
             ("dts", AudioFormat::Dts),
             ("dca", AudioFormat::Dts),
-        ] {
-            assert_eq!(
-                input.parse::<AudioFormat>().unwrap(),
-                expected,
-                "{input} must still parse after the to_string promotion"
-            );
-        }
-    }
-
-    /// `ascii_case_insensitive` is a container-level default applied to every
-    /// spelling strum accepts — including `to_string` values, not just
-    /// `serialize` ones.
-    #[test]
-    fn test_promoted_spellings_stay_case_insensitive() {
-        for input in ["EAC3", "E-AC-3", "DTS", "Dca"] {
-            assert!(
-                input.parse::<AudioFormat>().is_ok(),
-                "{input} must parse case-insensitively"
-            );
-        }
+        ]);
     }
 
     /// The codec-vs-container split is intended, not a bug to "fix".
@@ -199,13 +157,7 @@ mod tests {
     /// (#545) because that enum names containers.
     #[test]
     fn test_display_equals_codec_name() {
-        for fmt in AudioFormat::iter() {
-            assert_eq!(
-                fmt.to_string(),
-                fmt.codec_name(),
-                "Display for {fmt:?} must equal codec_name()"
-            );
-        }
+        assert_display_matches::<AudioFormat>(|fmt| fmt.codec_name(), "codec_name()");
     }
 
     #[test]

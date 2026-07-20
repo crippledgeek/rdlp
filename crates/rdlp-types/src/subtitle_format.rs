@@ -45,7 +45,9 @@ impl SubtitleFormat {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use strum::IntoEnumIterator;
+    use crate::enum_test_support::{
+        assert_all_parse_to, assert_display_matches, assert_display_roundtrips,
+    };
 
     /// `Display` must render the file extension, not whichever strum alias
     /// happens to be longest (#580, mirroring the `ContainerFormat` guard from
@@ -53,41 +55,22 @@ mod tests {
     /// so `as_ext` is the one `Display` must agree with.
     #[test]
     fn test_display_equals_as_ext() {
-        for fmt in SubtitleFormat::iter() {
-            assert_eq!(
-                fmt.to_string(),
-                fmt.as_ext(),
-                "Display for {fmt:?} must equal as_ext()"
-            );
-        }
+        assert_display_matches::<SubtitleFormat>(|fmt| fmt.as_ext(), "as_ext()");
     }
 
     /// Promoting `vtt` from `serialize` to `to_string` must not drop `webvtt`:
     /// strum's `FromStr` table is `serialize` **plus** `to_string` (#580).
     #[test]
-    fn test_to_string_promotion_preserved_every_spelling() {
-        for input in ["vtt", "webvtt", "VTT", "WebVTT"] {
-            assert_eq!(
-                input.parse::<SubtitleFormat>().unwrap(),
-                SubtitleFormat::Vtt,
-                "{input} must still parse after the to_string promotion"
-            );
-        }
+    fn test_alias_parsing() {
+        assert_all_parse_to(&[
+            ("vtt", SubtitleFormat::Vtt),
+            ("webvtt", SubtitleFormat::Vtt),
+        ]);
     }
 
     #[test]
     fn test_display_roundtrip() {
-        for fmt in [
-            SubtitleFormat::Srt,
-            SubtitleFormat::Vtt,
-            SubtitleFormat::Ass,
-            SubtitleFormat::Ssa,
-            SubtitleFormat::Lrc,
-        ] {
-            let s = fmt.to_string();
-            let parsed: SubtitleFormat = s.parse().unwrap();
-            assert_eq!(fmt, parsed);
-        }
+        assert_display_roundtrips::<SubtitleFormat>();
     }
 
     #[test]
