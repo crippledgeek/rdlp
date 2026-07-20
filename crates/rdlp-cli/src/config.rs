@@ -105,6 +105,26 @@ macro_rules! merge_bool {
     };
 }
 
+/// Parses a CLI string into a typed value, attaching the context every call
+/// site used to repeat by hand.
+///
+/// Replaces seven near-identical `parse::<T>() + map_err + with_context`
+/// blocks whose only differences were the target type and the noun.
+///
+/// Uses `anyhow::Error::from` rather than a `Display`-formatted `anyhow!`, so
+/// this is byte-identical to the `anyhow::anyhow!(e)` each call site used to
+/// write: it preserves the source error's `source()` chain instead of
+/// flattening it to a string.
+fn parse_arg<T>(raw: &str, what: &str) -> Result<T>
+where
+    T: std::str::FromStr,
+    <T as std::str::FromStr>::Err: std::error::Error + Send + Sync + 'static,
+{
+    raw.parse::<T>()
+        .map_err(anyhow::Error::from)
+        .with_context(|| format!("invalid {what} '{raw}'"))
+}
+
 /// Pure config merge: defaults < config file < CLI args.
 ///
 /// This function has no side effects (no interactive prompts, no I/O).
@@ -159,12 +179,8 @@ pub fn merge_config(
     } else if let Some(audio_format) = args.audio_format.as_deref()
         && audio_format != "interactive"
     {
-        config.postprocess.audio_format = Some(
-            audio_format
-                .parse::<AudioFormat>()
-                .map_err(|e| anyhow::anyhow!(e))
-                .with_context(|| format!("invalid audio format '{audio_format}'"))?,
-        );
+        config.postprocess.audio_format =
+            Some(parse_arg::<AudioFormat>(audio_format, "audio format")?);
     }
 
     if let Some(ref audio_quality) = args.audio_quality {
@@ -183,12 +199,7 @@ pub fn merge_config(
         config.subtitle_langs = langs.split(',').map(|s| s.trim().to_string()).collect();
     }
     if let Some(ref format) = args.sub_format {
-        config.subtitle_format = Some(
-            format
-                .parse::<SubtitleFormat>()
-                .map_err(|e| anyhow::anyhow!(e))
-                .with_context(|| format!("invalid subtitle format '{format}'"))?,
-        );
+        config.subtitle_format = Some(parse_arg::<SubtitleFormat>(format, "subtitle format")?);
     }
     merge_bool!(config, args, postprocess.embed_subtitles);
     // --list-subs implies --write-subtitles
@@ -210,12 +221,10 @@ pub fn merge_config(
     } else if let Some(recode_video) = args.recode_video.as_deref()
         && recode_video != "interactive"
     {
-        config.postprocess.recode_video = Some(
-            recode_video
-                .parse::<ContainerFormat>()
-                .map_err(|e| anyhow::anyhow!(e))
-                .with_context(|| format!("invalid recode video container '{recode_video}'"))?,
-        );
+        config.postprocess.recode_video = Some(parse_arg::<ContainerFormat>(
+            recode_video,
+            "recode video container",
+        )?);
     }
 
     if let Some(ref encoder) = args.video_encoder {
@@ -224,11 +233,8 @@ pub fn merge_config(
 
     // recode_container: explicit container for recode (overrides recode_video container)
     if let Some(ref fmt) = args.recode_container {
-        config.postprocess.recode_container = Some(
-            fmt.parse::<ContainerFormat>()
-                .map_err(|e| anyhow::anyhow!(e))
-                .with_context(|| format!("invalid recode container '{fmt}'"))?,
-        );
+        config.postprocess.recode_container =
+            Some(parse_arg::<ContainerFormat>(fmt, "recode container")?);
     }
 
     merge_opt!(config, args, postprocess.recode_threads);
@@ -286,10 +292,7 @@ pub fn merge_config(
     // Fixup policy — assign only when the flag was actually passed, so an
     // explicit `--fixup=detect_or_warn` still beats a config-file value (#583).
     if let Some(ref fixup) = args.fixup {
-        config.postprocess.fixup = fixup
-            .parse::<FixupPolicy>()
-            .map_err(|e| anyhow::anyhow!(e))
-            .with_context(|| format!("invalid fixup policy '{fixup}'"))?;
+        config.postprocess.fixup = parse_arg::<FixupPolicy>(fixup, "fixup policy")?;
     }
 
     merge_bool!(config, args, postprocess.keep_video);
@@ -325,12 +328,7 @@ pub fn merge_config(
         config.rate_limit = Some(bps);
     }
     if let Some(ref browser) = args.cookies_from_browser {
-        config.cookies_from_browser = Some(
-            browser
-                .parse::<BrowserType>()
-                .map_err(|e| anyhow::anyhow!(e))
-                .with_context(|| format!("invalid browser type '{browser}'"))?,
-        );
+        config.cookies_from_browser = Some(parse_arg::<BrowserType>(browser, "browser type")?);
     }
     if let Some(ref cookies) = args.cookies {
         config.cookies_file = Some(cookies.clone());
@@ -345,12 +343,8 @@ pub fn merge_config(
     } else if let Some(container) = args.remux.as_deref()
         && container != "interactive"
     {
-        config.postprocess.remux_container = Some(
-            container
-                .parse::<ContainerFormat>()
-                .map_err(|e| anyhow::anyhow!(e))
-                .with_context(|| format!("invalid remux container '{container}'"))?,
-        );
+        config.postprocess.remux_container =
+            Some(parse_arg::<ContainerFormat>(container, "remux container")?);
     }
 
     // Match filters (CLI appends to config file values)
