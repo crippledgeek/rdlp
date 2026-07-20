@@ -52,6 +52,12 @@ Examples:
   rdlp --cookies-from-browser chrome URL   Use browser cookies (login-gated)
   rdlp --recode-video=mkv URL              Recode video to MKV";
 
+// Shown only in `-h` (via after_help), suppressed in `--help` by an empty
+// after_long_help — `--help` already lists every option so the pointer would be
+// noise there. Keep the line <= 78 chars (clap wraps after_help at term width).
+const HELP_SHORT_FOOTER: &str =
+    "Showing common options. Run 'rdlp --help' for the full list of options.";
+
 /// Rejects an empty or whitespace-only argument value.
 ///
 /// The shared rule behind [`non_blank`] and [`non_blank_path`]. A blank value
@@ -146,6 +152,8 @@ pub enum PluginCmd {
 #[command(version)]
 #[command(help_template = HELP_TEMPLATE)]
 #[command(before_help = HELP_EXAMPLES)]
+#[command(after_help = HELP_SHORT_FOOTER)]
+#[command(after_long_help = "")]
 pub struct Args {
     /// Video URL to download
     #[arg(value_parser = non_blank)]
@@ -175,7 +183,7 @@ pub struct Args {
 
     /// Require strict video-only + audio-only streams for merge.
     /// Changes default from b/bv*+ba to b/bv+ba.
-    #[arg(long, help_heading = HELP_HEADING_GENERAL)]
+    #[arg(long, help_heading = HELP_HEADING_GENERAL, hide_short_help = true)]
     pub audio_multistreams: bool,
 
     /// Quiet mode (minimal output)
@@ -187,15 +195,15 @@ pub struct Args {
     pub verbose: bool,
 
     /// List all supported extractors
-    #[arg(long, help_heading = HELP_HEADING_INFO)]
+    #[arg(long, help_heading = HELP_HEADING_INFO, hide_short_help = true)]
     pub list_extractors: bool,
 
     /// List all supported download protocols
-    #[arg(long, help_heading = HELP_HEADING_INFO)]
+    #[arg(long, help_heading = HELP_HEADING_INFO, hide_short_help = true)]
     pub list_downloaders: bool,
 
     /// List all supported audio and video codecs
-    #[arg(long, help_heading = HELP_HEADING_INFO)]
+    #[arg(long, help_heading = HELP_HEADING_INFO, hide_short_help = true)]
     pub list_codecs: bool,
 
     /// Simulate (don't actually download, shows extraction summary)
@@ -212,7 +220,7 @@ pub struct Args {
 
     /// Print specific field(s) from metadata (no download)
     /// e.g., --print title or --print "id,title,extractor"
-    #[arg(long, value_parser = non_blank, value_name = "FIELD", help_heading = HELP_HEADING_INFO)]
+    #[arg(long, value_parser = non_blank, value_name = "FIELD", help_heading = HELP_HEADING_INFO, hide_short_help = true)]
     pub print: Option<String>,
 
     /// Interactive format selection
@@ -226,11 +234,11 @@ pub struct Args {
 
     /// Audio format for extraction
     /// Use --audio-format for interactive, --audio-format=mp3 for direct
-    #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true, value_parser = non_blank, value_name = "FORMAT", help_heading = HELP_HEADING_POSTPROCESS)]
+    #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true, value_parser = non_blank, value_name = "FORMAT", help_heading = HELP_HEADING_POSTPROCESS, hide_short_help = true)]
     pub audio_format: Option<String>,
 
     /// Audio quality (VBR level 0-9 or bitrate like "192K")
-    #[arg(long, value_parser = non_blank, value_name = "QUALITY", help_heading = HELP_HEADING_POSTPROCESS)]
+    #[arg(long, value_parser = non_blank, value_name = "QUALITY", help_heading = HELP_HEADING_POSTPROCESS, hide_short_help = true)]
     pub audio_quality: Option<String>,
 
     /// Embed metadata (title, artist, etc.) in the file
@@ -238,11 +246,11 @@ pub struct Args {
     pub embed_metadata: bool,
 
     /// Disable automatic thumbnail download and embedding
-    #[arg(long, help_heading = HELP_HEADING_POSTPROCESS)]
+    #[arg(long, help_heading = HELP_HEADING_POSTPROCESS, hide_short_help = true)]
     pub no_thumbnail: bool,
 
     /// Write thumbnail image to disk alongside media file
-    #[arg(long, help_heading = HELP_HEADING_POSTPROCESS)]
+    #[arg(long, help_heading = HELP_HEADING_POSTPROCESS, hide_short_help = true)]
     pub write_thumbnail: bool,
 
     // === Subtitle options ===
@@ -251,7 +259,7 @@ pub struct Args {
     pub write_subtitles: bool,
 
     /// Download auto-generated subtitles
-    #[arg(long, alias = "write-auto-subs", help_heading = HELP_HEADING_SUBTITLES)]
+    #[arg(long, alias = "write-auto-subs", help_heading = HELP_HEADING_SUBTITLES, hide_short_help = true)]
     pub write_auto_subtitles: bool,
 
     /// Subtitle languages to download (comma-separated, e.g., "en,es")
@@ -260,7 +268,7 @@ pub struct Args {
     pub sub_langs: Option<String>,
 
     /// Preferred subtitle format (srt, vtt, ass, ssa, lrc)
-    #[arg(long, alias = "sub-format", value_parser = non_blank, value_name = "FORMAT", help_heading = HELP_HEADING_SUBTITLES)]
+    #[arg(long, alias = "sub-format", value_parser = non_blank, value_name = "FORMAT", help_heading = HELP_HEADING_SUBTITLES, hide_short_help = true)]
     pub sub_format: Option<String>,
 
     /// Embed subtitles in video file (requires `FFmpeg`)
@@ -268,32 +276,32 @@ pub struct Args {
     pub embed_subtitles: bool,
 
     /// Interactive subtitle selection + video download (implies --write-subtitles)
-    #[arg(long, alias = "list-subs", help_heading = HELP_HEADING_SUBTITLES)]
+    #[arg(long, alias = "list-subs", help_heading = HELP_HEADING_SUBTITLES, hide_short_help = true)]
     pub list_subs: bool,
 
     /// Show subtitle menu, download only subtitles (no video), then exit
-    #[arg(long, alias = "list-subs-only", help_heading = HELP_HEADING_SUBTITLES)]
+    #[arg(long, alias = "list-subs-only", help_heading = HELP_HEADING_SUBTITLES, hide_short_help = true)]
     pub list_subs_only: bool,
 
     /// Strict subtitle mode: fail download if requested subs are missing
-    #[arg(long, help_heading = HELP_HEADING_SUBTITLES)]
+    #[arg(long, help_heading = HELP_HEADING_SUBTITLES, hide_short_help = true)]
     pub strict_subs: bool,
 
     /// Pre-validate subtitle URLs with HEAD requests before download
-    #[arg(long, help_heading = HELP_HEADING_SUBTITLES)]
+    #[arg(long, help_heading = HELP_HEADING_SUBTITLES, hide_short_help = true)]
     pub verify_sub_urls: bool,
 
     /// Retry subtitle downloads for already-downloaded videos missing subs
-    #[arg(long, help_heading = HELP_HEADING_SUBTITLES)]
+    #[arg(long, help_heading = HELP_HEADING_SUBTITLES, hide_short_help = true)]
     pub retry_subs: bool,
 
     /// Video encoder to use (e.g., libsvtav1, libx264).
     /// Overrides automatic encoder selection.
-    #[arg(long, value_name = "NAME", value_parser = non_blank, help_heading = HELP_HEADING_RECODE)]
+    #[arg(long, value_name = "NAME", value_parser = non_blank, help_heading = HELP_HEADING_RECODE, hide_short_help = true)]
     pub video_encoder: Option<String>,
 
     /// List available video encoders and exit.
-    #[arg(long, help_heading = HELP_HEADING_INFO)]
+    #[arg(long, help_heading = HELP_HEADING_INFO, hide_short_help = true)]
     pub list_encoders: bool,
 
     /// Convert video to specified format
@@ -303,7 +311,7 @@ pub struct Args {
 
     /// Target container format for video recode (e.g., mp4, mkv, webm).
     /// Takes precedence over --recode-video when both are specified.
-    #[arg(long, value_name = "FMT", value_parser = non_blank, help_heading = HELP_HEADING_RECODE)]
+    #[arg(long, value_name = "FMT", value_parser = non_blank, help_heading = HELP_HEADING_RECODE, hide_short_help = true)]
     pub recode_container: Option<String>,
 
     /// Audio mode during video recode: copy (default), auto, or an encoder name
@@ -324,24 +332,24 @@ pub struct Args {
     // `rdlp_types::config::MAX_RECODE_THREADS` and `8` in sync with
     // `rdlp_ffmpeg`'s `AUTO_RECODE_THREADS_CAP`.
     /// Encoder threads for video recode (1-64). Omit for auto (min(cores, 8)).
-    #[arg(long, value_name = "N", help_heading = HELP_HEADING_RECODE)]
+    #[arg(long, value_name = "N", help_heading = HELP_HEADING_RECODE, hide_short_help = true)]
     pub recode_threads: Option<u32>,
 
     /// Encoder preset override for video recode (e.g. `faster`, `medium`, `slow`).
     /// Omit to use the per-codec default. `libvvenc`: try `faster` for speed.
-    #[arg(long, value_name = "PRESET", value_parser = non_blank, help_heading = HELP_HEADING_RECODE)]
+    #[arg(long, value_name = "PRESET", value_parser = non_blank, help_heading = HELP_HEADING_RECODE, hide_short_help = true)]
     pub recode_preset: Option<String>,
 
     /// libvpx deadline for VP8/VP9 recode: best | good | realtime.
-    #[arg(long, value_name = "MODE", value_parser = non_blank, help_heading = HELP_HEADING_RECODE)]
+    #[arg(long, value_name = "MODE", value_parser = non_blank, help_heading = HELP_HEADING_RECODE, hide_short_help = true)]
     pub recode_deadline: Option<String>,
 
     /// libvpx cpu-used for VP8/VP9 recode (VP9: -8..8, VP8: -16..16).
-    #[arg(long, value_name = "N", allow_hyphen_values = true, help_heading = HELP_HEADING_RECODE)]
+    #[arg(long, value_name = "N", allow_hyphen_values = true, help_heading = HELP_HEADING_RECODE, hide_short_help = true)]
     pub recode_cpu_used: Option<i32>,
 
     /// libxavs2 `speed_level` for AVS2 recode (0..9).
-    #[arg(long, value_name = "N", help_heading = HELP_HEADING_RECODE)]
+    #[arg(long, value_name = "N", help_heading = HELP_HEADING_RECODE, hide_short_help = true)]
     pub recode_speed_level: Option<u32>,
 
     /// Remux to container for better seeking - no re-encoding
@@ -358,40 +366,40 @@ pub struct Args {
     pub loudnorm: bool,
 
     /// Target peak level in dBFS for peak normalization (default: -1.0)
-    #[arg(long, allow_hyphen_values = true, value_name = "DBFS", help_heading = HELP_HEADING_AUDIO_NORM)]
+    #[arg(long, allow_hyphen_values = true, value_name = "DBFS", help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
     pub audio_gain_target: Option<f64>,
 
     /// Loudnorm preset: broadcast (-23 LUFS), streaming (-14 LUFS), loud (-11 LUFS)
-    #[arg(long, value_parser = non_blank, value_name = "PRESET", help_heading = HELP_HEADING_AUDIO_NORM)]
+    #[arg(long, value_parser = non_blank, value_name = "PRESET", help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
     pub loudnorm_preset: Option<String>,
 
     /// Target integrated loudness in LUFS for loudnorm (e.g., -14)
-    #[arg(long, allow_hyphen_values = true, value_name = "LUFS", help_heading = HELP_HEADING_AUDIO_NORM)]
+    #[arg(long, allow_hyphen_values = true, value_name = "LUFS", help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
     pub loudnorm_i: Option<f64>,
 
     /// Target true peak in dBTP for loudnorm (e.g., -1)
-    #[arg(long, allow_hyphen_values = true, value_name = "DBTP", help_heading = HELP_HEADING_AUDIO_NORM)]
+    #[arg(long, allow_hyphen_values = true, value_name = "DBTP", help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
     pub loudnorm_tp: Option<f64>,
 
     /// Target loudness range in LU for loudnorm (e.g., 11)
-    #[arg(long, value_name = "LU", help_heading = HELP_HEADING_AUDIO_NORM)]
+    #[arg(long, value_name = "LU", help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
     pub loudnorm_lra: Option<f64>,
 
     /// Force dynamic (per-frame compression) mode in loudnorm pass 2
-    #[arg(long, help_heading = HELP_HEADING_AUDIO_NORM)]
+    #[arg(long, help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
     pub loudnorm_dynamic: bool,
 
     /// Prepend a mild acompressor before loudnorm to tame extreme peaks
-    #[arg(long, help_heading = HELP_HEADING_AUDIO_NORM)]
+    #[arg(long, help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
     pub loudnorm_precompress: bool,
 
     /// Enable limiter-boost fallback (+12 dB gain + hard limiter) for
     /// over-compressed content (implies --loudnorm)
-    #[arg(long, help_heading = HELP_HEADING_AUDIO_NORM)]
+    #[arg(long, help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
     pub normalize_boost: bool,
 
     /// Gain in dB for limiter-boost fallback (default: 12.0)
-    #[arg(long, allow_hyphen_values = true, value_name = "DB", help_heading = HELP_HEADING_AUDIO_NORM)]
+    #[arg(long, allow_hyphen_values = true, value_name = "DB", help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
     pub normalize_boost_db: Option<f64>,
 
     /// Fixup policy: never, warn, `detect_or_warn` [default: `detect_or_warn`]
@@ -404,15 +412,15 @@ pub struct Args {
     // is builder-only, so the derive API expresses it as `Option`, with the
     // default supplied by `Config::default()`. Plain `//` — a `///` here would
     // print this note in `rdlp --help`.
-    #[arg(long, value_parser = non_blank, value_name = "POLICY", help_heading = HELP_HEADING_POSTPROCESS)]
+    #[arg(long, value_parser = non_blank, value_name = "POLICY", help_heading = HELP_HEADING_POSTPROCESS, hide_short_help = true)]
     pub fixup: Option<String>,
 
     /// Keep original video file after post-processing
-    #[arg(long, help_heading = HELP_HEADING_POSTPROCESS)]
+    #[arg(long, help_heading = HELP_HEADING_POSTPROCESS, hide_short_help = true)]
     pub keep_video: bool,
 
     /// Path to `FFmpeg` executable (if not in PATH)
-    #[arg(long, value_parser = non_blank_path, value_name = "PATH", help_heading = HELP_HEADING_POSTPROCESS)]
+    #[arg(long, value_parser = non_blank_path, value_name = "PATH", help_heading = HELP_HEADING_POSTPROCESS, hide_short_help = true)]
     pub ffmpeg_location: Option<PathBuf>,
 
     // === Network options ===
@@ -422,30 +430,30 @@ pub struct Args {
 
     /// Connect/handshake timeout in seconds.
     /// Validated post-parse by `Config::validate()`: must be 1..=300.
-    #[arg(long, value_name = "SECS", help_heading = HELP_HEADING_NETWORK)]
+    #[arg(long, value_name = "SECS", help_heading = HELP_HEADING_NETWORK, hide_short_help = true)]
     pub socket_timeout: Option<u64>,
 
     /// Per-read idle timeout in seconds.
     /// Validated post-parse by `Config::validate()`: must be 1..=600.
-    #[arg(long, value_name = "SECS", help_heading = HELP_HEADING_NETWORK)]
+    #[arg(long, value_name = "SECS", help_heading = HELP_HEADING_NETWORK, hide_short_help = true)]
     pub read_timeout: Option<u64>,
 
     /// Idle keep-alive socket eviction timeout in seconds. `0` is the
     /// documented sentinel meaning "disable eviction (keep idle sockets
     /// forever)".
     /// Validated post-parse by `Config::validate()`: must be 0..=3600.
-    #[arg(long, value_name = "SECS", help_heading = HELP_HEADING_NETWORK)]
+    #[arg(long, value_name = "SECS", help_heading = HELP_HEADING_NETWORK, hide_short_help = true)]
     pub pool_idle_timeout: Option<u64>,
 
     /// Total download timeout in seconds (the entire file must complete within
     /// this). Default 3600.
     /// Validated post-parse by `Config::validate()`: must be 1..=86400.
-    #[arg(long, value_name = "SECS", help_heading = HELP_HEADING_NETWORK)]
+    #[arg(long, value_name = "SECS", help_heading = HELP_HEADING_NETWORK, hide_short_help = true)]
     pub download_timeout: Option<u64>,
 
     /// Merge (mux/concat) operation timeout in seconds. Default 1800.
     /// Validated post-parse by `Config::validate()`: must be 1..=86400.
-    #[arg(long, value_name = "SECS", help_heading = HELP_HEADING_NETWORK)]
+    #[arg(long, value_name = "SECS", help_heading = HELP_HEADING_NETWORK, hide_short_help = true)]
     pub merge_timeout: Option<u64>,
 
     /// Browser emulation profile for the TLS / HTTP stack
@@ -453,7 +461,7 @@ pub struct Args {
     /// identifier like chrome-137). Controls JA4 / JA4H fingerprint.
     /// Falls back to the `RDLP_BROWSER_EMULATION` env var, then
     /// `ChromeLatest`.
-    #[arg(long, value_name = "PROFILE", value_parser = non_blank, help_heading = HELP_HEADING_NETWORK)]
+    #[arg(long, value_name = "PROFILE", value_parser = non_blank, help_heading = HELP_HEADING_NETWORK, hide_short_help = true)]
     pub browser: Option<String>,
 
     /// Limit download speed (e.g., "1M", "500K", "10M", "2.5M")
@@ -475,7 +483,7 @@ pub struct Args {
 
     /// Filter videos by metadata (yt-dlp syntax). Repeatable (OR logic between filters).
     /// Examples: "duration > 60", "!`is_live`", "title *= cats", "`like_count` >? 100"
-    #[arg(long = "match-filter", action = clap::ArgAction::Append, value_parser = non_blank, value_name = "FILTER", help_heading = HELP_HEADING_DOWNLOAD)]
+    #[arg(long = "match-filter", action = clap::ArgAction::Append, value_parser = non_blank, value_name = "FILTER", help_heading = HELP_HEADING_DOWNLOAD, hide_short_help = true)]
     pub match_filter: Vec<String>,
 
     // === Search options ===
@@ -488,12 +496,12 @@ pub struct Args {
     pub search_site: Option<String>,
 
     /// Search filter in key=value format (repeatable)
-    #[arg(long = "search-filter", value_parser = non_blank, value_name = "KEY=VALUE", help_heading = HELP_HEADING_SEARCH)]
+    #[arg(long = "search-filter", value_parser = non_blank, value_name = "KEY=VALUE", help_heading = HELP_HEADING_SEARCH, hide_short_help = true)]
     pub search_filter: Vec<String>,
 
     // === Config file options ===
     /// Ignore config file (don't load from default location)
-    #[arg(long, help_heading = HELP_HEADING_CONFIG)]
+    #[arg(long, help_heading = HELP_HEADING_CONFIG, hide_short_help = true)]
     pub ignore_config: bool,
 
     /// Path to config file (TOML format)
@@ -504,7 +512,7 @@ pub struct Args {
     /// Pre-trust a publisher identity for non-interactive plugin install.
     /// Pass repeatedly for multiple identities.
     /// Format: `sigstore:github:user/repo` or `ed25519:<8-byte-hex>`.
-    #[arg(long, global = true, value_parser = non_blank, value_name = "PUBLISHER", help_heading = HELP_HEADING_CONFIG)]
+    #[arg(long, global = true, value_parser = non_blank, value_name = "PUBLISHER", help_heading = HELP_HEADING_CONFIG, hide_short_help = true)]
     pub trust_publisher: Vec<String>,
 
     /// Plugin management subcommand.
