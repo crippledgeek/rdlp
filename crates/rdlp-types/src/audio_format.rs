@@ -104,6 +104,7 @@ mod tests {
     use super::*;
     use crate::enum_test_support::{
         assert_all_parse_to, assert_display_matches, assert_display_roundtrips,
+        assert_serde_spellings_are_parseable,
     };
 
     #[test]
@@ -158,6 +159,13 @@ mod tests {
     #[test]
     fn test_display_equals_codec_name() {
         assert_display_matches::<AudioFormat>(|fmt| fmt.codec_name(), "codec_name()");
+    }
+
+    /// Precondition for #540's `Deserialize` -> `FromStr` delegation: no
+    /// variant may have a serde spelling that `FromStr` rejects.
+    #[test]
+    fn test_serde_spellings_are_all_parseable() {
+        assert_serde_spellings_are_parseable::<AudioFormat>();
     }
 
     #[test]

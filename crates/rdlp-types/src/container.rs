@@ -38,7 +38,12 @@ pub enum ContainerFormat {
     #[strum(serialize = "avi")]
     Avi,
     /// 3GPP mobile video
-    #[strum(to_string = "3gp", serialize = "3gpp")]
+    ///
+    /// `threegp` is not a real-world spelling — it is the lowercased *variant
+    /// identifier* that `#[serde(rename_all = "lowercase")]` accepted before
+    /// #540 delegated `Deserialize` to `FromStr`. It is kept as a parse-only
+    /// alias so configs persisted under the old vocabulary keep loading.
+    #[strum(to_string = "3gp", serialize = "3gpp", serialize = "threegp")]
     ThreeGp,
     /// MPEG-1/2 program stream
     #[strum(to_string = "mpg", serialize = "mpeg")]
@@ -209,6 +214,7 @@ mod tests {
     use super::*;
     use crate::enum_test_support::{
         assert_all_parse_to, assert_display_matches, assert_display_roundtrips,
+        assert_serde_spellings_are_parseable,
     };
     use strum::IntoEnumIterator as _;
 
@@ -252,6 +258,24 @@ mod tests {
 
         // Case-insensitivity across the alias set is asserted by the helper.
         assert_all_parse_to(ALIASES);
+    }
+
+    /// Every spelling the *current* serde representation accepts must also be
+    /// in the `FromStr` table.
+    ///
+    /// This is the back-compat precondition for #540, which delegates
+    /// `Deserialize` to `FromStr` so the config file and the CLI stop accepting
+    /// different vocabularies. Until that lands, `#[serde(rename_all =
+    /// "lowercase")]` accepts the lowercased *variant identifier*, which for
+    /// `ThreeGp` is `"threegp"` — a spelling `FromStr` rejects, because strum's
+    /// table holds only `3gp`/`3gpp`. Delegating without first adding `threegp`
+    /// as an alias would silently break every persisted config that wrote it.
+    ///
+    /// Derived from the serialized form rather than a hand-listed set, so it
+    /// cannot drift as variants are added.
+    #[test]
+    fn test_serde_spellings_are_all_parseable() {
+        assert_serde_spellings_are_parseable::<ContainerFormat>();
     }
 
     /// Each variant's own extension parses back to that variant.

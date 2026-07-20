@@ -47,6 +47,7 @@ mod tests {
     use super::*;
     use crate::enum_test_support::{
         assert_all_parse_to, assert_display_matches, assert_display_roundtrips,
+        assert_serde_spellings_are_parseable,
     };
 
     /// `Display` must render the file extension, not whichever strum alias
@@ -71,6 +72,13 @@ mod tests {
     #[test]
     fn test_display_roundtrip() {
         assert_display_roundtrips::<SubtitleFormat>();
+    }
+
+    /// Precondition for #540's `Deserialize` -> `FromStr` delegation: no
+    /// variant may have a serde spelling that `FromStr` rejects.
+    #[test]
+    fn test_serde_spellings_are_all_parseable() {
+        assert_serde_spellings_are_parseable::<SubtitleFormat>();
     }
 
     #[test]

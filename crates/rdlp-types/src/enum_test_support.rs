@@ -21,7 +21,36 @@
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
 
+use serde::Serialize;
 use strum::IntoEnumIterator;
+
+/// Asserts every spelling the serde representation accepts is also in the
+/// `FromStr` table.
+///
+/// This is the back-compat precondition for #540, which delegates `Deserialize`
+/// to `FromStr` so the config file and the CLI stop accepting different
+/// vocabularies. Any variant whose serialized spelling `FromStr` rejects would
+/// have its persisted configs silently broken by that delegation — which is
+/// exactly what `ContainerFormat::ThreeGp` (`"threegp"`) would have done.
+///
+/// Derived from the serialized form rather than a hand-listed set, so it cannot
+/// drift as variants are added.
+pub fn assert_serde_spellings_are_parseable<T>()
+where
+    T: IntoEnumIterator + Serialize + FromStr + PartialEq + Debug,
+    <T as FromStr>::Err: Debug,
+{
+    for variant in T::iter() {
+        let serialized = serde_json::to_string(&variant).expect("variant must serialize");
+        let spelling = serialized.trim_matches('"');
+        let parsed = spelling.parse::<T>().ok();
+        assert!(
+            parsed.as_ref() == Some(&variant),
+            "serde accepts {spelling:?} for {variant:?}, but FromStr rejects it — \
+             delegating Deserialize to FromStr would break persisted configs"
+        );
+    }
+}
 
 /// Asserts every variant's `Display` output parses back to that variant.
 ///
