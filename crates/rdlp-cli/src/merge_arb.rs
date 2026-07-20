@@ -82,3 +82,29 @@ proptest! {
         prop_assert!(args.match_filter.len() < 3);
     }
 }
+
+use crate::config::config_legacy::merge_config_legacy;
+use crate::config::{ResolvedInteractiveValues, merge_config};
+
+fn no_interactive() -> ResolvedInteractiveValues {
+    ResolvedInteractiveValues {
+        audio_format: None,
+        recode_video: None,
+        remux_container: None,
+    }
+}
+
+proptest! {
+    /// The rewrite must be behaviour-preserving. Any divergence surfaces here
+    /// as a concrete counterexample naming the field.
+    #[test]
+    fn rewrite_matches_legacy(cfg in arb_config(), args in arb_args()) {
+        let new = merge_config(&args, cfg.clone(), no_interactive());
+        let old = merge_config_legacy(&args, cfg, no_interactive());
+        match (new, old) {
+            (Ok(n), Ok(o)) => prop_assert_eq!(n, o),
+            (Err(_), Err(_)) => {}
+            (n, o) => prop_assert!(false, "one errored, one did not: {n:?} vs {o:?}"),
+        }
+    }
+}

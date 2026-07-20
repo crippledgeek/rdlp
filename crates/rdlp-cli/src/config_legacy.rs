@@ -1,32 +1,18 @@
-//! Configuration building and merging for CLI.
-//!
-//! Resolves interactive prompts, loads config files, and merges
-//! CLI arguments with file-based and default configuration using
-//! a three-layer precedence: CLI > config file > defaults.
+//! FROZEN copy of `merge_config` as it stood before the #585 rewrite.
+//! Exists solely so the differential test can prove the rewrite is
+//! behaviour-preserving. DELETED in Task 7.
+#![cfg(test)]
+#![allow(clippy::too_many_lines)]
 
 use anyhow::{Context, Result};
 use rdlp_api::{
     AudioFormat, BrowserEmulation, BrowserType, Config, ContainerFormat, FixupPolicy,
-    RecodeAudioMode, SubtitleFormat, config_io,
+    RecodeAudioMode, SubtitleFormat,
 };
 
 use crate::args::Args;
-use crate::selection::{select_audio_format, select_recode_video, select_remux_container};
+use crate::config::ResolvedInteractiveValues;
 
-/// Resolved values from interactive CLI prompts.
-///
-/// These are resolved BEFORE the pure config merge so that `merge_config()`
-/// remains free of side effects and is testable.
-#[derive(Copy, Clone)]
-pub struct ResolvedInteractiveValues {
-    pub audio_format: Option<AudioFormat>,
-    pub recode_video: Option<ContainerFormat>,
-    pub remux_container: Option<ContainerFormat>,
-}
-
-/// Resolve interactive CLI values (inquire prompts) before config merge.
-///
-/// Returns `None` values for fields that weren't set to "interactive".
 /// Parse a `--browser` / `RDLP_BROWSER_EMULATION` value into a
 /// `BrowserEmulation`. Recognised shorthands: `chrome-latest`,
 /// `firefox-latest`, `safari-latest`. Anything else is treated as a
@@ -39,35 +25,6 @@ fn parse_browser_emulation(s: &str) -> BrowserEmulation {
         "safari-latest" => BrowserEmulation::SafariLatest,
         other => BrowserEmulation::Pinned(other.to_string()),
     }
-}
-
-fn resolve_interactive_values(args: &Args) -> Result<ResolvedInteractiveValues> {
-    let audio_format = match args.audio_format.as_deref() {
-        Some("interactive") => {
-            select_audio_format().context("interactive audio format selection failed")?
-        }
-        _ => None,
-    };
-
-    let recode_video = match args.recode_video.as_deref() {
-        Some("interactive") => {
-            select_recode_video().context("interactive recode video format selection failed")?
-        }
-        _ => None,
-    };
-
-    let remux_container = match args.remux.as_deref() {
-        Some("interactive") => {
-            select_remux_container().context("interactive remux container selection failed")?
-        }
-        _ => None,
-    };
-
-    Ok(ResolvedInteractiveValues {
-        audio_format,
-        recode_video,
-        remux_container,
-    })
 }
 
 /// Merge an optional CLI arg into config, leaving the config-file value intact
@@ -115,8 +72,7 @@ macro_rules! merge_bool {
 /// Returns an error if any CLI argument fails to parse (invalid format string,
 /// container name, subtitle format, etc.) or if the resulting config fails
 /// validation.
-#[allow(clippy::too_many_lines)] // flat merge of 50+ CLI flags; extracting sub-functions would add indirection without clarity
-pub fn merge_config(
+pub fn merge_config_legacy(
     args: &Args,
     file_config: Config,
     interactive_values: ResolvedInteractiveValues,
@@ -395,41 +351,3 @@ pub fn merge_config(
 
     Ok(config)
 }
-
-/// Build Config by: resolve interactive prompts -> load file -> merge.
-pub fn build_config(args: &Args) -> Result<Config> {
-    // Step 1: Resolve interactive values (side effects isolated here)
-    let interactive_values = resolve_interactive_values(args)
-        .context("failed to resolve interactive configuration values")?;
-
-    // Step 2: Load config file (or use defaults)
-    let file_config = if args.ignore_config {
-        Config::default()
-    } else {
-        match config_io::load_config(args.config_location.as_deref()) {
-            Ok(Some((file_config, path))) => {
-                eprintln!("Loaded config from {}", path.display());
-                file_config
-            }
-            Ok(None) => Config::default(),
-            Err(e) => {
-                if args.config_location.is_some() {
-                    return Err(e.into());
-                }
-                eprintln!("Warning: Failed to load config file: {e}");
-                Config::default()
-            }
-        }
-    };
-
-    // Step 3: Pure merge (no side effects, testable)
-    merge_config(args, file_config, interactive_values)
-}
-
-#[cfg(test)]
-#[path = "config_legacy.rs"]
-pub mod config_legacy;
-
-#[cfg(test)]
-#[path = "config_tests.rs"]
-pub mod tests;
