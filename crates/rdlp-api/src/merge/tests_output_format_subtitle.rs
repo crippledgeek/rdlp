@@ -270,3 +270,59 @@ fn test_subtitle_some_overrides_strict_subs() {
     opts.merge_into(&mut config);
     assert!(config.strict_subs);
 }
+
+#[test]
+fn test_subtitle_none_preserves_verify_sub_urls() {
+    let mut config = Config {
+        verify_sub_urls: true,
+        ..Config::default()
+    };
+    let opts = SubtitleOptions::default();
+    opts.merge_into(&mut config);
+    assert!(
+        config.verify_sub_urls,
+        "None must preserve the base config value"
+    );
+}
+
+#[test]
+fn test_subtitle_some_overrides_verify_sub_urls() {
+    let mut config = Config {
+        verify_sub_urls: false,
+        ..Config::default()
+    };
+    let opts = SubtitleOptions {
+        verify_sub_urls: Some(true),
+        ..SubtitleOptions::default()
+    };
+    opts.merge_into(&mut config);
+    assert!(config.verify_sub_urls);
+}
+
+#[test]
+fn test_subtitle_none_preserves_retry_subs() {
+    let mut config = Config {
+        retry_subs: true,
+        ..Config::default()
+    };
+    let opts = SubtitleOptions::default();
+    opts.merge_into(&mut config);
+    assert!(
+        config.retry_subs,
+        "None must preserve the base config value"
+    );
+}
+
+#[test]
+fn test_subtitle_some_overrides_retry_subs() {
+    let mut config = Config {
+        retry_subs: false,
+        ..Config::default()
+    };
+    let opts = SubtitleOptions {
+        retry_subs: Some(true),
+        ..SubtitleOptions::default()
+    };
+    opts.merge_into(&mut config);
+    assert!(config.retry_subs);
+}
