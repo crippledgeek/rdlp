@@ -7,6 +7,20 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
+/// Whether `path` is still an un-remuxed MPEG-TS output, meaning an HLS
+/// download's remux never completed.
+///
+/// One definition shared by the two callers that ask it — the post-download
+/// check in `episode.rs` and the resume scan in `resume.rs` — which each
+/// compared `eq_ignore_ascii_case("ts")` on their own before.
+///
+/// Recognises `ContainerFormat`'s aliases, so `.mpegts` counts too. These are
+/// reject-guards, so widening the vocabulary makes them catch strictly more
+/// incomplete output; it cannot be sidestepped by using the alias spelling.
+pub(in crate::orchestrator) fn hls_remux_incomplete(path: &std::path::Path) -> bool {
+    rdlp_types::ContainerFormat::from_path(path) == Some(rdlp_types::ContainerFormat::Ts)
+}
+
 impl Orchestrator {
     /// Handle the case where all videos are already downloaded.
     ///
@@ -171,5 +185,36 @@ pub(super) fn filter_formats_by_language(infos: &mut [rdlp_types::InfoDict], lan
     for info in infos.iter_mut() {
         info.formats
             .retain(|f| f.language.as_deref() == Some(language));
+    }
+}
+
+#[cfg(test)]
+mod hls_remux_incomplete_tests {
+    use super::hls_remux_incomplete;
+    use std::path::Path;
+
+    #[test]
+    fn mpeg_ts_outputs_are_incomplete() {
+        for p in ["/tmp/Ep.ts", "/tmp/Ep.TS", "/tmp/Ep.mpegts"] {
+            assert!(hls_remux_incomplete(Path::new(p)), "{p} is un-remuxed TS");
+        }
+    }
+
+    /// The negative half: a completed remux, and the shapes that must not be
+    /// mistaken for one.
+    #[test]
+    fn remuxed_and_unknown_outputs_are_not_incomplete() {
+        for p in [
+            "/tmp/Ep.mp4",
+            "/tmp/Ep.mkv",
+            "/tmp/Ep",
+            "/tmp/Ep.rdlp-part",
+            "/tmp/ts",
+        ] {
+            assert!(
+                !hls_remux_incomplete(Path::new(p)),
+                "{p} must not be flagged"
+            );
+        }
     }
 }

@@ -377,10 +377,7 @@ impl Orchestrator {
         let final_path = crate::orchestrator::naming::finalize_survivor(survivor).await?;
 
         // HLS downloads produce .ts files that should be remuxed.
-        if is_hls
-            && rdlp_types::ContainerFormat::from_path(&final_path)
-                == Some(rdlp_types::ContainerFormat::Ts)
-        {
+        if is_hls && super::helpers::hls_remux_incomplete(&final_path) {
             return Err(OrchestratorError::DownloadFailed(
                 rdlp_core::RdlpError::Extraction {
                     message: format!(

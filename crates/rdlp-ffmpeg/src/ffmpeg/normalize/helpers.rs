@@ -465,10 +465,7 @@ mod audio_encoder_selection_tests {
     /// this change, and pinned here.
     #[test]
     fn wave_alias_resolves_like_wav() {
-        assert_eq!(
-            select_audio_encoder_for_container("wave"),
-            select_audio_encoder_for_container("wav"),
-        );
+        assert_eq!(select_audio_encoder_for_container("wave"), "pcm_s16le");
     }
 
     /// An extension that is not a container at all still falls back rather

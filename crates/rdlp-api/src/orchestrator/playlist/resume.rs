@@ -145,9 +145,7 @@ impl Orchestrator {
                     }
 
                     // Reject .ts files -- HLS remux didn't complete
-                    if rdlp_types::ContainerFormat::from_path(file_path)
-                        == Some(rdlp_types::ContainerFormat::Ts)
-                    {
+                    if super::helpers::hls_remux_incomplete(file_path) {
                         debug!(
                             file:% = filename;
                             "Skipping .ts file (remux incomplete)"
