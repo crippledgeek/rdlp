@@ -145,7 +145,7 @@ impl Orchestrator {
                     }
 
                     // Reject .ts files -- HLS remux didn't complete
-                    if ext.eq_ignore_ascii_case("ts") {
+                    if super::helpers::hls_remux_incomplete(file_path) {
                         debug!(
                             file:% = filename;
                             "Skipping .ts file (remux incomplete)"

@@ -377,23 +377,17 @@ impl Orchestrator {
         let final_path = crate::orchestrator::naming::finalize_survivor(survivor).await?;
 
         // HLS downloads produce .ts files that should be remuxed.
-        if is_hls {
-            let ext = final_path
-                .extension()
-                .and_then(|e| e.to_str())
-                .unwrap_or("");
-            if ext.eq_ignore_ascii_case("ts") {
-                return Err(OrchestratorError::DownloadFailed(
-                    rdlp_core::RdlpError::Extraction {
-                        message: format!(
-                            "Post-processing failed for '{}': \
+        if is_hls && super::helpers::hls_remux_incomplete(&final_path) {
+            return Err(OrchestratorError::DownloadFailed(
+                rdlp_core::RdlpError::Extraction {
+                    message: format!(
+                        "Post-processing failed for '{}': \
                              HLS container still .ts (FFmpeg remux did not complete)",
-                            final_info.title,
-                        ),
-                        url: None,
-                    },
-                ));
-            }
+                        final_info.title,
+                    ),
+                    url: None,
+                },
+            ));
         }
 
         Ok(Some(final_path))
