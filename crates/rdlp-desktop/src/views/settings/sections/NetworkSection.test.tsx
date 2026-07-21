@@ -152,6 +152,17 @@ describe("NetworkSection — timeout controls", () => {
         expect(descriptionNode!.textContent).toMatch(/idle keep-alive connections/i);
     });
 
+    // #613 regression guard: the placeholder is the "inherit the backend default"
+    // hint, so it must state the value the app actually uses —
+    // `DEFAULT_POOL_IDLE_TIMEOUT_SECS` in rdlp-http/src/config.rs, which owns the
+    // rationale for that number. Pinning a literal against a literal is weak by
+    // construction; #611 replaces it by sourcing the value over IPC.
+    it("pool-idle placeholder states the real backend default (60, not 90)", () => {
+        render(<NetworkSection draft={baseDraft} onChange={vi.fn()} />);
+        const numeric = screen.getByRole("textbox", { name: /idle timeout/i });
+        expect(numeric).toHaveAttribute("placeholder", "60");
+    });
+
     it("out-of-range pool-idle value clamps to the upper bound", async () => {
         const user = userEvent.setup();
         const onChange = vi.fn();
