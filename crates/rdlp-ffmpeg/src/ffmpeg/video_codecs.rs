@@ -11,8 +11,9 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use log::info;
 use serde::{Deserialize, Serialize};
+
+use crate::ffmpeg::codec_registry;
 
 /// Information about a specific video encoder.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -250,6 +251,19 @@ struct CodecEntry {
     encoders: &'static [(&'static str, &'static str)],
 }
 
+impl codec_registry::CodecRow for CodecEntry {
+    fn codec(&self) -> &'static str {
+        self.codec
+    }
+    fn encoders(&self) -> &'static [(&'static str, &'static str)] {
+        self.encoders
+    }
+}
+
+/// Per-registry cache. Module-level, NOT inside a generic function — see
+/// `codec_registry::preferred_encoder`.
+static VIDEO_CACHE: OnceLock<HashMap<&'static str, Option<&'static str>>> = OnceLock::new();
+
 /// Static table mapping codec names to ordered encoder preference lists.
 ///
 /// Codecs are listed in preference order — the first available encoder
@@ -375,7 +389,7 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
 pub fn is_encoder_available(encoder: &str) -> bool {
-    ffmpeg_the_third::codec::encoder::find_by_name(encoder).is_some()
+    codec_registry::is_encoder_available(encoder)
 }
 
 /// Returns the best available video encoder for a given codec name.
@@ -389,31 +403,7 @@ pub fn is_encoder_available(encoder: &str) -> bool {
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
 pub fn preferred_video_encoder(codec: &str) -> Option<&'static str> {
-    static CACHE: OnceLock<HashMap<&'static str, Option<&'static str>>> = OnceLock::new();
-
-    let cache = CACHE.get_or_init(|| {
-        let mut map = HashMap::new();
-        for entry in CODEC_PREFERENCES {
-            let selected = entry
-                .encoders
-                .iter()
-                .find(|(enc, _)| is_encoder_available(enc))
-                .map(|(enc, _)| *enc);
-
-            if let Some(enc) = selected {
-                info!("Using {enc} as {codec} encoder", codec = entry.codec);
-            }
-
-            map.insert(entry.codec, selected);
-        }
-        map
-    });
-
-    // Only canonically-known codecs are in the cache; unknown codec names return None
-    cache
-        .get(codec.to_ascii_lowercase().as_str())
-        .copied()
-        .flatten()
+    codec_registry::preferred_encoder(CODEC_PREFERENCES, &VIDEO_CACHE, codec, "video")
 }
 
 /// Resolves an encoder name.
@@ -428,23 +418,7 @@ pub fn preferred_video_encoder(codec: &str) -> Option<&'static str> {
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
 pub fn resolve_encoder(input: &str) -> Option<&'static str> {
-    let lower = input.to_ascii_lowercase();
-
-    // Check if input is a known codec name first
-    if let Some(enc) = preferred_video_encoder(&lower) {
-        return Some(enc);
-    }
-
-    // Otherwise treat as a direct encoder name — find the matching static str
-    // in our table, then gate on availability. Short-circuits on the first
-    // name match exactly like the prior nested-loop search: duplicate encoder
-    // names occur only across byte-identical codec-alias rows, so the verdict
-    // (available → Some, unavailable → None) is unchanged.
-    CODEC_PREFERENCES
-        .iter()
-        .flat_map(|entry| entry.encoders)
-        .find(|(enc, _)| enc.eq_ignore_ascii_case(input))
-        .and_then(|(enc, _)| is_encoder_available(enc).then_some(*enc))
+    codec_registry::resolve(CODEC_PREFERENCES, &VIDEO_CACHE, input, "video")
 }
 
 /// Returns all available encoders for a given codec name, in preference order.
@@ -454,18 +428,12 @@ pub fn resolve_encoder(input: &str) -> Option<&'static str> {
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
 pub fn available_encoders_for_codec(codec: &str) -> Vec<VideoEncoderInfo> {
-    let lower = codec.to_ascii_lowercase();
-    CODEC_PREFERENCES
-        .iter()
-        .find(|e| e.codec == lower.as_str())
-        .map(|entry| {
-            entry
-                .encoders
-                .iter()
-                .filter(|(enc, _)| is_encoder_available(enc))
+    codec_registry::find_row(CODEC_PREFERENCES, codec)
+        .map(|row| {
+            codec_registry::available_encoders(row)
                 .map(|(enc, display)| VideoEncoderInfo {
-                    encoder_name: (*enc).to_string(),
-                    display_name: (*display).to_string(),
+                    encoder_name: enc.to_string(),
+                    display_name: display.to_string(),
                     speed_controls: speed_controls_def(enc)
                         .iter()
                         .map(SpeedKnob::from_def)
@@ -489,13 +457,10 @@ pub fn list_available_codecs() -> Vec<VideoCodecInfo> {
     CODEC_PREFERENCES
         .iter()
         .filter_map(|entry| {
-            let encoders: Vec<VideoEncoderInfo> = entry
-                .encoders
-                .iter()
-                .filter(|(enc, _)| is_encoder_available(enc))
+            let encoders: Vec<VideoEncoderInfo> = codec_registry::available_encoders(entry)
                 .map(|(enc, display)| VideoEncoderInfo {
-                    encoder_name: (*enc).to_string(),
-                    display_name: (*display).to_string(),
+                    encoder_name: enc.to_string(),
+                    display_name: display.to_string(),
                     speed_controls: speed_controls_def(enc)
                         .iter()
                         .map(SpeedKnob::from_def)
@@ -674,5 +639,21 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The audio and video registries must not share a cache. Resolving a
+    /// video codec first must not change what the audio registry answers.
+    #[test]
+    fn audio_and_video_registries_have_independent_caches() {
+        crate::ffmpeg::ensure_init().expect("ffmpeg init");
+        let video_h264 = preferred_video_encoder("h264");
+        let audio_aac = crate::ffmpeg::audio_encoder_registry::preferred_audio_encoder("aac");
+
+        assert!(video_h264.is_some(), "h264 encoder should resolve");
+        assert!(audio_aac.is_some(), "aac encoder should resolve");
+        assert_ne!(
+            video_h264, audio_aac,
+            "audio registry returned the video registry's answer — caches are shared"
+        );
     }
 }
