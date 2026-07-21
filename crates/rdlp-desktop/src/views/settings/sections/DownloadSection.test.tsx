@@ -55,6 +55,30 @@ describe("DownloadSection", () => {
         expect(onChange).toHaveBeenCalledWith({ buffer_size: null });
     });
 
+    // Regression guard (security review Finding C): `bytesToMibDisplay(500_000)` rounds
+    // to 0, which is below `minValue={1}`. Rendering that 0 as the field's controlled
+    // value meant a blur with NO typing still clamped 0 -> 1 and committed 1 MiB,
+    // silently overwriting a legitimate sub-MiB stored value. Focusing and blurring
+    // with no edit must be a no-op.
+    it("does not rewrite a sub-MiB stored value on a no-op focus/blur", async () => {
+        const user = userEvent.setup();
+        const onChange = vi.fn();
+        const draft = { ...baseDraft, buffer_size: 500_000 } as AppSettings;
+        render(<DownloadSection draft={draft} onChange={onChange} />);
+        const input = screen.getByRole("textbox", { name: /buffer size/i });
+        await user.click(input);
+        await user.tab();
+        expect(onChange).not.toHaveBeenCalled();
+    });
+
+    it("renders the true byte count for a sub-MiB value instead of a misleading 0", () => {
+        const draft = { ...baseDraft, buffer_size: 500_000 } as AppSettings;
+        render(<DownloadSection draft={draft} onChange={vi.fn()} />);
+        const input = screen.getByRole("textbox", { name: /buffer size/i });
+        expect(input).toHaveValue("");
+        expect(input).toHaveAttribute("placeholder", "500,000 B");
+    });
+
     it("passes a unitless count straight through without conversion", async () => {
         const user = userEvent.setup();
         const onChange = vi.fn();

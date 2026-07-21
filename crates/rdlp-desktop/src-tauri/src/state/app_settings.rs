@@ -179,8 +179,15 @@ impl AppSettings {
     /// Load settings from disk, falling back to defaults.
     ///
     /// Reads the settings file at [`Self::settings_path()`]. If the
-    /// file is missing or contains invalid JSON, returns
+    /// file is missing, contains invalid JSON, or fails security
+    /// validation (see [`Self::validate_security`]), returns
     /// [`Default::default()`] instead.
+    ///
+    /// A hand-edited `settings.json` bypasses the frontend's zod schema, so this
+    /// is the last point that can reject an out-of-range or unsafe value before
+    /// it reaches the rest of the application (e.g. an allocation sized directly
+    /// from `buffer_size`). This is the only enforcement point on the *load*
+    /// path; the *save* path enforces the same check in `update_settings`.
     ///
     /// # Returns
     ///
@@ -196,20 +203,39 @@ impl AppSettings {
                 info!("No settings file at {}, using defaults", path.display());
                 Self::default()
             },
-            |contents| match serde_json::from_str(&contents) {
-                Ok(settings) => {
+            |contents| Self::parse_and_validate(&contents, &path),
+        )
+    }
+
+    /// Parse `contents` as JSON and validate the result, falling back to
+    /// [`Default::default()`] on either a parse error or a validation failure.
+    ///
+    /// Extracted from [`Self::load()`] so the parse-then-validate logic is testable
+    /// without depending on [`Self::settings_path()`], which resolves to a fixed,
+    /// non-configurable per-process path.
+    fn parse_and_validate(contents: &str, path: &std::path::Path) -> Self {
+        match serde_json::from_str::<Self>(contents) {
+            Ok(settings) => match settings.validate_security() {
+                Ok(()) => {
                     info!("Loaded settings from {}", path.display());
                     settings
                 }
                 Err(e) => {
                     warn!(
-                        "Failed to parse settings at {}: {e}, using defaults",
+                        "Settings at {} failed validation ({e}), using defaults",
                         path.display()
                     );
                     Self::default()
                 }
             },
-        )
+            Err(e) => {
+                warn!(
+                    "Failed to parse settings at {}: {e}, using defaults",
+                    path.display()
+                );
+                Self::default()
+            }
+        }
     }
 
     /// Persist the current settings to disk as JSON.
@@ -323,10 +349,12 @@ impl std::error::Error for SettingsValidationError {}
 ///
 /// Mirrors `rdlp_types::Config::validate()`'s `parallel_threshold` and `buffer_size`
 /// ceilings rather than introducing a second magic number. `Config::validate()` is not
-/// called on the desktop path (see `commands::download`), so this remains this field's
-/// only enforcement point on that path — no cross-crate test enforces the two literals
-/// staying in sync, so a future change to either ceiling must be mirrored manually in
-/// the other crate.
+/// called on the desktop path (see `commands::download`), so `validate_security` is this
+/// field's enforcement point on that path — run on both `AppSettings::load()` and the
+/// `update_settings` save command, so neither a hand-edited `settings.json` nor a save
+/// from the UI can carry an out-of-range value. No cross-crate test enforces the two
+/// literals staying in sync, so a future change to either ceiling must be mirrored
+/// manually in the other crate.
 const MAX_BYTE_SETTING: u64 = 1024 * 1024 * 1024;
 
 impl AppSettings {
@@ -936,6 +964,52 @@ mod tests {
             ..AppSettings::default()
         };
         assert!(s.validate_security().is_ok(), "sub-MiB must remain valid");
+    }
+
+    /// Finding A regression guard: `AppSettings::load()` used to deserialize straight
+    /// into state and never call `validate_security()`, so a hand-edited
+    /// `settings.json` with `{"buffer_size": 100000000000}` (100 GB, far above the
+    /// 1 GiB ceiling) would flow unchecked into `build_network_options` /
+    /// `BufWriter::with_capacity`. This exercises the exact logic `load()` runs
+    /// (`parse_and_validate`) so it fails against the pre-fix code (which had no
+    /// `validate_security()` call in that path) and passes once the fix is applied.
+    #[test]
+    fn test_out_of_range_settings_json_loads_as_defaults() {
+        let json = r#"{
+            "output_dir": "/tmp",
+            "embed_thumbnail": true,
+            "embed_metadata": false,
+            "verbose": false,
+            "default_subtitle_langs": [],
+            "buffer_size": 100000000000
+        }"#;
+        let settings = AppSettings::parse_and_validate(json, std::path::Path::new("test.json"));
+        assert_eq!(
+            settings.buffer_size, None,
+            "out-of-range buffer_size must NOT survive load — defaults must be used instead"
+        );
+        assert_eq!(
+            settings.output_dir,
+            AppSettings::default().output_dir,
+            "the whole record must fall back to defaults, not just the bad field"
+        );
+    }
+
+    /// A settings.json with a valid `buffer_size` loads unchanged (not silently
+    /// replaced by defaults) — the counterpart to the out-of-range test above.
+    #[test]
+    fn test_valid_settings_json_loads_unchanged() {
+        let json = r#"{
+            "output_dir": "/tmp",
+            "embed_thumbnail": true,
+            "embed_metadata": false,
+            "verbose": false,
+            "default_subtitle_langs": [],
+            "buffer_size": 4194304
+        }"#;
+        let settings = AppSettings::parse_and_validate(json, std::path::Path::new("test.json"));
+        assert_eq!(settings.buffer_size, Some(4_194_304));
+        assert_eq!(settings.output_dir, PathBuf::from("/tmp"));
     }
 
     #[test]

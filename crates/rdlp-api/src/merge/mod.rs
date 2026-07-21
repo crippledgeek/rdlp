@@ -189,11 +189,14 @@ impl MergeOverrides for NetworkOptions {
             config.concurrent_fragments = v as usize;
         }
         if let Some(v) = self.buffer_size {
-            // Genuinely narrowing on a 32-bit target. `Config::validate()` rejects any
-            // `buffer_size` above 1 GiB (and the desktop path additionally enforces the
-            // same ceiling in `AppSettings::validate_security`), so once validation has
-            // run, `v` always fits in `usize` on every target rdlp supports and the
-            // saturating fallback is unreachable.
+            // Genuinely narrowing on a 32-bit target. `Config::validate()` (CLI) and
+            // `AppSettings::validate_security` (desktop, on both load and save) both
+            // reject any `buffer_size` above 1 GiB before it reaches this merge, so `v`
+            // fits in `usize` on every target rdlp supports for those two callers. This
+            // function itself performs no validation — an embedder of `rdlp-api` that
+            // calls `build_config`/`merge_into` directly, without going through the CLI
+            // or desktop validation layers, is responsible for validating `buffer_size`
+            // itself; for such a caller the saturating fallback below IS reachable.
             config.buffer_size = usize::try_from(v).unwrap_or(usize::MAX);
         }
         if let Some(v) = self.parallel_threshold {
