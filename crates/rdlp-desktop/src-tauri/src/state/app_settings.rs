@@ -121,6 +121,21 @@ pub struct AppSettings {
     /// `Config::validate()`): must be 1..=86400.
     #[serde(default)]
     pub merge_timeout: Option<u64>,
+    /// Download subtitles by default.
+    #[serde(default)]
+    pub write_subtitles: bool,
+    /// Download auto-generated subtitles by default.
+    #[serde(default)]
+    pub write_auto_subtitles: bool,
+    /// Fail the download if requested subtitles are unavailable.
+    #[serde(default)]
+    pub strict_subs: bool,
+    /// Validate subtitle URLs before downloading.
+    #[serde(default)]
+    pub verify_sub_urls: bool,
+    /// Retry failed subtitle downloads.
+    #[serde(default)]
+    pub retry_subs: bool,
 }
 
 impl AppSettings {
@@ -240,6 +255,11 @@ impl Default for AppSettings {
             pool_idle_timeout: None,
             download_timeout: None,
             merge_timeout: None,
+            write_subtitles: false,
+            write_auto_subtitles: false,
+            strict_subs: false,
+            verify_sub_urls: false,
+            retry_subs: false,
         }
     }
 }
@@ -603,6 +623,11 @@ mod tests {
             pool_idle_timeout: None,
             download_timeout: None,
             merge_timeout: None,
+            write_subtitles: true,
+            write_auto_subtitles: true,
+            strict_subs: true,
+            verify_sub_urls: true,
+            retry_subs: true,
         };
 
         let json = serde_json::to_string(&settings).expect("serialization should succeed");
@@ -648,6 +673,11 @@ mod tests {
             Some("%(title)s.%(ext)s")
         );
         assert!(restored.embed_subtitles);
+        assert!(restored.write_subtitles);
+        assert!(restored.write_auto_subtitles);
+        assert!(restored.strict_subs);
+        assert!(restored.verify_sub_urls);
+        assert!(restored.retry_subs);
     }
 
     #[test]
@@ -681,5 +711,21 @@ mod tests {
         assert!(s.socket_timeout.is_none());
         assert!(s.read_timeout.is_none());
         assert!(s.pool_idle_timeout.is_none());
+    }
+
+    #[test]
+    fn legacy_json_without_subtitle_flags_defaults_false() {
+        // Minimal legacy settings.json predating the 5 subtitle flags. Mirrors the
+        // fixture shape in `test_legacy_settings_json_without_timeout_fields_loads`
+        // (the fields below are the only ones without `#[serde(default)]`).
+        let json = r#"{"output_dir":"/tmp","embed_thumbnail":true,"embed_metadata":false,"verbose":false,"default_subtitle_langs":[]}"#;
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        assert!(
+            !s.write_subtitles
+                && !s.write_auto_subtitles
+                && !s.strict_subs
+                && !s.verify_sub_urls
+                && !s.retry_subs
+        );
     }
 }

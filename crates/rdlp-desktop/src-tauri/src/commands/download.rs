@@ -322,11 +322,14 @@ pub async fn start_download(
             ..FormatOptions::default()
         },
         subtitles: SubtitleOptions {
-            write_subs: options.subtitles.then_some(true),
+            write_subs: Some(options.subtitles || settings.write_subtitles),
+            write_auto_subs: Some(settings.write_auto_subtitles),
             sub_langs: options.subtitle_langs,
             sub_format: settings.default_subtitle_format,
             embed_subs: embed_subtitles.then_some(true),
-            ..SubtitleOptions::default()
+            strict_subs: Some(settings.strict_subs),
+            verify_sub_urls: Some(settings.verify_sub_urls),
+            retry_subs: Some(settings.retry_subs),
         },
         postprocess: PostProcessOptions {
             remux,
