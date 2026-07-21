@@ -3,7 +3,7 @@
  *
  * This file runs under Vitest's typecheck mode only:
  *
- *   npm test -- --typecheck --run
+ *   pnpm test -- --typecheck --run
  *
  * Files matching `*.test-d.{ts,tsx}` are excluded from the runtime test pool
  * (see vitest.config.ts) so the assertions here are evaluated by `tsc` via

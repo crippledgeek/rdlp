@@ -79,8 +79,16 @@ nul
 
 # Node.js / Frontend
 node_modules/
-package-lock.json
 crates/rdlp-desktop/dist/
+
+# pnpm is this project's package manager (see BUILDING.md). `pnpm-lock.yaml` IS
+# committed — npm and pnpm both state the lockfile belongs in source control so
+# installs are reproducible across machines, CI, and releases. These entries
+# exist to keep foreign package-manager artifacts OUT, not to exclude lockfiles.
+package-lock.json
+yarn.lock
+bun.lockb
+bun.lock
 
 # Un-ignore TypeScript files in desktop frontend (*.ts above targets MPEG-TS video)
 !crates/rdlp-desktop/**/*.ts

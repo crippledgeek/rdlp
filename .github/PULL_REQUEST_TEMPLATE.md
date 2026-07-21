@@ -38,7 +38,7 @@ Closes #
 - [ ] `cargo test --workspace`
 - [ ] `cargo clippy -- -W clippy::all`
 - [ ] `cargo fmt --check`
-- [ ] (If desktop crate touched) `cd crates/rdlp-desktop && npx tsc --noEmit && npm test -- --run`
+- [ ] (If desktop crate touched) `cd crates/rdlp-desktop && pnpm exec tsc --noEmit && pnpm test`
 - [ ] Manual verification (describe the scenario)
 
 ## Checklist
