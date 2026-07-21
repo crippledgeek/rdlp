@@ -1,0 +1,25 @@
+# pnpm settings for the desktop frontend.
+#
+# strictDepBuilds makes an unreviewed postinstall script a HARD ERROR
+# (ERR_PNPM_IGNORED_BUILDS, exit 1) instead of a warning that scrolls past.
+#
+# This is the guard for the trap that bit us during the npm->pnpm migration:
+# pnpm 10 refuses to run a dependency's build scripts unless the package is
+# listed in `pnpm.onlyBuiltDependencies`, and Cypress downloads its actual
+# binary in postinstall. Unlisted, the install reports success and the binary
+# silently never arrives — failing later, somewhere unrelated.
+#
+# Verified empirically against pnpm 10.33.0 on 2026-07-21:
+#   - NOT on by default at this version (install warned and exited 0).
+#   - Honored ONLY here. The same key in package.json's `pnpm` block is
+#     silently ignored (exit 0) — do not "tidy" it into package.json next to
+#     onlyBuiltDependencies.
+#
+# Keep `onlyBuiltDependencies` entries UNPINNED (bare package names). Pinned
+# entries like `esbuild@0.27.4` stop matching after a version bump and are
+# silently blocked without tripping strictDepBuilds
+# (pnpm/pnpm#11219, pnpm/pnpm#10426).
+#
+# pnpm v11 replaces onlyBuiltDependencies/ignoredBuiltDependencies with a
+# unified `allowBuilds` map; revisit on that upgrade.
+strictDepBuilds: true
