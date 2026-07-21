@@ -101,6 +101,28 @@ fn positive_metadata_flag_still_sets_true() {
     );
 }
 
+#[test]
+fn positive_write_thumbnail_flag_still_sets_true() {
+    let mut args = default_args();
+    args.write_thumbnail = true;
+    let config = merge_config(&args, Config::default(), no_interactive()).unwrap();
+    assert!(
+        config.postprocess.write_thumbnail,
+        "--write-thumbnail must still work after tribool_pp conversion"
+    );
+}
+
+#[test]
+fn positive_embed_subtitles_flag_still_sets_true() {
+    let mut args = default_args();
+    args.embed_subtitles = true;
+    let config = merge_config(&args, Config::default(), no_interactive()).unwrap();
+    assert!(
+        config.postprocess.embed_subtitles,
+        "--embed-subtitles must still work after tribool_pp conversion"
+    );
+}
+
 /// Helper: create default Args for testing (all fields at defaults).
 fn default_args() -> Args {
     Args {
