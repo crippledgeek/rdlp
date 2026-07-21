@@ -4,6 +4,125 @@ use super::*;
 use crate::args::Args;
 use rdlp_api::{AudioFormat, Config, FixupPolicy, SubtitleFormat};
 
+#[test]
+fn flag_resolves_pair_to_tristate() {
+    use super::flag;
+    assert_eq!(flag(true, false), Some(true), "positive → Some(true)");
+    assert_eq!(flag(false, true), Some(false), "negative → Some(false)");
+    assert_eq!(
+        flag(false, false),
+        None,
+        "absent → None (leave config value)"
+    );
+    // overrides_with guarantees clap never leaves both true, but define the arm:
+    assert_eq!(
+        flag(true, true),
+        Some(true),
+        "positive wins if both somehow set"
+    );
+}
+
+#[test]
+fn no_embed_thumbnail_flag_disables_default_on() {
+    let mut args = default_args();
+    args.no_embed_thumbnail = true;
+    let config = merge_config(&args, Config::default(), no_interactive()).unwrap();
+    assert!(
+        !config.postprocess.embed_thumbnail,
+        "--no-embed-thumbnail must turn it off"
+    );
+}
+
+#[test]
+fn absent_thumbnail_flags_preserve_config_value() {
+    // embed_thumbnail defaults ON; an invocation that mentions neither flag
+    // must not clobber it (absent-vs-false).
+    let config = merge_config(&default_args(), Config::default(), no_interactive()).unwrap();
+    assert!(
+        config.postprocess.embed_thumbnail,
+        "absent pair must leave default ON"
+    );
+}
+
+#[test]
+fn embed_thumbnail_flag_reenables_a_config_off_value() {
+    let mut file_config = Config::default();
+    file_config.postprocess.embed_thumbnail = false; // config file turned it off
+    let mut args = default_args();
+    args.embed_thumbnail = true; // hidden positive re-enables
+    let config = merge_config(&args, file_config, no_interactive()).unwrap();
+    assert!(
+        config.postprocess.embed_thumbnail,
+        "--embed-thumbnail must override config-off"
+    );
+}
+
+#[test]
+fn no_embed_metadata_overrides_config_on() {
+    let mut file_config = Config::default();
+    file_config.postprocess.embed_metadata = true; // config turned it on
+    let mut args = default_args();
+    args.no_embed_metadata = true;
+    let config = merge_config(&args, file_config, no_interactive()).unwrap();
+    assert!(
+        !config.postprocess.embed_metadata,
+        "--no-embed-metadata must override config-on"
+    );
+}
+
+#[test]
+fn no_write_thumbnail_overrides_config_on() {
+    let mut file_config = Config::default();
+    file_config.postprocess.write_thumbnail = true;
+    let mut args = default_args();
+    args.no_write_thumbnail = true;
+    let config = merge_config(&args, file_config, no_interactive()).unwrap();
+    assert!(!config.postprocess.write_thumbnail);
+}
+
+#[test]
+fn no_embed_subtitles_overrides_config_on() {
+    let mut file_config = Config::default();
+    file_config.postprocess.embed_subtitles = true;
+    let mut args = default_args();
+    args.no_embed_subtitles = true;
+    let config = merge_config(&args, file_config, no_interactive()).unwrap();
+    assert!(!config.postprocess.embed_subtitles);
+}
+
+#[test]
+fn positive_metadata_flag_still_sets_true() {
+    let mut args = default_args();
+    args.embed_metadata = true;
+    let config = merge_config(&args, Config::default(), no_interactive()).unwrap();
+    assert!(
+        config.postprocess.embed_metadata,
+        "--embed-metadata must still work"
+    );
+}
+
+#[test]
+fn positive_write_thumbnail_flag_still_sets_true() {
+    let mut args = default_args();
+    args.write_thumbnail = true;
+    let config = merge_config(&args, Config::default(), no_interactive()).unwrap();
+    assert!(
+        config.postprocess.write_thumbnail,
+        "--write-thumbnail must still work after tribool_pp conversion"
+    );
+}
+
+#[test]
+fn positive_embed_subtitles_flag_still_sets_true() {
+    let mut args = default_args();
+    args.embed_subtitles = true;
+    let config = merge_config(&args, Config::default(), no_interactive()).unwrap();
+    assert!(
+        config.postprocess.embed_subtitles,
+        "--embed-subtitles must still work after tribool_pp conversion"
+    );
+}
+
 /// Helper: create default Args for testing (all fields at defaults).
 fn default_args() -> Args {
     Args {
@@ -26,13 +145,17 @@ fn default_args() -> Args {
         audio_format: None,
         audio_quality: None,
         embed_metadata: false,
-        no_thumbnail: false,
+        no_embed_metadata: false,
+        embed_thumbnail: false,
+        no_embed_thumbnail: false,
         write_thumbnail: false,
+        no_write_thumbnail: false,
         write_subtitles: false,
         write_auto_subtitles: false,
         sub_langs: None,
         sub_format: None,
         embed_subtitles: false,
+        no_embed_subtitles: false,
         list_subs: false,
         list_subs_only: false,
         strict_subs: false,
