@@ -80,6 +80,44 @@ pub fn preferred_encoder<R: CodecRow>(
         .flatten()
 }
 
+/// Resolves either a codec name or a direct encoder name to an available encoder.
+///
+/// Codec names go through [`preferred_encoder`]; anything else is matched against
+/// the table's encoder names and then gated on availability.
+///
+/// Requires [`super::ensure_init`] to have been called first.
+#[must_use]
+pub fn resolve<R: CodecRow>(
+    table: &'static [R],
+    cache: &'static OnceLock<HashMap<&'static str, Option<&'static str>>>,
+    input: &str,
+    label: &str,
+) -> Option<&'static str> {
+    let lower = input.to_ascii_lowercase();
+
+    if let Some(enc) = preferred_encoder(table, cache, &lower, label) {
+        return Some(enc);
+    }
+
+    // Short-circuits on the first name match: duplicate encoder names occur
+    // only across byte-identical codec-alias rows, so the verdict is unchanged.
+    table
+        .iter()
+        .flat_map(CodecRow::encoders)
+        .find(|(enc, _)| enc.eq_ignore_ascii_case(input))
+        .and_then(|(enc, _)| is_encoder_available(enc).then_some(*enc))
+}
+
+/// The row's encoders that are present in this build, in preference order.
+pub fn available_encoders<R: CodecRow>(
+    row: &'static R,
+) -> impl Iterator<Item = (&'static str, &'static str)> {
+    row.encoders()
+        .iter()
+        .filter(|(enc, _)| is_encoder_available(enc))
+        .map(|(enc, display)| (*enc, *display))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -172,5 +210,47 @@ mod tests {
     fn find_row_matches_case_insensitively() {
         assert!(find_row(TABLE_A, "SHARED_NAME").is_some());
         assert!(find_row(TABLE_A, "nope").is_none());
+    }
+
+    #[test]
+    fn resolve_accepts_a_codec_name() {
+        crate::ffmpeg::ensure_init().expect("ffmpeg init");
+        assert_eq!(
+            resolve(TABLE_A, &FAKE_CACHE_A, "shared_name", "test-a"),
+            Some("aac")
+        );
+    }
+
+    #[test]
+    fn resolve_accepts_a_direct_encoder_name() {
+        crate::ffmpeg::ensure_init().expect("ffmpeg init");
+        assert_eq!(
+            resolve(TABLE_A, &FAKE_CACHE_A, "aac", "test-a"),
+            Some("aac")
+        );
+    }
+
+    #[test]
+    fn resolve_rejects_an_unknown_name() {
+        crate::ffmpeg::ensure_init().expect("ffmpeg init");
+        assert_eq!(
+            resolve(TABLE_A, &FAKE_CACHE_A, "no_such_thing", "test-a"),
+            None
+        );
+    }
+
+    #[test]
+    fn available_encoders_filters_unavailable() {
+        crate::ffmpeg::ensure_init().expect("ffmpeg init");
+        // FAKE_TABLE's only encoder does not exist in any build.
+        assert!(
+            available_encoders(FAKE_TABLE.first().expect("row"))
+                .next()
+                .is_none(),
+            "unavailable encoder must be filtered out"
+        );
+
+        let got: Vec<_> = available_encoders(TABLE_A.first().expect("row")).collect();
+        assert_eq!(got, vec![("aac", "AAC")]);
     }
 }
