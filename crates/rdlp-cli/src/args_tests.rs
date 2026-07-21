@@ -38,9 +38,11 @@ const EXPECTED: &[(&str, &str)] = &[
     ("audio_format", HELP_HEADING_POSTPROCESS),
     ("audio_quality", HELP_HEADING_POSTPROCESS),
     ("embed_metadata", HELP_HEADING_POSTPROCESS),
+    ("no_embed_metadata", HELP_HEADING_POSTPROCESS),
     ("embed_thumbnail", HELP_HEADING_POSTPROCESS),
     ("no_embed_thumbnail", HELP_HEADING_POSTPROCESS),
     ("write_thumbnail", HELP_HEADING_POSTPROCESS),
+    ("no_write_thumbnail", HELP_HEADING_POSTPROCESS),
     ("remux", HELP_HEADING_POSTPROCESS),
     ("fixup", HELP_HEADING_POSTPROCESS),
     ("keep_video", HELP_HEADING_POSTPROCESS),
@@ -51,6 +53,7 @@ const EXPECTED: &[(&str, &str)] = &[
     ("sub_langs", HELP_HEADING_SUBTITLES),
     ("sub_format", HELP_HEADING_SUBTITLES),
     ("embed_subtitles", HELP_HEADING_SUBTITLES),
+    ("no_embed_subtitles", HELP_HEADING_SUBTITLES),
     ("list_subs", HELP_HEADING_SUBTITLES),
     ("list_subs_only", HELP_HEADING_SUBTITLES),
     ("strict_subs", HELP_HEADING_SUBTITLES),
@@ -111,8 +114,8 @@ fn every_option_is_classified_into_a_help_group() {
     assert_eq!(expected.len(), EXPECTED.len(), "duplicate id in EXPECTED");
     assert_eq!(
         EXPECTED.len(),
-        74,
-        "group map should cover all 74 option fields"
+        77,
+        "group map should cover all 77 option fields"
     );
 
     let cmd = Args::command();
@@ -596,4 +599,30 @@ fn no_embed_thumbnail_visible_in_long_help_only() {
         !long.contains("--embed-thumbnail "),
         "--embed-thumbnail is hide=true; not in --help"
     );
+}
+
+#[test]
+fn hidden_negations_parse_but_do_not_render() {
+    // They must parse (functional)…
+    for flag in [
+        "--no-embed-metadata",
+        "--no-write-thumbnail",
+        "--no-embed-subtitles",
+    ] {
+        assert!(
+            Args::try_parse_from(["rdlp", flag, "URL"]).is_ok(),
+            "{flag} must parse",
+        );
+    }
+    // …but appear in neither -h nor --help (hide = true).
+    let short = Args::command().render_help().to_string();
+    let long = Args::command().render_long_help().to_string();
+    for flag in [
+        "--no-embed-metadata",
+        "--no-write-thumbnail",
+        "--no-embed-subtitles",
+    ] {
+        assert!(!short.contains(flag), "{flag} must be hidden from -h");
+        assert!(!long.contains(flag), "{flag} must be hidden from --help");
+    }
 }

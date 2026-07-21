@@ -248,6 +248,10 @@ pub struct Args {
     #[arg(long, help_heading = HELP_HEADING_POSTPROCESS)]
     pub embed_metadata: bool,
 
+    /// Do not embed metadata (overrides a config file that enabled it)
+    #[arg(long, overrides_with = "embed_metadata", help_heading = HELP_HEADING_POSTPROCESS, hide = true)]
+    pub no_embed_metadata: bool,
+
     /// Embed thumbnail into the media file (on by default).
     ///
     /// Hidden positive half of the `--no-embed-thumbnail` pair: it restates the
@@ -256,18 +260,16 @@ pub struct Args {
     pub embed_thumbnail: bool,
 
     /// Disable automatic thumbnail embedding (on by default)
-    #[arg(
-        long,
-        alias = "no-thumbnail",
-        overrides_with = "embed_thumbnail",
-        help_heading = HELP_HEADING_POSTPROCESS,
-        hide_short_help = true
-    )]
+    #[arg(long, alias = "no-thumbnail", overrides_with = "embed_thumbnail", help_heading = HELP_HEADING_POSTPROCESS, hide_short_help = true)]
     pub no_embed_thumbnail: bool,
 
     /// Write thumbnail image to disk alongside media file
     #[arg(long, help_heading = HELP_HEADING_POSTPROCESS, hide_short_help = true)]
     pub write_thumbnail: bool,
+
+    /// Do not write the thumbnail to disk (overrides a config file that enabled it)
+    #[arg(long, overrides_with = "write_thumbnail", help_heading = HELP_HEADING_POSTPROCESS, hide = true)]
+    pub no_write_thumbnail: bool,
 
     // === Subtitle options ===
     /// Download subtitles
@@ -290,6 +292,10 @@ pub struct Args {
     /// Embed subtitles in video file (requires `FFmpeg`)
     #[arg(long, alias = "embed-subs", help_heading = HELP_HEADING_SUBTITLES)]
     pub embed_subtitles: bool,
+
+    /// Do not embed subtitles (overrides a config file that enabled it)
+    #[arg(long, overrides_with = "embed_subtitles", help_heading = HELP_HEADING_SUBTITLES, hide = true)]
+    pub no_embed_subtitles: bool,
 
     /// Interactive subtitle selection + video download (implies --write-subtitles)
     #[arg(long, help_heading = HELP_HEADING_SUBTITLES, hide_short_help = true)]
