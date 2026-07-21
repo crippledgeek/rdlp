@@ -1002,6 +1002,22 @@ mod tests {
         };
         let result_off = build_subtitle_options(&options, &settings_off, false);
         assert_eq!(result_off.write_subs, Some(false));
+
+        // Regression guard for the removed `options.subtitles || settings.write_subtitles`
+        // OR: an explicit per-download `subtitles: true` combined with the setting OFF
+        // yields `Some(true)` under the old code (`true || false`) but MUST be
+        // `Some(false)` now — `options.subtitles` no longer influences the result
+        // (per-download control deferred to #606). This case discriminates the fix.
+        let options_subs_true = DownloadOptions {
+            subtitles: true,
+            ..default_download_options()
+        };
+        let result_override = build_subtitle_options(&options_subs_true, &settings_off, false);
+        assert_eq!(
+            result_override.write_subs,
+            Some(false),
+            "options.subtitles must not influence write_subs; only the setting drives it",
+        );
     }
 
     /// Each of the 4 remaining settings-only subtitle bools MUST reach the
