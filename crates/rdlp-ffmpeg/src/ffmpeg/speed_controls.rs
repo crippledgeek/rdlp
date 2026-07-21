@@ -3,23 +3,66 @@
 //! The validator and `RecodeStage` MUST resolve the target encoder identically;
 //! both go through [`resolve_recode_encoder`] so they cannot drift.
 
+use rdlp_types::ContainerFormat;
 use thiserror::Error;
 
 use super::video_codecs::{KnobField, KnobKindDef, resolve_encoder, speed_controls_def};
 
+/// The codec every container that isn't explicitly special-cased encodes
+/// toward, and the answer for a container string that doesn't parse at all.
+/// Named because it is now referenced from two places.
+const DEFAULT_VIDEO_CODEC: &str = "h264";
+
 /// Return the default video codec to encode toward for a given container
-/// extension (e.g. `"webm"` → `"vp9"`, `"mp4"` → `"h264"`).
+/// (e.g. [`ContainerFormat::WebM`] → `"vp9"`, [`ContainerFormat::Mp4`] →
+/// `"h264"`).
 ///
 /// This is the **single source of truth** for the container → codec mapping.
 /// Both the speed-control validator and `RecodeStage` delegate here so they
 /// can never resolve differently.
+///
+/// Takes a [`ContainerFormat`] rather than a `&str`: every caller already had
+/// one and was calling `.as_ext()` purely to satisfy this signature, so the
+/// "callers always pass a canonical extension" invariant was conventional.
+/// It is now structural — the same argument as #536. Matched exhaustively with
+/// no catch-all, so a new container variant fails to compile here instead of
+/// silently inheriting `"h264"`.
 #[must_use]
-pub fn default_codec_for_container(container: &str) -> &'static str {
-    match container.to_ascii_lowercase().as_str() {
-        "webm" | "ivf" => "vp9",
-        "ogg" => "theora",
-        "mpg" | "vob" => "mpeg2",
-        _ => "h264",
+pub const fn default_codec_for_container(container: ContainerFormat) -> &'static str {
+    match container {
+        ContainerFormat::WebM | ContainerFormat::Ivf => "vp9",
+        ContainerFormat::Ogg => "theora",
+        ContainerFormat::Mpg | ContainerFormat::Vob => "mpeg2",
+        // Video containers that took the old `_` arm.
+        ContainerFormat::Mp4
+        | ContainerFormat::Mkv
+        | ContainerFormat::Mov
+        | ContainerFormat::M4v
+        | ContainerFormat::Ts
+        | ContainerFormat::Flv
+        | ContainerFormat::Avi
+        | ContainerFormat::ThreeGp
+        | ContainerFormat::F4v
+        | ContainerFormat::Wmv
+        | ContainerFormat::Asf
+        | ContainerFormat::Mxf
+        | ContainerFormat::Dv
+        | ContainerFormat::Nut
+        // Audio-only containers. A *video* codec is meaningless for these and
+        // they are not recode-video targets, but they reached "h264" through
+        // the old default and this conversion changes no behaviour.
+        | ContainerFormat::M4a
+        | ContainerFormat::Mka
+        | ContainerFormat::Mp3
+        | ContainerFormat::Wav
+        | ContainerFormat::Flac
+        | ContainerFormat::Opus
+        | ContainerFormat::Aac
+        | ContainerFormat::Aiff
+        | ContainerFormat::Wma
+        | ContainerFormat::Wv
+        | ContainerFormat::Caf
+        | ContainerFormat::Ac3 => DEFAULT_VIDEO_CODEC,
     }
 }
 
@@ -38,7 +81,13 @@ pub fn resolve_recode_encoder(
         return resolve_encoder(ve);
     }
     let target = recode_container.or(recode_video)?;
-    resolve_encoder(default_codec_for_container(target))
+    // These arrive as raw config strings, so the parse is the boundary where
+    // an unknown container becomes the default codec — the behaviour the old
+    // `_` arm provided when the match itself was string-based.
+    let codec = target
+        .parse::<ContainerFormat>()
+        .map_or(DEFAULT_VIDEO_CODEC, default_codec_for_container);
+    resolve_encoder(codec)
 }
 
 /// Strict per-encoder speed-control validation error.
@@ -226,14 +275,48 @@ mod tests {
         }
     }
 
+    /// Behaviour parity across the string → `ContainerFormat` conversion:
+    /// every container that had a non-default codec keeps it, and the ones
+    /// that reached `"h264"` via the old `_` arm still do.
     #[test]
     fn resolver_matches_recode_stage_defaults() {
-        assert_eq!(default_codec_for_container("webm"), "vp9");
-        assert_eq!(default_codec_for_container("ivf"), "vp9");
-        assert_eq!(default_codec_for_container("ogg"), "theora");
-        assert_eq!(default_codec_for_container("mpg"), "mpeg2");
-        assert_eq!(default_codec_for_container("vob"), "mpeg2");
-        assert_eq!(default_codec_for_container("mp4"), "h264");
-        assert_eq!(default_codec_for_container("mkv"), "h264");
+        for (container, want) in [
+            (ContainerFormat::WebM, "vp9"),
+            (ContainerFormat::Ivf, "vp9"),
+            (ContainerFormat::Ogg, "theora"),
+            (ContainerFormat::Mpg, "mpeg2"),
+            (ContainerFormat::Vob, "mpeg2"),
+            (ContainerFormat::Mp4, "h264"),
+            (ContainerFormat::Mkv, "h264"),
+        ] {
+            assert_eq!(
+                default_codec_for_container(container),
+                want,
+                "{container:?}"
+            );
+        }
+    }
+
+    /// The typed signature is the point: a caller can no longer hand this an
+    /// arbitrary string. Aliases resolve to the same answer as the canonical
+    /// name, which the old `to_ascii_lowercase` compare did not do.
+    #[test]
+    fn aliases_resolve_to_the_same_codec() {
+        assert_eq!(
+            default_codec_for_container("matroska".parse().expect("alias")),
+            default_codec_for_container(ContainerFormat::Mkv)
+        );
+    }
+
+    /// `resolve_recode_encoder` still takes strings (config-supplied), so its
+    /// unparseable-input path must keep the old `_ => "h264"` behaviour rather
+    /// than silently resolving to nothing.
+    #[test]
+    fn unparseable_container_string_still_falls_back_to_h264() {
+        assert_eq!(
+            resolve_recode_encoder(None, Some("not-a-container"), None),
+            resolve_recode_encoder(None, Some("mp4"), None),
+            "an unknown container string must resolve exactly as the h264 default did"
+        );
     }
 }
