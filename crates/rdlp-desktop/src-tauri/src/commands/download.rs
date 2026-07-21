@@ -199,6 +199,53 @@ fn build_subtitle_options(
     }
 }
 
+/// Build the [`NetworkOptions`] DTO from per-download options and persisted settings.
+///
+/// Every field is `Option`: `None` means "preserve whatever the base `Config` (loaded
+/// from the user's config file) already holds". Emitting `Some(default_value)` here
+/// would silently clobber a config-file setting, which is the defect class #540/#583
+/// tracked.
+///
+/// # Arguments
+///
+/// * `options` - Frontend-supplied download options.
+/// * `settings` - Persisted application settings used as defaults.
+fn build_network_options(
+    options: &DownloadOptions,
+    settings: &crate::state::AppSettings,
+) -> NetworkOptions {
+    let cookies_from_browser = options
+        .cookies_from_browser
+        .or(settings.cookies_from_browser);
+    let cookies_file: Option<PathBuf> = options
+        .cookies_file
+        .as_deref()
+        .map(PathBuf::from)
+        .or_else(|| settings.cookies_file.clone());
+    let proxy = options.proxy.clone().or_else(|| settings.proxy.clone());
+    let rate_limit_str = options
+        .rate_limit
+        .clone()
+        .or_else(|| settings.rate_limit.clone());
+
+    NetworkOptions {
+        cookies_from_browser,
+        cookies_file,
+        rate_limit: rate_limit_str.as_deref().and_then(parse_rate_limit),
+        proxy,
+        timeout_secs: settings.socket_timeout,
+        read_timeout_secs: settings.read_timeout,
+        pool_idle_timeout_secs: settings.pool_idle_timeout,
+        download_timeout_secs: settings.download_timeout,
+        merge_timeout_secs: settings.merge_timeout,
+        concurrent_fragments: settings.concurrent_fragments,
+        buffer_size: settings.buffer_size,
+        parallel_threshold: settings.parallel_threshold,
+        hls_head_probe_timeout: settings.hls_head_probe_timeout,
+        ..NetworkOptions::default()
+    }
+}
+
 /// Start a new download for the given URL.
 ///
 /// Validates the URL, adds a job to the queue, builds a
@@ -297,6 +344,10 @@ pub async fn start_download(
     // field with a non-`Copy` type is moved out below).
     let subtitle_options = build_subtitle_options(&options, &settings, embed_subtitles);
 
+    // Network options (borrows `options`; must run before any `options`
+    // field with a non-`Copy` type is moved out below).
+    let network_options = build_network_options(&options, &settings);
+
     // Build the download request from options + settings
     let output_dir = options
         .output_dir
@@ -304,23 +355,6 @@ pub async fn start_download(
 
     let remux = options.remux.or(settings.default_remux);
     let extract_audio = options.extract_audio.or(settings.default_extract_audio);
-
-    // Merge cookies: per-download overrides settings default.
-    let cookies_from_browser = options
-        .cookies_from_browser
-        .or(settings.cookies_from_browser);
-    let cookies_file: Option<PathBuf> = options
-        .cookies_file
-        .as_deref()
-        .map(PathBuf::from)
-        .or_else(|| settings.cookies_file.clone());
-
-    // Merge proxy and rate_limit.
-    let proxy = options.proxy.or_else(|| settings.proxy.clone());
-
-    // Rate limit: parse string like "500K" to bytes per second.
-    let rate_limit_str = options.rate_limit.or_else(|| settings.rate_limit.clone());
-    let rate_limit = rate_limit_str.as_deref().and_then(parse_rate_limit);
 
     // Output template.
     let output_template = options
@@ -399,18 +433,7 @@ pub async fn start_download(
                 .or_else(|| options.audio_gain_target.or(settings.audio_gain_target)),
             ..PostProcessOptions::default()
         },
-        network: NetworkOptions {
-            cookies_from_browser,
-            cookies_file,
-            rate_limit,
-            proxy,
-            timeout_secs: settings.socket_timeout,
-            read_timeout_secs: settings.read_timeout,
-            pool_idle_timeout_secs: settings.pool_idle_timeout,
-            download_timeout_secs: settings.download_timeout,
-            merge_timeout_secs: settings.merge_timeout,
-            ..NetworkOptions::default()
-        },
+        network: network_options,
         verbose: if options.verbose.unwrap_or(settings.verbose) {
             Some(true)
         } else {
@@ -1054,6 +1077,53 @@ mod tests {
         assert_eq!(result.strict_subs, Some(false));
         assert_eq!(result.verify_sub_urls, Some(false));
         assert_eq!(result.retry_subs, Some(false));
+    }
+
+    // ------------------------------------------------------------------ //
+    // I. Network options: build_network_options throughput settings bridge
+    // ------------------------------------------------------------------ //
+
+    #[test]
+    fn build_network_options_passes_throughput_settings_through() {
+        let settings = crate::state::AppSettings {
+            concurrent_fragments: Some(16),
+            buffer_size: Some(8 * 1024 * 1024),
+            parallel_threshold: Some(20 * 1024 * 1024),
+            hls_head_probe_timeout: Some(30),
+            ..crate::state::AppSettings::default()
+        };
+        let net = build_network_options(&default_download_options(), &settings);
+        assert_eq!(net.concurrent_fragments, Some(16));
+        assert_eq!(net.buffer_size, Some(8 * 1024 * 1024));
+        assert_eq!(net.parallel_threshold, Some(20 * 1024 * 1024));
+        assert_eq!(net.hls_head_probe_timeout, Some(30));
+    }
+
+    /// `None` must stay `None` all the way to the DTO — the desktop loads a real
+    /// config.toml as its base Config, so emitting `Some(default)` here would clobber
+    /// the user's config file.
+    #[test]
+    fn build_network_options_leaves_unset_throughput_settings_none() {
+        let net = build_network_options(
+            &default_download_options(),
+            &crate::state::AppSettings::default(),
+        );
+        assert!(net.concurrent_fragments.is_none());
+        assert!(net.buffer_size.is_none());
+        assert!(net.parallel_threshold.is_none());
+        assert!(net.hls_head_probe_timeout.is_none());
+    }
+
+    #[test]
+    fn build_network_options_still_carries_existing_timeouts() {
+        let settings = crate::state::AppSettings {
+            socket_timeout: Some(45),
+            download_timeout: Some(600),
+            ..crate::state::AppSettings::default()
+        };
+        let net = build_network_options(&default_download_options(), &settings);
+        assert_eq!(net.timeout_secs, Some(45));
+        assert_eq!(net.download_timeout_secs, Some(600));
     }
 
     /// `sub_langs` MUST pass through from `options` and `sub_format` from
