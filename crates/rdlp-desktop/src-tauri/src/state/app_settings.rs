@@ -325,6 +325,9 @@ impl std::error::Error for SettingsValidationError {}
 /// introducing a second magic number. `buffer_size` has **no** upper bound in
 /// `Config::validate()`, and `Config::validate()` is not called on the desktop path
 /// (see `commands::download`), so this is that field's only enforcement point.
+/// This value mirrors `rdlp_types::Config::validate()`'s `parallel_threshold` ceiling
+/// by hand — no cross-crate test enforces the two literals staying in sync, so a
+/// future change to either ceiling must be mirrored manually in the other crate.
 const MAX_BYTE_SETTING: u64 = 1024 * 1024 * 1024;
 
 impl AppSettings {
@@ -904,6 +907,23 @@ mod tests {
             bad.validate_security().is_err(),
             "0 is rejected by Config::validate too"
         );
+    }
+
+    #[test]
+    fn test_parallel_threshold_lower_boundary() {
+        let ok = AppSettings {
+            parallel_threshold: Some(1),
+            ..AppSettings::default()
+        };
+        assert!(ok.validate_security().is_ok(), "1 byte is in range");
+        let bad = AppSettings {
+            parallel_threshold: Some(0),
+            ..AppSettings::default()
+        };
+        let err = bad
+            .validate_security()
+            .expect_err("0 is rejected by Config::validate too");
+        assert!(err.to_string().contains("parallel_threshold"));
     }
 
     /// The GUI floors these fields at 1 MiB, but validation must NOT — a hand-edited
