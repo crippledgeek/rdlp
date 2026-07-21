@@ -166,6 +166,39 @@ fn validate_recode_preset(preset: Option<&str>) -> Result<(), AppError> {
     }
 }
 
+/// Merge per-download subtitle options with the app settings defaults.
+///
+/// `write_subs` reads the global `settings.write_subtitles` only —
+/// `options.subtitles` has no per-download UI control yet (tracked in
+/// follow-up #606), so it is intentionally not consulted here.
+///
+/// # Arguments
+///
+/// * `options` - Frontend-supplied download options.
+/// * `settings` - Persisted application settings used as defaults.
+/// * `embed_subtitles` - Already-resolved embed-subtitles flag (per-download
+///   override or settings default).
+///
+/// # Returns
+///
+/// A [`SubtitleOptions`] with every field resolved.
+fn build_subtitle_options(
+    options: &DownloadOptions,
+    settings: &crate::state::AppSettings,
+    embed_subtitles: bool,
+) -> SubtitleOptions {
+    SubtitleOptions {
+        write_subs: Some(settings.write_subtitles),
+        write_auto_subs: Some(settings.write_auto_subtitles),
+        sub_langs: options.subtitle_langs.clone(),
+        sub_format: settings.default_subtitle_format,
+        embed_subs: embed_subtitles.then_some(true),
+        strict_subs: Some(settings.strict_subs),
+        verify_sub_urls: Some(settings.verify_sub_urls),
+        retry_subs: Some(settings.retry_subs),
+    }
+}
+
 /// Start a new download for the given URL.
 ///
 /// Validates the URL, adds a job to the queue, builds a
@@ -257,6 +290,13 @@ pub async fn start_download(
         .ok()
         .map(|json| SavedDownloadOptions { json });
 
+    // Embed subtitles.
+    let embed_subtitles = options.embed_subtitles.unwrap_or(settings.embed_subtitles);
+
+    // Subtitle options (borrows `options`; must run before any `options`
+    // field with a non-`Copy` type is moved out below).
+    let subtitle_options = build_subtitle_options(&options, &settings, embed_subtitles);
+
     // Build the download request from options + settings
     let output_dir = options
         .output_dir
@@ -286,9 +326,6 @@ pub async fn start_download(
     let output_template = options
         .output_template
         .or_else(|| settings.output_template.clone());
-
-    // Embed subtitles.
-    let embed_subtitles = options.embed_subtitles.unwrap_or(settings.embed_subtitles);
 
     // Write thumbnail.
     let write_thumbnail_resolved = options.write_thumbnail.unwrap_or(settings.write_thumbnail);
@@ -321,16 +358,7 @@ pub async fn start_download(
             },
             ..FormatOptions::default()
         },
-        subtitles: SubtitleOptions {
-            write_subs: Some(options.subtitles || settings.write_subtitles),
-            write_auto_subs: Some(settings.write_auto_subtitles),
-            sub_langs: options.subtitle_langs,
-            sub_format: settings.default_subtitle_format,
-            embed_subs: embed_subtitles.then_some(true),
-            strict_subs: Some(settings.strict_subs),
-            verify_sub_urls: Some(settings.verify_sub_urls),
-            retry_subs: Some(settings.retry_subs),
-        },
+        subtitles: subtitle_options,
         postprocess: PostProcessOptions {
             remux,
             extract_audio,
@@ -946,6 +974,98 @@ mod tests {
         assert!(net.pool_idle_timeout_secs.is_none());
         assert!(net.download_timeout_secs.is_none());
         assert!(net.merge_timeout_secs.is_none());
+    }
+
+    // ------------------------------------------------------------------ //
+    // H. Subtitle options: settings -> SubtitleOptions bridge
+    // ------------------------------------------------------------------ //
+
+    /// `write_subs` MUST read the global `settings.write_subtitles` value
+    /// only. This is the regression guard for the misleading
+    /// `options.subtitles || settings.write_subtitles` OR that was removed:
+    /// `options.subtitles` has no per-download UI (hardcoded `false` in the
+    /// frontend; tracked in #606), so it must not influence the result.
+    #[test]
+    fn test_write_subs_follows_settings_only() {
+        let options = default_download_options();
+
+        let settings_on = AppSettings {
+            write_subtitles: true,
+            ..AppSettings::default()
+        };
+        let result_on = build_subtitle_options(&options, &settings_on, false);
+        assert_eq!(result_on.write_subs, Some(true));
+
+        let settings_off = AppSettings {
+            write_subtitles: false,
+            ..AppSettings::default()
+        };
+        let result_off = build_subtitle_options(&options, &settings_off, false);
+        assert_eq!(result_off.write_subs, Some(false));
+    }
+
+    /// Each of the 4 remaining settings-only subtitle bools MUST reach the
+    /// corresponding `SubtitleOptions` field verbatim.
+    #[test]
+    fn test_subtitle_settings_bools_propagate_to_dto() {
+        let options = default_download_options();
+        let settings = AppSettings {
+            write_auto_subtitles: true,
+            strict_subs: true,
+            verify_sub_urls: true,
+            retry_subs: true,
+            ..AppSettings::default()
+        };
+        let result = build_subtitle_options(&options, &settings, false);
+
+        assert_eq!(result.write_auto_subs, Some(true));
+        assert_eq!(result.strict_subs, Some(true));
+        assert_eq!(result.verify_sub_urls, Some(true));
+        assert_eq!(result.retry_subs, Some(true));
+    }
+
+    /// Default (all-false) settings MUST leave every subtitle bool field
+    /// `Some(false)` — negative counterpart of the previous test, proving
+    /// each field is independently wired rather than defaulting to `true`.
+    #[test]
+    fn test_subtitle_settings_bools_default_to_false() {
+        let options = default_download_options();
+        let settings = AppSettings::default();
+        let result = build_subtitle_options(&options, &settings, false);
+
+        assert_eq!(result.write_subs, Some(false));
+        assert_eq!(result.write_auto_subs, Some(false));
+        assert_eq!(result.strict_subs, Some(false));
+        assert_eq!(result.verify_sub_urls, Some(false));
+        assert_eq!(result.retry_subs, Some(false));
+    }
+
+    /// `sub_langs` MUST pass through from `options` and `sub_format` from
+    /// `settings`; `embed_subs` reflects the caller-resolved flag.
+    #[test]
+    fn test_subtitle_langs_and_format_pass_through() {
+        let options = DownloadOptions {
+            subtitle_langs: vec!["en".to_owned(), "sv".to_owned()],
+            ..default_download_options()
+        };
+        let settings = AppSettings {
+            default_subtitle_format: Some(rdlp_types::SubtitleFormat::Srt),
+            ..AppSettings::default()
+        };
+
+        let result_no_embed = build_subtitle_options(&options, &settings, false);
+        assert_eq!(
+            result_no_embed.sub_langs,
+            vec!["en".to_owned(), "sv".to_owned()]
+        );
+        assert_eq!(
+            result_no_embed.sub_format,
+            Some(rdlp_types::SubtitleFormat::Srt)
+        );
+        assert!(result_no_embed.embed_subs.is_none());
+
+        let result_embed = build_subtitle_options(&options, &settings, true);
+        assert_eq!(result_embed.embed_subs, Some(true));
     }
 }
 
