@@ -17,23 +17,25 @@ import { Text } from "react-aria-components";
 import { NumberField, NumberFieldInput, NumberFieldSteppers } from "@/components/ui/numberfield";
 import { FieldError, FieldGroup, Label } from "@/components/ui/field";
 
+/**
+ * `minValue`/`maxValue` bounds are enforced by CLAMPING, not rejection: React
+ * Aria's `useNumberFieldState.commit()` unconditionally clamps the committed
+ * value to `[minValue, maxValue]` *before* any validation runs (verified in
+ * `@react-stately/numberfield`'s `useNumberFieldState.mjs`). An out-of-range
+ * entry is silently coerced to the nearest bound; it is never rejected or
+ * surfaced as a `FieldError`. Do not add a schema expecting rejection here —
+ * it would be unreachable dead code (see `NumericField.test.tsx`'s clamping
+ * test).
+ */
 interface NumericFieldProps {
     id: string;
     label: string;
     helper: string;
     /** Value in the DISPLAY unit; `null` renders an empty field ("inherit default"). */
     value: number | null;
-    /**
-     * Bounds are enforced by CLAMPING, not rejection: React Aria's
-     * `useNumberFieldState.commit()` unconditionally clamps the committed
-     * value to `[minValue, maxValue]` *before* any validation runs
-     * (verified in `@react-stately/numberfield`'s `useNumberFieldState.mjs`).
-     * An out-of-range entry is silently coerced to the nearest bound; it is
-     * never rejected or surfaced as a `FieldError`. Do not add a schema
-     * expecting rejection here — it would be unreachable dead code (see
-     * `NumericField.test.tsx`'s clamping test).
-     */
+    /** Lower bound; see the clamping note below for how `minValue`/`maxValue` are enforced. */
     minValue: number;
+    /** Upper bound; see the clamping note below for how `minValue`/`maxValue` are enforced. */
     maxValue: number;
     onCommit: (next: number | null) => void;
     suffix?: string;
@@ -63,7 +65,11 @@ export function NumericField({
             minValue={minValue}
             maxValue={maxValue}
             onChange={(n) => onCommit(Number.isNaN(n) ? null : n)}
-            // "aria" surfaces validation inline without requiring a form submit.
+            // "aria" selects ARIA-based validation reporting over React Aria's
+            // native browser constraint-validation UI. Nothing in this component
+            // currently triggers validation (no `validate`/`isRequired`), so this
+            // has no observable effect today; it only matters if React Aria's
+            // built-in validation is ever turned on.
             validationBehavior="aria"
             isDisabled={isDisabled}
             className="group flex flex-col gap-1"
