@@ -176,7 +176,12 @@ pub struct Config {
 
     /// Pool idle-connection timeout in seconds.
     ///
-    /// Default: 90. Range: 0..=3600.
+    /// Default: 60. Range: 0..=3600.
+    ///
+    /// The default is NOT stored here — this field is `None` in
+    /// `Config::default()`, and `HttpClientConfig::from_rdlp_config` supplies
+    /// `DEFAULT_POOL_IDLE_TIMEOUT_SECS` when it is unset. See
+    /// `rdlp-http/src/config.rs` for that const and why its value is what it is.
     ///
     /// `0` is a sentinel meaning "disable idle eviction entirely" — wired
     /// through to wreq/reqwest as `pool_idle_timeout(None)`. Any positive

@@ -147,7 +147,7 @@ export function NetworkSection({ draft, onChange }: Props) {
                                     maxValue={3600}
                                     onCommit={handlePoolIdleChange}
                                     isDisabled={!poolIdleForm.evictIdle}
-                                    placeholder="90"
+                                    placeholder="60"
                                     suffix="s"
                                 />
                             </div>
