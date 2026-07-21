@@ -136,6 +136,22 @@ describe("NetworkSection — timeout controls", () => {
         expect(input).toHaveValue("60");
     });
 
+    // Finding 1 regression guard: the pool-idle NumericField renders `helper=""`
+    // (its helper text lives in a sibling FormDescription for layout reasons) and
+    // must stay programmatically associated with that sibling via
+    // aria-describedby, rather than losing its accessible description entirely.
+    it("associates the idle-timeout field with its sibling helper text via aria-describedby", () => {
+        render(<NetworkSection draft={baseDraft} onChange={vi.fn()} />);
+        const input = screen.getByRole("textbox", { name: /idle timeout/i });
+        const describedBy = input.getAttribute("aria-describedby");
+        expect(describedBy).toBeTruthy();
+        const describedByIds = describedBy!.split(/\s+/);
+        expect(describedByIds).toContain("pool-idle-timeout-description");
+        const descriptionNode = document.getElementById("pool-idle-timeout-description");
+        expect(descriptionNode).not.toBeNull();
+        expect(descriptionNode!.textContent).toMatch(/idle keep-alive connections/i);
+    });
+
     it("out-of-range pool-idle value clamps to the upper bound", async () => {
         const user = userEvent.setup();
         const onChange = vi.fn();

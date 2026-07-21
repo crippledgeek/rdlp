@@ -157,6 +157,19 @@ pub struct AppSettings {
     pub hls_head_probe_timeout: Option<u64>,
 }
 
+/// Upper bound on `parse_and_validate`'s reset-and-revalidate loop.
+///
+/// `reset_invalid_field`'s `OutOfRange` arm matches exactly 9 numeric fields
+/// (`socket_timeout`, `read_timeout`, `pool_idle_timeout`, `download_timeout`,
+/// `merge_timeout`, `concurrent_fragments`, `buffer_size`, `parallel_threshold`,
+/// `hls_head_probe_timeout`); each loop iteration resets a distinct field to
+/// `None` (which is always in-range), so a legitimately hand-edited file can
+/// require at most 9 iterations to converge. This bound exists so the loop's
+/// termination is structural rather than incidental on `AppSettings::default()`
+/// happening to validate — see the `debug_assert!` in `parse_and_validate` and
+/// Finding 5 in `task-9-report.md`.
+const MAX_RESET_ITERATIONS: u32 = 9;
+
 impl AppSettings {
     /// Return the path to the settings file on disk.
     ///
@@ -222,6 +235,17 @@ impl AppSettings {
     /// without depending on [`Self::settings_path()`], which resolves to a fixed,
     /// non-configurable per-process path.
     fn parse_and_validate(contents: &str, path: &std::path::Path) -> Self {
+        // `AppSettings::default()` is the fail-safe fallback both inside this loop
+        // (see `reset_invalid_field`'s `other =>` arm) and if `MAX_RESET_ITERATIONS`
+        // is ever exhausted below. That fallback only terminates the loop because
+        // the default record happens to be in-range; this assertion makes that
+        // assumption explicit and catches a future default drifting out-of-range
+        // before it can turn into an infinite loop in a release build.
+        debug_assert!(
+            Self::default().validate_security().is_ok(),
+            "AppSettings::default() must always pass validate_security() — it is the \
+             fail-safe fallback the reset loop below relies on to terminate"
+        );
         match serde_json::from_str::<Self>(contents) {
             Ok(mut settings) => {
                 // Loop resetting only the offending field, because a hand-edited
@@ -231,12 +255,30 @@ impl AppSettings {
                 // in this design, so it is the exact remedy — never fall back to
                 // `Self::default()`, which would also discard every OTHER field the
                 // user had set (output_dir, cookies, proxy, format defaults, ...).
+                //
+                // Bounded by `MAX_RESET_ITERATIONS` so termination is structural, not
+                // merely incidental on `reset_invalid_field`'s fail-safe reaching a
+                // valid record: without this bound, a future out-of-range default
+                // field that is ALSO missing from `reset_invalid_field`'s match would
+                // spin forever, since its `other =>` arm sets `*self = Self::default()`
+                // and a still-invalid default would immediately fail validation again.
+                let mut iterations = 0u32;
                 while let Err(e) = settings.validate_security() {
+                    if iterations >= MAX_RESET_ITERATIONS {
+                        warn!(
+                            "Settings at {} still failing validation after {MAX_RESET_ITERATIONS} \
+                             reset attempts ({e}); falling back to full defaults",
+                            path.display()
+                        );
+                        settings = Self::default();
+                        break;
+                    }
                     warn!(
                         "Settings at {} failed validation ({e}); resetting that field to its default",
                         path.display()
                     );
                     settings.reset_invalid_field(&e);
+                    iterations += 1;
                 }
                 info!("Loaded settings from {}", path.display());
                 settings
@@ -1026,7 +1068,7 @@ mod tests {
     /// whole record — see `test_valid_neighbouring_field_survives_invalid_sibling`
     /// for the field-preservation half of this contract.
     #[test]
-    fn test_out_of_range_settings_json_loads_as_defaults() {
+    fn test_out_of_range_settings_json_resets_only_that_field() {
         let json = r#"{
             "output_dir": "/tmp",
             "embed_thumbnail": true,
@@ -1123,5 +1165,80 @@ mod tests {
             ..AppSettings::default()
         };
         assert!(zero.validate_security().is_err());
+    }
+
+    /// Finding 5 boundary guard: exactly `MAX_RESET_ITERATIONS` (9) simultaneously
+    /// out-of-range fields — one per `OutOfRange` arm `reset_invalid_field` matches —
+    /// MUST resolve entirely via the per-field reset path, not the iteration-cap
+    /// fail-safe. `validate_security` reports fields in the same fixed order
+    /// `reset_invalid_field` matches them, so this pins the exact boundary the loop
+    /// bound must accommodate: 9 legitimate iterations is normal, not exhaustion.
+    #[test]
+    fn test_max_simultaneous_out_of_range_fields_resolves_without_full_reset() {
+        let json = r#"{
+            "output_dir": "/home/user/Videos",
+            "embed_thumbnail": true,
+            "embed_metadata": false,
+            "verbose": false,
+            "default_subtitle_langs": [],
+            "socket_timeout": 0,
+            "read_timeout": 0,
+            "pool_idle_timeout": 99999,
+            "download_timeout": 0,
+            "merge_timeout": 0,
+            "concurrent_fragments": 0,
+            "buffer_size": 0,
+            "parallel_threshold": 0,
+            "hls_head_probe_timeout": 0
+        }"#;
+        let settings = AppSettings::parse_and_validate(json, std::path::Path::new("test.json"));
+        assert!(settings.validate_security().is_ok());
+        assert_eq!(settings.socket_timeout, None);
+        assert_eq!(settings.read_timeout, None);
+        assert_eq!(settings.pool_idle_timeout, None);
+        assert_eq!(settings.download_timeout, None);
+        assert_eq!(settings.merge_timeout, None);
+        assert_eq!(settings.concurrent_fragments, None);
+        assert_eq!(settings.buffer_size, None);
+        assert_eq!(settings.parallel_threshold, None);
+        assert_eq!(settings.hls_head_probe_timeout, None);
+        // The per-field reset path preserves untouched fields; a fallback to
+        // `Self::default()` would have discarded this custom `output_dir` too.
+        assert_eq!(
+            settings.output_dir,
+            PathBuf::from("/home/user/Videos"),
+            "9 legitimate iterations must resolve per-field, not trip the \
+             MAX_RESET_ITERATIONS fail-safe (which would also reset output_dir)"
+        );
+    }
+
+    /// Finding 5 regression guard: `reset_invalid_field`'s `other =>` fail-safe arm
+    /// (an `OutOfRange` field name absent from the match — unreachable via the
+    /// public API since `validate_security` only ever reports the 9 matched names,
+    /// but defensive against a future field being added to one side and not the
+    /// other) must still terminate by falling back to a fully valid default record.
+    #[test]
+    fn test_reset_invalid_field_falls_back_to_defaults_for_unmatched_field_name() {
+        let mut settings = AppSettings {
+            output_dir: PathBuf::from("/custom/output"),
+            verbose: true,
+            ..AppSettings::default()
+        };
+        let err = SettingsValidationError::OutOfRange {
+            field: "not_a_real_field",
+            reason: "synthetic, for the fail-safe arm",
+        };
+        settings.reset_invalid_field(&err);
+        assert!(
+            settings.validate_security().is_ok(),
+            "the fail-safe fallback must itself be valid, or the caller's while-loop \
+             would spin until MAX_RESET_ITERATIONS"
+        );
+        assert_eq!(
+            settings.output_dir,
+            AppSettings::default().output_dir,
+            "the fail-safe arm discards the WHOLE record (unlike the matched arms, \
+             which reset only their own field)"
+        );
     }
 }

@@ -50,6 +50,15 @@ interface NumericFieldProps {
      * see the no-aria-label note below.
      */
     hideLabel?: boolean;
+    /**
+     * ID of an external element that describes this field, for callers that render
+     * the helper text as a sibling (e.g. a full-width `FormDescription` outside a
+     * narrow column) instead of passing `helper`. React Aria's `useField` merges this
+     * with the field's own generated description/error ids into one `aria-describedby`
+     * (verified in `@react-aria/label`'s `useField.mjs`), so the accessible description
+     * stays wired even when `helper=""`.
+     */
+    "aria-describedby"?: string;
 }
 
 export function NumericField({
@@ -64,6 +73,7 @@ export function NumericField({
     suffix,
     isDisabled = false,
     hideLabel = false,
+    "aria-describedby": ariaDescribedBy,
 }: NumericFieldProps) {
     return (
         <NumberField
@@ -81,9 +91,16 @@ export function NumericField({
             // allows up to 3 fractional digits, so the decimal separator is accepted as
             // valid partial input and `step` has nothing to snap (verified against
             // `useNumberFieldState.mjs`: no `step` prop means no `snapValueToStep` call).
-            // `maximumFractionDigits: 0` excludes the decimal separator from valid input
-            // and rounds any fractional commit to an integer.
+            // `maximumFractionDigits: 0` excludes the decimal separator from valid
+            // *typed* input: React Aria's NumberParser rejects "." as an invalid
+            // partial character when `maximumFractionDigits: 0` (verified in
+            // `@internationalized/number`'s `NumberParser.mjs`), so typing "3.5"
+            // never produces the value 3.5 — the "." keystroke is dropped and the
+            // digits concatenate, leaving "35". Rounding to an integer only applies
+            // to a fractional value supplied *programmatically* (e.g. a controlled
+            // `value` prop), not to typed input.
             formatOptions={{ maximumFractionDigits: 0 }}
+            {...(ariaDescribedBy !== undefined ? { "aria-describedby": ariaDescribedBy } : {})}
             onChange={(n) => onCommit(Number.isNaN(n) ? null : n)}
             // "aria" selects ARIA-based validation reporting over React Aria's
             // native browser constraint-validation UI. Nothing in this component
@@ -109,9 +126,18 @@ export function NumericField({
                 </FieldGroup>
                 {suffix && <span className="text-xs text-muted-foreground">{suffix}</span>}
             </div>
-            <Text className="text-xs text-muted-foreground" slot="description">
-                {helper}
-            </Text>
+            {/* Omit the description slot entirely when there is no helper text: React
+                Aria's useField always wires `aria-describedby` to a rendered
+                slot="description" node regardless of its content, so an
+                unconditional empty <Text> here would give the field an empty
+                accessible description. Callers with no local helper (e.g. a
+                narrow-column field whose helper lives in a sibling
+                FormDescription) pass `helper=""` and `aria-describedby` instead. */}
+            {helper !== "" && (
+                <Text className="text-xs text-muted-foreground" slot="description">
+                    {helper}
+                </Text>
+            )}
             <FieldError className="text-xs text-destructive" />
         </NumberField>
     );

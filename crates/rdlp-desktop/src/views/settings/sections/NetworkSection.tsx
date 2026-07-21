@@ -135,9 +135,12 @@ export function NetworkSection({ draft, onChange }: Props) {
                                 <NumericField
                                     id="pool-idle-timeout"
                                     label="Idle Timeout"
-                                    // Helper text moved to the full-width FormDescription sibling below —
-                                    // this narrow (96px) column would otherwise wrap it awkwardly.
+                                    // Helper text moved to the full-width FormDescription sibling below
+                                    // (id="pool-idle-timeout-description") — this narrow (96px) column
+                                    // would otherwise wrap it awkwardly. Wired back to the field via
+                                    // aria-describedby so it stays part of the accessible description.
                                     helper=""
+                                    aria-describedby="pool-idle-timeout-description"
                                     hideLabel
                                     value={poolIdleForm.evictIdle && poolIdleForm.secondsInput !== "" ? Number(poolIdleForm.secondsInput) : null}
                                     minValue={1}
@@ -149,7 +152,7 @@ export function NetworkSection({ draft, onChange }: Props) {
                                 />
                             </div>
                         </div>
-                        <FormDescription className="mt-1">
+                        <FormDescription id="pool-idle-timeout-description" className="mt-1">
                             When off, idle keep-alive connections are kept until the OS closes them.
                         </FormDescription>
                     </div>

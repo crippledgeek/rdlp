@@ -55,11 +55,16 @@ describe("DownloadSection", () => {
         expect(onChange).toHaveBeenCalledWith({ buffer_size: null });
     });
 
-    // Regression guard (security review Finding C): `bytesToMibDisplay(500_000)` rounds
-    // to 0, which is below `minValue={1}`. Rendering that 0 as the field's controlled
-    // value meant a blur with NO typing still clamped 0 -> 1 and committed 1 MiB,
-    // silently overwriting a legitimate sub-MiB stored value. Focusing and blurring
-    // with no edit must be a no-op.
+    // Contract pin, not a regression guard: a no-op focus/blur (no typing) must
+    // never emit a commit. This does NOT discriminate against the originally
+    // suspected mechanism — React Aria clamps a controlled `value` at
+    // construction (`@react-stately/numberfield/dist/useNumberFieldState.mjs:24-25`)
+    // and `useControlledState` only fires `onChange` on an actual change, so this
+    // test would have passed against the unpatched code too. The genuinely
+    // discriminating regression guard for the sub-MiB display bug is the
+    // neighbouring test asserting the field renders empty with the true byte
+    // count in the placeholder. Kept here because the "no-op means no commit"
+    // contract is worth pinning on its own merits.
     it("does not rewrite a sub-MiB stored value on a no-op focus/blur", async () => {
         const user = userEvent.setup();
         const onChange = vi.fn();
@@ -79,10 +84,15 @@ describe("DownloadSection", () => {
         expect(input).toHaveAttribute("placeholder", "500,000 B");
     });
 
-    // Finding 1 regression guard (MiB path): a fractional MiB entry must round to a
-    // whole MiB before the unit conversion, otherwise `mibDisplayToBytes` produces a
-    // non-whole-MiB byte value from a control labelled whole MiB.
-    it("commits a whole-MiB byte value when a fractional MiB is typed", async () => {
+    // Finding 2 regression guard (MiB path): verified in
+    // `node_modules/@internationalized/number/dist/NumberParser.mjs:154` — with
+    // `maximumFractionDigits: 0` the "." keystroke is rejected as invalid partial
+    // input, not rounded. Typing "3.5" therefore never reaches `mibDisplayToBytes`
+    // with 3.5 MiB; the "." is dropped and the digits concatenate, leaving "35"
+    // MiB. Pin the exact byte value so the digit-concatenation mechanism is
+    // visible to the next reader, not just "divisible by 1 MiB" (which 3.5 MiB
+    // rounded to a whole MiB would also satisfy).
+    it("commits the digit-concatenated whole-MiB byte value when a fractional MiB is typed", async () => {
         const user = userEvent.setup();
         const onChange = vi.fn();
         const draft = { ...baseDraft, buffer_size: 2 * 1_048_576 } as AppSettings;
@@ -92,9 +102,7 @@ describe("DownloadSection", () => {
         await user.type(input, "3.5");
         await user.tab();
         expect(onChange).toHaveBeenCalledTimes(1);
-        const committedBytes = (onChange.mock.calls[0]?.[0] as Partial<AppSettings>)
-            .buffer_size as number;
-        expect(committedBytes % 1_048_576).toBe(0);
+        expect(onChange).toHaveBeenCalledWith({ buffer_size: 35 * 1_048_576 });
     });
 
     it("passes a unitless count straight through without conversion", async () => {
