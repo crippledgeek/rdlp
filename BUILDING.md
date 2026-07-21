@@ -204,9 +204,13 @@ The desktop crate at `crates/rdlp-desktop/` is a Tauri v2 app with a React/TypeS
 cd crates/rdlp-desktop
 
 # Frontend deps + build
-# This project uses pnpm (not npm). Install it with `corepack enable`
-# or see https://pnpm.io/installation. `pnpm-lock.yaml` is committed;
-# use --frozen-lockfile in CI so installs match it exactly.
+# This project uses pnpm (not npm), pinned via the `packageManager` field.
+# pnpm 11 requires Node.js 22 or newer.
+# Install pnpm standalone: curl -fsSL https://get.pnpm.io/install.sh | sh -
+# (see https://pnpm.io/installation). `corepack enable` also works on Node 24
+# and older, but corepack is no longer bundled from Node 25 on.
+# `pnpm-lock.yaml` is committed; use --frozen-lockfile in CI so installs
+# match it exactly.
 pnpm install
 pnpm exec vite build
 

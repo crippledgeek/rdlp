@@ -14,11 +14,15 @@
 #
 # Keep entries UNPINNED (bare package names). A pinned entry like
 # `esbuild@0.27.4` stops matching after a version bump and is then silently
-# blocked (pnpm/pnpm#11219, pnpm/pnpm#10426).
+# blocked — observed under the predecessor `onlyBuiltDependencies`
+# (pnpm/pnpm#11219, pnpm/pnpm#10426, both still open against the v10 key); the
+# same pin-matching design carries into `allowBuilds`.
 #
-# Replaced `onlyBuiltDependencies` on the v10 -> v11 upgrade (2026-07-21);
-# v11 consolidated onlyBuiltDependencies / neverBuiltDependencies /
-# ignoredBuiltDependencies / ignoreDepScripts into this one map.
+# Replaced `onlyBuiltDependencies` on the v10 -> v11 upgrade (2026-07-21).
+# v11 REMOVED all five predecessors — onlyBuiltDependencies,
+# onlyBuiltDependenciesFile, neverBuiltDependencies, ignoredBuiltDependencies
+# and ignoreDepScripts — in favour of this one map, where a `false` value is
+# what neverBuilt/ignoredBuilt used to express.
 allowBuilds:
   cypress: true
   esbuild: true
