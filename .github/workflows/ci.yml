@@ -232,14 +232,28 @@ jobs:
 
       # --- Toolchain setup ---
 
+      # pnpm must be installed BEFORE setup-node so that `cache: 'pnpm'`
+      # can resolve the pnpm store path.
+      #
+      # `package_json_file` is REQUIRED here: the action defaults to
+      # `$GITHUB_WORKSPACE/package.json` to read the `packageManager` pin, and
+      # this repo has no root package.json (the only one is the desktop crate's).
+      # It swallows the resulting ENOENT and then fails with "No pnpm version is
+      # specified". Point it at the real manifest rather than duplicating the
+      # version here — passing both `version:` and a `packageManager` that
+      # disagree makes the action hard-error.
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: crates/rdlp-desktop/package.json
+
       - uses: actions/setup-node@v5
         with:
           node-version: lts/*
-          # NOTE: built-in `cache: 'npm'` requires a TRACKED lockfile.
-          # `crates/rdlp-desktop/package-lock.json` is in .gitignore by
-          # project policy, so setup-node's cache hash fails to resolve
-          # and the action errors out. Re-enable IF the project ever
-          # tracks its lockfile.
+          # `crates/rdlp-desktop/pnpm-lock.yaml` IS tracked, so the built-in
+          # cache resolves and replaces the hand-rolled tarball cache this
+          # workflow used to carry.
+          cache: pnpm
+          cache-dependency-path: crates/rdlp-desktop/pnpm-lock.yaml
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -272,49 +286,38 @@ jobs:
       # --- Desktop frontend (must build before any Rust pass, because
       #     rdlp-desktop's tauri build script reads dist/ via tauri.conf.json) ---
 
-      # Cache npm's tarball cache. setup-node's built-in `cache: 'npm'`
-      # requires a tracked `package-lock.json` — the project doesn't track
-      # one (per the comment on the setup-node step above), so we cache the
-      # tarball directory directly via actions/cache@v5. Keys on the
-      # crates/rdlp-desktop/package.json hash; falls back to any
-      # platform-matched cache via restore-keys.
+      # Dependency caching is handled by setup-node's `cache: pnpm` (see the
+      # toolchain-setup step above), keyed on the tracked pnpm-lock.yaml. The
+      # hand-rolled `npm config get cache` + actions/cache block this replaced
+      # existed only because no lockfile was tracked; it carried a Windows
+      # cache-path workaround (PR #299) and guarded against registry flakiness
+      # on Windows runners (PR #297, CI run 25398198158).
       #
-      # Without this step, every CI run does a fresh `npm install` against
-      # the npm registry, which intermittently fails on Windows runners
-      # (registry redirect / DNS / antivirus scanning) — observed on
-      # PR #297 CI run 25398198158.
+      # Both concerns are covered by the built-in STORE CACHE, not by
+      # --frozen-lockfile: (a) the Windows path guess is structurally gone —
+      # setup-node shells out to `pnpm store path` instead of assuming a
+      # directory; (b) on a cache hit, pnpm resolves entirely from the lockfile
+      # with no registry metadata round-trips, so it is *more* offline than the
+      # old npm tarball cache. Caveat: the key is the lockfile hash, so a
+      # dependency-bump PR misses the cache and does hit the registry — the old
+      # block keyed on package.json, which changes less often.
       #
-      # The cache path is queried via `npm config get cache` to avoid the
-      # earlier-PR-#299 Windows mistake (hardcoded `~\AppData\Local\npm-cache`
-      # is wrong — Windows default is `%APPDATA%\npm-cache` at
-      # `~\AppData\Roaming\npm-cache`, not Local). `npm config get cache` is
-      # authoritative across platforms and respects any project `.npmrc`.
-      - name: Resolve npm cache path
-        id: npm-cache-path
-        shell: bash
-        run: echo "path=$(npm config get cache)" >> "$GITHUB_OUTPUT"
-
-      - name: Cache npm tarball cache
-        uses: actions/cache@v5
-        with:
-          path: ${{ steps.npm-cache-path.outputs.path }}
-          key: ${{ runner.os }}-npm-${{ hashFiles('crates/rdlp-desktop/package.json') }}
-          restore-keys: |
-            ${{ runner.os }}-npm-
-
+      # --frozen-lockfile is a DRIFT CHECK with no network resilience: it fails
+      # the build if pnpm-lock.yaml and package.json disagree, pinning CI to
+      # exactly what was committed and reviewed.
       - name: Install frontend dependencies
         working-directory: crates/rdlp-desktop
-        run: npm install
+        run: pnpm install --frozen-lockfile
 
       - name: Build frontend
         working-directory: crates/rdlp-desktop
-        run: npx vite build
+        run: pnpm exec vite build
 
       - name: Frontend type check and tests
         working-directory: crates/rdlp-desktop
         run: |
-          npx tsc --noEmit
-          npm test
+          pnpm exec tsc --noEmit
+          pnpm test
 
       # --- Single workspace lint & test pass (covers libs + CLI + desktop +
       #     probe; eliminates the prior double-compile of the shared dep tree

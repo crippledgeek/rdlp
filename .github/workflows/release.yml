@@ -90,9 +90,18 @@ jobs:
 
       # --- Toolchain setup ---
 
+      # pnpm before setup-node so `cache: pnpm` can resolve the store path.
+      # `package_json_file` is required — see the equivalent step in ci.yml for
+      # why (no root package.json, so the action's default lookup fails).
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: crates/rdlp-desktop/package.json
+
       - uses: actions/setup-node@v5
         with:
           node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: crates/rdlp-desktop/pnpm-lock.yaml
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -104,7 +113,7 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: crates/rdlp-desktop
-        run: npm install
+        run: pnpm install --frozen-lockfile
 
       # --- Tauri build + release ---
 

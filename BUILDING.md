@@ -204,13 +204,16 @@ The desktop crate at `crates/rdlp-desktop/` is a Tauri v2 app with a React/TypeS
 cd crates/rdlp-desktop
 
 # Frontend deps + build
-npm install
-npx vite build
+# This project uses pnpm (not npm). Install it with `corepack enable`
+# or see https://pnpm.io/installation. `pnpm-lock.yaml` is committed;
+# use --frozen-lockfile in CI so installs match it exactly.
+pnpm install
+pnpm exec vite build
 
 # Type check + tests
-npx tsc --noEmit
-npm test -- --run
-npm test -- --typecheck --run
+pnpm exec tsc --noEmit
+pnpm test -- --run
+pnpm test -- --typecheck --run
 
 # Desktop crate compile + test
 cd ../..
@@ -222,7 +225,7 @@ For dev mode:
 
 ```bash
 cd crates/rdlp-desktop
-npm run tauri dev
+pnpm tauri dev
 ```
 
 ## Run
