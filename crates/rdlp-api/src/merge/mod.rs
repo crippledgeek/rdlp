@@ -74,6 +74,12 @@ impl MergeOverrides for SubtitleOptions {
         if let Some(v) = self.strict_subs {
             config.strict_subs = v;
         }
+        if let Some(v) = self.verify_sub_urls {
+            config.verify_sub_urls = v;
+        }
+        if let Some(v) = self.retry_subs {
+            config.retry_subs = v;
+        }
     }
 }
 

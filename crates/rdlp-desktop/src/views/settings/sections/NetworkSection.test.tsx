@@ -37,6 +37,11 @@ const baseDraft: AppSettings = {
     normalize_boost: false,
     normalize_boost_db: null,
     embed_subtitles: false,
+    write_subtitles: false,
+    write_auto_subtitles: false,
+    strict_subs: false,
+    verify_sub_urls: false,
+    retry_subs: false,
 };
 
 describe("NetworkSection — timeout controls", () => {

@@ -153,6 +153,10 @@ pub struct SubtitleOptions {
     pub embed_subs: Option<bool>,
     /// Fail if requested subtitles are not available. `None` preserves base config.
     pub strict_subs: Option<bool>,
+    /// Validate subtitle URLs before download. `None` preserves base config.
+    pub verify_sub_urls: Option<bool>,
+    /// Retry failed subtitle downloads. `None` preserves base config.
+    pub retry_subs: Option<bool>,
 }
 
 /// Post-processing options (remux, audio extraction, metadata, thumbnails).

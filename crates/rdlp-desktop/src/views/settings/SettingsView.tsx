@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { GeneralSection } from "./sections/GeneralSection";
 import { OutputSection } from "./sections/OutputSection";
 import { PostProcessSection } from "./sections/PostProcessSection";
+import { SubtitlesSection } from "./sections/SubtitlesSection";
 import { NormalizationSection } from "./sections/NormalizationSection";
 import { NetworkSection } from "./sections/NetworkSection";
 import { SystemSection } from "./sections/SystemSection";
@@ -101,6 +102,7 @@ export function SettingsView() {
                 <GeneralSection draft={draft} onChange={handleChange} />
                 <OutputSection draft={draft} onChange={handleChange} />
                 <PostProcessSection draft={draft} onChange={handleChange} />
+                <SubtitlesSection draft={draft} onChange={handleChange} />
                 <NormalizationSection draft={draft} onChange={handleChange} />
                 <NetworkSection draft={draft} onChange={handleChange} />
                 <SystemSection />
