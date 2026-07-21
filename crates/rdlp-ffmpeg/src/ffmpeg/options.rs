@@ -22,6 +22,63 @@ pub fn faststart_for_output(path: &Path) -> bool {
     rdlp_types::ContainerFormat::from_path(path).is_some_and(|c| c.supports_faststart())
 }
 
+/// Matroska cluster duration limit, in milliseconds.
+///
+/// `FFmpeg`'s Matroska muxer otherwise emits clusters sized by its own
+/// heuristics, which produces coarse seek points; capping cluster duration
+/// gives players (VLC in particular) a seek granularity users expect.
+const MKV_CLUSTER_TIME_LIMIT_MS: &str = "500";
+
+/// Muxer options for writing to `output`, derived from its container.
+///
+/// The boundary form, like [`faststart_for_output`]: callers hold only a path.
+/// Both the metadata-embed and video-transcode header writes built this
+/// dictionary inline with an identical `eq_ignore_ascii_case("mkv")` check and
+/// their own copy of the 500 ms literal; this is the single place that decision
+/// and that number live.
+#[must_use]
+pub fn muxer_options_for(output: &Path) -> ffmpeg_the_third::Dictionary<'static> {
+    let mut dict = ffmpeg_the_third::Dictionary::new();
+    if rdlp_types::ContainerFormat::from_path(output) == Some(rdlp_types::ContainerFormat::Mkv) {
+        dict.set("cluster_time_limit", MKV_CLUSTER_TIME_LIMIT_MS);
+        log::debug!("MKV detected, setting cluster_time_limit={MKV_CLUSTER_TIME_LIMIT_MS}ms");
+    }
+    dict
+}
+
+#[cfg(test)]
+mod muxer_options_tests {
+    use super::*;
+
+    #[test]
+    fn mkv_output_gets_the_cluster_time_limit() {
+        for path in ["/tmp/Title.mkv", "/tmp/Title.MKV", "/tmp/Title.matroska"] {
+            let dict = muxer_options_for(Path::new(path));
+            assert_eq!(
+                dict.get("cluster_time_limit"),
+                Some(MKV_CLUSTER_TIME_LIMIT_MS),
+                "{path} is Matroska and needs the cluster cap"
+            );
+        }
+    }
+
+    /// The negative half: no other container may pick up a Matroska-only
+    /// option, and an unknown extension must not either.
+    #[test]
+    fn non_mkv_output_gets_no_matroska_options() {
+        for path in [
+            "/tmp/Title.mp4",
+            "/tmp/Title.webm",
+            "/tmp/Title.mka",
+            "/tmp/Title.xyz",
+            "/tmp/Title",
+        ] {
+            let dict = muxer_options_for(Path::new(path));
+            assert_eq!(dict.get("cluster_time_limit"), None, "{path}");
+        }
+    }
+}
+
 /// Options for remux and merge operations.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RemuxOptions {

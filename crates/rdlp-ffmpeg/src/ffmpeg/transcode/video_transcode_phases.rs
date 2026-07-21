@@ -487,16 +487,7 @@ impl FFmpegRunner {
         };
 
         // Build muxer options dictionary
-        let mut dict = ffmpeg_the_third::Dictionary::new();
-
-        // MKV: set cluster_time_limit for smoother playback/seeking in players like VLC
-        let is_mkv = output
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("mkv"));
-        if is_mkv {
-            dict.set("cluster_time_limit", "500");
-            debug!("MKV detected, setting cluster_time_limit=500ms via dictionary");
-        }
+        let dict = crate::ffmpeg::options::muxer_options_for(output);
 
         // Set format-level encoding_tool metadata
         {

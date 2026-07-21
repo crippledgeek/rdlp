@@ -23,7 +23,6 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use log::debug;
 use rdlp_core::PostProcessCallback;
 
 use crate::error::{PostProcessError, Result};
@@ -183,16 +182,7 @@ impl FFmpegRunner {
         }
 
         // Build muxer options dictionary
-        let mut dict = ffmpeg_the_third::Dictionary::new();
-
-        // MKV: set cluster_time_limit for smoother playback/seeking in players like VLC
-        let is_mkv = output
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("mkv"));
-        if is_mkv {
-            dict.set("cluster_time_limit", "500");
-            debug!("MKV detected, setting cluster_time_limit=500ms via dictionary");
-        }
+        let dict = crate::ffmpeg::options::muxer_options_for(output);
 
         // Write header with options
         octx.write_header_with(dict)
