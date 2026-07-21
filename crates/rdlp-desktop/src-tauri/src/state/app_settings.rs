@@ -136,6 +136,25 @@ pub struct AppSettings {
     /// Retry failed subtitle downloads.
     #[serde(default)]
     pub retry_subs: bool,
+    /// Number of concurrent fragment/chunk downloads. `None` uses default (8).
+    /// Validated by [`AppSettings::validate_security`]: must be 1..=64.
+    #[serde(default)]
+    pub concurrent_fragments: Option<u32>,
+    /// Download buffer size in **bytes**. `None` uses default (2 MiB).
+    /// Validated by [`AppSettings::validate_security`]: must be 1..=1 GiB.
+    ///
+    /// The Settings UI presents this in MiB; bytes remain the stored truth.
+    #[serde(default)]
+    pub buffer_size: Option<u64>,
+    /// Minimum file size in **bytes** before parallel chunked download is used.
+    /// `None` uses default (10 MiB). Validated: must be 1..=1 GiB (mirrors
+    /// `rdlp_types::Config::validate()`).
+    #[serde(default)]
+    pub parallel_threshold: Option<u64>,
+    /// HLS HEAD-probe timeout in seconds. `None` uses default (5).
+    /// Validated by [`AppSettings::validate_security`]: must be 1..=300.
+    #[serde(default)]
+    pub hls_head_probe_timeout: Option<u64>,
 }
 
 impl AppSettings {
@@ -260,6 +279,10 @@ impl Default for AppSettings {
             strict_subs: false,
             verify_sub_urls: false,
             retry_subs: false,
+            concurrent_fragments: None,
+            buffer_size: None,
+            parallel_threshold: None,
+            hls_head_probe_timeout: None,
         }
     }
 }
@@ -271,8 +294,8 @@ pub enum SettingsValidationError {
     CookiesFileTraversal,
     /// `proxy` URL failed security validation.
     InvalidProxy(String),
-    /// A timeout field is outside its allowed range.
-    TimeoutOutOfRange {
+    /// A numeric field is outside its allowed range.
+    OutOfRange {
         /// Name of the offending field (e.g. `"socket_timeout"`).
         field: &'static str,
         /// Human-readable description of the allowed range.
@@ -287,7 +310,7 @@ impl std::fmt::Display for SettingsValidationError {
                 f.write_str("cookies_file path must not contain '..' components")
             }
             Self::InvalidProxy(msg) => write!(f, "invalid proxy URL: {msg}"),
-            Self::TimeoutOutOfRange { field, reason } => {
+            Self::OutOfRange { field, reason } => {
                 write!(f, "{field}: {reason}")
             }
         }
@@ -295,6 +318,14 @@ impl std::fmt::Display for SettingsValidationError {
 }
 
 impl std::error::Error for SettingsValidationError {}
+
+/// Upper bound for byte-valued settings, in bytes (1 GiB).
+///
+/// Mirrors `rdlp_types::Config::validate()`'s `parallel_threshold` ceiling rather than
+/// introducing a second magic number. `buffer_size` has **no** upper bound in
+/// `Config::validate()`, and `Config::validate()` is not called on the desktop path
+/// (see `commands::download`), so this is that field's only enforcement point.
+const MAX_BYTE_SETTING: u64 = 1024 * 1024 * 1024;
 
 impl AppSettings {
     /// Validate security-sensitive fields before persisting.
@@ -322,7 +353,7 @@ impl AppSettings {
         if let Some(t) = self.socket_timeout
             && !(1..=300).contains(&t)
         {
-            return Err(SettingsValidationError::TimeoutOutOfRange {
+            return Err(SettingsValidationError::OutOfRange {
                 field: "socket_timeout",
                 reason: "must be 1..=300 seconds",
             });
@@ -330,7 +361,7 @@ impl AppSettings {
         if let Some(t) = self.read_timeout
             && !(1..=600).contains(&t)
         {
-            return Err(SettingsValidationError::TimeoutOutOfRange {
+            return Err(SettingsValidationError::OutOfRange {
                 field: "read_timeout",
                 reason: "must be 1..=600 seconds",
             });
@@ -338,7 +369,7 @@ impl AppSettings {
         if let Some(t) = self.pool_idle_timeout
             && t > 3600
         {
-            return Err(SettingsValidationError::TimeoutOutOfRange {
+            return Err(SettingsValidationError::OutOfRange {
                 field: "pool_idle_timeout",
                 reason: "must be 0..=3600 seconds (0 = disabled)",
             });
@@ -346,7 +377,7 @@ impl AppSettings {
         if let Some(t) = self.download_timeout
             && !(1..=86400).contains(&t)
         {
-            return Err(SettingsValidationError::TimeoutOutOfRange {
+            return Err(SettingsValidationError::OutOfRange {
                 field: "download_timeout",
                 reason: "must be 1..=86400 seconds",
             });
@@ -354,9 +385,41 @@ impl AppSettings {
         if let Some(t) = self.merge_timeout
             && !(1..=86400).contains(&t)
         {
-            return Err(SettingsValidationError::TimeoutOutOfRange {
+            return Err(SettingsValidationError::OutOfRange {
                 field: "merge_timeout",
                 reason: "must be 1..=86400 seconds",
+            });
+        }
+        if let Some(n) = self.concurrent_fragments
+            && !(1..=64).contains(&n)
+        {
+            return Err(SettingsValidationError::OutOfRange {
+                field: "concurrent_fragments",
+                reason: "must be 1..=64 (caps peak transient memory under parallel fetch)",
+            });
+        }
+        if let Some(n) = self.buffer_size
+            && !(1..=MAX_BYTE_SETTING).contains(&n)
+        {
+            return Err(SettingsValidationError::OutOfRange {
+                field: "buffer_size",
+                reason: "must be 1..=1_073_741_824 bytes (1 GiB)",
+            });
+        }
+        if let Some(n) = self.parallel_threshold
+            && !(1..=MAX_BYTE_SETTING).contains(&n)
+        {
+            return Err(SettingsValidationError::OutOfRange {
+                field: "parallel_threshold",
+                reason: "must be 1..=1_073_741_824 bytes (1 GiB)",
+            });
+        }
+        if let Some(t) = self.hls_head_probe_timeout
+            && !(1..=300).contains(&t)
+        {
+            return Err(SettingsValidationError::OutOfRange {
+                field: "hls_head_probe_timeout",
+                reason: "must be 1..=300 seconds",
             });
         }
 
@@ -628,6 +691,10 @@ mod tests {
             strict_subs: true,
             verify_sub_urls: true,
             retry_subs: true,
+            concurrent_fragments: None,
+            buffer_size: None,
+            parallel_threshold: None,
+            hls_head_probe_timeout: None,
         };
 
         let json = serde_json::to_string(&settings).expect("serialization should succeed");
@@ -727,5 +794,148 @@ mod tests {
                 && !s.verify_sub_urls
                 && !s.retry_subs
         );
+    }
+
+    #[test]
+    fn test_new_throughput_fields_default_to_none() {
+        let s = AppSettings::default();
+        assert!(s.concurrent_fragments.is_none());
+        assert!(s.buffer_size.is_none());
+        assert!(s.parallel_threshold.is_none());
+        assert!(s.hls_head_probe_timeout.is_none());
+    }
+
+    #[test]
+    fn legacy_json_without_throughput_fields_defaults_none() {
+        // Minimal legacy settings.json predating the throughput fields. `None`, not
+        // `Some(0)` — a zero would be a valid-looking value that disables chunking.
+        let json = r#"{"output_dir":"/tmp","embed_thumbnail":true,"embed_metadata":false,"verbose":false,"default_subtitle_langs":[]}"#;
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        assert!(
+            s.concurrent_fragments.is_none()
+                && s.buffer_size.is_none()
+                && s.parallel_threshold.is_none()
+                && s.hls_head_probe_timeout.is_none()
+        );
+    }
+
+    #[test]
+    fn test_throughput_fields_round_trip_json() {
+        let s = AppSettings {
+            concurrent_fragments: Some(16),
+            buffer_size: Some(4 * 1024 * 1024),
+            parallel_threshold: Some(20 * 1024 * 1024),
+            hls_head_probe_timeout: Some(10),
+            ..AppSettings::default()
+        };
+        let json = serde_json::to_string(&s).expect("serialize");
+        let back: AppSettings = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.concurrent_fragments, Some(16));
+        assert_eq!(back.buffer_size, Some(4 * 1024 * 1024));
+        assert_eq!(back.parallel_threshold, Some(20 * 1024 * 1024));
+        assert_eq!(back.hls_head_probe_timeout, Some(10));
+    }
+
+    // --- Boundary pairs: each pair is one a `>=`-for-`>` slip cannot both pass. ---
+
+    #[test]
+    fn test_concurrent_fragments_boundary() {
+        let ok = AppSettings {
+            concurrent_fragments: Some(64),
+            ..AppSettings::default()
+        };
+        assert!(ok.validate_security().is_ok(), "64 is the documented max");
+        let bad = AppSettings {
+            concurrent_fragments: Some(65),
+            ..AppSettings::default()
+        };
+        let err = bad.validate_security().expect_err("65 must be rejected");
+        assert!(err.to_string().contains("concurrent_fragments"));
+        let zero = AppSettings {
+            concurrent_fragments: Some(0),
+            ..AppSettings::default()
+        };
+        assert!(
+            zero.validate_security().is_err(),
+            "0 fragments is meaningless"
+        );
+    }
+
+    #[test]
+    fn test_byte_setting_upper_boundary() {
+        let ok = AppSettings {
+            buffer_size: Some(1024 * 1024 * 1024),
+            parallel_threshold: Some(1024 * 1024 * 1024),
+            ..AppSettings::default()
+        };
+        assert!(
+            ok.validate_security().is_ok(),
+            "1 GiB is the documented max"
+        );
+
+        let bad_buf = AppSettings {
+            buffer_size: Some(1024 * 1024 * 1024 + 1),
+            ..AppSettings::default()
+        };
+        let err = bad_buf
+            .validate_security()
+            .expect_err("over 1 GiB must be rejected");
+        assert!(err.to_string().contains("buffer_size"));
+
+        let bad_thr = AppSettings {
+            parallel_threshold: Some(1024 * 1024 * 1024 + 1),
+            ..AppSettings::default()
+        };
+        assert!(bad_thr.validate_security().is_err());
+    }
+
+    #[test]
+    fn test_byte_setting_lower_boundary() {
+        let ok = AppSettings {
+            buffer_size: Some(1),
+            ..AppSettings::default()
+        };
+        assert!(ok.validate_security().is_ok(), "1 byte is in range");
+        let bad = AppSettings {
+            buffer_size: Some(0),
+            ..AppSettings::default()
+        };
+        assert!(
+            bad.validate_security().is_err(),
+            "0 is rejected by Config::validate too"
+        );
+    }
+
+    /// The GUI floors these fields at 1 MiB, but validation must NOT — a hand-edited
+    /// settings.json carrying a legitimate sub-MiB value has to survive. Guards against
+    /// someone hardening validation to match the `NumberField`'s `minValue`.
+    #[test]
+    fn test_sub_mib_byte_values_are_accepted() {
+        let s = AppSettings {
+            buffer_size: Some(500_000),
+            parallel_threshold: Some(500_000),
+            ..AppSettings::default()
+        };
+        assert!(s.validate_security().is_ok(), "sub-MiB must remain valid");
+    }
+
+    #[test]
+    fn test_hls_head_probe_timeout_boundary() {
+        let ok = AppSettings {
+            hls_head_probe_timeout: Some(300),
+            ..AppSettings::default()
+        };
+        assert!(ok.validate_security().is_ok());
+        let bad = AppSettings {
+            hls_head_probe_timeout: Some(301),
+            ..AppSettings::default()
+        };
+        let err = bad.validate_security().expect_err("301 must be rejected");
+        assert!(err.to_string().contains("hls_head_probe_timeout"));
+        let zero = AppSettings {
+            hls_head_probe_timeout: Some(0),
+            ..AppSettings::default()
+        };
+        assert!(zero.validate_security().is_err());
     }
 }

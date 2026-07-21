@@ -74,7 +74,7 @@ pub async fn update_settings(
             field: match &e {
                 SettingsValidationError::CookiesFileTraversal => "cookies_file".to_owned(),
                 SettingsValidationError::InvalidProxy(_) => "proxy".to_owned(),
-                SettingsValidationError::TimeoutOutOfRange { field, .. } => (*field).to_owned(),
+                SettingsValidationError::OutOfRange { field, .. } => (*field).to_owned(),
             },
             message: e.to_string(),
         })?;
