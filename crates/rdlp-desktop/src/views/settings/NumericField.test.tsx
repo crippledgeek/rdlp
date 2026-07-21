@@ -1,0 +1,93 @@
+import { describe, it, expect, vi } from "vitest";
+import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { z } from "zod";
+import { NumericField } from "./NumericField";
+
+const schema = z.union([z.null(), z.number().int().min(1).max(64)]);
+
+function setup(overrides: Partial<React.ComponentProps<typeof NumericField>> = {}) {
+    const onCommit = vi.fn();
+    render(
+        <NumericField
+            id="test-field"
+            label="Test Field"
+            helper="A helper line."
+            value={8}
+            minValue={1}
+            maxValue={64}
+            schema={schema}
+            onCommit={onCommit}
+            {...overrides}
+        />,
+    );
+    return { onCommit };
+}
+
+// NOTE on role: React Aria's `useNumberField` deliberately overrides the ARIA
+// APG spinbutton role to `null` on the rendered <input> — see
+// @react-aria/numberfield's useNumberField.js: "override the spinbutton role,
+// we can't focus a spin button with VO" (VoiceOver). The input therefore
+// exposes the implicit `textbox` role plus `aria-roledescription="Number
+// field"`, and `aria-valuenow`/`aria-valuemin`/`aria-valuemax` are explicitly
+// nulled out — never rendered on the DOM in this React Aria version. This was
+// verified against the installed node_modules source, not assumed. The first
+// test below was corrected from the brief's `role="spinbutton"` premise to
+// match; see task-2-report.md for the full empirical finding.
+describe("NumericField", () => {
+    it("exposes an accessible textbox carrying number-field ARIA semantics", () => {
+        setup();
+        const input = screen.getByRole("textbox", { name: /test field/i });
+        expect(input).toHaveAttribute("aria-roledescription", "Number field");
+        expect(input).toHaveValue("8");
+    });
+
+    it("derives its accessible name from the visible label only (no aria-label override)", () => {
+        setup();
+        const input = screen.getByRole("textbox", { name: /test field/i });
+        expect(input).not.toHaveAttribute("aria-label");
+    });
+
+    it("renders the helper text", () => {
+        setup();
+        expect(screen.getByText("A helper line.")).toBeInTheDocument();
+    });
+
+    it("renders a suffix when supplied", () => {
+        setup({ suffix: "MiB" });
+        expect(screen.getByText("MiB")).toBeInTheDocument();
+    });
+
+    it("renders an empty input when value is null", () => {
+        setup({ value: null });
+        expect(screen.getByRole("textbox", { name: /test field/i })).toHaveValue("");
+    });
+
+    it("commits a parsed number on blur", async () => {
+        const user = userEvent.setup();
+        const { onCommit } = setup();
+        const input = screen.getByRole("textbox", { name: /test field/i });
+        await user.clear(input);
+        await user.type(input, "16");
+        await user.tab();
+        expect(onCommit).toHaveBeenCalledWith(16);
+    });
+
+    it("commits null when the field is cleared", async () => {
+        const user = userEvent.setup();
+        const { onCommit } = setup();
+        const input = screen.getByRole("textbox", { name: /test field/i });
+        await user.clear(input);
+        await user.tab();
+        expect(onCommit).toHaveBeenCalledWith(null);
+    });
+
+    it("does not commit while the user is still typing", async () => {
+        const user = userEvent.setup();
+        const { onCommit } = setup();
+        const input = screen.getByRole("textbox", { name: /test field/i });
+        await user.clear(input);
+        await user.type(input, "1");
+        expect(onCommit).not.toHaveBeenCalledWith(1);
+    });
+});
