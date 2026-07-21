@@ -146,7 +146,7 @@ pub const OPTION_REGISTRY: &[OptionEntry] = &[
     },
     OptionEntry {
         field: "write_auto_subtitles",
-        gui: Gui::Missing("#602"),
+        gui: Gui::Control("write_auto_subtitles"),
     },
     OptionEntry {
         field: "subtitle_langs",
@@ -162,15 +162,15 @@ pub const OPTION_REGISTRY: &[OptionEntry] = &[
     },
     OptionEntry {
         field: "strict_subs",
-        gui: Gui::Missing("#602"),
+        gui: Gui::Control("strict_subs"),
     },
     OptionEntry {
         field: "verify_sub_urls",
-        gui: Gui::Missing("#602"),
+        gui: Gui::Control("verify_sub_urls"),
     },
     OptionEntry {
         field: "retry_subs",
-        gui: Gui::Missing("#602"),
+        gui: Gui::Control("retry_subs"),
     },
     OptionEntry {
         field: "quiet",
@@ -318,7 +318,7 @@ pub const OPTION_REGISTRY: &[OptionEntry] = &[
     },
     OptionEntry {
         field: "postprocess.write_subtitles",
-        gui: Gui::Missing("#602"),
+        gui: Gui::Control("write_subtitles"),
     },
     OptionEntry {
         field: "postprocess.keep_video",
@@ -663,9 +663,9 @@ mod tests {
                 Gui::Missing(_) => missing += 1,
             }
         }
-        assert_eq!(control, 31, "Control count drifted");
+        assert_eq!(control, 36, "Control count drifted");
         assert_eq!(na, 5, "NotApplicable count drifted");
-        assert_eq!(missing, 60, "Missing count drifted");
+        assert_eq!(missing, 55, "Missing count drifted");
     }
 
     #[test]
