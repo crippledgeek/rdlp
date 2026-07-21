@@ -13,7 +13,6 @@
 // Unit-agnostic by design: callers displaying a converted unit (e.g. MiB over a
 // byte-valued setting) convert at the value/onCommit boundary and pass `suffix`.
 
-import type { ZodTypeAny } from "zod";
 import { Text } from "react-aria-components";
 import { NumberField, NumberFieldInput, NumberFieldSteppers } from "@/components/ui/numberfield";
 import { FieldError, FieldGroup, Label } from "@/components/ui/field";
@@ -24,10 +23,18 @@ interface NumericFieldProps {
     helper: string;
     /** Value in the DISPLAY unit; `null` renders an empty field ("inherit default"). */
     value: number | null;
+    /**
+     * Bounds are enforced by CLAMPING, not rejection: React Aria's
+     * `useNumberFieldState.commit()` unconditionally clamps the committed
+     * value to `[minValue, maxValue]` *before* any validation runs
+     * (verified in `@react-stately/numberfield`'s `useNumberFieldState.mjs`).
+     * An out-of-range entry is silently coerced to the nearest bound; it is
+     * never rejected or surfaced as a `FieldError`. Do not add a schema
+     * expecting rejection here — it would be unreachable dead code (see
+     * `NumericField.test.tsx`'s clamping test).
+     */
     minValue: number;
     maxValue: number;
-    /** Schema over the DISPLAY-unit number; supplies the domain error message. */
-    schema: ZodTypeAny;
     onCommit: (next: number | null) => void;
     suffix?: string;
     isDisabled?: boolean;
@@ -40,7 +47,6 @@ export function NumericField({
     value,
     minValue,
     maxValue,
-    schema,
     onCommit,
     suffix,
     isDisabled = false,
@@ -59,10 +65,6 @@ export function NumericField({
             onChange={(n) => onCommit(Number.isNaN(n) ? null : n)}
             // "aria" surfaces validation inline without requiring a form submit.
             validationBehavior="aria"
-            validate={(n) => {
-                const result = schema.safeParse(Number.isNaN(n) ? null : n);
-                return result.success ? null : (result.error.errors[0]?.message ?? "Invalid value");
-            }}
             isDisabled={isDisabled}
             className="group flex flex-col gap-1"
         >

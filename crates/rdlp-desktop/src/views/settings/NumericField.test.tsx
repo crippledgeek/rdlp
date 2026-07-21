@@ -1,10 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { z } from "zod";
 import { NumericField } from "./NumericField";
-
-const schema = z.union([z.null(), z.number().int().min(1).max(64)]);
 
 function setup(overrides: Partial<React.ComponentProps<typeof NumericField>> = {}) {
     const onCommit = vi.fn();
@@ -16,7 +13,6 @@ function setup(overrides: Partial<React.ComponentProps<typeof NumericField>> = {
             value={8}
             minValue={1}
             maxValue={64}
-            schema={schema}
             onCommit={onCommit}
             {...overrides}
         />,
@@ -89,5 +85,29 @@ describe("NumericField", () => {
         await user.clear(input);
         await user.type(input, "1");
         expect(onCommit).not.toHaveBeenCalledWith(1);
+    });
+
+    // DESIGNED BEHAVIOUR: bounds are enforced by CLAMPING, not rejection.
+    // React Aria's useNumberFieldState unconditionally clamps the committed
+    // value to [minValue, maxValue] *inside* `commit()`, before validation
+    // ever runs against it — see useNumberFieldState.module.js:
+    // `clamp(newParsedValue, minValue, maxValue)` precedes
+    // `validation.commitValidation()`. This is the component's ONLY range
+    // mechanism (there is no schema prop): an out-of-range commit is
+    // silently coerced to the nearest bound, `onCommit` fires with the
+    // clamped value, and `FieldError`/`aria-invalid` never trigger from a
+    // range violation.
+    it("clamps an out-of-range commit to the nearest bound", async () => {
+        const user = userEvent.setup();
+        const { onCommit } = setup();
+        const input = screen.getByRole("textbox", { name: /test field/i });
+        await user.clear(input);
+        await user.type(input, "999");
+        await user.tab();
+        expect(onCommit).toHaveBeenCalledWith(64);
+        expect(
+            screen.queryByText("Number must be less than or equal to 64"),
+        ).not.toBeInTheDocument();
+        expect(input).not.toHaveAttribute("aria-invalid");
     });
 });
