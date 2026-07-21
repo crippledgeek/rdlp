@@ -58,6 +58,14 @@ describe("NumericField", () => {
         expect(screen.getByText("MiB")).toBeInTheDocument();
     });
 
+    it("renders the placeholder on the input when supplied", () => {
+        setup({ value: null, placeholder: "30" });
+        expect(screen.getByRole("textbox", { name: /test field/i })).toHaveAttribute(
+            "placeholder",
+            "30",
+        );
+    });
+
     it("renders an empty input when value is null", () => {
         setup({ value: null });
         expect(screen.getByRole("textbox", { name: /test field/i })).toHaveValue("");

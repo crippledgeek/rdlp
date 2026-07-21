@@ -84,6 +84,7 @@ export function NetworkSection({ draft, onChange }: Props) {
                         minValue={1}
                         maxValue={300}
                         onCommit={(v) => onChange({ socket_timeout: v })}
+                        placeholder="30"
                         suffix="s"
                     />
                     <NumericField
@@ -94,6 +95,7 @@ export function NetworkSection({ draft, onChange }: Props) {
                         minValue={1}
                         maxValue={600}
                         onCommit={(v) => onChange({ read_timeout: v })}
+                        placeholder="60"
                         suffix="s"
                     />
                     <NumericField
@@ -104,6 +106,7 @@ export function NetworkSection({ draft, onChange }: Props) {
                         minValue={1}
                         maxValue={86400}
                         onCommit={(v) => onChange({ download_timeout: v })}
+                        placeholder="3600"
                         suffix="s"
                     />
                     <NumericField
@@ -114,6 +117,7 @@ export function NetworkSection({ draft, onChange }: Props) {
                         minValue={1}
                         maxValue={86400}
                         onCommit={(v) => onChange({ merge_timeout: v })}
+                        placeholder="1800"
                         suffix="s"
                     />
                     <div className="col-span-2">
@@ -136,6 +140,7 @@ export function NetworkSection({ draft, onChange }: Props) {
                                     maxValue={3600}
                                     onCommit={handlePoolIdleChange}
                                     isDisabled={!poolIdleForm.evictIdle}
+                                    placeholder="90"
                                     suffix="s"
                                 />
                             </div>

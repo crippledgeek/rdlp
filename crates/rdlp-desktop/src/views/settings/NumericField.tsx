@@ -38,6 +38,8 @@ interface NumericFieldProps {
     /** Upper bound; see the clamping note below for how `minValue`/`maxValue` are enforced. */
     maxValue: number;
     onCommit: (next: number | null) => void;
+    /** Shown in the empty input to hint the backend default ("inherit" affordance). */
+    placeholder?: string;
     suffix?: string;
     isDisabled?: boolean;
 }
@@ -50,6 +52,7 @@ export function NumericField({
     minValue,
     maxValue,
     onCommit,
+    placeholder,
     suffix,
     isDisabled = false,
 }: NumericFieldProps) {
@@ -79,7 +82,10 @@ export function NumericField({
             <Label className="settings-label">{label}</Label>
             <div className="flex items-center gap-1">
                 <FieldGroup className="relative flex-1">
-                    <NumberFieldInput className="font-mono text-xs" />
+                    <NumberFieldInput
+                        className="font-mono text-xs"
+                        {...(placeholder !== undefined ? { placeholder } : {})}
+                    />
                     <NumberFieldSteppers />
                 </FieldGroup>
                 {suffix && <span className="text-xs text-muted-foreground">{suffix}</span>}
