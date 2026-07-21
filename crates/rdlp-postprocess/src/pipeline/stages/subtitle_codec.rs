@@ -18,7 +18,7 @@ use rdlp_types::ContainerFormat;
 
 /// The `FFmpeg` subtitle codec used to embed into a given container.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SubtitleEmbedCodec {
+pub(super) enum SubtitleEmbedCodec {
     /// `MPEG-4` timed text — the MP4/`QuickTime` family's native subtitle codec.
     MovText,
     /// `SubRip` — Matroska's default text subtitle codec.
@@ -36,7 +36,7 @@ impl SubtitleEmbedCodec {
     /// here, forcing an explicit decision instead of silently inheriting the
     /// old `"srt"` fallback.
     #[must_use]
-    pub const fn for_container(format: ContainerFormat) -> Option<Self> {
+    pub(super) const fn for_container(format: ContainerFormat) -> Option<Self> {
         match format {
             ContainerFormat::Mp4
             | ContainerFormat::Mov
@@ -73,22 +73,13 @@ impl SubtitleEmbedCodec {
 
     /// The encoder name passed to `FFmpeg`.
     #[must_use]
-    pub const fn as_ffmpeg_name(self) -> &'static str {
+    pub(super) const fn as_ffmpeg_name(self) -> &'static str {
         match self {
             Self::MovText => "mov_text",
             Self::Srt => "srt",
             Self::WebVtt => "webvtt",
         }
     }
-}
-
-/// Whether `format` can carry embedded subtitles at all.
-///
-/// The gateway to [`SubtitleEmbedCodec::for_container`], so the stage's
-/// should-we-run check and its codec choice cannot drift apart.
-#[must_use]
-pub const fn supports_subtitle_embed(format: ContainerFormat) -> bool {
-    SubtitleEmbedCodec::for_container(format).is_some()
 }
 
 #[cfg(test)]
@@ -120,18 +111,32 @@ mod tests {
         }
     }
 
-    /// The negative half: containers that were rejected before are still
-    /// rejected, and they no longer fall through to the silent `"srt"` default.
+    /// The negative half, swept rather than sampled: EVERY variant outside the
+    /// supported set must resolve to `None`, so nothing falls through to the
+    /// old silent `"srt"` default.
+    ///
+    /// Iterating `ContainerFormat` pins the whole mapping. The exhaustive match
+    /// only makes an *unclassified* variant fail to compile; this catches a
+    /// *misclassified* one, which the compiler cannot see.
     #[test]
-    fn unsupported_containers_have_no_codec() {
-        for ext in [
-            "ts", "avi", "flv", "mpg", "wav", "ac3", "ogg", "flac", "mp3",
-        ] {
-            let format: ContainerFormat = ext.parse().expect("known container");
+    fn every_variant_matches_the_pinned_support_set() {
+        use strum::IntoEnumIterator as _;
+
+        const SUPPORTED: &[ContainerFormat] = &[
+            ContainerFormat::Mp4,
+            ContainerFormat::Mov,
+            ContainerFormat::M4v,
+            ContainerFormat::M4a,
+            ContainerFormat::Mkv,
+            ContainerFormat::Mka,
+            ContainerFormat::WebM,
+        ];
+
+        for format in ContainerFormat::iter() {
             assert_eq!(
-                SubtitleEmbedCodec::for_container(format),
-                None,
-                "{ext} must not resolve to a codec"
+                SubtitleEmbedCodec::for_container(format).is_some(),
+                SUPPORTED.contains(&format),
+                "{format:?} support must match the pinned set"
             );
         }
     }

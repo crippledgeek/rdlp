@@ -14,7 +14,7 @@ pub mod normalize;
 pub mod recode;
 pub mod remux;
 pub mod subtitle;
-pub mod subtitle_codec;
+mod subtitle_codec;
 pub mod thumbnail;
 
 pub use audio_extract::AudioExtractStage;

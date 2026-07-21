@@ -84,6 +84,13 @@ pub fn resolve_recode_encoder(
     // These arrive as raw config strings, so the parse is the boundary where
     // an unknown container becomes the default codec — the behaviour the old
     // `_` arm provided when the match itself was string-based.
+    //
+    // ONE deliberate widening rides along: the parse resolves ContainerFormat's
+    // aliases, so `"mpeg"` now reaches the Mpg arm ("mpeg2") where the old
+    // literal `"mpg" | "vob"` compare let it fall to h264. Every other alias
+    // (`mpegts`, `3gpp`, `matroska`, `quicktime`, ...) still lands on h264, so
+    // `"mpeg"` is the only string whose codec changes. Same class of widening
+    // as #537's, and pinned by `mpeg_alias_resolves_like_mpg` below.
     let codec = target
         .parse::<ContainerFormat>()
         .map_or(DEFAULT_VIDEO_CODEC, default_codec_for_container);
@@ -306,6 +313,32 @@ mod tests {
             default_codec_for_container("matroska".parse().expect("alias")),
             default_codec_for_container(ContainerFormat::Mkv)
         );
+    }
+
+    /// The one string whose resolved codec this conversion CHANGES: `"mpeg"`
+    /// is a `ContainerFormat` alias for `Mpg`, so it now resolves to mpeg2
+    /// where the old literal `"mpg" | "vob"` compare dropped it to h264.
+    /// Deliberate, documented at the parse site, and pinned here.
+    #[test]
+    fn mpeg_alias_resolves_like_mpg() {
+        assert_eq!(
+            resolve_recode_encoder(None, Some("mpeg"), None),
+            resolve_recode_encoder(None, Some("mpg"), None),
+            "the `mpeg` alias must resolve exactly as `mpg` does"
+        );
+    }
+
+    /// The aliases that do NOT change: each still lands on the h264 default,
+    /// so the widening above is genuinely confined to `"mpeg"`.
+    #[test]
+    fn other_aliases_still_resolve_to_the_default_codec() {
+        for alias in ["mpegts", "3gpp", "matroska", "quicktime"] {
+            assert_eq!(
+                resolve_recode_encoder(None, Some(alias), None),
+                resolve_recode_encoder(None, Some("mp4"), None),
+                "{alias} must still resolve to the h264 default"
+            );
+        }
     }
 
     /// `resolve_recode_encoder` still takes strings (config-supplied), so its
