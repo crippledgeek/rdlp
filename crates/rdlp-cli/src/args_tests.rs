@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use clap::CommandFactory;
+use clap::{CommandFactory, Parser};
 
 use crate::args::{
     Args, HELP_HEADING_AUDIO_NORM, HELP_HEADING_CONFIG, HELP_HEADING_DOWNLOAD,
@@ -38,7 +38,8 @@ const EXPECTED: &[(&str, &str)] = &[
     ("audio_format", HELP_HEADING_POSTPROCESS),
     ("audio_quality", HELP_HEADING_POSTPROCESS),
     ("embed_metadata", HELP_HEADING_POSTPROCESS),
-    ("no_thumbnail", HELP_HEADING_POSTPROCESS),
+    ("embed_thumbnail", HELP_HEADING_POSTPROCESS),
+    ("no_embed_thumbnail", HELP_HEADING_POSTPROCESS),
     ("write_thumbnail", HELP_HEADING_POSTPROCESS),
     ("remux", HELP_HEADING_POSTPROCESS),
     ("fixup", HELP_HEADING_POSTPROCESS),
@@ -110,8 +111,8 @@ fn every_option_is_classified_into_a_help_group() {
     assert_eq!(expected.len(), EXPECTED.len(), "duplicate id in EXPECTED");
     assert_eq!(
         EXPECTED.len(),
-        73,
-        "group map should cover all 73 option fields"
+        74,
+        "group map should cover all 74 option fields"
     );
 
     let cmd = Args::command();
@@ -344,7 +345,7 @@ const HELP_SHORT_EXPERT: &[&str] = &[
     // Post-Processing
     "audio_format",
     "audio_quality",
-    "no_thumbnail",
+    "no_embed_thumbnail",
     "write_thumbnail",
     "fixup",
     "ffmpeg_location",
@@ -408,7 +409,9 @@ fn every_option_is_tiered_common_or_expert() {
 
     for arg in cmd.get_arguments() {
         let id = arg.get_id().as_str();
-        if arg.is_positional() || id == "help" || id == "version" {
+        // Fully-hidden flags (hide=true) render in neither -h nor --help, so they
+        // are outside the -h/--help tiering.
+        if arg.is_positional() || id == "help" || id == "version" || arg.is_hide_set() {
             continue;
         }
         seen.insert(id.to_owned());
@@ -549,4 +552,48 @@ fn no_arg_aliases_its_own_long_name() {
             }
         }
     }
+}
+
+#[test]
+fn legacy_no_thumbnail_alias_still_parses() {
+    let a = Args::try_parse_from(["rdlp", "--no-thumbnail", "URL"]).unwrap();
+    assert!(
+        a.no_embed_thumbnail,
+        "--no-thumbnail must still set no_embed_thumbnail via alias"
+    );
+}
+
+#[test]
+fn thumbnail_pair_is_last_wins() {
+    let off =
+        Args::try_parse_from(["rdlp", "--embed-thumbnail", "--no-embed-thumbnail", "URL"]).unwrap();
+    assert!(
+        off.no_embed_thumbnail && !off.embed_thumbnail,
+        "last flag (--no-) wins"
+    );
+    let on =
+        Args::try_parse_from(["rdlp", "--no-embed-thumbnail", "--embed-thumbnail", "URL"]).unwrap();
+    assert!(
+        on.embed_thumbnail && !on.no_embed_thumbnail,
+        "last flag (--embed) wins"
+    );
+}
+
+#[test]
+fn no_embed_thumbnail_visible_in_long_help_only() {
+    let short = Args::command().render_help().to_string();
+    let long = Args::command().render_long_help().to_string();
+    assert!(
+        long.contains("--no-embed-thumbnail"),
+        "--no-embed-thumbnail must show in --help"
+    );
+    assert!(
+        !short.contains("--no-embed-thumbnail"),
+        "--no-embed-thumbnail is EXPERT (hidden from -h)"
+    );
+    // The hidden positive must appear in neither.
+    assert!(
+        !long.contains("--embed-thumbnail "),
+        "--embed-thumbnail is hide=true; not in --help"
+    );
 }

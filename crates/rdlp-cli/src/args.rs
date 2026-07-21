@@ -248,9 +248,22 @@ pub struct Args {
     #[arg(long, help_heading = HELP_HEADING_POSTPROCESS)]
     pub embed_metadata: bool,
 
-    /// Disable automatic thumbnail download and embedding
-    #[arg(long, help_heading = HELP_HEADING_POSTPROCESS, hide_short_help = true)]
-    pub no_thumbnail: bool,
+    /// Embed thumbnail into the media file (on by default).
+    ///
+    /// Hidden positive half of the `--no-embed-thumbnail` pair: it restates the
+    /// default-ON state, so it is `hide = true` while the negation is visible.
+    #[arg(long, help_heading = HELP_HEADING_POSTPROCESS, hide = true)]
+    pub embed_thumbnail: bool,
+
+    /// Disable automatic thumbnail embedding (on by default)
+    #[arg(
+        long,
+        alias = "no-thumbnail",
+        overrides_with = "embed_thumbnail",
+        help_heading = HELP_HEADING_POSTPROCESS,
+        hide_short_help = true
+    )]
+    pub no_embed_thumbnail: bool,
 
     /// Write thumbnail image to disk alongside media file
     #[arg(long, help_heading = HELP_HEADING_POSTPROCESS, hide_short_help = true)]

@@ -90,6 +90,10 @@ fn resolve_interactive_values(args: &Args) -> Result<ResolvedInteractiveValues> 
 /// - `opt_pp: FIELD` — same, under `config.postprocess`
 /// - `set: FIELD <- ARG` — `if let Some(v) = args.ARG.clone() { config.FIELD = v; }`
 ///   (config field is NOT `Option`-typed; equivalent to `.clone_from(&v)`)
+/// - `tribool_pp: FIELD <- NEG` — tri-state negatable bool under
+///   `config.postprocess`: `if let Some(v) = flag(args.FIELD, args.NEG) {
+///   config.postprocess.FIELD = v; }`. `FIELD` is the positive flag+config
+///   field; `NEG` is the `--no-*` arg. Absent pair leaves the config value.
 ///
 /// Only `opt:` and `set:` support an optional/required `<- arg_name` arrow for
 /// when the CLI arg name differs from the config field name (e.g.
@@ -133,6 +137,30 @@ macro_rules! merge_fields {
             $config.$field = value;
         }
     };
+    (@arm $config:expr, $args:expr, tribool_pp, $field:ident <- $neg:ident) => {
+        if let Some(value) = flag($args.$field, $args.$neg) {
+            $config.postprocess.$field = value;
+        }
+    };
+}
+
+/// Resolves a `--foo` / `--no-foo` boolean pair to a tri-state.
+///
+/// clap's `overrides_with` wiring makes the pair mutually exclusive with POSIX
+/// last-wins semantics, so at most one of `yes`/`no` is `true` after parsing.
+/// Returns `None` when neither flag was passed, so an absent pair leaves the
+/// config-file / default value untouched at the merge boundary — the same
+/// absent-vs-`false` distinction the `opt:` arms preserve (#540/#583). A plain
+/// `bool` on the merge-facing path would collapse absent and `false` and
+/// silently clobber a config-file value, the anti-pattern this replaces.
+const fn flag(yes: bool, no: bool) -> Option<bool> {
+    if yes {
+        Some(true)
+    } else if no {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 /// Parses a CLI string into a typed value, attaching the context every call
@@ -183,6 +211,7 @@ pub fn merge_config(
         bool_pp: extract_audio,
         opt_pp: audio_quality,
         bool_pp: embed_metadata,
+        tribool_pp: embed_thumbnail <- no_embed_thumbnail,
         bool_pp: write_thumbnail,
         bool_pp: write_subtitles,
         bool: write_auto_subtitles,
@@ -247,10 +276,6 @@ pub fn merge_config(
     {
         config.postprocess.audio_format =
             Some(parse_arg::<AudioFormat>(audio_format, "audio format")?);
-    }
-
-    if args.no_thumbnail {
-        config.postprocess.embed_thumbnail = false;
     }
 
     // Subtitles
