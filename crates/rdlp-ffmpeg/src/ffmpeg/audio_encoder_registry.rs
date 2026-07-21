@@ -19,9 +19,10 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use log::info;
 use rdlp_types::ContainerFormat;
 use serde::{Deserialize, Serialize};
+
+use crate::ffmpeg::codec_registry;
 
 /// Information about a specific audio encoder.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -58,6 +59,19 @@ struct AudioCodecEntry {
     /// Container formats this codec is compatible with.
     supported_containers: &'static [ContainerFormat],
 }
+
+impl codec_registry::CodecRow for AudioCodecEntry {
+    fn codec(&self) -> &'static str {
+        self.codec
+    }
+    fn encoders(&self) -> &'static [(&'static str, &'static str)] {
+        self.encoders
+    }
+}
+
+/// Per-registry cache. Module-level, NOT inside a generic function — see
+/// `codec_registry::preferred_encoder`.
+static AUDIO_CACHE: OnceLock<HashMap<&'static str, Option<&'static str>>> = OnceLock::new();
 
 /// Static preference table for audio codecs.
 ///
@@ -189,7 +203,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
 pub fn is_audio_encoder_available(encoder: &str) -> bool {
-    ffmpeg_the_third::codec::encoder::find_by_name(encoder).is_some()
+    codec_registry::is_encoder_available(encoder)
 }
 
 /// Returns the best available audio encoder for a given codec name.
@@ -200,30 +214,7 @@ pub fn is_audio_encoder_available(encoder: &str) -> bool {
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
 pub fn preferred_audio_encoder(codec: &str) -> Option<&'static str> {
-    static CACHE: OnceLock<HashMap<&'static str, Option<&'static str>>> = OnceLock::new();
-
-    let cache = CACHE.get_or_init(|| {
-        let mut map = HashMap::new();
-        for entry in AUDIO_CODEC_PREFERENCES {
-            let selected = entry
-                .encoders
-                .iter()
-                .find(|(enc, _)| is_audio_encoder_available(enc))
-                .map(|(enc, _)| *enc);
-
-            if let Some(enc) = selected {
-                info!("Using {enc} as {codec} audio encoder", codec = entry.codec);
-            }
-
-            map.insert(entry.codec, selected);
-        }
-        map
-    });
-
-    cache
-        .get(codec.to_ascii_lowercase().as_str())
-        .copied()
-        .flatten()
+    codec_registry::preferred_encoder(AUDIO_CODEC_PREFERENCES, &AUDIO_CACHE, codec, "audio")
 }
 
 /// Resolves an audio encoder name.
@@ -238,22 +229,7 @@ pub fn preferred_audio_encoder(codec: &str) -> Option<&'static str> {
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
 pub fn resolve_audio_encoder(input: &str) -> Option<&'static str> {
-    let lower = input.to_ascii_lowercase();
-
-    // Check if input is a known codec name first
-    if let Some(enc) = preferred_audio_encoder(&lower) {
-        return Some(enc);
-    }
-
-    // Otherwise treat as a direct encoder name — find the matching static str,
-    // then gate on availability. Short-circuits on the first name match exactly
-    // like the prior nested-loop search (duplicate names occur only across
-    // byte-identical codec-alias rows), so the verdict is unchanged.
-    AUDIO_CODEC_PREFERENCES
-        .iter()
-        .flat_map(|entry| entry.encoders)
-        .find(|(enc, _)| enc.eq_ignore_ascii_case(input))
-        .and_then(|(enc, _)| is_audio_encoder_available(enc).then_some(*enc))
+    codec_registry::resolve(AUDIO_CODEC_PREFERENCES, &AUDIO_CACHE, input, "audio")
 }
 
 /// Returns all available encoders for a given audio codec name, in preference order.
@@ -263,18 +239,12 @@ pub fn resolve_audio_encoder(input: &str) -> Option<&'static str> {
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
 pub fn available_audio_encoders_for_codec(codec: &str) -> Vec<AudioEncoderInfo> {
-    let lower = codec.to_ascii_lowercase();
-    AUDIO_CODEC_PREFERENCES
-        .iter()
-        .find(|e| e.codec == lower.as_str())
-        .map(|entry| {
-            entry
-                .encoders
-                .iter()
-                .filter(|(enc, _)| is_audio_encoder_available(enc))
+    codec_registry::find_row(AUDIO_CODEC_PREFERENCES, codec)
+        .map(|row| {
+            codec_registry::available_encoders(row)
                 .map(|(enc, display)| AudioEncoderInfo {
-                    encoder_name: (*enc).to_string(),
-                    display_name: (*display).to_string(),
+                    encoder_name: enc.to_string(),
+                    display_name: display.to_string(),
                 })
                 .collect()
         })
@@ -290,13 +260,10 @@ pub fn list_available_audio_codecs() -> Vec<AudioCodecInfo> {
     AUDIO_CODEC_PREFERENCES
         .iter()
         .filter_map(|entry| {
-            let encoders: Vec<AudioEncoderInfo> = entry
-                .encoders
-                .iter()
-                .filter(|(enc, _)| is_audio_encoder_available(enc))
+            let encoders: Vec<AudioEncoderInfo> = codec_registry::available_encoders(entry)
                 .map(|(enc, display)| AudioEncoderInfo {
-                    encoder_name: (*enc).to_string(),
-                    display_name: (*display).to_string(),
+                    encoder_name: enc.to_string(),
+                    display_name: display.to_string(),
                 })
                 .collect();
 
