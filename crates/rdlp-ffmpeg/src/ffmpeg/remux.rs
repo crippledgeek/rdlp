@@ -86,9 +86,13 @@ impl FFmpegRunner {
 
         // MKV: use raw FFI with proper stream property copying for VLC compatibility.
         // The key is copying avg_frame_rate which sets Matroska's "Default duration" element.
-        let is_mkv = output
-            .extension()
-            .is_some_and(|e| e.eq_ignore_ascii_case("mkv"));
+        // Via ContainerFormat rather than a literal "mkv" compare, so this
+        // cannot drift from the rest of the container vocabulary. Slight
+        // widening: a `.matroska` output now takes the raw-FFI path too, which
+        // is correct — it is the same container under an alias, and it used to
+        // silently fall through to the generic muxer.
+        let is_mkv = rdlp_types::ContainerFormat::from_path(output)
+            == Some(rdlp_types::ContainerFormat::Mkv);
         if is_mkv {
             return Self::remux_mkv_raw_ffi(
                 input,

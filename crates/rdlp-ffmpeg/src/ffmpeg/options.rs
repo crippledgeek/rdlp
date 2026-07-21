@@ -19,10 +19,7 @@ use std::path::Path;
 /// An unrecognised extension answers `false` — matching the previous behaviour
 /// for unknown containers.
 pub fn faststart_for_output(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .and_then(|e| e.parse::<rdlp_types::ContainerFormat>().ok())
-        .is_some_and(|c| c.supports_faststart())
+    rdlp_types::ContainerFormat::from_path(path).is_some_and(|c| c.supports_faststart())
 }
 
 /// Options for remux and merge operations.

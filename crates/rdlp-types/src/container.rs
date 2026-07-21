@@ -4,6 +4,8 @@ use serde::Serialize;
 
 use crate::parse_error::ParseEnumError;
 use serde_with::DeserializeFromStr;
+use std::path::Path;
+
 use strum_macros::{Display, EnumIter, EnumString};
 
 /// Builds the `FromStr` error for [`ContainerFormat`].
@@ -196,6 +198,25 @@ impl ContainerFormat {
             Self::Caf => "caf",
             Self::Ac3 => "ac3",
         }
+    }
+
+    /// Derive the container from a filesystem path's extension.
+    ///
+    /// The single place a path becomes a `ContainerFormat`. Honours everything
+    /// [`FromStr`](std::str::FromStr) does — the canonical extension, the
+    /// aliases (`matroska`, `quicktime`, ...), and ASCII case — so callers stop
+    /// hand-rolling `path.extension().and_then(str::parse)` chains that each
+    /// pick their own subset of that vocabulary. Answers `None` for a missing,
+    /// non-UTF-8, or unrecognised extension; deciding what `None` means is the
+    /// caller's job.
+    ///
+    /// Takes only the path's extension — no filesystem access, so this stays
+    /// within the crate's pure-data remit.
+    #[must_use]
+    pub fn from_path(path: &Path) -> Option<Self> {
+        path.extension()
+            .and_then(|e| e.to_str())
+            .and_then(|e| e.parse().ok())
     }
 
     /// Whether this container supports faststart (moov atom at beginning).
@@ -542,5 +563,47 @@ mod tests {
             !ContainerFormat::Asf.is_audio_only(),
             "asf is the general fallback and may carry video"
         );
+    }
+
+    /// `from_path` is the one place a filesystem path becomes a container, so
+    /// it must honour everything `FromStr` honours: the canonical extension,
+    /// the strum aliases, and ASCII case-insensitivity.
+    #[test]
+    fn from_path_accepts_canonical_aliases_and_any_case() {
+        for (path, want) in [
+            ("/tmp/Title.mkv", ContainerFormat::Mkv),
+            ("/tmp/Title.matroska", ContainerFormat::Mkv),
+            ("/tmp/Title.MKV", ContainerFormat::Mkv),
+            ("/tmp/Title.quicktime", ContainerFormat::Mov),
+            ("Title.mp4", ContainerFormat::Mp4),
+            ("/tmp/a.b.c/Title.with.dots.webm", ContainerFormat::WebM),
+        ] {
+            assert_eq!(
+                ContainerFormat::from_path(std::path::Path::new(path)),
+                Some(want),
+                "{path}"
+            );
+        }
+    }
+
+    /// The negative space: anything that is not a recognised container answers
+    /// `None` rather than guessing a default.
+    #[test]
+    fn from_path_rejects_missing_unknown_and_non_container_extensions() {
+        for path in [
+            "/tmp/Title",
+            "/tmp/Title.",
+            "/tmp/.hidden",
+            "/tmp/Title.rdlp-part",
+            "/tmp/Title.srt",
+            "/tmp/Title.xyz",
+            "",
+        ] {
+            assert_eq!(
+                ContainerFormat::from_path(std::path::Path::new(path)),
+                None,
+                "{path:?} must not resolve to a container"
+            );
+        }
     }
 }
