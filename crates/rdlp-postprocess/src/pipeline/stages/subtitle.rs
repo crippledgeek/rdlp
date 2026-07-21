@@ -11,13 +11,17 @@ use log::{debug, warn};
 
 use rdlp_ffmpeg::FFmpegRunner;
 
+use rdlp_types::ContainerFormat;
+
+use super::subtitle_codec::SubtitleEmbedCodec;
 use crate::pipeline::{DiscoveredSidecar, PipelineMessage, PipelineStage, SidecarOwnership};
 
 /// Subtitle file extensions to search for.
 const SUBTITLE_EXTENSIONS: &[&str] = &["srt", "vtt", "ass", "ssa", "lrc"];
 
-/// Containers that support subtitle embedding.
-const SUBTITLE_CONTAINERS: &[&str] = &["mp4", "m4a", "m4v", "mov", "mkv", "mka", "webm"];
+// Which containers accept subtitles, and with which codec, is decided in
+// `super::subtitle_codec` by an exhaustive `ContainerFormat` match — never by
+// a string list here.
 
 /// Embeds subtitle streams into video containers.
 ///
@@ -34,30 +38,18 @@ impl SubtitleStage {
         Self { ffmpeg }
     }
 
-    /// Check if the container format supports subtitle embedding.
-    fn supports_subtitles(extension: &str) -> bool {
-        SUBTITLE_CONTAINERS
-            .iter()
-            .any(|c| c.eq_ignore_ascii_case(extension))
-    }
-
-    /// Get the `FFmpeg` subtitle codec for a container format.
-    fn subtitle_codec_for_container(container_ext: &str) -> &'static str {
-        if ["mp4", "m4a", "m4v", "mov"]
-            .iter()
-            .any(|c| c.eq_ignore_ascii_case(container_ext))
-        {
-            "mov_text"
-        } else if ["mkv", "mka"]
-            .iter()
-            .any(|c| c.eq_ignore_ascii_case(container_ext))
-        {
-            "srt"
-        } else if container_ext.eq_ignore_ascii_case("webm") {
-            "webvtt"
-        } else {
-            "srt"
-        }
+    /// Resolve the subtitle codec for a file extension, or `None` when the
+    /// container cannot carry subtitles.
+    ///
+    /// An unparseable extension is not a subtitle target, which is why this
+    /// swallows the parse error: `ContainerFormat` already owns the vocabulary
+    /// (including its aliases), so anything it rejects is not a container we
+    /// can embed into.
+    fn codec_for_extension(extension: &str) -> Option<SubtitleEmbedCodec> {
+        extension
+            .parse::<ContainerFormat>()
+            .ok()
+            .and_then(SubtitleEmbedCodec::for_container)
     }
 
     /// Find subtitle files alongside a media file using `original_stem` for discovery.
@@ -167,10 +159,10 @@ impl PipelineStage for SubtitleStage {
             .and_then(|e| e.to_str())
             .unwrap_or("");
 
-        if !Self::supports_subtitles(extension) {
+        let Some(codec) = Self::codec_for_extension(extension) else {
             debug!("SubtitleStage: container '{extension}' does not support subtitle embedding");
             return Ok(msg);
-        }
+        };
 
         let subtitle_files = Self::find_subtitle_files(&media_file, &msg.original_stem).await;
 
@@ -182,7 +174,7 @@ impl PipelineStage for SubtitleStage {
             return Ok(msg);
         }
 
-        let codec = Self::subtitle_codec_for_container(extension);
+        let codec = codec.as_ffmpeg_name();
         // FFmpeg subtitle embedding is not yet implemented in rdlp-ffmpeg.
         // Surface this LOUDLY: a user invoking --embed-subtitles must see a
         // warn-level message AND a structured warning on the pipeline so
@@ -301,34 +293,39 @@ mod tests {
         assert!(!stage.is_fatal());
     }
 
+    /// Same coverage the two string-based helpers had, now through the one
+    /// typed entry point that replaced them.
     #[test]
     fn supports_subtitle_containers() {
-        assert!(SubtitleStage::supports_subtitles("mp4"));
-        assert!(SubtitleStage::supports_subtitles("mkv"));
-        assert!(SubtitleStage::supports_subtitles("webm"));
-        assert!(!SubtitleStage::supports_subtitles("ts"));
-        assert!(!SubtitleStage::supports_subtitles("avi"));
+        assert!(SubtitleStage::codec_for_extension("mp4").is_some());
+        assert!(SubtitleStage::codec_for_extension("mkv").is_some());
+        assert!(SubtitleStage::codec_for_extension("webm").is_some());
+        assert!(SubtitleStage::codec_for_extension("ts").is_none());
+        assert!(SubtitleStage::codec_for_extension("avi").is_none());
     }
 
     #[test]
-    fn subtitle_codec_for_mp4() {
-        assert_eq!(
-            SubtitleStage::subtitle_codec_for_container("mp4"),
-            "mov_text"
-        );
+    fn subtitle_codec_per_container_family() {
+        for (ext, want) in [("mp4", "mov_text"), ("mkv", "srt"), ("webm", "webvtt")] {
+            assert_eq!(
+                SubtitleStage::codec_for_extension(ext).map(SubtitleEmbedCodec::as_ffmpeg_name),
+                Some(want),
+            );
+        }
     }
 
+    /// New negative coverage the string path never had: an extension that is
+    /// not a container at all, and a file with no extension, must both be
+    /// "no subtitle target" rather than falling through to the old `"srt"`
+    /// default.
     #[test]
-    fn subtitle_codec_for_mkv() {
-        assert_eq!(SubtitleStage::subtitle_codec_for_container("mkv"), "srt");
-    }
-
-    #[test]
-    fn subtitle_codec_for_webm() {
-        assert_eq!(
-            SubtitleStage::subtitle_codec_for_container("webm"),
-            "webvtt"
-        );
+    fn unknown_and_empty_extensions_are_not_subtitle_targets() {
+        for ext in ["", "part", "rdlp-tmp", "txt", "srt"] {
+            assert!(
+                SubtitleStage::codec_for_extension(ext).is_none(),
+                "{ext:?} must not resolve to a subtitle codec"
+            );
+        }
     }
 
     #[tokio::test]
