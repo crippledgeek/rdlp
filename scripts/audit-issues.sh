@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Issue-hygiene reconciliation report (read-only; makes no changes).
 #
 # Surfaces the rot patterns that let issues drift out of sync with the code,

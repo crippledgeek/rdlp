@@ -9,7 +9,13 @@
 #
 # Usage: scripts/check-gui-option-parity.sh [--self-test]
 set -euo pipefail
-cd "$(git rev-parse --show-toplevel)"
+
+# Pin the C locale: GNU grep's manual says range expressions like the `[a-z_]`
+# classes used below are UNSPECIFIED outside the C locale -- they "might fail to
+# match any character". A correctness fix, NOT a speed one (measured: no
+# difference). Full quote and rationale in #621.
+export LC_ALL=C
+cd "$(git rev-parse --show-toplevel)" || exit 2
 
 REGISTRY="crates/rdlp-api/src/options.rs"
 APPSETTINGS="crates/rdlp-desktop/src-tauri/src/state/app_settings.rs"

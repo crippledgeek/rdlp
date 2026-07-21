@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # CI guard: fail if production code enumerates a directory and deletes what it
 # finds there.
 #
@@ -48,11 +48,17 @@
 
 set -euo pipefail
 
+# Pin the C locale: GNU grep's manual says range expressions like the `[a-z_]`
+# classes used below are UNSPECIFIED outside the C locale -- they "might fail to
+# match any character". A correctness fix, NOT a speed one (measured: no
+# difference). Full quote and rationale in #621.
+export LC_ALL=C
+
 # Anchor to the repo root. `crates/*/src` is a relative glob: run from anywhere
 # else it expands to nothing, find scans zero files, and the script would
 # cheerfully report OK. A gate that passes having scanned nothing is worse than
 # no gate, so this is load-bearing, not tidiness.
-cd "$(git rev-parse --show-toplevel)"
+cd "$(git rev-parse --show-toplevel)" || exit 2
 
 SELF_TEST=0
 [ "${1:-}" = "--self-test" ] && SELF_TEST=1
