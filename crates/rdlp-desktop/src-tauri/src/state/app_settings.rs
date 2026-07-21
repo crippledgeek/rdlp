@@ -136,7 +136,39 @@ pub struct AppSettings {
     /// Retry failed subtitle downloads.
     #[serde(default)]
     pub retry_subs: bool,
+    /// Number of concurrent fragment/chunk downloads. `None` uses default (8).
+    /// Validated by [`AppSettings::validate_security`]: must be 1..=64.
+    #[serde(default)]
+    pub concurrent_fragments: Option<u32>,
+    /// Download buffer size in **bytes**. `None` uses default (2 MiB).
+    /// Validated by [`AppSettings::validate_security`]: must be 1..=1 GiB.
+    ///
+    /// The Settings UI presents this in MiB; bytes remain the stored truth.
+    #[serde(default)]
+    pub buffer_size: Option<u64>,
+    /// Minimum file size in **bytes** before parallel chunked download is used.
+    /// `None` uses default (10 MiB). Validated: must be 1..=1 GiB (mirrors
+    /// `rdlp_types::Config::validate()`).
+    #[serde(default)]
+    pub parallel_threshold: Option<u64>,
+    /// HLS HEAD-probe timeout in seconds. `None` uses default (5).
+    /// Validated by [`AppSettings::validate_security`]: must be 1..=300.
+    #[serde(default)]
+    pub hls_head_probe_timeout: Option<u64>,
 }
+
+/// Upper bound on `parse_and_validate`'s reset-and-revalidate loop.
+///
+/// `reset_invalid_field`'s `OutOfRange` arm matches exactly 9 numeric fields
+/// (`socket_timeout`, `read_timeout`, `pool_idle_timeout`, `download_timeout`,
+/// `merge_timeout`, `concurrent_fragments`, `buffer_size`, `parallel_threshold`,
+/// `hls_head_probe_timeout`); each loop iteration resets a distinct field to
+/// `None` (which is always in-range), so a legitimately hand-edited file can
+/// require at most 9 iterations to converge. This bound exists so the loop's
+/// termination is structural rather than incidental on `AppSettings::default()`
+/// happening to validate — see the `debug_assert!` in `parse_and_validate` and
+/// Finding 5 in `task-9-report.md`.
+const MAX_RESET_ITERATIONS: u32 = 9;
 
 impl AppSettings {
     /// Return the path to the settings file on disk.
@@ -159,13 +191,25 @@ impl AppSettings {
 
     /// Load settings from disk, falling back to defaults.
     ///
-    /// Reads the settings file at [`Self::settings_path()`]. If the
-    /// file is missing or contains invalid JSON, returns
-    /// [`Default::default()`] instead.
+    /// Reads the settings file at [`Self::settings_path()`]. If the file is
+    /// missing or contains invalid JSON, returns [`Default::default()`]. If it
+    /// parses but one or more fields fail security validation (see
+    /// [`Self::validate_security`]), only the offending field(s) reset to
+    /// their default (`None`) — every other field is preserved. See
+    /// [`Self::parse_and_validate`] for why: a whole-record fallback would
+    /// clobber the user's `output_dir`, cookies, proxy, and every other
+    /// setting over one out-of-range field.
+    ///
+    /// A hand-edited `settings.json` bypasses the frontend's zod schema, so this
+    /// is the last point that can reject an out-of-range or unsafe value before
+    /// it reaches the rest of the application (e.g. an allocation sized directly
+    /// from `buffer_size`). This is the only enforcement point on the *load*
+    /// path; the *save* path enforces the same check in `update_settings`.
     ///
     /// # Returns
     ///
-    /// The loaded [`AppSettings`], or defaults if loading fails.
+    /// The loaded [`AppSettings`], with any invalid field(s) reset to their
+    /// default, or full defaults if the file is missing/unparseable.
     #[must_use]
     pub fn load() -> Self {
         let path = Self::settings_path();
@@ -177,20 +221,111 @@ impl AppSettings {
                 info!("No settings file at {}, using defaults", path.display());
                 Self::default()
             },
-            |contents| match serde_json::from_str(&contents) {
-                Ok(settings) => {
-                    info!("Loaded settings from {}", path.display());
-                    settings
-                }
-                Err(e) => {
+            |contents| Self::parse_and_validate(&contents, &path),
+        )
+    }
+
+    /// Parse `contents` as JSON, then validate the result. A parse error falls back to
+    /// [`Default::default()`] (there's no partial record to preserve). A validation
+    /// failure resets ONLY the offending field to `None` ("inherit default" — see
+    /// [`Self::reset_invalid_field`]) and re-validates, looping until the record is
+    /// fully valid; every other field survives untouched.
+    ///
+    /// Extracted from [`Self::load()`] so the parse-then-validate logic is testable
+    /// without depending on [`Self::settings_path()`], which resolves to a fixed,
+    /// non-configurable per-process path.
+    fn parse_and_validate(contents: &str, path: &std::path::Path) -> Self {
+        // `AppSettings::default()` is the fail-safe fallback both inside this loop
+        // (see `reset_invalid_field`'s `other =>` arm) and if `MAX_RESET_ITERATIONS`
+        // is ever exhausted below. That fallback only terminates the loop because
+        // the default record happens to be in-range; this assertion makes that
+        // assumption explicit and catches a future default drifting out-of-range
+        // before it can turn into an infinite loop in a release build.
+        debug_assert!(
+            Self::default().validate_security().is_ok(),
+            "AppSettings::default() must always pass validate_security() — it is the \
+             fail-safe fallback the reset loop below relies on to terminate"
+        );
+        match serde_json::from_str::<Self>(contents) {
+            Ok(mut settings) => {
+                // Loop resetting only the offending field, because a hand-edited
+                // settings.json can carry more than one out-of-range value and
+                // `validate_security()` reports (and this loop resets) one at a time.
+                // A field reset to `None` means "inherit the default" everywhere else
+                // in this design, so it is the exact remedy — never fall back to
+                // `Self::default()`, which would also discard every OTHER field the
+                // user had set (output_dir, cookies, proxy, format defaults, ...).
+                //
+                // Bounded by `MAX_RESET_ITERATIONS` so termination is structural, not
+                // merely incidental on `reset_invalid_field`'s fail-safe reaching a
+                // valid record: without this bound, a future out-of-range default
+                // field that is ALSO missing from `reset_invalid_field`'s match would
+                // spin forever, since its `other =>` arm sets `*self = Self::default()`
+                // and a still-invalid default would immediately fail validation again.
+                let mut iterations = 0u32;
+                while let Err(e) = settings.validate_security() {
+                    if iterations >= MAX_RESET_ITERATIONS {
+                        warn!(
+                            "Settings at {} still failing validation after {MAX_RESET_ITERATIONS} \
+                             reset attempts ({e}); falling back to full defaults",
+                            path.display()
+                        );
+                        settings = Self::default();
+                        break;
+                    }
                     warn!(
-                        "Failed to parse settings at {}: {e}, using defaults",
+                        "Settings at {} failed validation ({e}); resetting that field to its default",
                         path.display()
                     );
-                    Self::default()
+                    settings.reset_invalid_field(&e);
+                    iterations += 1;
+                }
+                info!("Loaded settings from {}", path.display());
+                settings
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to parse settings at {}: {e}, using defaults",
+                    path.display()
+                );
+                Self::default()
+            }
+        }
+    }
+
+    /// Reset the single field named by `err` to its default (`None`/unset), leaving
+    /// every other field untouched.
+    ///
+    /// Only [`SettingsValidationError::OutOfRange`] identifies a single numeric field;
+    /// the other variants (`CookiesFileTraversal`, `InvalidProxy`) reset their
+    /// respective non-numeric field to `None` directly, since they carry no `field`
+    /// name to dispatch on.
+    fn reset_invalid_field(&mut self, err: &SettingsValidationError) {
+        match err {
+            SettingsValidationError::CookiesFileTraversal => self.cookies_file = None,
+            SettingsValidationError::InvalidProxy(_) => self.proxy = None,
+            SettingsValidationError::OutOfRange { field, .. } => match *field {
+                "socket_timeout" => self.socket_timeout = None,
+                "read_timeout" => self.read_timeout = None,
+                "pool_idle_timeout" => self.pool_idle_timeout = None,
+                "download_timeout" => self.download_timeout = None,
+                "merge_timeout" => self.merge_timeout = None,
+                "concurrent_fragments" => self.concurrent_fragments = None,
+                "buffer_size" => self.buffer_size = None,
+                "parallel_threshold" => self.parallel_threshold = None,
+                "hls_head_probe_timeout" => self.hls_head_probe_timeout = None,
+                other => {
+                    // Unreachable in practice (every `OutOfRange` field above is listed).
+                    // Fail safe rather than looping forever on an unmatched field: fall
+                    // back to full defaults for this one pathological case only.
+                    warn!(
+                        "Unknown out-of-range field '{other}' during settings reset; \
+                         resetting the whole record to defaults as a fail-safe"
+                    );
+                    *self = Self::default();
                 }
             },
-        )
+        }
     }
 
     /// Persist the current settings to disk as JSON.
@@ -260,6 +395,10 @@ impl Default for AppSettings {
             strict_subs: false,
             verify_sub_urls: false,
             retry_subs: false,
+            concurrent_fragments: None,
+            buffer_size: None,
+            parallel_threshold: None,
+            hls_head_probe_timeout: None,
         }
     }
 }
@@ -271,8 +410,8 @@ pub enum SettingsValidationError {
     CookiesFileTraversal,
     /// `proxy` URL failed security validation.
     InvalidProxy(String),
-    /// A timeout field is outside its allowed range.
-    TimeoutOutOfRange {
+    /// A numeric field is outside its allowed range.
+    OutOfRange {
         /// Name of the offending field (e.g. `"socket_timeout"`).
         field: &'static str,
         /// Human-readable description of the allowed range.
@@ -287,7 +426,7 @@ impl std::fmt::Display for SettingsValidationError {
                 f.write_str("cookies_file path must not contain '..' components")
             }
             Self::InvalidProxy(msg) => write!(f, "invalid proxy URL: {msg}"),
-            Self::TimeoutOutOfRange { field, reason } => {
+            Self::OutOfRange { field, reason } => {
                 write!(f, "{field}: {reason}")
             }
         }
@@ -295,6 +434,18 @@ impl std::fmt::Display for SettingsValidationError {
 }
 
 impl std::error::Error for SettingsValidationError {}
+
+/// Upper bound for byte-valued settings, in bytes (1 GiB).
+///
+/// Mirrors `rdlp_types::Config::validate()`'s `parallel_threshold` and `buffer_size`
+/// ceilings rather than introducing a second magic number. `Config::validate()` is not
+/// called on the desktop path (see `commands::download`), so `validate_security` is this
+/// field's enforcement point on that path — run on both `AppSettings::load()` and the
+/// `update_settings` save command, so neither a hand-edited `settings.json` nor a save
+/// from the UI can carry an out-of-range value. No cross-crate test enforces the two
+/// literals staying in sync, so a future change to either ceiling must be mirrored
+/// manually in the other crate.
+const MAX_BYTE_SETTING: u64 = 1024 * 1024 * 1024;
 
 impl AppSettings {
     /// Validate security-sensitive fields before persisting.
@@ -322,7 +473,7 @@ impl AppSettings {
         if let Some(t) = self.socket_timeout
             && !(1..=300).contains(&t)
         {
-            return Err(SettingsValidationError::TimeoutOutOfRange {
+            return Err(SettingsValidationError::OutOfRange {
                 field: "socket_timeout",
                 reason: "must be 1..=300 seconds",
             });
@@ -330,7 +481,7 @@ impl AppSettings {
         if let Some(t) = self.read_timeout
             && !(1..=600).contains(&t)
         {
-            return Err(SettingsValidationError::TimeoutOutOfRange {
+            return Err(SettingsValidationError::OutOfRange {
                 field: "read_timeout",
                 reason: "must be 1..=600 seconds",
             });
@@ -338,7 +489,7 @@ impl AppSettings {
         if let Some(t) = self.pool_idle_timeout
             && t > 3600
         {
-            return Err(SettingsValidationError::TimeoutOutOfRange {
+            return Err(SettingsValidationError::OutOfRange {
                 field: "pool_idle_timeout",
                 reason: "must be 0..=3600 seconds (0 = disabled)",
             });
@@ -346,7 +497,7 @@ impl AppSettings {
         if let Some(t) = self.download_timeout
             && !(1..=86400).contains(&t)
         {
-            return Err(SettingsValidationError::TimeoutOutOfRange {
+            return Err(SettingsValidationError::OutOfRange {
                 field: "download_timeout",
                 reason: "must be 1..=86400 seconds",
             });
@@ -354,9 +505,41 @@ impl AppSettings {
         if let Some(t) = self.merge_timeout
             && !(1..=86400).contains(&t)
         {
-            return Err(SettingsValidationError::TimeoutOutOfRange {
+            return Err(SettingsValidationError::OutOfRange {
                 field: "merge_timeout",
                 reason: "must be 1..=86400 seconds",
+            });
+        }
+        if let Some(n) = self.concurrent_fragments
+            && !(1..=64).contains(&n)
+        {
+            return Err(SettingsValidationError::OutOfRange {
+                field: "concurrent_fragments",
+                reason: "must be 1..=64 (caps peak transient memory under parallel fetch)",
+            });
+        }
+        if let Some(n) = self.buffer_size
+            && !(1..=MAX_BYTE_SETTING).contains(&n)
+        {
+            return Err(SettingsValidationError::OutOfRange {
+                field: "buffer_size",
+                reason: "must be 1..=1_073_741_824 bytes (1 GiB)",
+            });
+        }
+        if let Some(n) = self.parallel_threshold
+            && !(1..=MAX_BYTE_SETTING).contains(&n)
+        {
+            return Err(SettingsValidationError::OutOfRange {
+                field: "parallel_threshold",
+                reason: "must be 1..=1_073_741_824 bytes (1 GiB)",
+            });
+        }
+        if let Some(t) = self.hls_head_probe_timeout
+            && !(1..=300).contains(&t)
+        {
+            return Err(SettingsValidationError::OutOfRange {
+                field: "hls_head_probe_timeout",
+                reason: "must be 1..=300 seconds",
             });
         }
 
@@ -628,6 +811,10 @@ mod tests {
             strict_subs: true,
             verify_sub_urls: true,
             retry_subs: true,
+            concurrent_fragments: None,
+            buffer_size: None,
+            parallel_threshold: None,
+            hls_head_probe_timeout: None,
         };
 
         let json = serde_json::to_string(&settings).expect("serialization should succeed");
@@ -726,6 +913,332 @@ mod tests {
                 && !s.strict_subs
                 && !s.verify_sub_urls
                 && !s.retry_subs
+        );
+    }
+
+    #[test]
+    fn test_new_throughput_fields_default_to_none() {
+        let s = AppSettings::default();
+        assert!(s.concurrent_fragments.is_none());
+        assert!(s.buffer_size.is_none());
+        assert!(s.parallel_threshold.is_none());
+        assert!(s.hls_head_probe_timeout.is_none());
+    }
+
+    #[test]
+    fn legacy_json_without_throughput_fields_defaults_none() {
+        // Minimal legacy settings.json predating the throughput fields. `None`, not
+        // `Some(0)` — a zero would be a valid-looking value that disables chunking.
+        let json = r#"{"output_dir":"/tmp","embed_thumbnail":true,"embed_metadata":false,"verbose":false,"default_subtitle_langs":[]}"#;
+        let s: AppSettings = serde_json::from_str(json).unwrap();
+        assert!(
+            s.concurrent_fragments.is_none()
+                && s.buffer_size.is_none()
+                && s.parallel_threshold.is_none()
+                && s.hls_head_probe_timeout.is_none()
+        );
+    }
+
+    #[test]
+    fn test_throughput_fields_round_trip_json() {
+        let s = AppSettings {
+            concurrent_fragments: Some(16),
+            buffer_size: Some(4 * 1024 * 1024),
+            parallel_threshold: Some(20 * 1024 * 1024),
+            hls_head_probe_timeout: Some(10),
+            ..AppSettings::default()
+        };
+        let json = serde_json::to_string(&s).expect("serialize");
+        let back: AppSettings = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back.concurrent_fragments, Some(16));
+        assert_eq!(back.buffer_size, Some(4 * 1024 * 1024));
+        assert_eq!(back.parallel_threshold, Some(20 * 1024 * 1024));
+        assert_eq!(back.hls_head_probe_timeout, Some(10));
+    }
+
+    // --- Boundary pairs: each pair is one a `>=`-for-`>` slip cannot both pass. ---
+
+    #[test]
+    fn test_concurrent_fragments_boundary() {
+        let ok = AppSettings {
+            concurrent_fragments: Some(64),
+            ..AppSettings::default()
+        };
+        assert!(ok.validate_security().is_ok(), "64 is the documented max");
+        let bad = AppSettings {
+            concurrent_fragments: Some(65),
+            ..AppSettings::default()
+        };
+        let err = bad.validate_security().expect_err("65 must be rejected");
+        assert!(err.to_string().contains("concurrent_fragments"));
+        let zero = AppSettings {
+            concurrent_fragments: Some(0),
+            ..AppSettings::default()
+        };
+        assert!(
+            zero.validate_security().is_err(),
+            "0 fragments is meaningless"
+        );
+    }
+
+    #[test]
+    fn test_byte_setting_upper_boundary() {
+        let ok = AppSettings {
+            buffer_size: Some(1024 * 1024 * 1024),
+            parallel_threshold: Some(1024 * 1024 * 1024),
+            ..AppSettings::default()
+        };
+        assert!(
+            ok.validate_security().is_ok(),
+            "1 GiB is the documented max"
+        );
+
+        let bad_buf = AppSettings {
+            buffer_size: Some(1024 * 1024 * 1024 + 1),
+            ..AppSettings::default()
+        };
+        let err = bad_buf
+            .validate_security()
+            .expect_err("over 1 GiB must be rejected");
+        assert!(err.to_string().contains("buffer_size"));
+
+        let bad_thr = AppSettings {
+            parallel_threshold: Some(1024 * 1024 * 1024 + 1),
+            ..AppSettings::default()
+        };
+        assert!(bad_thr.validate_security().is_err());
+    }
+
+    #[test]
+    fn test_byte_setting_lower_boundary() {
+        let ok = AppSettings {
+            buffer_size: Some(1),
+            ..AppSettings::default()
+        };
+        assert!(ok.validate_security().is_ok(), "1 byte is in range");
+        let bad = AppSettings {
+            buffer_size: Some(0),
+            ..AppSettings::default()
+        };
+        assert!(
+            bad.validate_security().is_err(),
+            "0 is rejected by Config::validate too"
+        );
+    }
+
+    #[test]
+    fn test_parallel_threshold_lower_boundary() {
+        let ok = AppSettings {
+            parallel_threshold: Some(1),
+            ..AppSettings::default()
+        };
+        assert!(ok.validate_security().is_ok(), "1 byte is in range");
+        let bad = AppSettings {
+            parallel_threshold: Some(0),
+            ..AppSettings::default()
+        };
+        let err = bad
+            .validate_security()
+            .expect_err("0 is rejected by Config::validate too");
+        assert!(err.to_string().contains("parallel_threshold"));
+    }
+
+    /// The GUI floors these fields at 1 MiB, but validation must NOT — a hand-edited
+    /// settings.json carrying a legitimate sub-MiB value has to survive. Guards against
+    /// someone hardening validation to match the `NumberField`'s `minValue`.
+    #[test]
+    fn test_sub_mib_byte_values_are_accepted() {
+        let s = AppSettings {
+            buffer_size: Some(500_000),
+            parallel_threshold: Some(500_000),
+            ..AppSettings::default()
+        };
+        assert!(s.validate_security().is_ok(), "sub-MiB must remain valid");
+    }
+
+    /// Finding A regression guard: `AppSettings::load()` used to deserialize straight
+    /// into state and never call `validate_security()`, so a hand-edited
+    /// `settings.json` with `{"buffer_size": 100000000000}` (100 GB, far above the
+    /// 1 GiB ceiling) would flow unchecked into `build_network_options` /
+    /// `BufWriter::with_capacity`. This exercises the exact logic `load()` runs
+    /// (`parse_and_validate`) so it fails against the pre-fix code (which had no
+    /// `validate_security()` call in that path) and passes once the fix is applied.
+    ///
+    /// Updated for Finding 2: `load()` now resets ONLY the offending field, not the
+    /// whole record — see `test_valid_neighbouring_field_survives_invalid_sibling`
+    /// for the field-preservation half of this contract.
+    #[test]
+    fn test_out_of_range_settings_json_resets_only_that_field() {
+        let json = r#"{
+            "output_dir": "/tmp",
+            "embed_thumbnail": true,
+            "embed_metadata": false,
+            "verbose": false,
+            "default_subtitle_langs": [],
+            "buffer_size": 100000000000
+        }"#;
+        let settings = AppSettings::parse_and_validate(json, std::path::Path::new("test.json"));
+        assert_eq!(
+            settings.buffer_size, None,
+            "out-of-range buffer_size must NOT survive load — it resets to None (inherit default)"
+        );
+    }
+
+    /// Finding 2 regression guard: a bad field alongside a good field must not wipe the
+    /// good one. Pre-fix, `parse_and_validate` fell back to `Self::default()` on ANY
+    /// validation failure, which would also have discarded `output_dir` here.
+    #[test]
+    fn test_valid_neighbouring_field_survives_invalid_sibling() {
+        let json = r#"{
+            "output_dir": "/home/user/Videos",
+            "embed_thumbnail": true,
+            "embed_metadata": false,
+            "verbose": false,
+            "default_subtitle_langs": [],
+            "buffer_size": 100000000000
+        }"#;
+        let settings = AppSettings::parse_and_validate(json, std::path::Path::new("test.json"));
+        assert_eq!(
+            settings.buffer_size, None,
+            "the offending field resets to None"
+        );
+        assert_eq!(
+            settings.output_dir,
+            PathBuf::from("/home/user/Videos"),
+            "a valid neighbouring field must survive the reset of a different bad field"
+        );
+    }
+
+    /// Multiple simultaneously-bad fields must each reset independently — the loop in
+    /// `parse_and_validate` must not stop after fixing only the first one.
+    #[test]
+    fn test_multiple_invalid_fields_each_reset_independently() {
+        let json = r#"{
+            "output_dir": "/home/user/Videos",
+            "embed_thumbnail": true,
+            "embed_metadata": false,
+            "verbose": false,
+            "default_subtitle_langs": [],
+            "buffer_size": 100000000000,
+            "socket_timeout": 9999,
+            "concurrent_fragments": 999
+        }"#;
+        let settings = AppSettings::parse_and_validate(json, std::path::Path::new("test.json"));
+        assert_eq!(settings.buffer_size, None);
+        assert_eq!(settings.socket_timeout, None);
+        assert_eq!(settings.concurrent_fragments, None);
+        assert_eq!(settings.output_dir, PathBuf::from("/home/user/Videos"));
+    }
+
+    /// A settings.json with a valid `buffer_size` loads unchanged (not silently
+    /// replaced by defaults) — the counterpart to the out-of-range test above.
+    #[test]
+    fn test_valid_settings_json_loads_unchanged() {
+        let json = r#"{
+            "output_dir": "/tmp",
+            "embed_thumbnail": true,
+            "embed_metadata": false,
+            "verbose": false,
+            "default_subtitle_langs": [],
+            "buffer_size": 4194304
+        }"#;
+        let settings = AppSettings::parse_and_validate(json, std::path::Path::new("test.json"));
+        assert_eq!(settings.buffer_size, Some(4_194_304));
+        assert_eq!(settings.output_dir, PathBuf::from("/tmp"));
+    }
+
+    #[test]
+    fn test_hls_head_probe_timeout_boundary() {
+        let ok = AppSettings {
+            hls_head_probe_timeout: Some(300),
+            ..AppSettings::default()
+        };
+        assert!(ok.validate_security().is_ok());
+        let bad = AppSettings {
+            hls_head_probe_timeout: Some(301),
+            ..AppSettings::default()
+        };
+        let err = bad.validate_security().expect_err("301 must be rejected");
+        assert!(err.to_string().contains("hls_head_probe_timeout"));
+        let zero = AppSettings {
+            hls_head_probe_timeout: Some(0),
+            ..AppSettings::default()
+        };
+        assert!(zero.validate_security().is_err());
+    }
+
+    /// Finding 5 boundary guard: exactly `MAX_RESET_ITERATIONS` (9) simultaneously
+    /// out-of-range fields — one per `OutOfRange` arm `reset_invalid_field` matches —
+    /// MUST resolve entirely via the per-field reset path, not the iteration-cap
+    /// fail-safe. `validate_security` reports fields in the same fixed order
+    /// `reset_invalid_field` matches them, so this pins the exact boundary the loop
+    /// bound must accommodate: 9 legitimate iterations is normal, not exhaustion.
+    #[test]
+    fn test_max_simultaneous_out_of_range_fields_resolves_without_full_reset() {
+        let json = r#"{
+            "output_dir": "/home/user/Videos",
+            "embed_thumbnail": true,
+            "embed_metadata": false,
+            "verbose": false,
+            "default_subtitle_langs": [],
+            "socket_timeout": 0,
+            "read_timeout": 0,
+            "pool_idle_timeout": 99999,
+            "download_timeout": 0,
+            "merge_timeout": 0,
+            "concurrent_fragments": 0,
+            "buffer_size": 0,
+            "parallel_threshold": 0,
+            "hls_head_probe_timeout": 0
+        }"#;
+        let settings = AppSettings::parse_and_validate(json, std::path::Path::new("test.json"));
+        assert!(settings.validate_security().is_ok());
+        assert_eq!(settings.socket_timeout, None);
+        assert_eq!(settings.read_timeout, None);
+        assert_eq!(settings.pool_idle_timeout, None);
+        assert_eq!(settings.download_timeout, None);
+        assert_eq!(settings.merge_timeout, None);
+        assert_eq!(settings.concurrent_fragments, None);
+        assert_eq!(settings.buffer_size, None);
+        assert_eq!(settings.parallel_threshold, None);
+        assert_eq!(settings.hls_head_probe_timeout, None);
+        // The per-field reset path preserves untouched fields; a fallback to
+        // `Self::default()` would have discarded this custom `output_dir` too.
+        assert_eq!(
+            settings.output_dir,
+            PathBuf::from("/home/user/Videos"),
+            "9 legitimate iterations must resolve per-field, not trip the \
+             MAX_RESET_ITERATIONS fail-safe (which would also reset output_dir)"
+        );
+    }
+
+    /// Finding 5 regression guard: `reset_invalid_field`'s `other =>` fail-safe arm
+    /// (an `OutOfRange` field name absent from the match — unreachable via the
+    /// public API since `validate_security` only ever reports the 9 matched names,
+    /// but defensive against a future field being added to one side and not the
+    /// other) must still terminate by falling back to a fully valid default record.
+    #[test]
+    fn test_reset_invalid_field_falls_back_to_defaults_for_unmatched_field_name() {
+        let mut settings = AppSettings {
+            output_dir: PathBuf::from("/custom/output"),
+            verbose: true,
+            ..AppSettings::default()
+        };
+        let err = SettingsValidationError::OutOfRange {
+            field: "not_a_real_field",
+            reason: "synthetic, for the fail-safe arm",
+        };
+        settings.reset_invalid_field(&err);
+        assert!(
+            settings.validate_security().is_ok(),
+            "the fail-safe fallback must itself be valid, or the caller's while-loop \
+             would spin until MAX_RESET_ITERATIONS"
+        );
+        assert_eq!(
+            settings.output_dir,
+            AppSettings::default().output_dir,
+            "the fail-safe arm discards the WHOLE record (unlike the matched arms, \
+             which reset only their own field)"
         );
     }
 }

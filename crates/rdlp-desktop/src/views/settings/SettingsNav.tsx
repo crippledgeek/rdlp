@@ -14,6 +14,7 @@ const SECTIONS: SectionDef[] = [
     { id: "settings-formats", label: "Format Defaults" },
     { id: "settings-output", label: "Output & Templates" },
     { id: "settings-postprocess", label: "Media & Embedding" },
+    { id: "settings-download", label: "Download Behaviour" },
     { id: "settings-subtitles", label: "Subtitles" },
     { id: "settings-normalization", label: "Audio Normalization" },
     { id: "settings-network", label: "Network" },

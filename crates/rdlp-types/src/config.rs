@@ -500,6 +500,12 @@ impl Config {
         if self.buffer_size == 0 {
             return Err(ConfigValidationError::InvalidBufferSize);
         }
+        if self.buffer_size > 1024 * 1024 * 1024 {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "buffer_size",
+                reason: "must be 1..=1_073_741_824 bytes (1 GiB)",
+            });
+        }
         if self.playlist_start == 0 {
             return Err(ConfigValidationError::InvalidPlaylistStart);
         }

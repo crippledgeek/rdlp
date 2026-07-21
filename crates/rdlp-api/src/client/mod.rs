@@ -942,6 +942,9 @@ mod shared_client_tests {
             rate_limit: _,
             download_timeout_secs: _,
             merge_timeout_secs: _,
+            buffer_size: _,
+            parallel_threshold: _,
+            hls_head_probe_timeout: _,
         } = NetworkOptions::default();
     }
 

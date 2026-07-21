@@ -1,18 +1,13 @@
 // NetworkSection: proxy, rate limit, timeouts, and cookie settings.
 
-import { useState } from "react";
 import { Globe, KeyRound } from "lucide-react";
-import type { ZodTypeAny } from "zod";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectTrigger, SelectValue, SelectItem, SelectPopover, SelectListBox } from "@/components/ui/select";
+import { NumericField } from "@/views/settings/NumericField";
+import { FormDescription } from "@/components/ui/field";
 import {
-    socketTimeoutSchema,
-    readTimeoutSchema,
-    downloadTimeoutSchema,
-    mergeTimeoutSchema,
-    poolIdleTimeoutSchema,
     formStateToPoolIdleTimeout,
     poolIdleTimeoutToFormState,
     type PoolIdleFormState,
@@ -26,96 +21,14 @@ interface Props {
     onChange: (update: Partial<AppSettings>) => void;
 }
 
-interface TimeoutFieldProps {
-    id: string;
-    label: string;
-    helper: string;
-    value: number | null;
-    placeholder: string;
-    schema: ZodTypeAny;
-    onCommit: (next: number | null) => void;
-    disabled?: boolean;
-}
-
-function TimeoutField({
-    id,
-    label,
-    helper,
-    value,
-    placeholder,
-    schema,
-    onCommit,
-    disabled,
-}: TimeoutFieldProps) {
-    // Local state for the in-flight edit + inline error. The displayed string
-    // is derived from `value` whenever the user is not actively editing, so
-    // external prop updates (settings reload, reset-to-defaults) propagate.
-    const [draft, setDraft] = useState<string | null>(null);
-    const [error, setError] = useState<string | null>(null);
-
-    const displayed = draft ?? (value === null ? "" : String(value));
-
-    const handleChange = (next: string) => {
-        setDraft(next);
-        const result = schema.safeParse(next);
-        if (!result.success) {
-            setError(result.error.errors[0]?.message ?? "Invalid value");
-            return;
-        }
-        setError(null);
-        onCommit(result.data as number | null);
-    };
-
-    const handleBlur = () => {
-        // Drop the local draft so subsequent prop updates flow through.
-        setDraft(null);
-    };
-
-    return (
-        <div>
-            <Label htmlFor={id} className="settings-label">
-                {label}
-            </Label>
-            <div className="flex items-center gap-1">
-                <Input
-                    id={id}
-                    type="number"
-                    inputMode="numeric"
-                    min={0}
-                    placeholder={placeholder}
-                    value={displayed}
-                    onChange={(e) => handleChange(e.target.value)}
-                    onBlur={handleBlur}
-                    aria-describedby={`${id}-help`}
-                    aria-invalid={error !== null}
-                    disabled={disabled}
-                    className="font-mono text-xs"
-                />
-                <span className="text-xs text-muted-foreground">s</span>
-            </div>
-            <p
-                id={`${id}-help`}
-                className={`text-xs mt-1 ${error ? "text-destructive" : "text-muted-foreground"}`}
-            >
-                {error ?? helper}
-            </p>
-        </div>
-    );
-}
-
 export function NetworkSection({ draft, onChange }: Props) {
     const poolIdleForm: PoolIdleFormState = poolIdleTimeoutToFormState(draft.pool_idle_timeout);
-    // Local state: in-flight numeric draft (null = not editing, derive from
-    // prop) + inline error. Both are reset by the checkbox toggle handler so
-    // that disabling eviction always clears stale errors and edits.
-    const [poolIdleDraft, setPoolIdleDraft] = useState<string | null>(null);
-    const [poolIdleError, setPoolIdleError] = useState<string | null>(null);
-
-    const displayedPoolIdle = poolIdleDraft ?? poolIdleForm.secondsInput;
-
+    // NumericField already owns the in-progress-text vs committed-number split
+    // and clamps to [minValue, maxValue] before `onCommit` fires (see
+    // NumericField.tsx). The 0-sentinel ("disable eviction") stays owned by
+    // the checkbox — NumericField's own minValue=1 means the numeric control
+    // itself can never produce 0.
     const handleEvictToggle = (next: boolean) => {
-        setPoolIdleDraft(null);
-        setPoolIdleError(null);
         onChange({
             pool_idle_timeout: formStateToPoolIdleTimeout({
                 evictIdle: next,
@@ -124,24 +37,13 @@ export function NetworkSection({ draft, onChange }: Props) {
         });
     };
 
-    const handlePoolIdleChange = (nextRaw: string) => {
-        setPoolIdleDraft(nextRaw);
-        const result = poolIdleTimeoutSchema.safeParse(nextRaw);
-        if (!result.success) {
-            setPoolIdleError(result.error.errors[0]?.message ?? "Invalid value");
-            return;
-        }
-        setPoolIdleError(null);
+    const handlePoolIdleChange = (next: number | null) => {
         onChange({
             pool_idle_timeout: formStateToPoolIdleTimeout({
                 evictIdle: poolIdleForm.evictIdle,
-                secondsInput: nextRaw,
+                secondsInput: next === null ? "" : String(next),
             }),
         });
-    };
-
-    const handlePoolIdleBlur = () => {
-        setPoolIdleDraft(null);
     };
 
     return (
@@ -175,41 +77,49 @@ export function NetworkSection({ draft, onChange }: Props) {
                             className="font-mono text-xs"
                         />
                     </div>
-                    <TimeoutField
+                    <NumericField
                         id="socket-timeout"
                         label="Connection Timeout"
                         helper="Time to establish a connection to the server."
                         value={draft.socket_timeout}
-                        placeholder="30"
-                        schema={socketTimeoutSchema}
+                        minValue={1}
+                        maxValue={300}
                         onCommit={(v) => onChange({ socket_timeout: v })}
+                        placeholder="30"
+                        suffix="s"
                     />
-                    <TimeoutField
+                    <NumericField
                         id="read-timeout"
                         label="Read Timeout"
                         helper="Maximum gap between bytes during a download."
                         value={draft.read_timeout}
-                        placeholder="60"
-                        schema={readTimeoutSchema}
+                        minValue={1}
+                        maxValue={600}
                         onCommit={(v) => onChange({ read_timeout: v })}
+                        placeholder="60"
+                        suffix="s"
                     />
-                    <TimeoutField
+                    <NumericField
                         id="download-timeout"
                         label="Download Timeout"
                         helper="Maximum time for the entire file download."
                         value={draft.download_timeout}
-                        placeholder="3600"
-                        schema={downloadTimeoutSchema}
+                        minValue={1}
+                        maxValue={86400}
                         onCommit={(v) => onChange({ download_timeout: v })}
+                        placeholder="3600"
+                        suffix="s"
                     />
-                    <TimeoutField
+                    <NumericField
                         id="merge-timeout"
                         label="Merge Timeout"
                         helper="Maximum time to mux/merge the downloaded parts."
                         value={draft.merge_timeout}
-                        placeholder="1800"
-                        schema={mergeTimeoutSchema}
+                        minValue={1}
+                        maxValue={86400}
                         onCommit={(v) => onChange({ merge_timeout: v })}
+                        placeholder="1800"
+                        suffix="s"
                     />
                     <div className="col-span-2">
                         <div className="flex items-center gap-2 flex-wrap">
@@ -221,29 +131,30 @@ export function NetworkSection({ draft, onChange }: Props) {
                             >
                                 <span className="settings-label !mb-0">Evict idle connections after</span>
                             </Checkbox>
-                            <Input
-                                id="pool-idle-timeout"
-                                type="number"
-                                inputMode="numeric"
-                                min={1}
-                                placeholder="90"
-                                value={displayedPoolIdle}
-                                onChange={(e) => handlePoolIdleChange(e.target.value)}
-                                onBlur={handlePoolIdleBlur}
-                                disabled={!poolIdleForm.evictIdle}
-                                aria-describedby="evict-idle-help"
-                                aria-invalid={poolIdleError !== null}
-                                className="font-mono text-xs w-20"
-                            />
-                            <span className="text-xs text-muted-foreground">s</span>
+                            <div className="w-24">
+                                <NumericField
+                                    id="pool-idle-timeout"
+                                    label="Idle Timeout"
+                                    // Helper text moved to the full-width FormDescription sibling below
+                                    // (id="pool-idle-timeout-description") — this narrow (96px) column
+                                    // would otherwise wrap it awkwardly. Wired back to the field via
+                                    // aria-describedby so it stays part of the accessible description.
+                                    helper=""
+                                    aria-describedby="pool-idle-timeout-description"
+                                    hideLabel
+                                    value={poolIdleForm.evictIdle && poolIdleForm.secondsInput !== "" ? Number(poolIdleForm.secondsInput) : null}
+                                    minValue={1}
+                                    maxValue={3600}
+                                    onCommit={handlePoolIdleChange}
+                                    isDisabled={!poolIdleForm.evictIdle}
+                                    placeholder="90"
+                                    suffix="s"
+                                />
+                            </div>
                         </div>
-                        <p
-                            id="evict-idle-help"
-                            className={`text-xs mt-1 ${poolIdleError ? "text-destructive" : "text-muted-foreground"}`}
-                        >
-                            {poolIdleError ??
-                                "When off, idle keep-alive connections are kept until the OS closes them."}
-                        </p>
+                        <FormDescription id="pool-idle-timeout-description" className="mt-1">
+                            When off, idle keep-alive connections are kept until the OS closes them.
+                        </FormDescription>
                     </div>
                 </div>
             </section>

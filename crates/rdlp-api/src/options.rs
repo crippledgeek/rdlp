@@ -66,7 +66,7 @@ pub const OPTION_REGISTRY: &[OptionEntry] = &[
     },
     OptionEntry {
         field: "concurrent_fragments",
-        gui: Gui::Missing("#602"),
+        gui: Gui::Control("concurrent_fragments"),
     },
     OptionEntry {
         field: "rate_limit",
@@ -94,7 +94,7 @@ pub const OPTION_REGISTRY: &[OptionEntry] = &[
     },
     OptionEntry {
         field: "buffer_size",
-        gui: Gui::Missing("#602"),
+        gui: Gui::Control("buffer_size"),
     },
     OptionEntry {
         field: "proxy",
@@ -122,11 +122,11 @@ pub const OPTION_REGISTRY: &[OptionEntry] = &[
     },
     OptionEntry {
         field: "hls_head_probe_timeout",
-        gui: Gui::Missing("#602"),
+        gui: Gui::Control("hls_head_probe_timeout"),
     },
     OptionEntry {
         field: "parallel_threshold",
-        gui: Gui::Missing("#602"),
+        gui: Gui::Control("parallel_threshold"),
     },
     OptionEntry {
         field: "source_address",
@@ -663,9 +663,9 @@ mod tests {
                 Gui::Missing(_) => missing += 1,
             }
         }
-        assert_eq!(control, 36, "Control count drifted");
+        assert_eq!(control, 40, "Control count drifted");
         assert_eq!(na, 5, "NotApplicable count drifted");
-        assert_eq!(missing, 55, "Missing count drifted");
+        assert_eq!(missing, 51, "Missing count drifted");
     }
 
     #[test]

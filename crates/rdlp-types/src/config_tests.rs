@@ -682,3 +682,27 @@ fn validate_accepts_recode_threads_in_range() {
         assert!(cfg.validate().is_ok(), "threads={threads} must be valid");
     }
 }
+
+#[test]
+fn test_validate_buffer_size_accepts_1_gib_boundary() {
+    let mut config = Config::default();
+    config.buffer_size = 1024 * 1024 * 1024;
+    assert!(
+        config.validate().is_ok(),
+        "1 GiB must be the inclusive upper bound"
+    );
+}
+
+#[test]
+fn test_validate_buffer_size_rejects_above_1_gib() {
+    let mut config = Config::default();
+    config.buffer_size = 1024 * 1024 * 1024 + 1;
+    let err = config.validate().unwrap_err();
+    assert!(matches!(
+        err,
+        ConfigValidationError::OutOfRange {
+            field: "buffer_size",
+            ..
+        }
+    ));
+}
