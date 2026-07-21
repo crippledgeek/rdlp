@@ -19,7 +19,7 @@ describe("byteUnits", () => {
         expect(mibDisplayToBytes(bytesToMibDisplay(10 * BYTES_PER_MIB))).toBe(10 * BYTES_PER_MIB);
     });
 
-    /// Documents the lossy direction: a hand-edited non-whole-MiB byte value cannot
+    // Documents the lossy direction: a hand-edited non-whole-MiB byte value cannot
     /// survive a display round-trip. The UI's defence is to never write back a field
     /// the user did not edit — this test pins WHY that rule exists.
     it("is lossy for non-whole-MiB byte values (display rounds)", () => {
