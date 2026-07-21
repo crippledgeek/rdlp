@@ -1,69 +1,20 @@
-import { z } from "zod";
-
-// Coercion is via `Number(v)` after empty/null short-circuit, so leading/trailing
-// whitespace, scientific notation ("1e2" → 100), and hex literals ("0x10" → 16)
-// are tolerated; the post-coercion `.int()` filter rejects non-integer results
-// like NaN. Backend `Config::validate()` is the authoritative range check.
-const intInRange = (min: number, max: number, label: string) =>
-    z.preprocess(
-        (v) => (v === "" || v === null || v === undefined ? null : Number(v)),
-        z.union([
-            z.null(),
-            z.number({ invalid_type_error: `${label} must be a number` })
-                .int(`${label} must be an integer`)
-                .min(min, `${label} must be ≥ ${min}`)
-                .max(max, `${label} must be ≤ ${max}`),
-        ]),
-    );
-
-export const socketTimeoutSchema = intInRange(1, 300, "Connection timeout");
-export const readTimeoutSchema = intInRange(1, 600, "Read timeout");
-export const downloadTimeoutSchema = intInRange(1, 86400, "Download timeout");
-export const mergeTimeoutSchema = intInRange(1, 86400, "Merge timeout");
-
-// Numeric input alone — the 0-sentinel is owned by the checkbox.
-// Reject 0 explicitly so users who type 0 see a hint to use the checkbox.
-//
-// superRefine ordering is load-bearing: integer → 0-sentinel → min → max.
-// Reordering would surface the generic "≥ 1" message for `0` instead of the
-// checkbox hint. Tests below pin one regression case per branch.
-export const poolIdleTimeoutSchema = z.preprocess(
-    (v) => (v === "" || v === null || v === undefined ? null : Number(v)),
-    z.union([
-        z.null(),
-        z.number({ invalid_type_error: "Idle timeout must be a number" })
-            .superRefine((n, ctx) => {
-                if (!Number.isInteger(n)) {
-                    ctx.addIssue({
-                        code: z.ZodIssueCode.custom,
-                        message: "Idle timeout must be an integer",
-                    });
-                    return;
-                }
-                if (n === 0) {
-                    ctx.addIssue({
-                        code: z.ZodIssueCode.custom,
-                        message: "Use the checkbox to keep connections alive forever",
-                    });
-                    return;
-                }
-                if (n < 1) {
-                    ctx.addIssue({
-                        code: z.ZodIssueCode.custom,
-                        message: "Idle timeout must be ≥ 1",
-                    });
-                    return;
-                }
-                if (n > 3600) {
-                    ctx.addIssue({
-                        code: z.ZodIssueCode.custom,
-                        message: "Idle timeout must be ≤ 3600",
-                    });
-                    return;
-                }
-            }),
-    ]),
-);
+// The four timeout-bound schemas (socket/read/download/merge) and
+// `poolIdleTimeoutSchema` were deleted here (#585 Task 3). Reason: none has
+// a reachable consumer any more. `NetworkSection` now migrates its numeric
+// timeout inputs to the shared `NumericField` (React Aria `NumberField`),
+// whose `useNumberFieldState.commit()` unconditionally CLAMPS the committed
+// value to `[minValue, maxValue]` *before* any validation runs (verified in
+// `@react-stately/numberfield`'s `useNumberFieldState.mjs` — see
+// `NumericField.tsx`'s doc comment). A zod schema mirroring the same bounds
+// can therefore never reject anything a user can actually type through the
+// UI — including `poolIdleTimeoutSchema`'s 0-sentinel branch: NumericField's
+// own `minValue={1}` on the pool-idle control means a typed `0` clamps to
+// `1` before `onCommit` ever fires, so the "use the checkbox" hint text can
+// no longer be reached from the UI either. Range enforcement is now
+// client-side clamping plus `AppSettings::validate_security()` on the Rust
+// side. The 0-sentinel *behaviour* itself is NOT dead — it lives on in
+// `formStateToPoolIdleTimeout`/`poolIdleTimeoutToFormState` below, which the
+// checkbox still drives.
 
 export interface PoolIdleFormState {
     evictIdle: boolean;

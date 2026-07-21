@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import { fireEvent } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { render, screen } from "@/test/test-utils";
 import { NetworkSection } from "./NetworkSection";
 import type { AppSettings } from "@/types";
@@ -44,48 +45,63 @@ const baseDraft: AppSettings = {
     retry_subs: false,
 };
 
+// NOTE on role: NumericField wraps React Aria's NumberField, which
+// deliberately overrides the ARIA APG spinbutton role to `null` on the
+// rendered <input> (VoiceOver focus incompatibility) — the input exposes the
+// implicit `textbox` role instead. See NumericField.test.tsx / task-2-report.md
+// for the full empirical finding. Queries below use role="textbox".
+//
+// NOTE on commit timing: NumericField (React Aria useNumberFieldState) commits
+// on blur, not on every keystroke — unlike the hand-rolled TimeoutField this
+// section used to render. Tests that assert `onChange` therefore drive input
+// via `userEvent` (type + tab) rather than a single `fireEvent.change`.
 describe("NetworkSection — timeout controls", () => {
-    it("renders three timeout controls with associated labels", () => {
+    it("renders four timeout controls with associated labels", () => {
         render(<NetworkSection draft={baseDraft} onChange={vi.fn()} />);
-        expect(screen.getByLabelText(/connection timeout/i)).toBeInTheDocument();
-        expect(screen.getByLabelText(/read timeout/i)).toBeInTheDocument();
+        expect(screen.getByRole("textbox", { name: /connection timeout/i })).toBeInTheDocument();
+        expect(screen.getByRole("textbox", { name: /read timeout/i })).toBeInTheDocument();
+        expect(screen.getByRole("textbox", { name: /download timeout/i })).toBeInTheDocument();
+        expect(screen.getByRole("textbox", { name: /merge timeout/i })).toBeInTheDocument();
         expect(
             screen.getByRole("checkbox", { name: /evict idle/i }),
         ).toBeInTheDocument();
     });
 
-    it("typing in connection timeout commits a number when valid", () => {
+    it("typing in connection timeout commits a number on blur", async () => {
+        const user = userEvent.setup();
         const onChange = vi.fn();
         render(<NetworkSection draft={baseDraft} onChange={onChange} />);
-        const input = screen.getByLabelText(
-            /connection timeout/i,
-        ) as HTMLInputElement;
-        fireEvent.change(input, { target: { value: "45" } });
+        const input = screen.getByRole("textbox", { name: /connection timeout/i });
+        await user.clear(input);
+        await user.type(input, "45");
+        await user.tab();
         expect(onChange).toHaveBeenCalledWith({ socket_timeout: 45 });
     });
 
-    it("emptying connection timeout commits null", () => {
+    it("emptying connection timeout commits null", async () => {
+        const user = userEvent.setup();
         const draft = { ...baseDraft, socket_timeout: 30 };
         const onChange = vi.fn();
         render(<NetworkSection draft={draft} onChange={onChange} />);
-        const input = screen.getByLabelText(
-            /connection timeout/i,
-        ) as HTMLInputElement;
-        fireEvent.change(input, { target: { value: "" } });
+        const input = screen.getByRole("textbox", { name: /connection timeout/i });
+        await user.clear(input);
+        await user.tab();
         expect(onChange).toHaveBeenCalledWith({ socket_timeout: null });
     });
 
-    it("invalid connection timeout does not commit but shows inline error", () => {
+    // DESIGNED BEHAVIOUR: NumericField enforces bounds by CLAMPING, not
+    // rejection (React Aria's useNumberFieldState.commit() clamps before any
+    // validation runs — see NumericField.tsx's doc comment). An out-of-range
+    // connection timeout is silently coerced to maxValue=300, never rejected.
+    it("out-of-range connection timeout clamps to the upper bound", async () => {
+        const user = userEvent.setup();
         const onChange = vi.fn();
         render(<NetworkSection draft={baseDraft} onChange={onChange} />);
-        const input = screen.getByLabelText(
-            /connection timeout/i,
-        ) as HTMLInputElement;
-        fireEvent.change(input, { target: { value: "9999" } });
-        expect(screen.getByText(/≤ 300/i)).toBeInTheDocument();
-        expect(
-            onChange.mock.calls.every(([arg]) => arg.socket_timeout !== 9999),
-        ).toBe(true);
+        const input = screen.getByRole("textbox", { name: /connection timeout/i });
+        await user.clear(input);
+        await user.type(input, "9999");
+        await user.tab();
+        expect(onChange).toHaveBeenCalledWith({ socket_timeout: 300 });
     });
 
     it("checkbox unchecked commits pool_idle_timeout=0 (sentinel)", () => {
@@ -100,7 +116,7 @@ describe("NetworkSection — timeout controls", () => {
     it("checkbox unchecked disables the numeric input", () => {
         const draft = { ...baseDraft, pool_idle_timeout: 0 };
         render(<NetworkSection draft={draft} onChange={vi.fn()} />);
-        const numeric = screen.getByPlaceholderText("90") as HTMLInputElement;
+        const numeric = screen.getByRole("textbox", { name: /idle timeout/i });
         expect(numeric).toBeDisabled();
     });
 
@@ -109,23 +125,23 @@ describe("NetworkSection — timeout controls", () => {
         const { rerender } = render(
             <NetworkSection draft={{ ...baseDraft, socket_timeout: 30 }} onChange={onChange} />,
         );
-        let input = screen.getByLabelText(/connection timeout/i) as HTMLInputElement;
-        expect(input.value).toBe("30");
+        let input = screen.getByRole("textbox", { name: /connection timeout/i });
+        expect(input).toHaveValue("30");
         rerender(<NetworkSection draft={{ ...baseDraft, socket_timeout: 60 }} onChange={onChange} />);
-        input = screen.getByLabelText(/connection timeout/i) as HTMLInputElement;
-        expect(input.value).toBe("60");
+        input = screen.getByRole("textbox", { name: /connection timeout/i });
+        expect(input).toHaveValue("60");
     });
 
-    it("clears stale pool-idle error when the user unchecks the checkbox", () => {
+    it("out-of-range pool-idle value clamps to the upper bound", async () => {
+        const user = userEvent.setup();
         const onChange = vi.fn();
         render(
             <NetworkSection draft={{ ...baseDraft, pool_idle_timeout: 90 }} onChange={onChange} />,
         );
-        const numeric = screen.getByPlaceholderText("90") as HTMLInputElement;
-        fireEvent.change(numeric, { target: { value: "9999" } });
-        expect(screen.getByText(/≤ 3600/)).toBeInTheDocument();
-        const checkbox = screen.getByRole("checkbox", { name: /evict idle/i });
-        fireEvent.click(checkbox);
-        expect(screen.queryByText(/≤ 3600/)).not.toBeInTheDocument();
+        const numeric = screen.getByRole("textbox", { name: /idle timeout/i });
+        await user.clear(numeric);
+        await user.type(numeric, "9999");
+        await user.tab();
+        expect(onChange).toHaveBeenCalledWith({ pool_idle_timeout: 3600 });
     });
 });
