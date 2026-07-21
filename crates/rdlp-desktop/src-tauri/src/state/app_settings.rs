@@ -321,13 +321,12 @@ impl std::error::Error for SettingsValidationError {}
 
 /// Upper bound for byte-valued settings, in bytes (1 GiB).
 ///
-/// Mirrors `rdlp_types::Config::validate()`'s `parallel_threshold` ceiling rather than
-/// introducing a second magic number. `buffer_size` has **no** upper bound in
-/// `Config::validate()`, and `Config::validate()` is not called on the desktop path
-/// (see `commands::download`), so this is that field's only enforcement point.
-/// This value mirrors `rdlp_types::Config::validate()`'s `parallel_threshold` ceiling
-/// by hand — no cross-crate test enforces the two literals staying in sync, so a
-/// future change to either ceiling must be mirrored manually in the other crate.
+/// Mirrors `rdlp_types::Config::validate()`'s `parallel_threshold` and `buffer_size`
+/// ceilings rather than introducing a second magic number. `Config::validate()` is not
+/// called on the desktop path (see `commands::download`), so this remains this field's
+/// only enforcement point on that path — no cross-crate test enforces the two literals
+/// staying in sync, so a future change to either ceiling must be mirrored manually in
+/// the other crate.
 const MAX_BYTE_SETTING: u64 = 1024 * 1024 * 1024;
 
 impl AppSettings {

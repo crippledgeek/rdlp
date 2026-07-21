@@ -272,7 +272,7 @@ pub struct NetworkOptions {
     /// Number of concurrent download fragments/chunks. `None` preserves base config.
     pub concurrent_fragments: Option<u32>,
     /// Download buffer size in bytes. `None` preserves base config.
-    /// Range `1..=1_073_741_824` where enforced upstream.
+    /// Range: `1..=1_073_741_824` (enforced by `Config::validate()`).
     pub buffer_size: Option<u64>,
     /// Minimum file size in bytes before parallel chunked download is used.
     /// `None` preserves base config. Range: `1..=1_073_741_824` (enforced by
