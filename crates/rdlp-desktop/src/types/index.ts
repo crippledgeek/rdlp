@@ -437,6 +437,11 @@ export interface AppSettings {
     normalize_boost: boolean;
     normalize_boost_db: number | null;
     embed_subtitles: boolean;
+    write_subtitles: boolean;
+    write_auto_subtitles: boolean;
+    strict_subs: boolean;
+    verify_sub_urls: boolean;
+    retry_subs: boolean;
 }
 
 // ========== Error Types ==========
