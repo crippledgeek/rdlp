@@ -232,23 +232,23 @@ pub(super) fn extract_json_value(text: &str, key: &str) -> Option<f64> {
 /// For video containers, delegates to [`audio_encoder_registry::select_audio_encoder_for_container`].
 /// Falls back to the best available AAC encoder for unknown extensions.
 pub(super) fn select_audio_encoder_for_container(ext: &str) -> &'static str {
-    // Audio-only output formats: these are not ContainerFormat variants but
-    // appear as extensions when normalizing standalone audio files.
-    if ext.eq_ignore_ascii_case("mp3") {
-        return "libmp3lame";
-    }
-    if ext.eq_ignore_ascii_case("flac") {
-        return "flac";
-    }
-    if ext.eq_ignore_ascii_case("wav") {
-        return "pcm_s16le";
-    }
+    let Ok(container) = ext.parse::<rdlp_types::ContainerFormat>() else {
+        return crate::ffmpeg::audio_codecs::preferred_aac_encoder();
+    };
 
-    // For proper container formats, delegate to the registry
-    if let Ok(container) = ext.parse::<rdlp_types::ContainerFormat>() {
-        crate::ffmpeg::audio_encoder_registry::select_audio_encoder_for_container(container)
-    } else {
-        crate::ffmpeg::audio_codecs::preferred_aac_encoder()
+    match container {
+        // Lossless/lossy audio-only containers whose own codec is the whole
+        // point: re-encoding a .mp3 to AAC-in-mp3 is not what the user asked
+        // for. The registry's fallback arm would do exactly that, so these are
+        // decided here before delegating.
+        //
+        // (These three WERE matched as raw strings with a comment claiming
+        // they "are not ContainerFormat variants". They are — Mp3, Flac and
+        // Wav have been variants throughout; the comment was simply wrong.)
+        rdlp_types::ContainerFormat::Mp3 => "libmp3lame",
+        rdlp_types::ContainerFormat::Flac => "flac",
+        rdlp_types::ContainerFormat::Wav => "pcm_s16le",
+        other => crate::ffmpeg::audio_encoder_registry::select_audio_encoder_for_container(other),
     }
 }
 
@@ -435,4 +435,51 @@ where
 /// [`parse_loudnorm_json`].
 pub(super) fn begin_loudnorm_capture() -> Result<LogCaptureGuard> {
     LogCaptureGuard::begin()
+}
+
+#[cfg(test)]
+mod audio_encoder_selection_tests {
+    use super::select_audio_encoder_for_container;
+
+    /// The three audio-only containers whose own codec is the point. These were
+    /// matched as raw strings before; the answers must not move.
+    #[test]
+    fn audio_only_containers_keep_their_native_encoder() {
+        assert_eq!(select_audio_encoder_for_container("mp3"), "libmp3lame");
+        assert_eq!(select_audio_encoder_for_container("flac"), "flac");
+        assert_eq!(select_audio_encoder_for_container("wav"), "pcm_s16le");
+    }
+
+    /// Case-insensitivity came free with `eq_ignore_ascii_case`; going through
+    /// `FromStr` must preserve it.
+    #[test]
+    fn audio_only_matching_stays_case_insensitive() {
+        assert_eq!(select_audio_encoder_for_container("MP3"), "libmp3lame");
+        assert_eq!(select_audio_encoder_for_container("Flac"), "flac");
+    }
+
+    /// The widening this conversion accepts: `"wave"` is a `ContainerFormat`
+    /// alias for Wav, so it now resolves to `pcm_s16le` where the literal
+    /// `eq_ignore_ascii_case("wav")` missed it and it fell through to the
+    /// registry's AAC fallback. Same class as the other alias widenings in
+    /// this change, and pinned here.
+    #[test]
+    fn wave_alias_resolves_like_wav() {
+        assert_eq!(
+            select_audio_encoder_for_container("wave"),
+            select_audio_encoder_for_container("wav"),
+        );
+    }
+
+    /// An extension that is not a container at all still falls back rather
+    /// than panicking or resolving to an audio-only encoder.
+    #[test]
+    fn unknown_extension_falls_back_to_aac() {
+        let fallback = crate::ffmpeg::audio_codecs::preferred_aac_encoder();
+        assert_eq!(
+            select_audio_encoder_for_container("not-a-container"),
+            fallback
+        );
+        assert_eq!(select_audio_encoder_for_container(""), fallback);
+    }
 }
