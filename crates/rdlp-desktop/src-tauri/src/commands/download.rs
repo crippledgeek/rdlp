@@ -214,6 +214,7 @@ fn build_network_options(
     options: &DownloadOptions,
     settings: &crate::state::AppSettings,
 ) -> NetworkOptions {
+    // Merge cookies: per-download overrides settings default.
     let cookies_from_browser = options
         .cookies_from_browser
         .or(settings.cookies_from_browser);
@@ -222,7 +223,12 @@ fn build_network_options(
         .as_deref()
         .map(PathBuf::from)
         .or_else(|| settings.cookies_file.clone());
+
+    // Merge proxy: per-download overrides settings default.
     let proxy = options.proxy.clone().or_else(|| settings.proxy.clone());
+
+    // Rate limit: per-download overrides settings default, then parse string
+    // like "500K" to bytes per second.
     let rate_limit_str = options
         .rate_limit
         .clone()
@@ -946,25 +952,12 @@ mod tests {
 
     // ------------------------------------------------------------------ //
     // G. Network timeouts: AppSettings → NetworkOptions plumbing
+    //    (folded into `build_network_options` coverage — the former
+    //    `merge_network_options` test-local fork is gone; see section I)
     // ------------------------------------------------------------------ //
 
-    /// Replicates the network-field merge from `start_download`
-    /// (the `network` block) for isolated testing.
-    fn merge_network_options(_options: &DownloadOptions, settings: &AppSettings) -> NetworkOptions {
-        // Mirrors the production `network: NetworkOptions { ... }` literal
-        // in `start_download`. Updated when production fields change.
-        NetworkOptions {
-            timeout_secs: settings.socket_timeout,
-            read_timeout_secs: settings.read_timeout,
-            pool_idle_timeout_secs: settings.pool_idle_timeout,
-            download_timeout_secs: settings.download_timeout,
-            merge_timeout_secs: settings.merge_timeout,
-            ..NetworkOptions::default()
-        }
-    }
-
     /// When `AppSettings` carries the timeout fields, they MUST propagate
-    /// into the `NetworkOptions` literal that backs the `DownloadRequest`.
+    /// into the `NetworkOptions` produced by `build_network_options`.
     #[test]
     fn test_settings_timeouts_propagate_to_network_options() {
         let settings = AppSettings {
@@ -976,7 +969,7 @@ mod tests {
             ..AppSettings::default()
         };
         let options = default_download_options();
-        let net = merge_network_options(&options, &settings);
+        let net = build_network_options(&options, &settings);
         assert_eq!(net.timeout_secs, Some(45));
         assert_eq!(net.read_timeout_secs, Some(120));
         assert_eq!(net.pool_idle_timeout_secs, Some(0));
@@ -991,7 +984,7 @@ mod tests {
     fn test_default_settings_leave_timeouts_unset_in_network_options() {
         let settings = AppSettings::default();
         let options = default_download_options();
-        let net = merge_network_options(&options, &settings);
+        let net = build_network_options(&options, &settings);
         assert!(net.timeout_secs.is_none());
         assert!(net.read_timeout_secs.is_none());
         assert!(net.pool_idle_timeout_secs.is_none());
@@ -1124,6 +1117,127 @@ mod tests {
         let net = build_network_options(&default_download_options(), &settings);
         assert_eq!(net.timeout_secs, Some(45));
         assert_eq!(net.download_timeout_secs, Some(600));
+    }
+
+    // ------------------------------------------------------------------ //
+    // I.1 Network options: per-download-overrides-settings precedence
+    //     (cookies, proxy, rate limit)
+    // ------------------------------------------------------------------ //
+
+    /// `cookies_file`: a per-download value MUST win over a settings value.
+    #[test]
+    fn build_network_options_cookies_file_per_download_wins() {
+        let options = DownloadOptions {
+            cookies_file: Some("/per-download/cookies.txt".to_owned()),
+            ..default_download_options()
+        };
+        let settings = AppSettings {
+            cookies_file: Some(PathBuf::from("/settings/cookies.txt")),
+            ..AppSettings::default()
+        };
+        let net = build_network_options(&options, &settings);
+        assert_eq!(
+            net.cookies_file,
+            Some(PathBuf::from("/per-download/cookies.txt"))
+        );
+    }
+
+    /// `cookies_file`: absent per-download MUST fall back to the settings value.
+    #[test]
+    fn build_network_options_cookies_file_falls_back_to_settings() {
+        let options = default_download_options();
+        let settings = AppSettings {
+            cookies_file: Some(PathBuf::from("/settings/cookies.txt")),
+            ..AppSettings::default()
+        };
+        let net = build_network_options(&options, &settings);
+        assert_eq!(
+            net.cookies_file,
+            Some(PathBuf::from("/settings/cookies.txt"))
+        );
+    }
+
+    /// `cookies_from_browser`: a per-download value MUST win over a settings value.
+    #[test]
+    fn build_network_options_cookies_from_browser_per_download_wins() {
+        let options = DownloadOptions {
+            cookies_from_browser: Some(BrowserType::Chrome),
+            ..default_download_options()
+        };
+        let settings = AppSettings {
+            cookies_from_browser: Some(BrowserType::Firefox),
+            ..AppSettings::default()
+        };
+        let net = build_network_options(&options, &settings);
+        assert_eq!(net.cookies_from_browser, Some(BrowserType::Chrome));
+    }
+
+    /// `cookies_from_browser`: absent per-download MUST fall back to settings.
+    #[test]
+    fn build_network_options_cookies_from_browser_falls_back_to_settings() {
+        let options = default_download_options();
+        let settings = AppSettings {
+            cookies_from_browser: Some(BrowserType::Firefox),
+            ..AppSettings::default()
+        };
+        let net = build_network_options(&options, &settings);
+        assert_eq!(net.cookies_from_browser, Some(BrowserType::Firefox));
+    }
+
+    /// `proxy`: a per-download value MUST win over a settings value.
+    #[test]
+    fn build_network_options_proxy_per_download_wins() {
+        let options = DownloadOptions {
+            proxy: Some("http://per-download:3128".to_owned()),
+            ..default_download_options()
+        };
+        let settings = AppSettings {
+            proxy: Some("http://settings:3128".to_owned()),
+            ..AppSettings::default()
+        };
+        let net = build_network_options(&options, &settings);
+        assert_eq!(net.proxy.as_deref(), Some("http://per-download:3128"));
+    }
+
+    /// `proxy`: absent per-download MUST fall back to the settings value.
+    #[test]
+    fn build_network_options_proxy_falls_back_to_settings() {
+        let options = default_download_options();
+        let settings = AppSettings {
+            proxy: Some("http://settings:3128".to_owned()),
+            ..AppSettings::default()
+        };
+        let net = build_network_options(&options, &settings);
+        assert_eq!(net.proxy.as_deref(), Some("http://settings:3128"));
+    }
+
+    /// `rate_limit`: a per-download value MUST win over a settings value, and
+    /// the winning string MUST be parsed to bytes/sec (not passed through raw).
+    #[test]
+    fn build_network_options_rate_limit_per_download_wins_and_parses() {
+        let options = DownloadOptions {
+            rate_limit: Some("500K".to_owned()),
+            ..default_download_options()
+        };
+        let settings = AppSettings {
+            rate_limit: Some("2M".to_owned()),
+            ..AppSettings::default()
+        };
+        let net = build_network_options(&options, &settings);
+        assert_eq!(net.rate_limit, Some(512_000));
+    }
+
+    /// `rate_limit`: absent per-download MUST fall back to the settings
+    /// value, which MUST also be parsed to bytes/sec.
+    #[test]
+    fn build_network_options_rate_limit_falls_back_to_settings_and_parses() {
+        let options = default_download_options();
+        let settings = AppSettings {
+            rate_limit: Some("2M".to_owned()),
+            ..AppSettings::default()
+        };
+        let net = build_network_options(&options, &settings);
+        assert_eq!(net.rate_limit, Some(2 * 1024 * 1024));
     }
 
     /// `sub_langs` MUST pass through from `options` and `sub_format` from
