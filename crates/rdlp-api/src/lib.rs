@@ -25,6 +25,8 @@ pub mod errors;
 pub mod events;
 /// Download handle and ID types.
 pub mod handle;
+/// Pure-data option registry (config↔GUI axis).
+pub mod options;
 /// Download request types.
 pub mod request;
 /// Download result types.
