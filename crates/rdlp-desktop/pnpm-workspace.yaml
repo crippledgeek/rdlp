@@ -1,25 +1,31 @@
 # pnpm settings for the desktop frontend.
 #
-# strictDepBuilds makes an unreviewed postinstall script a HARD ERROR
+# pnpm reads settings ONLY from here (and from `.npmrc` for auth/registry). The
+# `pnpm` block in package.json is no longer read at all as of v11 — do not
+# "tidy" any of these keys back into package.json; they would be silently
+# ignored.
+#
+# allowBuilds is the allowlist of dependencies permitted to run install
+# scripts. pnpm refuses to run a dependency's build scripts unless it is listed
+# here, and Cypress downloads its actual binary in postinstall. Unlisted, the
+# install reports success and the binary silently never arrives — failing
+# later, somewhere unrelated. That is the trap that bit us during the
+# npm->pnpm migration.
+#
+# Keep entries UNPINNED (bare package names). A pinned entry like
+# `esbuild@0.27.4` stops matching after a version bump and is then silently
+# blocked (pnpm/pnpm#11219, pnpm/pnpm#10426).
+#
+# Replaced `onlyBuiltDependencies` on the v10 -> v11 upgrade (2026-07-21);
+# v11 consolidated onlyBuiltDependencies / neverBuiltDependencies /
+# ignoredBuiltDependencies / ignoreDepScripts into this one map.
+allowBuilds:
+  cypress: true
+  esbuild: true
+
+# strictDepBuilds makes an unreviewed install script a HARD ERROR
 # (ERR_PNPM_IGNORED_BUILDS, exit 1) instead of a warning that scrolls past.
-#
-# This is the guard for the trap that bit us during the npm->pnpm migration:
-# pnpm 10 refuses to run a dependency's build scripts unless the package is
-# listed in `pnpm.onlyBuiltDependencies`, and Cypress downloads its actual
-# binary in postinstall. Unlisted, the install reports success and the binary
-# silently never arrives — failing later, somewhere unrelated.
-#
-# Verified empirically against pnpm 10.33.0 on 2026-07-21:
-#   - NOT on by default at this version (install warned and exited 0).
-#   - Honored ONLY here. The same key in package.json's `pnpm` block is
-#     silently ignored (exit 0) — do not "tidy" it into package.json next to
-#     onlyBuiltDependencies.
-#
-# Keep `onlyBuiltDependencies` entries UNPINNED (bare package names). Pinned
-# entries like `esbuild@0.27.4` stop matching after a version bump and are
-# silently blocked without tripping strictDepBuilds
-# (pnpm/pnpm#11219, pnpm/pnpm#10426).
-#
-# pnpm v11 replaces onlyBuiltDependencies/ignoredBuiltDependencies with a
-# unified `allowBuilds` map; revisit on that upgrade.
+# It became the default in v11 (it was NOT on by default in 10.33.0 — verified
+# empirically: the install warned and exited 0). Kept explicit so the guard
+# survives a future default flip and stays greppable.
 strictDepBuilds: true
