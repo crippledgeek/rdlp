@@ -178,10 +178,14 @@ impl AppSettings {
 
     /// Load settings from disk, falling back to defaults.
     ///
-    /// Reads the settings file at [`Self::settings_path()`]. If the
-    /// file is missing, contains invalid JSON, or fails security
-    /// validation (see [`Self::validate_security`]), returns
-    /// [`Default::default()`] instead.
+    /// Reads the settings file at [`Self::settings_path()`]. If the file is
+    /// missing or contains invalid JSON, returns [`Default::default()`]. If it
+    /// parses but one or more fields fail security validation (see
+    /// [`Self::validate_security`]), only the offending field(s) reset to
+    /// their default (`None`) — every other field is preserved. See
+    /// [`Self::parse_and_validate`] for why: a whole-record fallback would
+    /// clobber the user's `output_dir`, cookies, proxy, and every other
+    /// setting over one out-of-range field.
     ///
     /// A hand-edited `settings.json` bypasses the frontend's zod schema, so this
     /// is the last point that can reject an out-of-range or unsafe value before
@@ -191,7 +195,8 @@ impl AppSettings {
     ///
     /// # Returns
     ///
-    /// The loaded [`AppSettings`], or defaults if loading fails.
+    /// The loaded [`AppSettings`], with any invalid field(s) reset to their
+    /// default, or full defaults if the file is missing/unparseable.
     #[must_use]
     pub fn load() -> Self {
         let path = Self::settings_path();
@@ -207,27 +212,35 @@ impl AppSettings {
         )
     }
 
-    /// Parse `contents` as JSON and validate the result, falling back to
-    /// [`Default::default()`] on either a parse error or a validation failure.
+    /// Parse `contents` as JSON, then validate the result. A parse error falls back to
+    /// [`Default::default()`] (there's no partial record to preserve). A validation
+    /// failure resets ONLY the offending field to `None` ("inherit default" — see
+    /// [`Self::reset_invalid_field`]) and re-validates, looping until the record is
+    /// fully valid; every other field survives untouched.
     ///
     /// Extracted from [`Self::load()`] so the parse-then-validate logic is testable
     /// without depending on [`Self::settings_path()`], which resolves to a fixed,
     /// non-configurable per-process path.
     fn parse_and_validate(contents: &str, path: &std::path::Path) -> Self {
         match serde_json::from_str::<Self>(contents) {
-            Ok(settings) => match settings.validate_security() {
-                Ok(()) => {
-                    info!("Loaded settings from {}", path.display());
-                    settings
-                }
-                Err(e) => {
+            Ok(mut settings) => {
+                // Loop resetting only the offending field, because a hand-edited
+                // settings.json can carry more than one out-of-range value and
+                // `validate_security()` reports (and this loop resets) one at a time.
+                // A field reset to `None` means "inherit the default" everywhere else
+                // in this design, so it is the exact remedy — never fall back to
+                // `Self::default()`, which would also discard every OTHER field the
+                // user had set (output_dir, cookies, proxy, format defaults, ...).
+                while let Err(e) = settings.validate_security() {
                     warn!(
-                        "Settings at {} failed validation ({e}), using defaults",
+                        "Settings at {} failed validation ({e}); resetting that field to its default",
                         path.display()
                     );
-                    Self::default()
+                    settings.reset_invalid_field(&e);
                 }
-            },
+                info!("Loaded settings from {}", path.display());
+                settings
+            }
             Err(e) => {
                 warn!(
                     "Failed to parse settings at {}: {e}, using defaults",
@@ -235,6 +248,41 @@ impl AppSettings {
                 );
                 Self::default()
             }
+        }
+    }
+
+    /// Reset the single field named by `err` to its default (`None`/unset), leaving
+    /// every other field untouched.
+    ///
+    /// Only [`SettingsValidationError::OutOfRange`] identifies a single numeric field;
+    /// the other variants (`CookiesFileTraversal`, `InvalidProxy`) reset their
+    /// respective non-numeric field to `None` directly, since they carry no `field`
+    /// name to dispatch on.
+    fn reset_invalid_field(&mut self, err: &SettingsValidationError) {
+        match err {
+            SettingsValidationError::CookiesFileTraversal => self.cookies_file = None,
+            SettingsValidationError::InvalidProxy(_) => self.proxy = None,
+            SettingsValidationError::OutOfRange { field, .. } => match *field {
+                "socket_timeout" => self.socket_timeout = None,
+                "read_timeout" => self.read_timeout = None,
+                "pool_idle_timeout" => self.pool_idle_timeout = None,
+                "download_timeout" => self.download_timeout = None,
+                "merge_timeout" => self.merge_timeout = None,
+                "concurrent_fragments" => self.concurrent_fragments = None,
+                "buffer_size" => self.buffer_size = None,
+                "parallel_threshold" => self.parallel_threshold = None,
+                "hls_head_probe_timeout" => self.hls_head_probe_timeout = None,
+                other => {
+                    // Unreachable in practice (every `OutOfRange` field above is listed).
+                    // Fail safe rather than looping forever on an unmatched field: fall
+                    // back to full defaults for this one pathological case only.
+                    warn!(
+                        "Unknown out-of-range field '{other}' during settings reset; \
+                         resetting the whole record to defaults as a fail-safe"
+                    );
+                    *self = Self::default();
+                }
+            },
         }
     }
 
@@ -973,6 +1021,10 @@ mod tests {
     /// `BufWriter::with_capacity`. This exercises the exact logic `load()` runs
     /// (`parse_and_validate`) so it fails against the pre-fix code (which had no
     /// `validate_security()` call in that path) and passes once the fix is applied.
+    ///
+    /// Updated for Finding 2: `load()` now resets ONLY the offending field, not the
+    /// whole record — see `test_valid_neighbouring_field_survives_invalid_sibling`
+    /// for the field-preservation half of this contract.
     #[test]
     fn test_out_of_range_settings_json_loads_as_defaults() {
         let json = r#"{
@@ -986,13 +1038,54 @@ mod tests {
         let settings = AppSettings::parse_and_validate(json, std::path::Path::new("test.json"));
         assert_eq!(
             settings.buffer_size, None,
-            "out-of-range buffer_size must NOT survive load — defaults must be used instead"
+            "out-of-range buffer_size must NOT survive load — it resets to None (inherit default)"
+        );
+    }
+
+    /// Finding 2 regression guard: a bad field alongside a good field must not wipe the
+    /// good one. Pre-fix, `parse_and_validate` fell back to `Self::default()` on ANY
+    /// validation failure, which would also have discarded `output_dir` here.
+    #[test]
+    fn test_valid_neighbouring_field_survives_invalid_sibling() {
+        let json = r#"{
+            "output_dir": "/home/user/Videos",
+            "embed_thumbnail": true,
+            "embed_metadata": false,
+            "verbose": false,
+            "default_subtitle_langs": [],
+            "buffer_size": 100000000000
+        }"#;
+        let settings = AppSettings::parse_and_validate(json, std::path::Path::new("test.json"));
+        assert_eq!(
+            settings.buffer_size, None,
+            "the offending field resets to None"
         );
         assert_eq!(
             settings.output_dir,
-            AppSettings::default().output_dir,
-            "the whole record must fall back to defaults, not just the bad field"
+            PathBuf::from("/home/user/Videos"),
+            "a valid neighbouring field must survive the reset of a different bad field"
         );
+    }
+
+    /// Multiple simultaneously-bad fields must each reset independently — the loop in
+    /// `parse_and_validate` must not stop after fixing only the first one.
+    #[test]
+    fn test_multiple_invalid_fields_each_reset_independently() {
+        let json = r#"{
+            "output_dir": "/home/user/Videos",
+            "embed_thumbnail": true,
+            "embed_metadata": false,
+            "verbose": false,
+            "default_subtitle_langs": [],
+            "buffer_size": 100000000000,
+            "socket_timeout": 9999,
+            "concurrent_fragments": 999
+        }"#;
+        let settings = AppSettings::parse_and_validate(json, std::path::Path::new("test.json"));
+        assert_eq!(settings.buffer_size, None);
+        assert_eq!(settings.socket_timeout, None);
+        assert_eq!(settings.concurrent_fragments, None);
+        assert_eq!(settings.output_dir, PathBuf::from("/home/user/Videos"));
     }
 
     /// A settings.json with a valid `buffer_size` loads unchanged (not silently

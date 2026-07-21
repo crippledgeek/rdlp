@@ -109,6 +109,24 @@ describe("NumericField", () => {
     // silently coerced to the nearest bound, `onCommit` fires with the
     // clamped value, and `FieldError`/`aria-invalid` never trigger from a
     // range violation.
+    // Finding 1 regression guard: every setting behind this component is integer-valued
+    // (seconds, counts, whole MiB). Without `formatOptions`, React Aria's default
+    // `Intl.NumberFormat` accepts up to 3 fractional digits, so "3.5" parses as 3.5 and
+    // is committed as-is — silently breaking a `serde` deserialize into `Option<u64>`/
+    // `Option<u32>` at the IPC boundary.
+    it("commits an integer when a fractional value is typed", async () => {
+        const user = userEvent.setup();
+        const { onCommit } = setup();
+        const input = screen.getByRole("textbox", { name: /test field/i });
+        await user.clear(input);
+        await user.type(input, "3.5");
+        await user.tab();
+        expect(onCommit).toHaveBeenCalledTimes(1);
+        const committed = onCommit.mock.calls[0]?.[0];
+        expect(committed).not.toBeNull();
+        expect(Number.isInteger(committed)).toBe(true);
+    });
+
     it("clamps an out-of-range commit to the nearest bound", async () => {
         const user = userEvent.setup();
         const { onCommit } = setup();

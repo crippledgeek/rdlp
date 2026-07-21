@@ -79,6 +79,24 @@ describe("DownloadSection", () => {
         expect(input).toHaveAttribute("placeholder", "500,000 B");
     });
 
+    // Finding 1 regression guard (MiB path): a fractional MiB entry must round to a
+    // whole MiB before the unit conversion, otherwise `mibDisplayToBytes` produces a
+    // non-whole-MiB byte value from a control labelled whole MiB.
+    it("commits a whole-MiB byte value when a fractional MiB is typed", async () => {
+        const user = userEvent.setup();
+        const onChange = vi.fn();
+        const draft = { ...baseDraft, buffer_size: 2 * 1_048_576 } as AppSettings;
+        render(<DownloadSection draft={draft} onChange={onChange} />);
+        const input = screen.getByRole("textbox", { name: /buffer size/i });
+        await user.clear(input);
+        await user.type(input, "3.5");
+        await user.tab();
+        expect(onChange).toHaveBeenCalledTimes(1);
+        const committedBytes = (onChange.mock.calls[0]?.[0] as Partial<AppSettings>)
+            .buffer_size as number;
+        expect(committedBytes % 1_048_576).toBe(0);
+    });
+
     it("passes a unitless count straight through without conversion", async () => {
         const user = userEvent.setup();
         const onChange = vi.fn();

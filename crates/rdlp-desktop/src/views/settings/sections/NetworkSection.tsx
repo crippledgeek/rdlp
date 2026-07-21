@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectTrigger, SelectValue, SelectItem, SelectPopover, SelectListBox } from "@/components/ui/select";
 import { NumericField } from "@/views/settings/NumericField";
+import { FormDescription } from "@/components/ui/field";
 import {
     formStateToPoolIdleTimeout,
     poolIdleTimeoutToFormState,
@@ -134,7 +135,10 @@ export function NetworkSection({ draft, onChange }: Props) {
                                 <NumericField
                                     id="pool-idle-timeout"
                                     label="Idle Timeout"
-                                    helper="When off, idle keep-alive connections are kept until the OS closes them."
+                                    // Helper text moved to the full-width FormDescription sibling below —
+                                    // this narrow (96px) column would otherwise wrap it awkwardly.
+                                    helper=""
+                                    hideLabel
                                     value={poolIdleForm.evictIdle && poolIdleForm.secondsInput !== "" ? Number(poolIdleForm.secondsInput) : null}
                                     minValue={1}
                                     maxValue={3600}
@@ -145,6 +149,9 @@ export function NetworkSection({ draft, onChange }: Props) {
                                 />
                             </div>
                         </div>
+                        <FormDescription className="mt-1">
+                            When off, idle keep-alive connections are kept until the OS closes them.
+                        </FormDescription>
                     </div>
                 </div>
             </section>

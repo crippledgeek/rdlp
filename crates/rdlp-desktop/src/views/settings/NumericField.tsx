@@ -42,6 +42,14 @@ interface NumericFieldProps {
     placeholder?: string;
     suffix?: string;
     isDisabled?: boolean;
+    /**
+     * Visually hides the `<Label>` (via `sr-only`) while keeping it in the DOM as the
+     * field's accessible name. Use when a sibling control (e.g. a checkbox) already
+     * carries the equivalent visible text and a second visible label would just repeat
+     * it in a cramped layout. Never replace the `<Label>` with `aria-label` instead —
+     * see the no-aria-label note below.
+     */
+    hideLabel?: boolean;
 }
 
 export function NumericField({
@@ -55,6 +63,7 @@ export function NumericField({
     placeholder,
     suffix,
     isDisabled = false,
+    hideLabel = false,
 }: NumericFieldProps) {
     return (
         <NumberField
@@ -67,6 +76,14 @@ export function NumericField({
             {...(value !== null ? { value } : {})}
             minValue={minValue}
             maxValue={maxValue}
+            // Every setting behind this component is integer-valued (seconds, counts,
+            // whole MiB). Without `formatOptions`, React Aria's default `Intl.NumberFormat`
+            // allows up to 3 fractional digits, so the decimal separator is accepted as
+            // valid partial input and `step` has nothing to snap (verified against
+            // `useNumberFieldState.mjs`: no `step` prop means no `snapValueToStep` call).
+            // `maximumFractionDigits: 0` excludes the decimal separator from valid input
+            // and rounds any fractional commit to an integer.
+            formatOptions={{ maximumFractionDigits: 0 }}
             onChange={(n) => onCommit(Number.isNaN(n) ? null : n)}
             // "aria" selects ARIA-based validation reporting over React Aria's
             // native browser constraint-validation UI. Nothing in this component
@@ -78,8 +95,10 @@ export function NumericField({
             className="group flex flex-col gap-1"
         >
             {/* No aria-label: it would override this visible Label as the accessible
-                name, and a drift between the two breaks WCAG 2.5.3 Label in Name. */}
-            <Label className="settings-label">{label}</Label>
+                name, and a drift between the two breaks WCAG 2.5.3 Label in Name.
+                `hideLabel` visually hides it via `sr-only` instead — it stays in the
+                DOM as the accessible name. */}
+            <Label className={hideLabel ? "sr-only" : "settings-label"}>{label}</Label>
             <div className="flex items-center gap-1">
                 <FieldGroup className="relative flex-1">
                     <NumberFieldInput

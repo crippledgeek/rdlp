@@ -54,7 +54,7 @@ function byteFieldPlaceholder(bytes: number | null, unsetPlaceholder: string): s
 
 function byteFieldHelper(bytes: number | null, defaultHelper: string): string {
     if (bytes !== null && isSubMibBytes(bytes)) {
-        return `Currently set to ${bytes.toLocaleString()} bytes via the config file (below 1 MiB, so this field shows it as blank). Entering a value here replaces it with a whole-MiB size.`;
+        return `Currently set to ${bytes.toLocaleString()} bytes via the settings file (below 1 MiB, so this field shows it as blank). Entering a value here replaces it with a whole-MiB size.`;
     }
     return defaultHelper;
 }
@@ -98,7 +98,7 @@ export function DownloadSection({ draft, onChange }: Props) {
                     label="Buffer Size (MiB)"
                     helper={byteFieldHelper(
                         draft.buffer_size,
-                        "Download buffer per connection. Default 2 MiB. Values below 1 MiB can be set in the config file.",
+                        "Download buffer per connection. Default 2 MiB. Values below 1 MiB can be set in the settings file.",
                     )}
                     value={byteFieldValue(draft.buffer_size)}
                     minValue={1}
