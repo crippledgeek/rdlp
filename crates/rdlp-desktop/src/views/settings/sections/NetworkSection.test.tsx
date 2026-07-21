@@ -43,6 +43,10 @@ const baseDraft: AppSettings = {
     strict_subs: false,
     verify_sub_urls: false,
     retry_subs: false,
+    concurrent_fragments: null,
+    buffer_size: null,
+    parallel_threshold: null,
+    hls_head_probe_timeout: null,
 };
 
 // NOTE on role: NumericField wraps React Aria's NumberField, which

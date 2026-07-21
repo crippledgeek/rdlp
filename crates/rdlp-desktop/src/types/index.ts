@@ -442,6 +442,12 @@ export interface AppSettings {
     strict_subs: boolean;
     verify_sub_urls: boolean;
     retry_subs: boolean;
+    concurrent_fragments: number | null;
+    /** Bytes. Displayed in MiB by the Settings UI; bytes are the stored truth. */
+    buffer_size: number | null;
+    /** Bytes. Displayed in MiB by the Settings UI; bytes are the stored truth. */
+    parallel_threshold: number | null;
+    hls_head_probe_timeout: number | null;
 }
 
 // ========== Error Types ==========
