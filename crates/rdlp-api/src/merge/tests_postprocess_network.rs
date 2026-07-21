@@ -655,3 +655,69 @@ fn test_postprocess_recode_threads_none_preserves_base() {
     assert_eq!(config.postprocess.recode_threads, Some(4));
     assert_eq!(config.postprocess.recode_preset, Some("slow".to_string()));
 }
+
+#[test]
+fn test_network_none_preserves_buffer_size() {
+    let mut config = Config {
+        buffer_size: 4 * 1024 * 1024,
+        ..Config::default()
+    };
+    NetworkOptions::default().merge_into(&mut config);
+    assert_eq!(config.buffer_size, 4 * 1024 * 1024);
+}
+
+#[test]
+fn test_network_some_overrides_buffer_size() {
+    let mut config = Config {
+        buffer_size: 4 * 1024 * 1024,
+        ..Config::default()
+    };
+    NetworkOptions {
+        buffer_size: Some(8 * 1024 * 1024),
+        ..NetworkOptions::default()
+    }
+    .merge_into(&mut config);
+    assert_eq!(config.buffer_size, 8 * 1024 * 1024);
+}
+
+#[test]
+fn test_network_none_preserves_parallel_threshold() {
+    let mut config = Config {
+        parallel_threshold: Some(5 * 1024 * 1024),
+        ..Config::default()
+    };
+    NetworkOptions::default().merge_into(&mut config);
+    assert_eq!(config.parallel_threshold, Some(5 * 1024 * 1024));
+}
+
+#[test]
+fn test_network_some_overrides_parallel_threshold() {
+    let mut config = Config::default();
+    NetworkOptions {
+        parallel_threshold: Some(20 * 1024 * 1024),
+        ..NetworkOptions::default()
+    }
+    .merge_into(&mut config);
+    assert_eq!(config.parallel_threshold, Some(20 * 1024 * 1024));
+}
+
+#[test]
+fn test_network_none_preserves_hls_head_probe_timeout() {
+    let mut config = Config {
+        hls_head_probe_timeout: Some(9),
+        ..Config::default()
+    };
+    NetworkOptions::default().merge_into(&mut config);
+    assert_eq!(config.hls_head_probe_timeout, Some(9));
+}
+
+#[test]
+fn test_network_some_overrides_hls_head_probe_timeout() {
+    let mut config = Config::default();
+    NetworkOptions {
+        hls_head_probe_timeout: Some(30),
+        ..NetworkOptions::default()
+    }
+    .merge_into(&mut config);
+    assert_eq!(config.hls_head_probe_timeout, Some(30));
+}

@@ -271,6 +271,16 @@ pub struct NetworkOptions {
     pub merge_timeout_secs: Option<u64>,
     /// Number of concurrent download fragments/chunks. `None` preserves base config.
     pub concurrent_fragments: Option<u32>,
+    /// Download buffer size in bytes. `None` preserves base config.
+    /// Range `1..=1_073_741_824` where enforced upstream.
+    pub buffer_size: Option<u64>,
+    /// Minimum file size in bytes before parallel chunked download is used.
+    /// `None` preserves base config. Range: `1..=1_073_741_824` (enforced by
+    /// `Config::validate()`).
+    pub parallel_threshold: Option<u64>,
+    /// HLS HEAD-probe timeout in seconds. Maps to `Config::hls_head_probe_timeout`.
+    /// `None` preserves base config. Range: 1..=300 (enforced by `Config::validate()`).
+    pub hls_head_probe_timeout: Option<u64>,
     /// Download rate limit in bytes per second.
     pub rate_limit: Option<u64>,
     /// HTTP/SOCKS proxy URL (e.g. `"http://proxy:3128"`, `"socks5://proxy:1080"`). `None` preserves base config.
@@ -337,6 +347,9 @@ mod tests {
         assert!(req.network.retries.is_none());
         assert!(req.network.timeout_secs.is_none());
         assert!(req.network.concurrent_fragments.is_none());
+        assert!(req.network.buffer_size.is_none());
+        assert!(req.network.parallel_threshold.is_none());
+        assert!(req.network.hls_head_probe_timeout.is_none());
         assert!(req.network.rate_limit.is_none());
         assert!(req.network.cookies_from_browser.is_none());
         assert!(req.network.cookies_file.is_none());

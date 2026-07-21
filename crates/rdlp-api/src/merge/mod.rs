@@ -188,6 +188,18 @@ impl MergeOverrides for NetworkOptions {
         if let Some(v) = self.concurrent_fragments {
             config.concurrent_fragments = v as usize;
         }
+        if let Some(v) = self.buffer_size {
+            // Genuinely narrowing on a 32-bit target. Values are capped at 1 GiB by
+            // AppSettings::validate_security / Config::validate upstream, so the
+            // saturating fallback is unreachable on every target rdlp supports.
+            config.buffer_size = usize::try_from(v).unwrap_or(usize::MAX);
+        }
+        if let Some(v) = self.parallel_threshold {
+            config.parallel_threshold = Some(v);
+        }
+        if let Some(v) = self.hls_head_probe_timeout {
+            config.hls_head_probe_timeout = Some(v);
+        }
         if let Some(v) = self.rate_limit {
             config.rate_limit = Some(v);
         }
