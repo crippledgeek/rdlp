@@ -17,7 +17,7 @@
 # not here.
 set -euo pipefail
 
-cd "$(git rev-parse --show-toplevel)"
+cd "$(git rev-parse --show-toplevel)" || exit 2
 
 echo "==> cargo dupes check --exclude-tests --min-lines 20 -p crates/"
 cargo dupes check --exclude-tests --min-lines 20 -p crates/

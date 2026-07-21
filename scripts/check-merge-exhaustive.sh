@@ -9,7 +9,13 @@
 #                "canary-verified" stays true as the tree evolves.
 set -euo pipefail
 
-cd "$(git rev-parse --show-toplevel)"
+# Pin the C locale: GNU grep's manual says range expressions like the `[a-z_]`
+# classes used below are UNSPECIFIED outside the C locale -- they "might fail to
+# match any character". A correctness fix, NOT a speed one (measured: no
+# difference). Full quote and rationale in #621.
+export LC_ALL=C
+
+cd "$(git rev-parse --show-toplevel)" || exit 2
 
 FILE="crates/rdlp-cli/src/config_tests.rs"
 FN="every_config_field_is_classified"

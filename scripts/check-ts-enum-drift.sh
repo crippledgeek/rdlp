@@ -26,6 +26,18 @@
 
 set -euo pipefail
 
+# Pin the C locale: GNU grep's manual says range expressions like the `[a-z_]`
+# classes used below are UNSPECIFIED outside the C locale -- they "might fail to
+# match any character". A correctness fix, NOT a speed one (measured: no
+# difference). Full quote and rationale in #621.
+export LC_ALL=C
+
+# Anchor to the repo root: every path below is relative, so without this the
+# gate scans NOTHING and reports success when run from any other directory --
+# the same fail-open class as the missing-tool guard. `|| exit 2` distinguishes
+# "cannot run" from "gate failed" (exit 1). See #621.
+cd "$(git rev-parse --show-toplevel)" || exit 2
+
 TS_FILE="crates/rdlp-desktop/src/types/index.ts"
 
 # rust_file:rust_enum:ts_union — each enum's `rename_all = "lowercase"` is

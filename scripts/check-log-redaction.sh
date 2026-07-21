@@ -11,6 +11,12 @@
 # runs fail-closed there (CI sets RDLP_REQUIRE_SEMGREP=1 to turn skip into failure).
 set -euo pipefail
 
+# Anchor to the repo root: every path below is relative, so without this the
+# gate scans NOTHING and reports success when run from any other directory --
+# the same fail-open class as the missing-tool guard. `|| exit 2` distinguishes
+# "cannot run" from "gate failed" (exit 1). See #621.
+cd "$(git rev-parse --show-toplevel)" || exit 2
+
 RULE="scripts/semgrep/log-url-redaction.yml"
 SCAN="crates"
 

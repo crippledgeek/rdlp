@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Run every invariant gate. Referenced by CODING_RULES.md's Pre-Commit Checklist
 # so the gates have a committed local entry point, not only a CI one.
 #
@@ -6,16 +6,34 @@
 
 set -uo pipefail
 
-cd "$(git rev-parse --show-toplevel)"
+# `|| exit` matters here (SC2164): this script runs with `set -uo pipefail` and
+# deliberately WITHOUT `-e`, so a failed cd would not abort -- it would run every
+# gate against whatever directory the caller happened to be in and report on the
+# wrong tree.
+cd "$(git rev-parse --show-toplevel)" || exit 2  # 2 = cannot run, 1 = a gate failed
 
 FAILED=0
+BLOCKED=0
+BLOCKED_GATES=""
 
 for script in scripts/check-*.sh; do
     # Don't recurse into this aggregate.
     [ "$(basename "$script")" = "check-all.sh" ] && continue
     printf '%-44s' "$(basename "$script")"
-    if output=$(bash "$script" 2>&1); then
+    # Distinguish the two non-zero cases rather than folding them together.
+    # A gate that CANNOT RUN (exit 2 -- a required tool is missing) is not the
+    # same news as an invariant being violated (exit 1), and telling an operator
+    # "invariants failed" when rg simply isn't installed sends them hunting for
+    # a defect that does not exist.
+    rc=0
+    output=$(bash "$script" 2>&1) || rc=$?
+    if [[ $rc -eq 0 ]]; then
         echo "OK"
+    elif [[ $rc -eq 2 ]]; then
+        echo "CANNOT RUN"
+        printf '%s\n' "$output" | sed 's/^/    /'
+        BLOCKED=1
+        BLOCKED_GATES="$BLOCKED_GATES $script"
     else
         echo "FAILED"
         printf '%s\n' "$output" | sed 's/^/    /'
@@ -44,8 +62,19 @@ for script in scripts/check-*.sh; do
     # a green canary that does not exist. Require the sentinel on stdout so
     # "a real canary ran" is observed rather than inferred, and so the failure
     # mode is loud rather than silent.
-    if output=$(bash "$script" --self-test 2>&1) \
-        && printf '%s\n' "$output" | grep -q '^SELF-TEST OK'; then
+    rc=0
+    output=$(bash "$script" --self-test 2>&1) || rc=$?
+    # A canary exiting 2 is only credible as CANNOT RUN if the GATE ITSELF was
+    # blocked above. Otherwise a script could mention `--self-test`, ignore it,
+    # exit 2, and skip the sentinel assertion entirely -- dodging the anti-spoof
+    # property this loop exists for while the gate demonstrably runs fine.
+    if [[ $rc -eq 2 ]] && [[ " $BLOCKED_GATES " == *" $script "* ]]; then
+        echo "CANNOT RUN"
+        printf '%s\n' "$output" | sed 's/^/    /'
+        BLOCKED=1
+        continue
+    fi
+    if [[ $rc -eq 0 ]] && printf '%s\n' "$output" | grep -q '^SELF-TEST OK'; then
         echo "OK"
     else
         echo "FAILED"
@@ -57,10 +86,19 @@ for script in scripts/check-*.sh; do
     fi
 done
 
+# A real failure outranks a blocked gate: if any invariant is actually violated,
+# that is the headline regardless of what else could not run.
 if [ "$FAILED" -eq 1 ]; then
     echo ""
     echo "One or more invariant gates failed."
     exit 1
+fi
+
+if [ "$BLOCKED" -eq 1 ]; then
+    echo ""
+    echo "One or more invariant gates COULD NOT RUN (missing tool). Nothing above"
+    echo "was reported as violated, but the suite did not fully execute."
+    exit 2
 fi
 
 echo ""

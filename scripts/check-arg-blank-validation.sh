@@ -26,10 +26,16 @@
 
 set -euo pipefail
 
+# Pin the C locale: GNU grep's manual says range expressions like the `[a-z_]`
+# classes used below are UNSPECIFIED outside the C locale -- they "might fail to
+# match any character". A correctness fix, NOT a speed one (measured: no
+# difference). Full quote and rationale in #621.
+export LC_ALL=C
+
 # Anchor to the repo root: the target path below is relative, so running from
 # anywhere else would scan nothing and cheerfully report OK. A gate that passes
 # having scanned nothing is worse than no gate.
-cd "$(git rev-parse --show-toplevel)"
+cd "$(git rev-parse --show-toplevel)" || exit 2
 
 TARGET="crates/rdlp-cli/src/args.rs"
 
