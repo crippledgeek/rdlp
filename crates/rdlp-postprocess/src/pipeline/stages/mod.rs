@@ -5,6 +5,7 @@
 //! 4: `RecodeStage` → 5: `SubtitleStage` → 6: `MetadataStage` → 7: `ThumbnailStage` →
 //! 8: `FixupStage` → 9: `FinalizeMetadataStage`
 
+mod audio_convert;
 pub mod audio_extract;
 pub mod finalize_metadata;
 pub mod fixup;
@@ -12,6 +13,7 @@ pub mod merge;
 pub mod metadata;
 pub mod normalize;
 pub mod recode;
+mod recode_audio_only;
 pub mod remux;
 pub mod subtitle;
 mod subtitle_codec;
