@@ -23,6 +23,14 @@ impl MediaKind {
     }
 }
 
+// `declared_codec(_, MediaKind::Video)` has no production caller yet — it is
+// exercised only by `video_kind_answers_separately` below. The planned
+// consumer is deriving a container's default video codec the same
+// muxer-declared way `select_audio_encoder_for_container` does for audio,
+// wiring into `default_codec_for_container`/`validate_speed_controls`. Not
+// speculative surface: it is real, planned follow-up work landing in a later
+// PR, kept here now because the audio and video code paths share this module.
+
 /// The codec the linked build's muxer declares as its default for `container`.
 ///
 /// Returns `None` when the container carries no stream of that kind at all
@@ -95,9 +103,10 @@ pub fn declared_codec(container: ContainerFormat, kind: MediaKind) -> Option<&'s
         let name = CStr::from_ptr(name).to_str().ok()?;
         if name == "unknown_codec" {
             log::warn!(
-                "{container} muxer declared {kind} codec id {}, but the \
+                "{} muxer declared {kind} codec id {}, but the \
                  linked libavcodec has no name for it (descriptor table is \
                  behind the muxer table) — reporting no declared {kind} codec",
+                container.as_ext(),
                 id as u32
             );
             return None;
@@ -175,6 +184,14 @@ mod tests {
     /// each container declares; that per-container table is a later task's to
     /// pin (see the individual exact-pin tests above for the containers that
     /// already have one).
+    ///
+    /// This is a deliberate pin on a full-featured `FFmpeg` build: it asserts
+    /// the EXACT set of audio-less containers, so it fails on any build with
+    /// muxers disabled (`--disable-muxer=caf`, a `--disable-everything`
+    /// distro build, a minimal vendored build) where a container this test
+    /// expects to have audio no longer does. If it fires for that reason,
+    /// the fix is widening the expected set to match the linked build, not
+    /// treating it as a real regression.
     #[test]
     fn every_container_resolves_and_only_ivf_lacks_audio() {
         use strum::IntoEnumIterator;
