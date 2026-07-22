@@ -65,6 +65,35 @@ pub fn build_video_fixture(path: &Path, muxer: &str) -> Result<(), ()> {
     ])
 }
 
+/// Build an H.264 + stereo-48 kHz-AAC fixture.
+///
+/// The audio-extraction suites need a real audio stream, which
+/// [`build_video_fixture`] deliberately omits. AAC at 48 kHz is the shape a
+/// downloaded MP4 actually has, and its `fltp` / 1024-sample decoder output is
+/// what every other encoder must be adapted from (#638).
+pub fn build_av_fixture(path: &Path) -> Result<(), ()> {
+    run_ffmpeg(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=d=2:s=320x240:r=25",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:d=2:r=48000",
+        "-ac",
+        "2",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-shortest",
+        path.to_str().unwrap(),
+    ])
+}
+
 /// Build a REAL JPEG. Placeholder bytes are not a substitute: an invalid image
 /// makes the embed fail early and skip the sidecar cleanup entirely, which
 /// hides sidecar-lifecycle bugs — the first investigation of the borrowed-input

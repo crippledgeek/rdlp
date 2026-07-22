@@ -2,7 +2,9 @@
 //!
 //! Provides `add_abuffer_to_graph` and `parse_and_validate_filter_graph`
 //! which bypass `ffmpeg-the-third` wrapper limitations for audio filter
-//! graph setup.
+//! graph setup, plus the two audio-graph builders every route goes through:
+//! [`build_audio_filter_graph`] (any filter spec) and
+//! [`build_encoder_adapted_audio_filter`] (a spec derived from an encoder).
 //!
 //! # Lint allowances
 //!
@@ -19,6 +21,125 @@ use std::ffi::CString;
 use crate::error::{PostProcessError, Result};
 
 use super::super::FFmpegRunner;
+
+/// What the graph's sink end must produce.
+///
+/// The filter chain and the sink's frame size are one decision, not two:
+/// `frame_size` is meaningless without knowing which encoder the chain feeds,
+/// and a chain built for a fixed-frame-size encoder is unusable without it.
+/// Grouping them is what makes [`build_audio_filter_graph`] apply both — the
+/// previous shape let a caller build the graph and simply forget the frame
+/// size, which is exactly how #638 shipped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct AudioSinkSpec<'a> {
+    /// Filter chain between `abuffer` and `abuffersink` (e.g. an `aformat`).
+    pub filter_spec: &'a str,
+    /// Samples per frame the sink must emit, from the **opened** encoder's
+    /// `frame_size`. `0` means the consumer accepts variable-length frames
+    /// (PCM, or a measurement-only graph with no encoder at all) and leaves
+    /// the sink's chunking alone.
+    pub frame_size: u32,
+}
+
+/// Build `abuffer → {sink.filter_spec} → abuffersink` for `decoder`'s output.
+///
+/// This is the single audio-graph constructor for the whole crate — normalize,
+/// recode, and extract all route through it — and it applies
+/// `sink.frame_size` itself. Most audio encoders reject a non-final frame of
+/// any other length with a bare `EINVAL` from `avcodec_send_frame`, so pairing
+/// the two here rather than trusting each caller to remember a follow-up call
+/// is the structural form of the #638 fix.
+///
+/// # Errors
+///
+/// Returns an error if a filter is missing from the build, or the graph fails
+/// to parse, configure, or validate.
+pub(crate) fn build_audio_filter_graph(
+    decoder: &ffmpeg_the_third::decoder::Audio,
+    input_time_base: ffmpeg_the_third::Rational,
+    sink: AudioSinkSpec<'_>,
+) -> Result<ffmpeg_the_third::filter::Graph> {
+    let mut graph = ffmpeg_the_third::filter::Graph::new();
+
+    let abuffersink = ffmpeg_the_third::filter::find("abuffersink")
+        .ok_or_else(|| PostProcessError::ffmpeg_failed("abuffersink filter not found"))?;
+
+    FFmpegRunner::add_abuffer_to_graph(
+        &mut graph,
+        "in",
+        input_time_base,
+        decoder.rate(),
+        decoder.format().name(),
+        &decoder.ch_layout().description(),
+    )?;
+    graph
+        .add(&abuffersink, "out", "")
+        .map_err(|e| PostProcessError::FFmpegLibraryError {
+            message: format!("failed to add abuffersink filter: {e}"),
+        })?;
+
+    FFmpegRunner::parse_and_validate_filter_graph(&mut graph, "in", "out", sink.filter_spec)?;
+
+    // After `avfilter_graph_config`, matching FFmpeg's own ordering in
+    // `ffmpeg_filter.c`: the sink's input link must be configured before its
+    // frame size can be constrained.
+    FFmpegRunner::set_buffersink_frame_size(&mut graph, "out", sink.frame_size);
+
+    Ok(graph)
+}
+
+/// Build a graph that adapts `decoder`'s frames to everything `encoder` needs.
+///
+/// Two adaptations are required, and an encoder rejects the frame with a bare
+/// `EINVAL` if either is missing:
+///
+/// 1. **Sample format / rate / channel layout**, via `aformat`. Format
+///    negotiation inserts the resampler itself — `auto_convert` is left at its
+///    `AVFILTER_AUTO_CONVERT_ALL` default — so no explicit `aresample` stage is
+///    needed.
+/// 2. **Frame size**, applied by [`build_audio_filter_graph`].
+///
+/// `encoder` must be **opened**: `frame_size` is only populated by
+/// `avcodec_open2`, which is why this takes `encoder::audio::Encoder` rather
+/// than the pre-open `encoder::audio::Audio`. Taking the opened type makes
+/// "adapt before the encoder is ready" a compile error instead of a silent
+/// zero.
+///
+/// Both transcode routes — standalone `extract_audio` and the audio side of a
+/// video recode — call this. They had separate builders until #638, and only
+/// the recode one set the frame size, so `--extract-audio` worked for AAC
+/// alone: the one target whose frame size already matched the AAC decoder's
+/// 1024-sample output.
+///
+/// # Errors
+///
+/// Propagates any failure from [`build_audio_filter_graph`].
+pub(crate) fn build_encoder_adapted_audio_filter(
+    decoder: &ffmpeg_the_third::decoder::Audio,
+    encoder: &ffmpeg_the_third::encoder::audio::Encoder,
+    input_time_base: ffmpeg_the_third::Rational,
+) -> Result<ffmpeg_the_third::filter::Graph> {
+    // The channel layout comes from the encoder's own `ch_layout` (configured
+    // from the decoder's channel count before open), so layouts beyond
+    // mono/stereo are described correctly. The builder this replaced hardcoded
+    // `"stereo"` for anything above 1 channel and aborted every 5.1 recode
+    // with "Changing audio frame properties on the fly is not supported".
+    let filter_spec = format!(
+        "aformat=sample_fmts={}:sample_rates={}:channel_layouts={}",
+        encoder.format().name(),
+        encoder.rate(),
+        encoder.ch_layout().description(),
+    );
+
+    build_audio_filter_graph(
+        decoder,
+        input_time_base,
+        AudioSinkSpec {
+            filter_spec: &filter_spec,
+            frame_size: encoder.frame_size(),
+        },
+    )
+}
 
 impl FFmpegRunner {
     /// Add an `abuffer` audio source filter to a graph using raw FFI.
