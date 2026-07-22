@@ -5,10 +5,9 @@
 //!
 //! When `libfdk_aac` is available (custom `FFmpeg` build with `--enable-nonfree`),
 //! it is automatically preferred over the built-in `aac` encoder for better
-//! quality at equivalent bitrates. Use [`preferred_aac_encoder()`] to resolve
-//! the best available AAC encoder at runtime.
-
-use super::audio_encoder_registry;
+//! quality at equivalent bitrates — resolved via
+//! [`super::audio_encoder_registry::preferred_audio_encoder`], the single
+//! source of truth for encoder preference.
 
 /// Audio codec configuration for extraction/conversion.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -162,31 +161,9 @@ pub fn get_audio_codec(name: &str) -> Option<&'static AudioCodecConfig> {
         .map(|(_, config)| config)
 }
 
-/// Returns the best available AAC encoder name.
-///
-/// Delegates to [`audio_encoder_registry::preferred_audio_encoder`] for a single
-/// source of truth. Returns `"libfdk_aac"` when the Fraunhofer FDK build is
-/// available, otherwise `"aac"` (built-in).
-///
-/// This function requires [`super::ensure_init`] to have been called first.
-#[must_use]
-pub fn preferred_aac_encoder() -> &'static str {
-    audio_encoder_registry::preferred_audio_encoder("aac").unwrap_or("aac")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_preferred_aac_encoder_returns_valid_name() {
-        // Must be one of the two known AAC encoders
-        let enc = preferred_aac_encoder();
-        assert!(
-            enc == "aac" || enc == "libfdk_aac",
-            "unexpected encoder: {enc}"
-        );
-    }
 
     #[test]
     fn test_get_audio_codec_aac() {

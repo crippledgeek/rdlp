@@ -225,33 +225,6 @@ pub(super) fn extract_json_value(text: &str, key: &str) -> Option<f64> {
     value_str.trim().parse::<f64>().ok()
 }
 
-/// Select the appropriate audio encoder for a container extension.
-///
-/// Handles both video containers and audio-only output formats (e.g., mp3, flac, wav).
-/// For recognized audio-only extensions, returns the canonical encoder directly.
-/// For video containers, delegates to [`audio_encoder_registry::select_audio_encoder_for_container`].
-/// Falls back to the best available AAC encoder for unknown extensions.
-pub(super) fn select_audio_encoder_for_container(ext: &str) -> &'static str {
-    let Ok(container) = ext.parse::<rdlp_types::ContainerFormat>() else {
-        return crate::ffmpeg::audio_codecs::preferred_aac_encoder();
-    };
-
-    match container {
-        // Lossless/lossy audio-only containers whose own codec is the whole
-        // point: re-encoding a .mp3 to AAC-in-mp3 is not what the user asked
-        // for. The registry's fallback arm would do exactly that, so these are
-        // decided here before delegating.
-        //
-        // (These three WERE matched as raw strings with a comment claiming
-        // they "are not ContainerFormat variants". They are — Mp3, Flac and
-        // Wav have been variants throughout; the comment was simply wrong.)
-        rdlp_types::ContainerFormat::Mp3 => "libmp3lame",
-        rdlp_types::ContainerFormat::Flac => "flac",
-        rdlp_types::ContainerFormat::Wav => "pcm_s16le",
-        other => crate::ffmpeg::audio_encoder_registry::select_audio_encoder_for_container(other),
-    }
-}
-
 /// Get a sensible default bitrate (in bps) for an encoder.
 pub(super) fn default_bitrate_for_encoder(encoder: &str) -> usize {
     match encoder {
@@ -329,6 +302,49 @@ pub(super) const fn audio_only_extension_for(container: ContainerFormat) -> &'st
 pub(super) fn audio_only_extension_for_ext(ext: &str) -> &'static str {
     ext.parse::<ContainerFormat>()
         .map_or(DEFAULT_AUDIO_ONLY.as_ext(), audio_only_extension_for)
+}
+
+/// Resolves the audio encoder for a normalize output extension.
+///
+/// `final_output_ext` is the USER's output path extension, so two distinct
+/// failure modes must stay distinct:
+///
+/// - The extension doesn't parse into a [`ContainerFormat`] at all. This
+///   degrades gracefully to AAC, exactly like the sibling
+///   [`audio_only_extension_for_ext`] — normalization is about container
+///   *defaults* (#618), not about rejecting extensions it doesn't recognise,
+///   and the prior behaviour (before #618) was this same AAC fallback.
+/// - The extension parses but the registry can't determine an encoder for
+///   it (container genuinely carries no audio, or the muxer/codec tables
+///   yielded nothing usable — see
+///   [`super::super::audio_encoder_registry::select_audio_encoder_for_container`]).
+///   This is a real refusal and is reported truthfully: the extension goes
+///   in `format`, never mislabelled as a codec name.
+pub(super) fn resolve_normalize_audio_encoder(
+    final_output_ext: &str,
+    label: &str,
+) -> Result<&'static str> {
+    if let Ok(container) = final_output_ext.parse::<ContainerFormat>() {
+        super::super::audio_encoder_registry::select_audio_encoder_for_container(container)
+            .ok_or_else(|| PostProcessError::UnsupportedFormat {
+                format: final_output_ext.to_string(),
+                operation: format!(
+                    "audio normalization ({label}): no audio encoder could be \
+                     determined for container '{final_output_ext}'"
+                ),
+            })
+    } else {
+        warn!(
+            "audio normalization ({label}): unrecognized output extension \
+             '{final_output_ext}'; falling back to AAC"
+        );
+        super::super::audio_encoder_registry::preferred_audio_encoder("aac").ok_or_else(|| {
+            PostProcessError::UnsupportedCodec {
+                codec: "aac".to_string(),
+                operation: format!("audio normalization ({label})"),
+            }
+        })
+    }
 }
 
 /// Three-tier recovery for mux failures during audio normalization.
@@ -435,48 +451,4 @@ where
 /// [`parse_loudnorm_json`].
 pub(super) fn begin_loudnorm_capture() -> Result<LogCaptureGuard> {
     LogCaptureGuard::begin()
-}
-
-#[cfg(test)]
-mod audio_encoder_selection_tests {
-    use super::select_audio_encoder_for_container;
-
-    /// The three audio-only containers whose own codec is the point. These were
-    /// matched as raw strings before; the answers must not move.
-    #[test]
-    fn audio_only_containers_keep_their_native_encoder() {
-        assert_eq!(select_audio_encoder_for_container("mp3"), "libmp3lame");
-        assert_eq!(select_audio_encoder_for_container("flac"), "flac");
-        assert_eq!(select_audio_encoder_for_container("wav"), "pcm_s16le");
-    }
-
-    /// Case-insensitivity came free with `eq_ignore_ascii_case`; going through
-    /// `FromStr` must preserve it.
-    #[test]
-    fn audio_only_matching_stays_case_insensitive() {
-        assert_eq!(select_audio_encoder_for_container("MP3"), "libmp3lame");
-        assert_eq!(select_audio_encoder_for_container("Flac"), "flac");
-    }
-
-    /// The widening this conversion accepts: `"wave"` is a `ContainerFormat`
-    /// alias for Wav, so it now resolves to `pcm_s16le` where the literal
-    /// `eq_ignore_ascii_case("wav")` missed it and it fell through to the
-    /// registry's AAC fallback. Same class as the other alias widenings in
-    /// this change, and pinned here.
-    #[test]
-    fn wave_alias_resolves_like_wav() {
-        assert_eq!(select_audio_encoder_for_container("wave"), "pcm_s16le");
-    }
-
-    /// An extension that is not a container at all still falls back rather
-    /// than panicking or resolving to an audio-only encoder.
-    #[test]
-    fn unknown_extension_falls_back_to_aac() {
-        let fallback = crate::ffmpeg::audio_codecs::preferred_aac_encoder();
-        assert_eq!(
-            select_audio_encoder_for_container("not-a-container"),
-            fallback
-        );
-        assert_eq!(select_audio_encoder_for_container(""), fallback);
-    }
 }

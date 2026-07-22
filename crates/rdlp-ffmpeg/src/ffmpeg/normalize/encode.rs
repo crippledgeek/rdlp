@@ -36,9 +36,7 @@ use super::super::ffi_helpers::set_single_thread_codec;
 use super::super::log_capture::LogSuppressGuard;
 use super::super::salvage::open_input_resilient;
 use super::super::transcode::MuxTimingState;
-use super::helpers::{
-    build_audio_filter_with_spec, default_bitrate_for_encoder, select_audio_encoder_for_container,
-};
+use super::helpers::{build_audio_filter_with_spec, default_bitrate_for_encoder};
 use super::io_diag::validate_mux_header_state;
 
 /// Recurring plumbing passed through the normalize encode helpers.
@@ -135,7 +133,7 @@ impl FFmpegRunner {
                 )
             })?;
 
-        let enc_name = select_audio_encoder_for_container(final_output_ext);
+        let enc_name = super::helpers::resolve_normalize_audio_encoder(final_output_ext, label)?;
         let enc_codec = ffmpeg_the_third::encoder::find_by_name(enc_name).ok_or_else(|| {
             PostProcessError::UnsupportedCodec {
                 codec: enc_name.to_string(),

@@ -203,6 +203,80 @@ impl RecodeStage {
         })
     }
 
+    /// Resolves `(audio_copy, audio_codec)` for a transcode (never called on
+    /// the remux fast path, which always copies audio unconditionally).
+    ///
+    /// `has_audio` gates everything else: `setup_audio_pipeline` only creates
+    /// an audio output stream when the input actually has an audio stream
+    /// (`transcode/video_transcode_phases.rs`), so a video-only source has
+    /// always made the resolved encoder irrelevant. Refusing before this
+    /// check (Important-4, #618 fix wave 1) was a regression — a video-only
+    /// `.ivf` recode used to succeed and started hard-failing.
+    fn resolve_audio_params(
+        recode_audio: &RecodeAudioMode,
+        target: ContainerFormat,
+        has_audio: bool,
+    ) -> Result<(bool, Option<String>), PostProcessError> {
+        if !has_audio {
+            return Ok((true, None));
+        }
+
+        let target_ext = target.as_ext();
+        match recode_audio {
+            RecodeAudioMode::Copy => Ok((true, None)),
+            RecodeAudioMode::Auto => {
+                // `None` does not strictly mean "this container cannot carry
+                // audio" — see `muxer_defaults::declared_codec`'s doc for the
+                // other two causes (no muxer claims the extension; ABI skew
+                // between the muxer and libavcodec tables). Refuse truthfully
+                // rather than guessing which cause applies, and rather than
+                // silently dropping the audio track or defaulting to AAC
+                // (FFmpeg itself would refuse with a cryptic "Invalid
+                // argument" if we didn't).
+                let Some(encoder) =
+                    audio_encoder_registry::select_audio_encoder_for_container(target)
+                else {
+                    return Err(PostProcessError::UnsupportedFormat {
+                        format: target_ext.to_string(),
+                        operation: format!(
+                            "no audio encoder could be determined for container \
+                             '{target_ext}'; use --recode-audio=copy with a \
+                             video-only source, or choose a different container"
+                        ),
+                    });
+                };
+                debug!("RecodeStage: auto audio encoder for {target_ext}: {encoder}");
+                Ok((false, Some(encoder.to_string())))
+            }
+            RecodeAudioMode::Encoder { name } => {
+                if !audio_encoder_registry::container_supports_audio_codec(target, name) {
+                    warn!(
+                        "RecodeStage: audio codec '{name}' may not be compatible with \
+                         container '{target_ext}'; proceeding anyway"
+                    );
+                }
+                let resolved = audio_encoder_registry::resolve_audio_encoder(name).or_else(|| {
+                    warn!(
+                        "RecodeStage: audio encoder '{name}' not available; \
+                         falling back to container default"
+                    );
+                    audio_encoder_registry::select_audio_encoder_for_container(target)
+                });
+                let Some(resolved) = resolved else {
+                    return Err(PostProcessError::UnsupportedFormat {
+                        format: target_ext.to_string(),
+                        operation: format!(
+                            "audio encoder '{name}' is unavailable and no audio \
+                             encoder could be determined for container '{target_ext}'"
+                        ),
+                    });
+                };
+                debug!("RecodeStage: using audio encoder: {resolved}");
+                Ok((false, Some(resolved.to_string())))
+            }
+        }
+    }
+
     fn default_preset_crf(encoder: &str) -> (Option<String>, Option<u32>) {
         // Explicit per-encoder match (not substring): x265's default crf is 28,
         // not x264's 23; and libopenh264/kvazaar (substring "264"/"kvazaar") are
@@ -295,38 +369,13 @@ impl PipelineStage for RecodeStage {
             msg.config.recode_audio.clone()
         };
 
-        // Derive audio_copy / audio_codec from the resolved mode
+        // Derive audio_copy / audio_codec from the resolved mode. Remux
+        // always copies audio (no re-encoding needed); otherwise resolution
+        // depends on whether the input has an audio stream at all (Important-4).
         let (audio_copy, audio_codec) = if can_remux {
-            // Remux path always copies audio — no re-encoding needed
             (true, None)
         } else {
-            match recode_audio {
-                RecodeAudioMode::Copy => (true, None),
-                RecodeAudioMode::Auto => {
-                    let encoder =
-                        audio_encoder_registry::select_audio_encoder_for_container(target);
-                    debug!("RecodeStage: auto audio encoder for {target_ext}: {encoder}");
-                    (false, Some(encoder.to_string()))
-                }
-                RecodeAudioMode::Encoder { ref name } => {
-                    if !audio_encoder_registry::container_supports_audio_codec(target, name) {
-                        warn!(
-                            "RecodeStage: audio codec '{name}' may not be compatible with \
-                             container '{target_ext}'; proceeding anyway"
-                        );
-                    }
-                    let resolved = audio_encoder_registry::resolve_audio_encoder(name)
-                        .unwrap_or_else(|| {
-                            warn!(
-                                "RecodeStage: audio encoder '{name}' not available; \
-                                 falling back to container default"
-                            );
-                            audio_encoder_registry::select_audio_encoder_for_container(target)
-                        });
-                    debug!("RecodeStage: using audio encoder: {resolved}");
-                    (false, Some(resolved.to_string()))
-                }
-            }
+            Self::resolve_audio_params(&recode_audio, target, media_info.audio_codec.is_some())?
         };
 
         let output_path = msg.tracker.temp_path(&input_file, target_ext);
@@ -493,6 +542,63 @@ mod tests {
             RecodeStage::default_preset_crf("libx264"),
             (Some("medium".into()), Some(23))
         );
+    }
+
+    /// #618 fix-wave-1, Important-5: exercises `resolve_audio_params` itself
+    /// (real `rdlp-postprocess` code), not just the registry it wraps.
+    #[test]
+    fn resolve_audio_params_auto_ivf_with_audio_is_refused_truthfully() {
+        rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
+        let err =
+            RecodeStage::resolve_audio_params(&RecodeAudioMode::Auto, ContainerFormat::Ivf, true)
+                .expect_err("ivf has no audio encoder to resolve");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no audio encoder could be determined"),
+            "error should name the real cause, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn resolve_audio_params_auto_mp4_with_audio_resolves_aac_family() {
+        rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
+        let (audio_copy, audio_codec) =
+            RecodeStage::resolve_audio_params(&RecodeAudioMode::Auto, ContainerFormat::Mp4, true)
+                .expect("mp4 always resolves an aac-family encoder");
+        assert!(!audio_copy);
+        let codec = audio_codec.expect("mp4 auto mode must pick an encoder");
+        assert!(
+            codec == "aac" || codec == "libfdk_aac",
+            "expected an aac-family encoder for mp4, got {codec}"
+        );
+    }
+
+    #[test]
+    fn resolve_audio_params_bogus_encoder_on_ivf_with_audio_is_refused() {
+        rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
+        let mode = RecodeAudioMode::Encoder {
+            name: "definitely_not_a_real_encoder_xyz".to_string(),
+        };
+        let err = RecodeStage::resolve_audio_params(&mode, ContainerFormat::Ivf, true)
+            .expect_err("bogus encoder + no container default on ivf must refuse");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unavailable") && msg.contains("no audio"),
+            "error should explain both causes, got: {msg}"
+        );
+    }
+
+    /// #618 fix-wave-1, Important-4 regression guard: a video-only source
+    /// recoding to a container with no resolvable audio default (e.g.
+    /// `.ivf`) must NOT be refused — `setup_audio_pipeline` only creates an
+    /// audio stream when the input actually has one
+    /// (`transcode/video_transcode_phases.rs`), so the chosen/default
+    /// encoder was always irrelevant for video-only sources.
+    #[test]
+    fn resolve_audio_params_auto_ivf_without_audio_succeeds_as_copy() {
+        let result =
+            RecodeStage::resolve_audio_params(&RecodeAudioMode::Auto, ContainerFormat::Ivf, false);
+        assert_eq!(result.unwrap(), (true, None));
     }
 
     #[test]
