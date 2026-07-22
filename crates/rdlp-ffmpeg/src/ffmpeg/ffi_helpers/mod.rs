@@ -50,6 +50,58 @@ pub(crate) enum CodecTagAction {
     Clear,
 }
 
+/// Set the frame-rate fields on an output `AVStream`.
+///
+/// These live on `AVStream`, **not** in `AVCodecParameters`, so neither
+/// `avcodec_parameters_copy` nor `Stream::set_parameters` carries them — an
+/// output stream starts at `0/0` unless something sets it explicitly.
+///
+/// Most muxers infer a workable rate and never notice, which is why the gap
+/// survived so long. `mxfenc` does not: `mxf_init` reads `st->avg_frame_rate`,
+/// falls back to `st->r_frame_rate`, and **never consults `st->time_base`** —
+/// so a stream carrying only a time base yields an edit rate of `0/0` and
+/// `mxf_init_timecode` refuses the whole file with "Unsupported frame rate
+/// 0/0" at `write_header`. That is #629, on both the transcode and the
+/// stream-copy path.
+///
+/// A zero or negative rate is skipped rather than written: `0/0` is what the
+/// field already holds, and writing a nonsense rate would trade a clear
+/// muxer refusal for a file that claims a rate it does not have.
+pub(crate) fn set_stream_frame_rates(
+    stream: *mut ffmpeg_the_third::ffi::AVStream,
+    avg: ffmpeg_the_third::ffi::AVRational,
+    r: ffmpeg_the_third::ffi::AVRational,
+) {
+    const fn is_positive(rate: ffmpeg_the_third::ffi::AVRational) -> bool {
+        rate.num > 0 && rate.den > 0
+    }
+
+    // SAFETY: `stream` is a live `AVStream` owned by an output context the
+    // caller holds; both fields are plain `AVRational` values.
+    unsafe {
+        if is_positive(avg) {
+            (*stream).avg_frame_rate = avg;
+        }
+        if is_positive(r) {
+            (*stream).r_frame_rate = r;
+        }
+    }
+}
+
+/// Carry the source stream's frame rates onto the output stream — the
+/// stream-copy form of [`set_stream_frame_rates`].
+pub(crate) fn copy_stream_frame_rates(
+    dst: *mut ffmpeg_the_third::ffi::AVStream,
+    src: *const ffmpeg_the_third::ffi::AVStream,
+) {
+    // SAFETY: `src` is a live input-context stream and `dst` a live
+    // output-context stream, both owned by the caller for this call; the reads
+    // and writes are of plain `AVRational` fields.
+    unsafe {
+        set_stream_frame_rates(dst, (*src).avg_frame_rate, (*src).r_frame_rate);
+    }
+}
+
 impl FFmpegRunner {
     /// Add a stream-copy output stream: add stream, copy parameters, resolve
     /// the codec tag for the target container.

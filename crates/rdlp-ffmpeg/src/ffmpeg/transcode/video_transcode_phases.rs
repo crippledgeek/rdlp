@@ -294,6 +294,18 @@ impl FFmpegRunner {
                 num: video_enc_time_base.numerator(),
                 den: video_enc_time_base.denominator(),
             };
+
+            // The time base alone is not a frame rate, and `mxf_init` reads
+            // only the rate fields — it never consults `time_base`, so
+            // without this MXF sees `0/0` and refuses the file at
+            // `write_header` for every encoder (#629). Sourced from
+            // `video_ist_frame_rate`, which already resolves
+            // `avg_frame_rate` with an `r_frame_rate` fallback.
+            let rate = ffmpeg_the_third::ffi::AVRational {
+                num: video_ist_frame_rate.numerator(),
+                den: video_ist_frame_rate.denominator(),
+            };
+            crate::ffmpeg::ffi_helpers::set_stream_frame_rates(stream_ptr, rate, rate);
         }
 
         Ok(VideoTranscodeContext {
