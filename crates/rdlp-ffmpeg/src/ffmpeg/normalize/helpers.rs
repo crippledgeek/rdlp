@@ -226,12 +226,19 @@ pub(super) fn extract_json_value(text: &str, key: &str) -> Option<f64> {
 }
 
 /// Get a sensible default bitrate (in bps) for an encoder.
+///
+/// The `0` arm is the lossless sentinel: `bit_rate` is meaningless for these
+/// encoders (they ignore it), and `encode.rs:174` prefers a non-zero input
+/// bitrate when one is known anyway. Widened alongside the audio-default
+/// registry (#618) to cover every lossless encoder now reachable through
+/// `select_audio_encoder_for_container` (`.aiff`/`.caf` → `pcm_s16be`, `.wv`
+/// → `wavpack`), not just the two that were reachable before.
 pub(super) fn default_bitrate_for_encoder(encoder: &str) -> usize {
     match encoder {
         "aac" | "libfdk_aac" => 128_000,
         "libmp3lame" => 192_000,
         "libopus" => 128_000,
-        "flac" | "pcm_s16le" => 0,
+        "flac" | "pcm_s16le" | "pcm_s16be" | "alac" | "wavpack" | "tta" => 0,
         _ => 128_000,
     }
 }

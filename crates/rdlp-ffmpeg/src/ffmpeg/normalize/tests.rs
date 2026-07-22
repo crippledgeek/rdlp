@@ -93,6 +93,12 @@ fn test_default_bitrate_for_encoder() {
     assert_eq!(default_bitrate_for_encoder("libopus"), 128_000);
     assert_eq!(default_bitrate_for_encoder("flac"), 0);
     assert_eq!(default_bitrate_for_encoder("pcm_s16le"), 0);
+    // Lossless siblings newly reachable via the widened audio-default
+    // registry (#618): `.aiff`/`.caf` -> pcm_s16be, `.wv` -> wavpack.
+    assert_eq!(default_bitrate_for_encoder("pcm_s16be"), 0);
+    assert_eq!(default_bitrate_for_encoder("alac"), 0);
+    assert_eq!(default_bitrate_for_encoder("wavpack"), 0);
+    assert_eq!(default_bitrate_for_encoder("tta"), 0);
 }
 
 #[test]
