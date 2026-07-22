@@ -3,11 +3,15 @@
 //! Provides `AudioCodecConfig` and `AUDIO_CODECS` for mapping codec names
 //! to encoder names, file extensions, quality scale ranges, and bitrate ranges.
 //!
-//! When `libfdk_aac` is available (custom `FFmpeg` build with `--enable-nonfree`),
-//! it is automatically preferred over the built-in `aac` encoder for better
-//! quality at equivalent bitrates — resolved via
-//! [`super::audio_encoder_registry::preferred_audio_encoder`], the single
-//! source of truth for encoder preference.
+//! This table is the audio-extraction path's own configuration
+//! (`AudioExtractStage` / `transcode::audio_extract`), which reads `encoder`
+//! as a literal `FFmpeg` encoder name and does NOT resolve it through
+//! [`super::audio_encoder_registry::preferred_audio_encoder`] — the "aac" row
+//! here always names the built-in `aac` encoder, even on a build that links
+//! `libfdk_aac`. Rerouting extraction through the preference registry would
+//! be a behaviour change and is out of this module's scope; see
+//! `audio_encoder_registry` for the encoder-preference logic actually used by
+//! recode/normalize.
 
 /// Audio codec configuration for extraction/conversion.
 #[derive(Debug, Clone, PartialEq, Eq)]
