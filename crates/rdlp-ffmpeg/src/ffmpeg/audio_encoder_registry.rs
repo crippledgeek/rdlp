@@ -881,7 +881,7 @@ mod tests {
         }
     }
 
-    /// Tier 4 (the AAC-with-warning fallback the whole design hinges on
+    /// Tier 3 (the AAC-with-warning fallback the whole design hinges on
     /// being VISIBLE) had no test — tiers 1-2 were covered, tier 3 wasn't.
     /// A bogus codec name skips the preference table (tier 1) and the
     /// direct-name check (tier 2) unconditionally, landing on tier 3
