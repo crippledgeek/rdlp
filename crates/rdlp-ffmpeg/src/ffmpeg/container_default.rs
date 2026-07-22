@@ -17,6 +17,17 @@
 //! deliberately stay separate: they share this shape but not a single arm, and
 //! each must keep its own exhaustive `ContainerFormat` match with no `_` arm
 //! (#538).
+//!
+//! The kind parameter is what makes the `"avc"` hazard above a compile error
+//! rather than a silent wrong answer:
+//!
+//! ```compile_fail,E0308
+//! use rdlp_ffmpeg::ffmpeg::container_default::{ContainerDefault, Policy};
+//! use rdlp_ffmpeg::ffmpeg::source::{Audio, Video};
+//! fn wants_audio(_: &ContainerDefault<Audio>) {}
+//! let v: ContainerDefault<Video> = ContainerDefault::new(Policy::FromMuxer);
+//! wants_audio(&v);
+//! ```
 
 use std::marker::PhantomData;
 
@@ -68,7 +79,7 @@ impl<K: StreamKind> ContainerDefault<K> {
 #[cfg(test)]
 mod tests {
     use super::{ContainerDefault, Policy};
-    use crate::ffmpeg::source::{Audio, Video};
+    use crate::ffmpeg::source::Video;
     use rdlp_types::media_name::CodecName;
 
     #[test]
@@ -76,27 +87,5 @@ mod tests {
         let d: ContainerDefault<Video> =
             ContainerDefault::new(Policy::Override(CodecName::from_static("h264")));
         assert!(matches!(d.policy(), Policy::Override(c) if c.as_str() == "h264"));
-    }
-
-    /// The point of the kind parameter: a video default and an audio default
-    /// are not the same type, so an audio codec cannot be installed as a
-    /// container's *video* override. `"avc"` is the live hazard — a real
-    /// descriptor that resolves to `AV_CODEC_ID_ON2AVC`, an audio codec.
-    #[test]
-    fn video_and_audio_defaults_are_distinct_types() {
-        let v: ContainerDefault<Video> = ContainerDefault::new(Policy::FromMuxer);
-        let a: ContainerDefault<Audio> = ContainerDefault::new(Policy::FromMuxer);
-        assert!(matches!(v.policy(), Policy::FromMuxer));
-        assert!(matches!(a.policy(), Policy::FromMuxer));
-    }
-
-    /// A `compile_fail` doctest is the real proof of separation; this asserts
-    /// the runtime half so the doctest is not the only coverage.
-    #[test]
-    fn a_video_default_does_not_satisfy_an_audio_signature() {
-        fn wants_audio(_: &ContainerDefault<Audio>) {}
-        let a: ContainerDefault<Audio> = ContainerDefault::new(Policy::NotATarget);
-        wants_audio(&a);
-        // `wants_audio(&v)` with `v: ContainerDefault<Video>` is E0308.
     }
 }

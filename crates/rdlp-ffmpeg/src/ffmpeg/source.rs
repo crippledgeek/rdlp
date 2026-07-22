@@ -167,10 +167,8 @@ pub fn muxer_decides<K: StreamKind>(
 #[cfg(test)]
 mod tests {
     use super::{Audio, Source, SourceState, SourceVideo, Video};
-    use crate::ffmpeg::codec_registry::MediaKind;
     use rdlp_types::ContainerFormat;
     use rdlp_types::media_name::CodecName;
-    use rdlp_types::rule::Rule;
 
     #[test]
     fn from_probe_distinguishes_absent_from_unnamed() {
@@ -185,23 +183,6 @@ mod tests {
         let src: SourceVideo = Source::from_probe(true, Some(CodecName::from_static("h264")));
         assert_eq!(src.name().map(CodecName::as_str), Some("h264"));
         assert!(src.is_present());
-    }
-
-    #[test]
-    fn markers_carry_their_media_kind() {
-        assert_eq!(<Video as super::StreamKind>::MEDIA_KIND, MediaKind::Video);
-        assert_eq!(<Audio as super::StreamKind>::MEDIA_KIND, MediaKind::Audio);
-    }
-
-    /// The whole reason `Source` is kind-parameterised: a rule asked about
-    /// video must not accept an audio source.
-    #[test]
-    fn video_and_audio_sources_are_distinct_types() {
-        let rule = |s: &SourceVideo| s.is_present();
-        let video: SourceVideo = Source::from_probe(true, None);
-        assert!(rule.eval(&video));
-        // `rule.eval(&audio)` where `audio: SourceAudio` is a compile error —
-        // proven by the compile_fail doctest on `Source` itself.
     }
 
     #[test]

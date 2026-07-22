@@ -16,23 +16,26 @@ use super::{codec_registry, muxer_defaults};
 
 /// The codec every container falls back to when the linked build's muxer
 /// declares nothing for it, and the answer for a container string that
-/// doesn't parse at all. Named because it is now referenced from two places.
-const DEFAULT_VIDEO_CODEC: CodecName = CodecName::from_static("h264");
+/// doesn't parse at all. Named because it is now referenced from several
+/// places.
+///
+/// [`Policy::Override`] is public and its `CodecName` may hold a
+/// `Cow::Owned` (constructed from a runtime string), so `into_static()` on an
+/// arbitrary `Policy::Override(codec)` is not guaranteed to succeed — only
+/// the literal built here is. Every non-test call site that needs the
+/// fallback as a plain string uses this constant directly instead of
+/// round-tripping through a `CodecName` and its fallible `into_static()`.
+const DEFAULT_VIDEO_CODEC_STR: &str = "h264";
 
-/// Recovers the `&'static str` backing a [`CodecName`] known to have been
-/// constructed via [`CodecName::from_static`] — every [`Policy::Override`]
-/// arm in [`video_default_for`], and [`DEFAULT_VIDEO_CODEC`] itself.
+/// The [`CodecName`] spelling of [`DEFAULT_VIDEO_CODEC_STR`], built from it
+/// so the two representations cannot drift apart.
 ///
-/// # Panics
-///
-/// Never in practice: a `CodecName` built by `CodecName::from_static` is
-/// always the borrowed variant, so `into_static` always returns `Some`.
-#[allow(clippy::expect_used)]
-fn static_codec_str(codec: CodecName) -> &'static str {
-    codec
-        .into_static()
-        .expect("CodecName::from_static always yields a borrowed value")
-}
+/// `#[cfg(test)]`-only: production code never needs the `CodecName` form of
+/// the fallback, only the `&'static str` (see `DEFAULT_VIDEO_CODEC_STR`'s doc
+/// comment); the tests below use this form to compare against values that
+/// already arrive as `CodecName` (e.g. `resolve_encoder`'s return type).
+#[cfg(test)]
+const DEFAULT_VIDEO_CODEC: CodecName = CodecName::from_static(DEFAULT_VIDEO_CODEC_STR);
 
 /// Policy per container. Exhaustive with no `_` arm: a new [`ContainerFormat`]
 /// variant must be classified here or the build fails.
@@ -246,11 +249,11 @@ const fn video_default_for(container: ContainerFormat) -> ContainerDefault<Video
 /// `Override`). rdlp keeps no second copy of `FFmpeg`'s table for the ten
 /// that do defer. Deviations are named in [`video_default_for`] with their
 /// reasons: the
-/// `FromMuxer` arm falls back to [`DEFAULT_VIDEO_CODEC`] only when
+/// `FromMuxer` arm falls back to [`DEFAULT_VIDEO_CODEC_STR`] only when
 /// `declared_codec` returns `None` (which does NOT mean "this container
 /// carries no video" — see that function's doc comment — an ABI-skew codec id
 /// or no muxer claiming the extension both produce it too); the twelve
-/// audio-only containers always resolve [`DEFAULT_VIDEO_CODEC`] via the
+/// audio-only containers always resolve [`DEFAULT_VIDEO_CODEC_STR`] via the
 /// dedicated `Policy::NotATarget` (video kind) regardless of what their
 /// muxer declares.
 ///
@@ -271,15 +274,22 @@ pub fn default_codec_for_container(container: ContainerFormat) -> &'static str {
     super::ensure_init().ok();
     let default = video_default_for(container);
     match default.policy() {
-        Policy::Override(codec) => static_codec_str(codec.clone()),
-        Policy::NotATarget => static_codec_str(DEFAULT_VIDEO_CODEC),
+        // `codec` may hold a `Cow::Owned` in the general case (`Policy::Override`
+        // is a public constructor), so this is the one arm that cannot use
+        // `DEFAULT_VIDEO_CODEC_STR` directly; it degrades to the same fallback
+        // an unclassifiable container already resolves to.
+        Policy::Override(codec) => codec
+            .clone()
+            .into_static()
+            .unwrap_or(DEFAULT_VIDEO_CODEC_STR),
+        Policy::NotATarget => DEFAULT_VIDEO_CODEC_STR,
         Policy::FromMuxer => {
             muxer_defaults::declared_codec(container, codec_registry::MediaKind::Video)
                 // `declared_codec` validates FFmpeg's own static descriptor-table
                 // name via `CodecName::new_static`, so it is always recoverable
                 // as `&'static str` here — see `MediaName::into_static`.
                 .and_then(rdlp_types::media_name::CodecName::into_static)
-                .unwrap_or_else(|| static_codec_str(DEFAULT_VIDEO_CODEC))
+                .unwrap_or(DEFAULT_VIDEO_CODEC_STR)
         }
     }
 }
@@ -319,10 +329,9 @@ pub fn resolve_recode_encoder(
     // containers are still classified `Override("h264")` or fall through to
     // `DEFAULT_VIDEO_CODEC` keep that behaviour (see
     // `other_aliases_still_resolve_to_the_default_codec`).
-    let codec = target.parse::<ContainerFormat>().map_or_else(
-        |_| static_codec_str(DEFAULT_VIDEO_CODEC),
-        default_codec_for_container,
-    );
+    let codec = target
+        .parse::<ContainerFormat>()
+        .map_or(DEFAULT_VIDEO_CODEC_STR, default_codec_for_container);
     resolve_encoder(codec).and_then(rdlp_types::media_name::VideoEncoderName::into_static)
 }
 

@@ -6,8 +6,9 @@
 //! The predecessor of this module was a single `VideoRule` type alias over a
 //! boxed closure (#647). A trait costs nothing extra — the blanket impl below
 //! means every closure already *is* a `Rule` — while letting a rule that
-//! captures nothing be a zero-sized type, and letting future combinators
-//! compose without boxing each intermediate.
+//! captures nothing be a 1-byte named type, and letting a future combinator
+//! compose without boxing each intermediate (none exists yet; `Always` below
+//! is the only rule this crate builds today).
 //!
 //! This mirrors `winnow::Parser`, already a dependency of this crate, whose
 //! combinators are provided methods returning concrete types rather than trait
@@ -16,8 +17,6 @@
 //! rule to be a named type with a `Display` impl, which would turn three rule
 //! factories into twenty-six structs, and it is an assertion-oriented crate
 //! this foundation crate should not depend on.
-
-use std::marker::PhantomData;
 
 /// A boolean question asked of a `T`.
 ///
@@ -41,28 +40,28 @@ where
 
 /// A rule that ignores its subject entirely and always answers the same way.
 ///
-/// `PhantomData<fn(T)>` rather than `PhantomData<T>`: this type never holds a
-/// `T`, only answers questions about one, so the `fn` pointer form keeps it
-/// `Send`/`Sync` regardless of whether `T` is.
+/// Not generic over the subject: a rule that captures nothing needs no
+/// per-`T` instantiation, and a single concrete type satisfies `Rule<T>` for
+/// every `T` via the blanket impl below — including the higher-ranked
+/// `Rule<&'a T>` a boxed trait-object dispatch table needs. A prior
+/// `Always<T>` version (parameterised, `PhantomData<fn(T)>`-carrying) could
+/// only implement `Rule<T>` for the one concrete `T` it was built with, so it
+/// could not satisfy `for<'a> Rule<&'a SourceVideo>` and call sites had to
+/// wrap it in a closure just to get the right bound — reconstructing `Always`
+/// on every `eval` for no benefit.
 #[derive(Debug, Clone, Copy)]
-pub struct Always<T> {
-    answer: bool,
-    _subject: PhantomData<fn(T)>,
-}
+pub struct Always(bool);
 
-impl<T> Rule<T> for Always<T> {
+impl<T> Rule<T> for Always {
     fn eval(&self, _subject: T) -> bool {
-        self.answer
+        self.0
     }
 }
 
-/// Build a rule that answers `answer` for every subject.
+/// Build a rule that answers `answer` for every subject, for any subject type.
 #[must_use]
-pub const fn always<T>(answer: bool) -> Always<T> {
-    Always {
-        answer,
-        _subject: PhantomData,
-    }
+pub const fn always(answer: bool) -> Always {
+    Always(answer)
 }
 
 #[cfg(test)]
@@ -78,11 +77,11 @@ mod tests {
 
     #[test]
     fn always_ignores_its_subject() {
-        let yes = always::<u32>(true);
-        let no = always::<u32>(false);
-        assert!(yes.eval(0));
-        assert!(yes.eval(u32::MAX));
-        assert!(!no.eval(0));
+        let yes = always(true);
+        let no = always(false);
+        assert!(Rule::<u32>::eval(&yes, 0));
+        assert!(Rule::<u32>::eval(&yes, u32::MAX));
+        assert!(!Rule::<u32>::eval(&no, 0));
     }
 
     #[test]

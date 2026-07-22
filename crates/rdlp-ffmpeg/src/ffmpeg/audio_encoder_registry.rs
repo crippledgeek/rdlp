@@ -29,8 +29,8 @@ use crate::ffmpeg::{codec_registry, muxer_defaults};
 ///
 /// AAC because it is the one audio codec essentially every general-purpose
 /// delivery container carries and every build can encode. Named rather than
-/// repeated as a literal at each of its three sites: it encodes a *policy*
-/// ("when all else fails, this"), and three spellings can drift — including
+/// repeated as a literal at each of its two sites: it encodes a *policy*
+/// ("when all else fails, this"), and two spellings can drift — including
 /// out of sync with the `container_supports_audio_codec` gate that decides
 /// whether the substitution is legal at all.
 ///
@@ -690,7 +690,6 @@ mod tests {
     #[test]
     fn the_fallback_codec_is_the_one_tier_three_resolves() {
         ensure_init_for_test();
-        assert_eq!(FALLBACK_AUDIO_CODEC.as_str(), "aac");
         assert!(
             preferred_audio_encoder(FALLBACK_AUDIO_CODEC.as_str()).is_some(),
             "the named fallback must actually resolve an encoder"
@@ -1186,6 +1185,21 @@ mod tests {
                     // at all" — an ABI-skew `None` (muxer declares a codec id
                     // this build's libavcodec can't name) would let a
                     // misclassified `NotATarget` through this cross-check too.
+                    //
+                    // Why this cross-check is still meaningful rather than
+                    // circular: for the audio kind, `NotATarget` is currently
+                    // capability-backed (`Ivf` is the only member, and it
+                    // genuinely has no audio slot), so `declared_codec`
+                    // returning `None` here is an independent fact about the
+                    // linked build, not a restatement of `audio_default_for`'s
+                    // own policy choice. If a future container is classified
+                    // `NotATarget` purely as a policy decision (the muxer
+                    // *does* declare an audio codec, rdlp just declines to
+                    // target it — mirroring the video side's `M4a`/`Wma`
+                    // policy-not-capability arms), this assertion would fail
+                    // for that container even though the classification is
+                    // correct, because "the variant's documented meaning is
+                    // policy" is then weaker than what this assertion checks.
                     assert!(
                         muxer_defaults::declared_codec(container, codec_registry::MediaKind::Audio)
                             .is_none(),

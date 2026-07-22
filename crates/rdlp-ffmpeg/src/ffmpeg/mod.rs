@@ -42,7 +42,7 @@
 mod audio_codecs;
 pub mod audio_encoder_registry;
 pub(crate) mod codec_registry;
-pub mod container_default;
+pub(crate) mod container_default;
 mod dts_synth;
 pub(crate) use dts_synth::DtsSynthesizer;
 mod encoding_tag;
@@ -97,13 +97,14 @@ pub use normalize_types::{
 };
 pub use options::{AudioExtractOptions, ChapterEntry, RemuxOptions, VideoConvertOptions};
 pub use probe::{MediaInfo, StreamInfo, StreamKind};
-// `source::StreamKind` is deliberately NOT re-exported here: `probe::StreamKind`
-// (an enum: which stream a probed `MediaInfo` entry is) already owns this name
-// at `ffmpeg::` scope, and `source::StreamKind` (a sealed marker trait) is a
-// different concept with the same name. Re-exporting both would be E0255.
-// The Interfaces contract for #651 Task 2 already scopes the new trait to
-// `rdlp_ffmpeg::ffmpeg::source::StreamKind`, so this is not a narrowing.
-pub use source::{Audio, Source, SourceAudio, SourceState, SourceVideo, Video};
+// `source::{Audio, Source, SourceAudio, SourceState, SourceVideo, Video}` are
+// deliberately NOT re-exported here: every consumer already imports them via
+// `rdlp_ffmpeg::ffmpeg::source::`, so a second top-level path would be an
+// unused, unmaintained alias. `source::StreamKind` additionally could not be
+// re-exported even if a consumer wanted it that way: `probe::StreamKind` (an
+// enum: which stream a probed `MediaInfo` entry is) already owns this name at
+// `ffmpeg::` scope, and `source::StreamKind` (a sealed marker trait) is a
+// different concept with the same name — re-exporting both would be E0255.
 pub use video_codecs::{
     VideoCodecInfo, VideoEncoderInfo, available_encoders_for_codec, is_encoder_available,
     list_available_codecs, preferred_video_encoder, resolve_encoder,

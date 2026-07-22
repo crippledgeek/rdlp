@@ -53,7 +53,9 @@ pub(super) struct RecodeParams {
 /// a rule value built from one call site cannot drift from itself.
 ///
 /// Boxed because [`rule_for`] returns a different concrete rule per container
-/// arm; the rules themselves compose without allocation.
+/// arm — `codec_in`, `muxer_decides::<Video>`, and `always` are all distinct
+/// concrete types. No combinator exists yet to compose two rules into one;
+/// each arm currently picks exactly one factory.
 type VideoRule = Box<dyn for<'a> Rule<&'a SourceVideo> + Send + Sync>;
 
 /// Matches when the source's video codec canonically identifies as one of
@@ -107,7 +109,7 @@ fn rule_for(input_ext: &str, output: ContainerFormat) -> VideoRule {
         // `.mka`. Whether an audio-only container may carry video is #577's
         // call, not a side effect of this routing fix; today's success is
         // left as-is via an unconditional `true`.
-        ContainerFormat::Mka => Box::new(move |video: &SourceVideo| always(true).eval(video)),
+        ContainerFormat::Mka => Box::new(always(true)),
         ContainerFormat::WebM | ContainerFormat::Ivf => codec_in(&["vp8", "vp9", "av1"]),
         ContainerFormat::ThreeGp => codec_in(&["h264", "h263", "mpeg4"]),
         // All three ASF-family spellings share one muxer and therefore one
@@ -138,7 +140,7 @@ fn rule_for(input_ext: &str, output: ContainerFormat) -> VideoRule {
         | ContainerFormat::Caf
         | ContainerFormat::Ac3 => {
             let matches_ext = input_ext.eq_ignore_ascii_case(output.as_ext());
-            Box::new(move |video: &SourceVideo| always(matches_ext).eval(video))
+            Box::new(always(matches_ext))
         }
     }
 }
