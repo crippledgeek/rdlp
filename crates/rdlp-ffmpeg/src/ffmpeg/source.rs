@@ -23,6 +23,7 @@
 use std::marker::PhantomData;
 
 use rdlp_types::media_name::CodecName;
+use rdlp_types::{ContainerFormat, rule::Rule};
 
 use crate::ffmpeg::codec_registry::MediaKind;
 
@@ -137,10 +138,37 @@ pub type SourceVideo = Source<Video>;
 /// A probed audio stream.
 pub type SourceAudio = Source<Audio>;
 
+/// Ask the linked `FFmpeg` build's own muxer whether `container` can
+/// represent this source's named codec, for whichever stream kind `K` is.
+///
+/// Uses `avformat_query_codec` plus the #633 known-support allow-list, via
+/// [`muxer_can_represent`](crate::muxer_can_represent).
+///
+/// One factory for both kinds. Before #651 this existed twice — as
+/// `recode.rs`'s `muxer_decides` and `recode_audio_only.rs`'s
+/// `can_copy_audio_only` — identical but for the `MediaKind` argument, which
+/// is exactly the drift axis the kind marker now supplies for free.
+///
+/// `Unnamed` and `Absent` both refuse, but as separate arms: neither proves
+/// representability, and the two are not the same fact (#630, #637).
+/// Re-encoding still yields a playable file, so refusing here is safe.
+#[must_use]
+#[allow(clippy::match_same_arms)]
+pub fn muxer_decides<K: StreamKind>(
+    container: ContainerFormat,
+) -> Box<dyn for<'a> Rule<&'a Source<K>> + Send + Sync> {
+    Box::new(move |source: &Source<K>| match source.state() {
+        SourceState::Absent => false,
+        SourceState::Unnamed => false,
+        SourceState::Codec(codec) => crate::muxer_can_represent(container, codec, K::MEDIA_KIND),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::{Audio, Source, SourceState, SourceVideo, Video};
     use crate::ffmpeg::codec_registry::MediaKind;
+    use rdlp_types::ContainerFormat;
     use rdlp_types::media_name::CodecName;
     use rdlp_types::rule::Rule;
 
@@ -174,5 +202,28 @@ mod tests {
         assert!(rule.eval(&video));
         // `rule.eval(&audio)` where `audio: SourceAudio` is a compile error —
         // proven by the compile_fail doctest on `Source` itself.
+    }
+
+    #[test]
+    fn muxer_decides_answers_per_kind_for_the_same_container() {
+        crate::ffmpeg::ensure_init().expect("ffmpeg init");
+        let webm_video = super::muxer_decides::<Video>(ContainerFormat::WebM);
+        let webm_audio = super::muxer_decides::<Audio>(ContainerFormat::WebM);
+
+        let vp9: Source<Video> = Source::from_probe(true, Some(CodecName::from_static("vp9")));
+        let aac: Source<Audio> = Source::from_probe(true, Some(CodecName::from_static("aac")));
+
+        assert!(webm_video.eval(&vp9), "webm carries vp9 video");
+        assert!(!webm_audio.eval(&aac), "webm does not carry aac audio");
+    }
+
+    #[test]
+    fn muxer_decides_refuses_absent_and_unnamed_separately() {
+        crate::ffmpeg::ensure_init().expect("ffmpeg init");
+        let rule = super::muxer_decides::<Video>(ContainerFormat::Mkv);
+        let absent: Source<Video> = Source::from_probe(false, None);
+        let unnamed: Source<Video> = Source::from_probe(true, None);
+        assert!(!rule.eval(&absent), "no stream proves nothing");
+        assert!(!rule.eval(&unnamed), "an unnameable codec proves nothing");
     }
 }

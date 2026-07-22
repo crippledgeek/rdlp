@@ -10,13 +10,13 @@ use anyhow::Context;
 use async_trait::async_trait;
 use log::{debug, info, warn};
 
-use rdlp_ffmpeg::ffmpeg::source::{Source, SourceState, SourceVideo};
+use rdlp_ffmpeg::ffmpeg::source::{Audio, Source, SourceState, SourceVideo, Video, muxer_decides};
 use rdlp_ffmpeg::ffmpeg::{audio_encoder_registry, video_codecs};
 use rdlp_ffmpeg::{FFmpegRunner, PostProcessError, VideoConvertOptions};
 use rdlp_types::rule::{Rule, always};
 use rdlp_types::{AudioEncoderName, CodecName, ContainerFormat, RecodeAudioMode, VideoEncoderName};
 
-use crate::pipeline::stages::recode_audio_only::{self, SourceAudio};
+use crate::pipeline::stages::recode_audio_only;
 use crate::pipeline::{PipelineMessage, PipelineStage};
 
 /// Named parameters for [`RecodeStage::build_convert_options`].
@@ -72,27 +72,6 @@ fn codec_in(identities: &'static [&'static str]) -> VideoRule {
     })
 }
 
-/// Asks the linked `FFmpeg` build's own muxer whether it can represent the
-/// source's named codec in `container` (`avformat_query_codec` plus the
-/// #633 known-support allow-list, via [`rdlp_ffmpeg::muxer_can_represent`]).
-///
-/// `Unnamed` transcodes rather than asking: nothing is proven, and
-/// re-encoding still yields a playable file. `Absent` is not reachable here
-/// in production (an audio-only source is routed to
-/// [`RecodeStage::can_copy_audio_only`] first) but is kept as its own arm,
-/// not merged with `Unnamed` — the exact conflation that shipped as a
-/// regression once already (#630, #637).
-#[allow(clippy::match_same_arms)]
-fn muxer_decides(container: ContainerFormat) -> VideoRule {
-    Box::new(move |video: &SourceVideo| match video.state() {
-        SourceState::Unnamed => false,
-        SourceState::Absent => false,
-        SourceState::Codec(c) => {
-            rdlp_ffmpeg::muxer_can_represent(container, c, rdlp_ffmpeg::MediaKind::Video)
-        }
-    })
-}
-
 /// The remux-compatibility rule for `output`, given the extension `input_ext`
 /// originally carried (only the ext-compare fallback arms consult it — the
 /// container-specific arms answer from the codec or from `FFmpeg`'s own
@@ -120,7 +99,7 @@ fn rule_for(input_ext: &str, output: ContainerFormat) -> VideoRule {
         ContainerFormat::Mkv
         | ContainerFormat::Nut
         | ContainerFormat::Mxf
-        | ContainerFormat::Avi => muxer_decides(output),
+        | ContainerFormat::Avi => muxer_decides::<Video>(output),
         // `av_guess_format("x.mka")` resolves to matroska's *audio* muxer
         // (identical `name`, different muxer), which rejects every video
         // codec — so `muxer_decides` would answer "transcode", yet the
@@ -568,13 +547,8 @@ impl PipelineStage for RecodeStage {
             .context("recode stage: failed to probe input file")?;
         let video: SourceVideo =
             Source::from_probe(media_info.has_video, media_info.video_codec.clone());
-        let audio = SourceAudio::from_probe(
-            media_info.has_audio,
-            media_info
-                .audio_codec
-                .as_ref()
-                .map(rdlp_types::media_name::MediaName::as_str),
-        );
+        let audio: Source<Audio> =
+            Source::from_probe(media_info.has_audio, media_info.audio_codec.clone());
 
         // An audio-only source cannot go through the video pipeline at all —
         // `convert_video` opens a video decoder and ends at `NoVideoStream`
@@ -591,7 +565,7 @@ impl PipelineStage for RecodeStage {
                      video stream to encode"
                 );
             }
-            return recode_audio_only::recode_audio_only(&self.ffmpeg, msg, target, audio).await;
+            return recode_audio_only::recode_audio_only(&self.ffmpeg, msg, target, &audio).await;
         }
 
         // When a video encoder is explicitly requested, always transcode — never remux
@@ -1060,7 +1034,8 @@ mod tests {
     }
 
     /// Builds a [`SourceVideo`] whose codec is named, for call sites that
-    /// used to construct `SourceVideo::Codec("...")` directly.
+    /// used to construct the pre-#651 private `SourceVideo` enum's
+    /// `Codec("...")` variant directly — now a <code>[Source]<[Video]></code>.
     fn video_codec(name: &'static str) -> SourceVideo {
         Source::from_probe(true, Some(CodecName::from_static(name)))
     }
