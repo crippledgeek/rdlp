@@ -34,10 +34,10 @@ use crate::ffmpeg::{codec_registry, muxer_defaults};
 /// out of sync with the `container_supports_audio_codec` gate that decides
 /// whether the substitution is legal at all.
 ///
-/// A `const` item, so `from_static`'s "invalid input is a build error"
-/// contract genuinely applies; called in a function body it is an ordinary
-/// runtime call that would panic instead.
-const FALLBACK_AUDIO_CODEC: CodecName = CodecName::from_static("aac");
+/// A `const` item bound to `CodecName::AAC`, so the name is validated at
+/// compile time (via that const's `from_static`); constructing it inline in a
+/// function body would instead be a runtime call that panics on a bad name.
+const FALLBACK_AUDIO_CODEC: CodecName = CodecName::AAC;
 
 /// Information about a specific audio encoder.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -497,15 +497,13 @@ const fn audio_default_for(container: ContainerFormat) -> ContainerDefault<Audio
         // override is probably wrong for Ogg specifically — but changing it
         // is a separate user-visible change.
         ContainerFormat::Mkv | ContainerFormat::Mka | ContainerFormat::Ogg => {
-            ContainerDefault::new(Policy::Override(CodecName::from_static("opus")))
+            ContainerDefault::new(Policy::Override(CodecName::OPUS))
         }
 
         // FFmpeg declares `amr_nb`: 8 kHz speech-only, and the native encoder
         // is absent from most builds. 3GPP TS 26.244 permits AMR, AMR-WB and
         // AAC, so AAC is spec-correct rather than a workaround.
-        ContainerFormat::ThreeGp => {
-            ContainerDefault::new(Policy::Override(CodecName::from_static("aac")))
-        }
+        ContainerFormat::ThreeGp => ContainerDefault::new(Policy::Override(CodecName::AAC)),
 
         // Raw VP8/VP9/AV1 elementary stream; the muxer declares no audio codec
         // and refuses any audio stream outright.
