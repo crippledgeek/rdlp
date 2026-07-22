@@ -55,12 +55,24 @@ pub(crate) enum CodecTagAction {
 /// ([`crate::ffmpeg::muxer_defaults::muxer_can_represent`]) or *enforcing* one
 /// mid-mux ([`FFmpegRunner::resolve_codec_tag`]).
 ///
-/// Both questions must be answered by the same rule. #630 is what happens when
-/// they aren't: `RecodeStage::can_remux` routed `hevc → avi` to the remux path
-/// on a hand-written codec list, and `resolve_codec_tag` — 200 lines and one
-/// FFI boundary later — refused the very same pairing with "avi cannot
-/// represent hevc video". The user got a fatal error where a transcode was
-/// available.
+/// Sharing this rule is what #630 was about: `RecodeStage::can_remux` routed
+/// `hevc → avi` to the remux path on a hand-written codec list, and
+/// `resolve_codec_tag` — 200 lines and one FFI boundary later — refused the
+/// very same pairing with "avi cannot represent hevc video". The user got a
+/// fatal error where a transcode was available.
+///
+/// **The two are not identical, deliberately.** `resolve_codec_tag` accepts
+/// unconditionally when the muxer has no codec-tag table at all
+/// (`tags.is_null()`, e.g. `mxfenc`), *before* it ever reaches this rule.
+/// Enforcement may not refuse a copy the muxer has given no evidence
+/// against; routing may not *choose* one on no evidence. The invariant that
+/// matters is the implication, not the equivalence:
+///
+/// > whenever this predicate says yes, `resolve_codec_tag` does not refuse.
+///
+/// `routing_never_chooses_a_copy_enforcement_would_refuse` pins exactly that,
+/// and asserting equivalence instead would assert a bug (enforcement would
+/// start hard-failing `h264 → mxf`).
 ///
 /// Positive evidence only, in the two forms `FFmpeg` offers:
 ///
@@ -71,9 +83,20 @@ pub(crate) enum CodecTagAction {
 /// `1` (supported), `0` (not supported), or **negative**
 /// (`AVERROR_PATCHWELCOME` — "information unavailable"), and the negative case
 /// is real, not theoretical. `mxfenc` ships no `query_codec` callback and a
-/// null `codec_tag` table, so *every* codec answers `AVERROR_PATCHWELCOME`
-/// there. "Unknown" is not evidence a stream copy works, so it takes the same
-/// branch as an explicit `0`.
+/// null `codec_tag` table, so every codec **other than the ones it declares**
+/// (`mpeg2video`, `pcm_s16le`, `eia_608` — `avformat_query_codec`'s
+/// declared-defaults branch answers `1` for those) reports
+/// `AVERROR_PATCHWELCOME` there. "Unknown" is not evidence a stream copy
+/// works, so it takes the same branch as an explicit `0`.
+///
+/// **Known, accepted false negatives.** A muxer can *implement* a codec
+/// without *declaring* it through either channel, and this rule reads that as
+/// no. `mxfenc` is the live example: it carries a full H.264 essence mapping
+/// (`mxf_h264_codec_uls`, `mxf_parse_h264_frame`) and `ffmpeg -c copy` muxes
+/// `h264 → mxf` fine, but exposes it via neither a tag table nor
+/// `query_codec`, so routing re-encodes instead of copying. That costs a
+/// stream copy, never correctness — the alternative (assume yes on no
+/// evidence) is what produced #630. Tracked in #633.
 ///
 /// A positive answer is not always `1`: `mp3enc`'s `query_codec` returns
 /// `MKTAG('A','P','I','C')` for attached-picture codecs, which is why the
@@ -300,7 +323,14 @@ impl FFmpegRunner {
 
         // Ask representability, not tag choice — through the shared rule, so
         // this enforcement point and the routing predicate that decides
-        // whether to remux at all can never disagree again (#630).
+        // whether to remux at all stay in step (#630; the one deliberate
+        // asymmetry is documented on that function).
+        //
+        // Note its tag-table branch is inert from here: the `tags.is_null()`
+        // early return and the `muxer_tag_for_codec != 0` branch above have
+        // already established both that a table exists and that it has no
+        // entry for `codec_id`, so only the `avformat_query_codec` half can
+        // decide anything at this call site.
         if oformat_can_represent(oformat, codec_id) {
             return Ok(CodecTagAction::Clear);
         }
@@ -825,6 +855,74 @@ mod tests {
     /// `matroskaenc` defines `mkv_query_codec` and demonstrably supports it.
     /// Fails against the unpatched predicate (which returns
     /// `IncompatibleContainerCodec` here).
+    /// The property #630 actually rests on, and the only thing that stops the
+    /// two decisions drifting apart again: **whenever routing chooses a stream
+    /// copy, enforcement must not then refuse it.**
+    ///
+    /// Stated as an implication, not an equivalence, because the converse is
+    /// deliberately false — see `oformat_can_represent`'s doc. Enforcement
+    /// additionally accepts anything when the muxer has no tag table at all,
+    /// so `mxf` accepts codecs routing would never have picked. Asserting
+    /// equivalence here would be asserting a bug.
+    #[test]
+    fn routing_never_chooses_a_copy_enforcement_would_refuse() {
+        use crate::ffmpeg::codec_registry::MediaKind;
+        use crate::ffmpeg::muxer_defaults::muxer_can_represent;
+
+        crate::ffmpeg::ensure_init().unwrap();
+        let dir = tempfile::tempdir().expect("tempdir");
+
+        // The containers `RecodeStage::can_remux` routes through the shared
+        // predicate, against a codec spread covering all three
+        // `avformat_query_codec` answers.
+        let containers = [
+            (rdlp_types::ContainerFormat::Mkv, "mkv"),
+            (rdlp_types::ContainerFormat::Nut, "nut"),
+            (rdlp_types::ContainerFormat::Mxf, "mxf"),
+            (rdlp_types::ContainerFormat::Avi, "avi"),
+        ];
+        let codecs = [
+            ("h264", ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_H264),
+            ("hevc", ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_HEVC),
+            ("vp9", ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_VP9),
+            ("av1", ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_AV1),
+            ("mpeg4", ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_MPEG4),
+            (
+                "mpeg2video",
+                ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_MPEG2VIDEO,
+            ),
+            (
+                "prores",
+                ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_PRORES,
+            ),
+        ];
+
+        let mut routed_copies = 0_u32;
+        for (container, ext) in containers {
+            let oformat = oformat_for_extension(dir.path(), ext);
+            for (name, id) in codecs {
+                if !muxer_can_represent(container, name, MediaKind::Video) {
+                    continue;
+                }
+                routed_copies += 1;
+                let params =
+                    fake_params(id, ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_VIDEO);
+                assert!(
+                    FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params)).is_ok(),
+                    "routing would stream-copy {name} into {ext}, but enforcement refuses it — \
+                     the two rules have drifted"
+                );
+            }
+        }
+
+        // Guards against the loop passing vacuously if the predicate ever
+        // starts answering `false` for everything.
+        assert!(
+            routed_copies >= 10,
+            "expected the matrix to exercise real copies, got {routed_copies}"
+        );
+    }
+
     #[test]
     fn resolve_codec_tag_permits_hevc_into_mkv() {
         crate::ffmpeg::ensure_init().unwrap();

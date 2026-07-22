@@ -242,9 +242,33 @@ mod tests {
         ));
     }
 
+    /// `avformat_query_codec`'s *third* branch, which the first version of
+    /// this file's docs missed: with no `query_codec` callback and no tag
+    /// table, a muxer still answers `1` for the codecs it **declares**
+    /// (`mux_utils.c`: `codec_id == ofmt->video_codec || audio_codec ||
+    /// subtitle_codec`). `ff_mxf_muxer` declares `mpeg2video` and
+    /// `pcm_s16le`, so mxf is not the uniform "always transcode" container
+    /// the docs claimed — and this is a genuinely distinct arm from the
+    /// tag-table and `query_codec` paths the other tests pin.
+    #[test]
+    fn a_muxers_own_declared_codec_answers_yes() {
+        crate::ffmpeg::ensure_init().expect("ffmpeg init");
+        assert!(muxer_can_represent(
+            ContainerFormat::Mxf,
+            "mpeg2video",
+            MediaKind::Video
+        ));
+        assert!(muxer_can_represent(
+            ContainerFormat::Mxf,
+            "pcm_s16le",
+            MediaKind::Audio
+        ));
+    }
+
     /// The negative (`AVERROR_PATCHWELCOME`) arm — `mxfenc` has neither a
-    /// `query_codec` callback nor a `codec_tag` table, so it can answer only
-    /// "unknown", and unknown must not be read as yes.
+    /// `query_codec` callback nor a `codec_tag` table, so every codec *other
+    /// than the ones it declares* answers "unknown", and unknown must not be
+    /// read as yes.
     #[test]
     fn treats_unknown_representability_as_no() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
