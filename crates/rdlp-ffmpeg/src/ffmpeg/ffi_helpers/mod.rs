@@ -76,8 +76,12 @@ pub(crate) fn set_stream_frame_rates(
         rate.num > 0 && rate.den > 0
     }
 
-    // SAFETY: `stream` is a live `AVStream` owned by an output context the
-    // caller holds; both fields are plain `AVRational` values.
+    // SAFETY: `stream` is non-null and live. Both call sites derive it from
+    // the index `add_stream`/`add_stream_copy` itself returned for a stream
+    // it just created on an output context the caller owns for the whole
+    // call — never from a caller-supplied index — so the pointer is
+    // in-bounds by construction rather than by assumption. Both writes are of
+    // plain `AVRational` values into that stream.
     unsafe {
         if is_positive(avg) {
             (*stream).avg_frame_rate = avg;
@@ -94,9 +98,12 @@ pub(crate) fn copy_stream_frame_rates(
     dst: *mut ffmpeg_the_third::ffi::AVStream,
     src: *const ffmpeg_the_third::ffi::AVStream,
 ) {
-    // SAFETY: `src` is a live input-context stream and `dst` a live
-    // output-context stream, both owned by the caller for this call; the reads
-    // and writes are of plain `AVRational` fields.
+    // SAFETY: both pointers are non-null and live for this call. `src` is a
+    // stream borrowed from an open input context (the borrow outlives this
+    // call — the remux loop uses `ist` again afterwards), `dst` an
+    // output-context stream per `set_stream_frame_rates`'s contract above.
+    // The two contexts are distinct allocations, so the read and the write
+    // cannot alias. Both fields are plain `AVRational` values.
     unsafe {
         set_stream_frame_rates(dst, (*src).avg_frame_rate, (*src).r_frame_rate);
     }
