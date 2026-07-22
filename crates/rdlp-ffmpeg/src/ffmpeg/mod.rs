@@ -45,7 +45,7 @@ pub(crate) mod codec_registry;
 mod dts_synth;
 pub(crate) use dts_synth::DtsSynthesizer;
 mod encoding_tag;
-pub use encoding_tag::encoding_tool_tag;
+pub use encoding_tag::{audio_tag_component, encoding_tool_tag};
 mod ffi_helpers;
 pub mod fixup;
 pub mod log_capture;

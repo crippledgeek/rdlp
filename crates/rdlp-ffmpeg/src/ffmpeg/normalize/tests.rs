@@ -48,7 +48,7 @@ fn test_select_audio_encoder_for_container() {
     assert_eq!(sel(C::Ivf), None, "was aac under the catch-all");
 }
 
-/// #618 fix-wave-1, Important-3: an output extension that isn't a
+/// #618: an output extension that isn't a
 /// `ContainerFormat` at all (`.m2ts`, `.oga`, `.3g2`, ...) must fall back to
 /// AAC exactly like the sibling `audio_only_extension_for_ext` does, not
 /// hard-fail normalization. Regression guard for the deleted
@@ -66,7 +66,7 @@ fn unrecognized_extension_falls_back_to_aac_not_hard_failure() {
     }
 }
 
-/// #618 fix-wave-1, Important-2: a *recognised* container that genuinely has
+/// #618: a *recognised* container that genuinely has
 /// no resolvable audio encoder (e.g. `.ivf`, no audio stream at all) must
 /// report a truthful cause — never "container carries no audio" folded in
 /// with a parse failure, and never a codec name where an extension belongs.

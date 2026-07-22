@@ -210,15 +210,21 @@ impl RecodeStage {
     /// an audio output stream when the input actually has an audio stream
     /// (`transcode/video_transcode_phases.rs`), so a video-only source has
     /// always made the resolved encoder irrelevant. Refusing before this
-    /// check (Important-4, #618 fix wave 1) was a regression — a video-only
-    /// `.ivf` recode used to succeed and started hard-failing.
+    /// check (#618) was a regression — a video-only `.ivf` recode used to
+    /// succeed and started hard-failing.
+    ///
+    /// A video-only source returns `(false, None)`, not `(true, None)`: there
+    /// is no audio stream to copy, so claiming `audio_copy = true` would
+    /// stamp a false "copy" into the `encoding_tool` metadata tag (both
+    /// branches are otherwise inert — `setup_audio_pipeline` only opens an
+    /// audio output when `ctx.audio_transcode`/an input audio stream exists).
     fn resolve_audio_params(
         recode_audio: &RecodeAudioMode,
         target: ContainerFormat,
         has_audio: bool,
     ) -> Result<(bool, Option<String>), PostProcessError> {
         if !has_audio {
-            return Ok((true, None));
+            return Ok((false, None));
         }
 
         let target_ext = target.as_ext();
@@ -371,11 +377,12 @@ impl PipelineStage for RecodeStage {
 
         // Derive audio_copy / audio_codec from the resolved mode. Remux
         // always copies audio (no re-encoding needed); otherwise resolution
-        // depends on whether the input has an audio stream at all (Important-4).
+        // depends on whether the input has an audio stream at all — see
+        // `resolve_audio_params`.
         let (audio_copy, audio_codec) = if can_remux {
             (true, None)
         } else {
-            Self::resolve_audio_params(&recode_audio, target, media_info.audio_codec.is_some())?
+            Self::resolve_audio_params(&recode_audio, target, media_info.has_audio)?
         };
 
         let output_path = msg.tracker.temp_path(&input_file, target_ext);
@@ -476,13 +483,10 @@ impl PipelineStage for RecodeStage {
 
         // Capture the encoding_tool for downstream pass-through stages.
         {
-            let audio_part = if let Some(ref ac) = opts.audio_codec {
-                ac.as_str()
-            } else if opts.audio_copy {
-                "copy"
-            } else {
-                "none"
-            };
+            let audio_part = rdlp_ffmpeg::ffmpeg::audio_tag_component(
+                opts.audio_copy,
+                opts.audio_codec.as_deref(),
+            );
             let video_part = opts.video_codec.as_deref().unwrap_or("libx264");
             msg.encoding_tool = Some(format!("{video_part} + {audio_part}"));
         }
@@ -544,8 +548,8 @@ mod tests {
         );
     }
 
-    /// #618 fix-wave-1, Important-5: exercises `resolve_audio_params` itself
-    /// (real `rdlp-postprocess` code), not just the registry it wraps.
+    /// Exercises `resolve_audio_params` itself (real `rdlp-postprocess`
+    /// code), not just the registry it wraps.
     #[test]
     fn resolve_audio_params_auto_ivf_with_audio_is_refused_truthfully() {
         rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
@@ -588,17 +592,55 @@ mod tests {
         );
     }
 
-    /// #618 fix-wave-1, Important-4 regression guard: a video-only source
-    /// recoding to a container with no resolvable audio default (e.g.
-    /// `.ivf`) must NOT be refused — `setup_audio_pipeline` only creates an
-    /// audio stream when the input actually has one
-    /// (`transcode/video_transcode_phases.rs`), so the chosen/default
-    /// encoder was always irrelevant for video-only sources.
+    /// Regression guard (#618): a video-only source recoding to a container
+    /// with no resolvable audio default (e.g. `.ivf`) must NOT be refused —
+    /// `setup_audio_pipeline` only creates an audio stream when the input
+    /// actually has one (`transcode/video_transcode_phases.rs`), so the
+    /// chosen/default encoder was always irrelevant for video-only sources.
+    /// Resolves to `(false, None)`, not `(true, None)` — there is no audio
+    /// stream to copy.
     #[test]
-    fn resolve_audio_params_auto_ivf_without_audio_succeeds_as_copy() {
+    fn resolve_audio_params_auto_ivf_without_audio_omits_audio() {
         let result =
             RecodeStage::resolve_audio_params(&RecodeAudioMode::Auto, ContainerFormat::Ivf, false);
+        assert_eq!(result.unwrap(), (false, None));
+    }
+
+    /// `RecodeAudioMode::Copy` with an actual audio stream present was
+    /// untested — only the `has_audio == false` early-return path (which
+    /// also short-circuits `Copy`) had coverage.
+    #[test]
+    fn resolve_audio_params_copy_mode_with_audio_copies() {
+        let result =
+            RecodeStage::resolve_audio_params(&RecodeAudioMode::Copy, ContainerFormat::Mp4, true);
         assert_eq!(result.unwrap(), (true, None));
+    }
+
+    /// The `Encoder` arm's SUCCESS path was untested — only its `Err` path
+    /// (`resolve_audio_params_bogus_encoder_on_ivf_with_audio_is_refused`)
+    /// had coverage. Pins that a valid-but-container-mismatched encoder name
+    /// still resolves to `(false, Some(name))` rather than aborting — the
+    /// container mismatch only warns (see `container_supports_audio_codec`).
+    /// Uses `"flac"` (always built in, and its table row maps `flac -> flac`
+    /// so `resolve_audio_encoder` is identity-stable on every build) rather
+    /// than picking from a candidate list keyed on availability: `"aac"` is
+    /// always available too, but `resolve_audio_encoder("aac")` resolves
+    /// through the *preferred*-encoder table and returns `"libfdk_aac"` on a
+    /// build that links it — an assertion pinned to the literal `"aac"`
+    /// would then fail only on richer builds.
+    #[test]
+    fn resolve_audio_params_encoder_arm_succeeds_despite_container_mismatch() {
+        rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
+        // flac does not support Wav, so this exercises the warn-then-proceed
+        // branch rather than the compatible-encoder path.
+        let mode = RecodeAudioMode::Encoder {
+            name: "flac".to_string(),
+        };
+        let (audio_copy, audio_codec) =
+            RecodeStage::resolve_audio_params(&mode, ContainerFormat::Wav, true)
+                .expect("an available encoder must resolve despite a container mismatch warning");
+        assert!(!audio_copy);
+        assert_eq!(audio_codec.as_deref(), Some("flac"));
     }
 
     #[test]

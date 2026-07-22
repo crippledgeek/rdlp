@@ -406,7 +406,7 @@ pub fn select_audio_encoder_for_container(container: ContainerFormat) -> Option<
                 // a declared policy (`NoAudio`). "No muxer claims this
                 // extension" is the one case that would otherwise pass
                 // through silently — the case an operator would most want to
-                // see (Minor-10, #618 fix wave 1).
+                // see (#618).
                 log::warn!(
                     "no muxer declares an audio codec for container {}; \
                      no default audio encoder available",
@@ -435,19 +435,22 @@ pub fn select_audio_encoder_for_container(container: ContainerFormat) -> Option<
 ///
 /// Split out of [`select_audio_encoder_for_container`] so tier 4 is
 /// testable with an arbitrary/bogus codec name, independent of what any
-/// particular linked `FFmpeg` build actually declares (Minor-12).
+/// particular linked `FFmpeg` build actually declares.
 ///
-/// Caveat (Minor-7): `is_audio_encoder_available` is a bare
-/// `find_by_name(..).is_some()` — it does not check
-/// `AV_CODEC_CAP_EXPERIMENTAL`. `FFmpeg`'s native `vorbis`/`opus` encoders
-/// both carry that flag and fail to open without
+/// Caveat: `is_audio_encoder_available` is a bare `find_by_name(..).is_some()`
+/// — it does not check `AV_CODEC_CAP_EXPERIMENTAL`. `FFmpeg`'s native
+/// `vorbis`/`opus` encoders both carry that flag and fail to open without
 /// `strict_std_compliance = experimental`, so on a build lacking
 /// `libvorbis`/`libopus` this tier can resolve a codec-ID name (`vorbis`)
 /// that "is available" by this check yet won't actually open. Not filtered
 /// here: none of rdlp's transcode call sites set `strict_std_compliance`, so
-/// this is a real gap, but plumbing capability flags through this lookup is
-/// a materially bigger change than the rest of this fix wave — left for a
-/// follow-up rather than folded in here.
+/// this is a real gap. It is deferred, not because filtering would require
+/// major plumbing — `ffmpeg-the-third` already exposes
+/// `Codec::capabilities()` / `Capabilities::EXPERIMENTAL`, so a self-filter
+/// here would be a few lines with no new plumbing — but because the failure
+/// mode this leaves in place is a loud encoder-open error at transcode time,
+/// not a silent wrong-codec substitution (the #618 bug class). Tracked as
+/// #625.
 fn resolve_declared_codec(codec: &'static str, container: ContainerFormat) -> Option<&'static str> {
     preferred_audio_encoder(codec)
         .or_else(|| is_audio_encoder_available(codec).then_some(codec))
@@ -610,7 +613,7 @@ mod tests {
     /// this fails under the old `_ => "aac"` catch-all (mutation-verified,
     /// see the module report). On a build WITHOUT it, tier 4's AAC-fallback
     /// is correct by design, so a bare "must not be aac" would itself be a
-    /// false failure (Minor-6) — the honest form only asserts the exact
+    /// false failure — the honest form only asserts the exact
     /// codec when it's actually available.
     #[test]
     fn audio_only_containers_get_their_own_codec_not_aac() {
@@ -658,7 +661,7 @@ mod tests {
     /// The four overrides, asserted against literal encoder names — NOT
     /// against `declared_codec(..)`, which would be a tautology that
     /// survives mutating the override away. Guarded the same honest way as
-    /// `asf_family_gets_wmav2` (Minor-6): only asserted when the encoder is
+    /// `asf_family_gets_wmav2`: only asserted when the encoder is
     /// actually available, since tier 4's AAC fallback is correct by design
     /// otherwise.
     #[test]
@@ -685,7 +688,7 @@ mod tests {
 
     /// Containers that defer to the muxer must NOT all be AAC — that was the
     /// old catch-all's signature failure. Guarded the same honest way as
-    /// `asf_family_gets_wmav2` (Minor-6): on a thin build missing
+    /// `asf_family_gets_wmav2`: on a thin build missing
     /// `mp2`/`libvorbis`, tier 4's AAC fallback is correct by design, so
     /// these only assert the exact codec when it's actually available.
     #[test]
@@ -732,10 +735,10 @@ mod tests {
         }
     }
 
-    /// Minor-12: tier 4 (the AAC-with-warning fallback the whole design
-    /// hinges on being VISIBLE) had no test — tiers 1-3 were covered, tier 4
-    /// wasn't. A bogus codec name skips the preference table (tier 1) and
-    /// the direct-name check (tier 3) unconditionally, landing on tier 4
+    /// Tier 4 (the AAC-with-warning fallback the whole design hinges on
+    /// being VISIBLE) had no test — tiers 1-3 were covered, tier 4 wasn't.
+    /// A bogus codec name skips the preference table (tier 1) and the
+    /// direct-name check (tier 3) unconditionally, landing on tier 4
     /// regardless of what any particular linked `FFmpeg` build declares.
     #[test]
     fn tier_four_falls_back_to_aac_for_an_unresolvable_codec() {
