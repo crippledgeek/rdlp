@@ -159,7 +159,7 @@ impl RecodeStage {
         if can_remux {
             return Some(VideoConvertOptions {
                 remux_only: true,
-                audio_copy: true,
+                audio_copy: params.audio_copy,
                 ..Default::default()
             });
         }
@@ -376,11 +376,15 @@ impl PipelineStage for RecodeStage {
         };
 
         // Derive audio_copy / audio_codec from the resolved mode. Remux
-        // always copies audio (no re-encoding needed); otherwise resolution
-        // depends on whether the input has an audio stream at all — see
-        // `resolve_audio_params`.
+        // stream-copies unconditionally when there IS an audio stream to
+        // copy (no re-encoding needed); a video-only source has no audio
+        // stream to copy, so `audio_copy` must be `false`, not a true claim
+        // with nothing behind it — the same "+ none" truthfulness fix
+        // `resolve_audio_params` already applies to the transcode path
+        // (`23c344a7`), extended to remux so `encoding_tool` never stamps a
+        // false "+ copy" for a video-only remux.
         let (audio_copy, audio_codec) = if can_remux {
-            (true, None)
+            (media_info.has_audio, None)
         } else {
             Self::resolve_audio_params(&recode_audio, target, media_info.has_audio)?
         };
@@ -760,6 +764,29 @@ mod tests {
         let opts = RecodeStage::build_convert_options(&params, true).unwrap();
         assert!(opts.remux_only);
         assert!(opts.audio_copy);
+    }
+
+    /// Minor-7 regression guard: a video-only remux (`params.audio_copy ==
+    /// false`, no audio stream present) must NOT stamp `audio_copy: true` —
+    /// that would claim an audio "copy" that never happened. Pins that
+    /// `build_convert_options` reads `params.audio_copy` on the remux path
+    /// rather than hardcoding `true`.
+    #[test]
+    fn build_convert_options_remux_video_only_does_not_claim_audio_copy() {
+        let params = RecodeParams {
+            target: ContainerFormat::Mp4,
+            encoder_override: None,
+            audio_copy: false,
+            audio_codec: None,
+            threads: None,
+            preset_override: None,
+            deadline: None,
+            cpu_used: None,
+            speed_level: None,
+        };
+        let opts = RecodeStage::build_convert_options(&params, true).unwrap();
+        assert!(opts.remux_only);
+        assert!(!opts.audio_copy);
     }
 
     #[test]
