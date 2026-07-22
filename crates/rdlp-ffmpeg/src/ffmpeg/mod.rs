@@ -51,6 +51,7 @@ pub mod fixup;
 pub mod log_capture;
 mod merge;
 mod metadata;
+pub(crate) mod muxer_defaults;
 mod normalize;
 mod normalize_types;
 mod options;
