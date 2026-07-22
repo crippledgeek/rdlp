@@ -225,33 +225,6 @@ impl ContainerFormat {
     pub const fn supports_faststart(&self) -> bool {
         matches!(self, Self::Mp4 | Self::Mov | Self::M4v | Self::F4v)
     }
-
-    /// Whether this is an audio-only container format.
-    #[inline]
-    #[must_use]
-    pub const fn is_audio_only(&self) -> bool {
-        matches!(
-            self,
-            Self::Ogg
-                | Self::M4a
-                | Self::Mp3
-                | Self::Wav
-                | Self::Flac
-                | Self::Opus
-                | Self::Aac
-                | Self::Aiff
-                | Self::Mka
-                // Microsoft's File Name Extension Guidelines are explicit that
-                // `.wma` names ASF content with "no supported video streams" —
-                // a video stream of any codec belongs in `.wmv` or `.asf`. This
-                // predicate records that classification; it does NOT yet drop
-                // video streams from a `--remux=wma` (see #538 follow-up).
-                | Self::Wma
-                | Self::Wv
-                | Self::Caf
-                | Self::Ac3
-        )
-    }
 }
 
 #[cfg(test)]
@@ -452,7 +425,6 @@ mod tests {
             ContainerFormat::M4v
         );
         assert_eq!(ContainerFormat::M4v.as_ext(), "m4v");
-        assert!(!ContainerFormat::M4v.is_audio_only());
     }
 
     /// `wmv` and `wma` keep their own extension instead of canonicalizing to
@@ -526,43 +498,6 @@ mod tests {
                  canonicalize to '{canonical_ext}', never be preserved verbatim"
             );
         }
-    }
-
-    #[test]
-    fn test_is_audio_only() {
-        // Audio containers
-        assert!(ContainerFormat::Mp3.is_audio_only());
-        assert!(ContainerFormat::Wav.is_audio_only());
-        assert!(ContainerFormat::Flac.is_audio_only());
-        assert!(ContainerFormat::Opus.is_audio_only());
-        assert!(ContainerFormat::Aac.is_audio_only());
-        assert!(ContainerFormat::M4a.is_audio_only());
-        assert!(ContainerFormat::Ogg.is_audio_only());
-        assert!(ContainerFormat::Mka.is_audio_only());
-        assert!(ContainerFormat::Ac3.is_audio_only());
-
-        // Video containers
-        assert!(!ContainerFormat::Mp4.is_audio_only());
-        assert!(!ContainerFormat::Mkv.is_audio_only());
-        assert!(!ContainerFormat::Avi.is_audio_only());
-
-        // ASF family (#538). The negative pair carries more weight than the
-        // positive: `is_audio_only` is a `matches!`, so it can never be made
-        // exhaustive — a misclassified `Wmv`/`Asf` would be silent by
-        // construction, and dropping `| Self::Wma` from the predicate must not
-        // leave the suite green.
-        assert!(
-            ContainerFormat::Wma.is_audio_only(),
-            "wma names ASF content with no supported video streams"
-        );
-        assert!(
-            !ContainerFormat::Wmv.is_audio_only(),
-            "wmv is the ASF spelling that carries video"
-        );
-        assert!(
-            !ContainerFormat::Asf.is_audio_only(),
-            "asf is the general fallback and may carry video"
-        );
     }
 
     /// `from_path` is the one place a filesystem path becomes a container, so

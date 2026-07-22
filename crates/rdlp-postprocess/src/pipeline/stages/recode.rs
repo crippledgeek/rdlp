@@ -118,7 +118,7 @@ impl RecodeStage {
     /// Pick the default video codec to encode toward when no explicit
     /// encoder override is given. Delegates to the single source in `rdlp-ffmpeg`
     /// so the recode pipeline and `validate_speed_controls` never resolve differently.
-    const fn default_codec_for(target: ContainerFormat) -> &'static str {
+    fn default_codec_for(target: ContainerFormat) -> &'static str {
         rdlp_ffmpeg::default_codec_for_container(target)
     }
 
@@ -152,6 +152,12 @@ impl RecodeStage {
     /// Returns `None` when an explicit encoder override is requested but not
     /// available in this `FFmpeg` build. `audio_codec` is `None` for copy,
     /// `Some(name)` for re-encode.
+    ///
+    /// `params.encoder_override` is filtered for an empty string here too
+    /// (not only at `process()`'s call site): an empty override must mean
+    /// "no override" wherever this function is reached, mirroring
+    /// `resolve_recode_encoder`'s `.filter(|s| !s.is_empty())` — Item 17 of
+    /// PR-3's re-review.
     fn build_convert_options(
         params: &RecodeParams,
         can_remux: bool,
@@ -164,7 +170,7 @@ impl RecodeStage {
             });
         }
 
-        if let Some(ref requested) = params.encoder_override {
+        if let Some(requested) = params.encoder_override.as_deref().filter(|s| !s.is_empty()) {
             let encoder_name = video_codecs::resolve_encoder(requested)?;
             let (default_preset, crf) = Self::default_preset_crf(encoder_name);
             let preset = params.preset_override.clone().or(default_preset);
@@ -183,14 +189,36 @@ impl RecodeStage {
             });
         }
 
-        let target_codec = Self::default_codec_for(params.target);
-        let encoder = video_codecs::resolve_encoder(target_codec);
+        Self::options_for_codec(Self::default_codec_for(params.target), params)
+    }
+
+    /// Resolves `target_codec` to an available encoder and assembles the
+    /// transcode options, refusing (`None`) rather than silently no-opping
+    /// when no encoder is available.
+    ///
+    /// Split out of `build_convert_options`'s no-override branch so the
+    /// "unresolvable codec" refusal is directly testable with a bogus codec
+    /// name (Important-4 of PR-3's #618 review), independent of what any
+    /// particular linked `FFmpeg` build's muxers happen to declare. Before
+    /// this fix, that branch computed `encoder: Option<&str>` and mapped it
+    /// straight into `video_codec: encoder.map(String::from)` while still
+    /// returning `Some(..)` unconditionally — a silent no-op transcode (no
+    /// `video_codec` set, so `FFmpegRunner::convert_video` streams the
+    /// source through with no video encoder configured), the exact shape
+    /// that hid the `dvvideo` bug ("pipeline terminated with no output and
+    /// no error"). Mirrors the audio side's honest refusal in
+    /// `resolve_declared_codec`.
+    fn options_for_codec(
+        target_codec: &'static str,
+        params: &RecodeParams,
+    ) -> Option<VideoConvertOptions> {
+        let encoder = video_codecs::resolve_encoder(target_codec)?;
         let (default_preset, crf) = Self::default_preset_crf_for_codec(target_codec);
         let preset = params.preset_override.clone().or(default_preset);
 
         Some(VideoConvertOptions {
             remux_only: false,
-            video_codec: encoder.map(String::from),
+            video_codec: Some(encoder.to_string()),
             preset,
             crf,
             threads: params.threads,
@@ -317,6 +345,24 @@ impl PipelineStage for RecodeStage {
 
         let input_file = msg.tracker.primary();
 
+        // An empty string is treated as "no override" everywhere in this
+        // stage, mirroring `resolve_recode_encoder`'s
+        // `.filter(|s| !s.is_empty())`. Before this fix, the CLI pre-flight
+        // validator (`rdlp_ffmpeg::resolve_recode_encoder`, called from
+        // `config.rs`) already treated `--video-encoder ""` / a
+        // `video_encoder = ""` in config.toml as "no override", while this
+        // stage discriminated on `Some(_)` directly and took the override
+        // branch — producing a blank-name error ("video encoder '' is not
+        // available in this FFmpeg build") the CLI validator itself would
+        // never have surfaced. Normalizing once here, rather than filtering
+        // at each of the five sites below, keeps the two entry points from
+        // drifting apart again (Item 17 of PR-3's re-review).
+        let video_encoder = msg
+            .config
+            .video_encoder
+            .as_deref()
+            .filter(|s| !s.is_empty());
+
         // Resolve target container: prefer recode_container, fallback to
         // recode_video, fallback again to MP4.
         let target = msg
@@ -334,7 +380,7 @@ impl PipelineStage for RecodeStage {
             .and_then(|e| e.to_str())
             .unwrap_or("");
 
-        if input_ext.eq_ignore_ascii_case(target_ext) && msg.config.video_encoder.is_none() {
+        if input_ext.eq_ignore_ascii_case(target_ext) && video_encoder.is_none() {
             debug!(
                 "RecodeStage: file already in target format ({target_ext}) and no encoder override, skipping"
             );
@@ -352,7 +398,7 @@ impl PipelineStage for RecodeStage {
             .await
             .context("recode stage: failed to probe input file")?;
         // When a video encoder is explicitly requested, always transcode — never remux
-        let can_remux = msg.config.video_encoder.is_none()
+        let can_remux = video_encoder.is_none()
             && Self::can_remux(input_ext, target, media_info.video_codec.as_deref());
 
         if can_remux {
@@ -395,7 +441,7 @@ impl PipelineStage for RecodeStage {
         // (distinct from the generic "encoder not available" below) — e.g. AVS2
         // into MP4. Only relevant when actually transcoding (not remuxing).
         if !can_remux
-            && let Some(req) = msg.config.video_encoder.as_deref()
+            && let Some(req) = video_encoder
             && let Some(enc) = video_codecs::resolve_encoder(req)
             && !Self::encoder_container_compatible(enc, target)
         {
@@ -409,7 +455,7 @@ impl PipelineStage for RecodeStage {
         let Some(mut opts) = Self::build_convert_options(
             &RecodeParams {
                 target,
-                encoder_override: msg.config.video_encoder.clone(),
+                encoder_override: video_encoder.map(ToOwned::to_owned),
                 audio_copy,
                 audio_codec,
                 threads: msg.config.recode_threads,
@@ -420,14 +466,29 @@ impl PipelineStage for RecodeStage {
             },
             can_remux,
         ) else {
-            let requested = msg.config.video_encoder.as_deref().unwrap_or("");
-            return Err(PostProcessError::UnsupportedFormat {
-                format: requested.to_string(),
-                operation: format!(
-                    "video encoder '{requested}' is not available in this FFmpeg build"
-                ),
-            }
-            .into());
+            // Two distinct causes land here now that Important-4 makes the
+            // default-codec path refuse instead of silently no-opping: an
+            // explicit `--video-encoder` override that isn't available, or
+            // (no override) an unresolvable default codec for the target
+            // container. Distinguish them so the message names the thing
+            // that actually failed, rather than a blank encoder name.
+            let (format, operation) = if let Some(requested) = video_encoder {
+                (
+                    requested.to_string(),
+                    format!("video encoder '{requested}' is not available in this FFmpeg build"),
+                )
+            } else {
+                let target_codec = Self::default_codec_for(target);
+                (
+                    target_codec.to_string(),
+                    format!(
+                        "no encoder available for default video codec '{target_codec}' \
+                         (target container '{target_ext}'); pass --video-encoder to \
+                         choose one explicitly, or select a different container"
+                    ),
+                )
+            };
+            return Err(PostProcessError::UnsupportedFormat { format, operation }.into());
         };
 
         opts.verbose = msg.verbose;
@@ -910,6 +971,56 @@ mod tests {
         assert!(result.is_none());
     }
 
+    /// Important-4 of PR-3's #618 review: an unresolvable *default* codec
+    /// (no `--video-encoder` override) must refuse, not silently return
+    /// `Some(VideoConvertOptions { video_codec: None, .. })` — the shape
+    /// that hid the `dvvideo` bug ("pipeline terminated with no output and
+    /// no error"). `options_for_codec` is the seam that makes this
+    /// falsifiable with a bogus codec name, independent of any real
+    /// container or any particular linked `FFmpeg` build's muxers.
+    #[test]
+    fn options_for_codec_refuses_an_unresolvable_codec_rather_than_no_opping() {
+        let params = RecodeParams {
+            target: ContainerFormat::Mp4,
+            encoder_override: None,
+            audio_copy: true,
+            audio_codec: None,
+            threads: None,
+            preset_override: None,
+            deadline: None,
+            cpu_used: None,
+            speed_level: None,
+        };
+        let result = RecodeStage::options_for_codec("definitely_not_a_real_codec_xyz", &params);
+        assert!(
+            result.is_none(),
+            "an unresolvable codec must refuse rather than returning \
+             Some(..) with video_codec: None"
+        );
+    }
+
+    /// Positive companion: a genuinely resolvable codec must still produce
+    /// `video_codec: Some(..)` through the same seam.
+    #[test]
+    fn options_for_codec_resolves_a_real_codec() {
+        rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
+        let params = RecodeParams {
+            target: ContainerFormat::Mp4,
+            encoder_override: None,
+            audio_copy: true,
+            audio_codec: None,
+            threads: None,
+            preset_override: None,
+            deadline: None,
+            cpu_used: None,
+            speed_level: None,
+        };
+        let opts =
+            RecodeStage::options_for_codec("h264", &params).expect("libx264 available in tests");
+        assert!(!opts.remux_only);
+        assert!(opts.video_codec.is_some());
+    }
+
     #[test]
     fn threads_and_preset_override_flow_into_options() {
         let params = RecodeParams {
@@ -966,4 +1077,45 @@ mod tests {
         assert_eq!(opts.cpu_used, Some(2));
         assert_eq!(opts.speed_level, None);
     }
+
+    /// Item 17 of PR-3's re-review, `build_convert_options` entry point: an
+    /// empty `encoder_override` must be treated as "no override" — resolving
+    /// the target container's default codec — not as a request for an
+    /// encoder literally named `""`. Before the fix, `resolve_encoder("")`
+    /// returned `None` and this whole function returned `None`, producing a
+    /// blank-name error at the `process()` call site
+    /// ("video encoder '' is not available in this `FFmpeg` build"), even
+    /// though the CLI pre-flight validator (`rdlp_ffmpeg::resolve_recode_encoder`,
+    /// which already filters empty strings) would have let `--video-encoder ""`
+    /// through as "no override".
+    #[test]
+    fn build_convert_options_empty_encoder_override_is_treated_as_no_override() {
+        rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
+        let params = RecodeParams {
+            target: ContainerFormat::Mp4,
+            encoder_override: Some(String::new()),
+            audio_copy: true,
+            audio_codec: None,
+            threads: None,
+            preset_override: None,
+            deadline: None,
+            cpu_used: None,
+            speed_level: None,
+        };
+        let opts = RecodeStage::build_convert_options(&params, false)
+            .expect("an empty encoder_override must fall through to the default codec, not refuse");
+        assert!(!opts.remux_only);
+        assert!(
+            opts.video_codec.is_some(),
+            "must resolve mp4's default codec, not treat \"\" as a literal encoder name"
+        );
+    }
+
+    // The `process()`-entry-point companion to the test above (Item 17 of
+    // PR-3's re-review) lives in `tests/empty_video_encoder_e2e.rs`, not
+    // here: it needs the `ffmpeg` CLI to build its input fixture, and
+    // `scripts/check-no-cli.sh` forbids `std::process::Command` anywhere
+    // under `crates/*/src/` (production code enforces pure libav-only
+    // `FFmpeg` usage) — `tests/` is the sanctioned home for CLI-built
+    // fixtures, per `tests/cancel_e2e.rs`'s existing convention.
 }
