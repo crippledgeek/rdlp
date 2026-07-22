@@ -16,12 +16,10 @@
 //! - [`container_supports_audio_codec`] — point query for validation
 //! - [`select_audio_encoder_for_container`] — best default encoder for a container
 
-use std::collections::HashMap;
-use std::sync::OnceLock;
-
-use log::info;
 use rdlp_types::ContainerFormat;
 use serde::{Deserialize, Serialize};
+
+use crate::ffmpeg::codec_registry;
 
 /// Information about a specific audio encoder.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -57,6 +55,15 @@ struct AudioCodecEntry {
     encoders: &'static [(&'static str, &'static str)],
     /// Container formats this codec is compatible with.
     supported_containers: &'static [ContainerFormat],
+}
+
+impl codec_registry::CodecRow for AudioCodecEntry {
+    fn codec(&self) -> &'static str {
+        self.codec
+    }
+    fn encoders(&self) -> &'static [(&'static str, &'static str)] {
+        self.encoders
+    }
 }
 
 /// Static preference table for audio codecs.
@@ -184,12 +191,16 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
     },
 ];
 
+/// The audio codec registry, owning its own cache over [`AUDIO_CODEC_PREFERENCES`].
+static AUDIO_REGISTRY: codec_registry::Registry<AudioCodecEntry> =
+    codec_registry::Registry::new(AUDIO_CODEC_PREFERENCES, codec_registry::MediaKind::Audio);
+
 /// Returns `true` if the named audio encoder is available in the current `FFmpeg` build.
 ///
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
 pub fn is_audio_encoder_available(encoder: &str) -> bool {
-    ffmpeg_the_third::codec::encoder::find_by_name(encoder).is_some()
+    codec_registry::is_encoder_available(encoder)
 }
 
 /// Returns the best available audio encoder for a given codec name.
@@ -200,30 +211,7 @@ pub fn is_audio_encoder_available(encoder: &str) -> bool {
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
 pub fn preferred_audio_encoder(codec: &str) -> Option<&'static str> {
-    static CACHE: OnceLock<HashMap<&'static str, Option<&'static str>>> = OnceLock::new();
-
-    let cache = CACHE.get_or_init(|| {
-        let mut map = HashMap::new();
-        for entry in AUDIO_CODEC_PREFERENCES {
-            let selected = entry
-                .encoders
-                .iter()
-                .find(|(enc, _)| is_audio_encoder_available(enc))
-                .map(|(enc, _)| *enc);
-
-            if let Some(enc) = selected {
-                info!("Using {enc} as {codec} audio encoder", codec = entry.codec);
-            }
-
-            map.insert(entry.codec, selected);
-        }
-        map
-    });
-
-    cache
-        .get(codec.to_ascii_lowercase().as_str())
-        .copied()
-        .flatten()
+    AUDIO_REGISTRY.preferred_encoder(codec)
 }
 
 /// Resolves an audio encoder name.
@@ -238,22 +226,7 @@ pub fn preferred_audio_encoder(codec: &str) -> Option<&'static str> {
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
 pub fn resolve_audio_encoder(input: &str) -> Option<&'static str> {
-    let lower = input.to_ascii_lowercase();
-
-    // Check if input is a known codec name first
-    if let Some(enc) = preferred_audio_encoder(&lower) {
-        return Some(enc);
-    }
-
-    // Otherwise treat as a direct encoder name — find the matching static str,
-    // then gate on availability. Short-circuits on the first name match exactly
-    // like the prior nested-loop search (duplicate names occur only across
-    // byte-identical codec-alias rows), so the verdict is unchanged.
-    AUDIO_CODEC_PREFERENCES
-        .iter()
-        .flat_map(|entry| entry.encoders)
-        .find(|(enc, _)| enc.eq_ignore_ascii_case(input))
-        .and_then(|(enc, _)| is_audio_encoder_available(enc).then_some(*enc))
+    AUDIO_REGISTRY.resolve(input)
 }
 
 /// Returns all available encoders for a given audio codec name, in preference order.
@@ -263,18 +236,13 @@ pub fn resolve_audio_encoder(input: &str) -> Option<&'static str> {
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
 pub fn available_audio_encoders_for_codec(codec: &str) -> Vec<AudioEncoderInfo> {
-    let lower = codec.to_ascii_lowercase();
-    AUDIO_CODEC_PREFERENCES
-        .iter()
-        .find(|e| e.codec == lower.as_str())
-        .map(|entry| {
-            entry
-                .encoders
-                .iter()
-                .filter(|(enc, _)| is_audio_encoder_available(enc))
+    AUDIO_REGISTRY
+        .find_row(codec)
+        .map(|row| {
+            codec_registry::available_encoders(row)
                 .map(|(enc, display)| AudioEncoderInfo {
-                    encoder_name: (*enc).to_string(),
-                    display_name: (*display).to_string(),
+                    encoder_name: enc.to_string(),
+                    display_name: display.to_string(),
                 })
                 .collect()
         })
@@ -290,13 +258,10 @@ pub fn list_available_audio_codecs() -> Vec<AudioCodecInfo> {
     AUDIO_CODEC_PREFERENCES
         .iter()
         .filter_map(|entry| {
-            let encoders: Vec<AudioEncoderInfo> = entry
-                .encoders
-                .iter()
-                .filter(|(enc, _)| is_audio_encoder_available(enc))
+            let encoders: Vec<AudioEncoderInfo> = codec_registry::available_encoders(entry)
                 .map(|(enc, display)| AudioEncoderInfo {
-                    encoder_name: (*enc).to_string(),
-                    display_name: (*display).to_string(),
+                    encoder_name: enc.to_string(),
+                    display_name: display.to_string(),
                 })
                 .collect();
 
@@ -346,10 +311,8 @@ pub fn audio_codecs_for_container(container: ContainerFormat) -> Vec<AudioCodecI
 /// ```
 #[must_use]
 pub fn container_supports_audio_codec(container: ContainerFormat, codec: &str) -> bool {
-    let lower = codec.to_ascii_lowercase();
-    AUDIO_CODEC_PREFERENCES
-        .iter()
-        .find(|e| e.codec == lower.as_str())
+    AUDIO_REGISTRY
+        .find_row(codec)
         .is_some_and(|entry| entry.supported_containers.contains(&container))
 }
 
@@ -406,9 +369,20 @@ mod tests {
 
     #[test]
     fn resolve_encoder_by_encoder_name() {
-        // Built-in "aac" encoder is always available
-        let enc = resolve_audio_encoder("aac");
-        assert!(enc.is_some());
+        // "libmp3lame" is an ENCODER name (the sole encoder under codec key
+        // "mp3"), not itself a codec key, so this exercises the
+        // direct-encoder-name branch of `resolve` rather than short-circuiting
+        // through `preferred_encoder` the way `resolve_encoder_by_codec_name`
+        // (which passes "aac", a codec key) does. Gated on availability so a
+        // build without libmp3lame still passes — either branch outcome
+        // proves the direct-name path was taken, since "libmp3lame" never
+        // matches a codec key.
+        crate::ffmpeg::ensure_init().expect("ffmpeg init");
+        if is_audio_encoder_available("libmp3lame") {
+            assert_eq!(resolve_audio_encoder("libmp3lame"), Some("libmp3lame"));
+        } else {
+            assert_eq!(resolve_audio_encoder("libmp3lame"), None);
+        }
     }
 
     #[test]
