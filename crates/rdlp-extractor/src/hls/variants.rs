@@ -10,6 +10,20 @@ use log::debug;
 use rdlp_core::{RdlpError, Result};
 use rdlp_types::CodecName;
 
+// `CodecName::from_static`'s documented contract — "invalid input is a build
+// error" — only holds when the call is genuinely const-evaluated. This
+// module-level const (rather than calling `from_static` inline in the
+// function body below) restores that contract for the hardcoded fallback
+// literal in this file.
+//
+// "mp4a" is an RFC 6381 fourcc, not a canonical `FFmpeg` codec-ID name (see
+// #642's `Rfc6381Codec`-vs-`CodecName` vocabulary distinction), so it does
+// not belong on `CodecName`'s associated-const set (#653) — it stays a
+// local literal. Its use here as a `CodecName` fallback (rather than the
+// distinct `Rfc6381Codec` vocabulary) is pre-existing and unchanged by this
+// refactor.
+const MP4A: CodecName = CodecName::from_static("mp4a");
+
 /// Validate an HLS playlist/segment URL before fetching.
 ///
 /// Test behavior: allow http/https on `127.0.0.1` / `localhost` so mockito
@@ -116,7 +130,7 @@ pub(crate) fn expand_master_variants(
                 let (_, a) = rdlp_core::parse_hls_codecs(codecs);
                 a
             })
-            .unwrap_or_else(|| CodecName::from_static("mp4a"));
+            .unwrap_or(MP4A);
 
         variants.push(HlsVariantInfo {
             media_playlist_url: audio_playlist_url.to_string(),
@@ -157,9 +171,8 @@ pub(crate) fn infer_muxed_audio(
     audio_codec: Option<CodecName>,
     has_separate_audio_group: bool,
 ) -> Option<CodecName> {
-    audio_codec.or_else(|| {
-        (video_codec.is_some() && !has_separate_audio_group).then(|| CodecName::from_static("aac"))
-    })
+    audio_codec
+        .or_else(|| (video_codec.is_some() && !has_separate_audio_group).then_some(CodecName::AAC))
 }
 
 impl HlsSizeDetector {

@@ -34,10 +34,10 @@ use crate::ffmpeg::{codec_registry, muxer_defaults};
 /// out of sync with the `container_supports_audio_codec` gate that decides
 /// whether the substitution is legal at all.
 ///
-/// A `const` item, so `from_static`'s "invalid input is a build error"
-/// contract genuinely applies; called in a function body it is an ordinary
-/// runtime call that would panic instead.
-const FALLBACK_AUDIO_CODEC: CodecName = CodecName::from_static("aac");
+/// A `const` item bound to `CodecName::AAC`, so the name is validated at
+/// compile time (via that const's `from_static`); constructing it inline in a
+/// function body would instead be a runtime call that panics on a bad name.
+const FALLBACK_AUDIO_CODEC: CodecName = CodecName::AAC;
 
 /// Information about a specific audio encoder.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -101,10 +101,7 @@ impl codec_registry::CodecRow for AudioCodecEntry {
 /// the `container_supports_audio_codec` gate and the frontend greying logic.
 static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
     AudioCodecEntry {
-        // Keeps its own literal rather than `FALLBACK_AUDIO_CODEC`: this row
-        // IS the table `FALLBACK_AUDIO_CODEC` is defined independently of —
-        // referencing it here would make the const define itself.
-        codec: CodecName::from_static("aac"),
+        codec: CodecName::AAC,
         display_name: "AAC",
         encoders: &[
             (
@@ -152,7 +149,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         aliases: &[],
     },
     AudioCodecEntry {
-        codec: CodecName::from_static("opus"),
+        codec: CodecName::OPUS,
         display_name: "Opus",
         encoders: &[(AudioEncoderName::from_static("libopus"), "Opus (libopus)")],
         supported_containers: &[
@@ -168,7 +165,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         aliases: &[],
     },
     AudioCodecEntry {
-        codec: CodecName::from_static("vorbis"),
+        codec: CodecName::VORBIS,
         display_name: "Vorbis",
         encoders: &[(
             AudioEncoderName::from_static("libvorbis"),
@@ -183,7 +180,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         aliases: &[],
     },
     AudioCodecEntry {
-        codec: CodecName::from_static("flac"),
+        codec: CodecName::FLAC,
         display_name: "FLAC",
         encoders: &[(AudioEncoderName::from_static("flac"), "FLAC (built-in)")],
         supported_containers: &[
@@ -205,7 +202,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         aliases: &[],
     },
     AudioCodecEntry {
-        codec: CodecName::from_static("ac3"),
+        codec: CodecName::AC3,
         display_name: "AC-3 (Dolby Digital)",
         encoders: &[(AudioEncoderName::from_static("ac3"), "AC-3 (built-in)")],
         supported_containers: &[
@@ -219,7 +216,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         aliases: &[],
     },
     AudioCodecEntry {
-        codec: CodecName::from_static("eac3"),
+        codec: CodecName::EAC3,
         display_name: "E-AC-3 (Dolby Digital Plus)",
         encoders: &[(AudioEncoderName::from_static("eac3"), "E-AC-3 (built-in)")],
         supported_containers: &[
@@ -500,15 +497,13 @@ const fn audio_default_for(container: ContainerFormat) -> ContainerDefault<Audio
         // override is probably wrong for Ogg specifically — but changing it
         // is a separate user-visible change.
         ContainerFormat::Mkv | ContainerFormat::Mka | ContainerFormat::Ogg => {
-            ContainerDefault::new(Policy::Override(CodecName::from_static("opus")))
+            ContainerDefault::new(Policy::Override(CodecName::OPUS))
         }
 
         // FFmpeg declares `amr_nb`: 8 kHz speech-only, and the native encoder
         // is absent from most builds. 3GPP TS 26.244 permits AMR, AMR-WB and
         // AAC, so AAC is spec-correct rather than a workaround.
-        ContainerFormat::ThreeGp => {
-            ContainerDefault::new(Policy::Override(CodecName::from_static("aac")))
-        }
+        ContainerFormat::ThreeGp => ContainerDefault::new(Policy::Override(CodecName::AAC)),
 
         // Raw VP8/VP9/AV1 elementary stream; the muxer declares no audio codec
         // and refuses any audio stream outright.

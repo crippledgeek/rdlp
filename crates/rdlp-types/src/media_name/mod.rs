@@ -409,6 +409,34 @@ impl<K: NameKind> MediaName<K> {
     }
 }
 
+/// Canonical `FFmpeg` codec-ID names used in more than one place in the
+/// workspace. Single-use codec names stay as literals at their definition
+/// site — a const for a value used once is a Lazy Element.
+impl MediaName<Codec> {
+    /// H.264 / AVC.
+    pub const H264: Self = Self::from_static("h264");
+    /// H.265 / HEVC.
+    pub const HEVC: Self = Self::from_static("hevc");
+    /// VP9.
+    pub const VP9: Self = Self::from_static("vp9");
+    /// VP8.
+    pub const VP8: Self = Self::from_static("vp8");
+    /// AV1.
+    pub const AV1: Self = Self::from_static("av1");
+    /// AAC.
+    pub const AAC: Self = Self::from_static("aac");
+    /// AC-3 (Dolby Digital).
+    pub const AC3: Self = Self::from_static("ac3");
+    /// E-AC-3 (Dolby Digital Plus).
+    pub const EAC3: Self = Self::from_static("eac3");
+    /// Opus.
+    pub const OPUS: Self = Self::from_static("opus");
+    /// FLAC.
+    pub const FLAC: Self = Self::from_static("flac");
+    /// Vorbis.
+    pub const VORBIS: Self = Self::from_static("vorbis");
+}
+
 /// Borrows the underlying name as a plain `&str`, so a `MediaName` can be
 /// used as the needle in a lookup keyed by `&str` (e.g.
 /// `HashMap<MediaName<K>, _>::get(some_str)`).
@@ -550,6 +578,26 @@ mod tests {
             format!("{:?}", VideoEncoderName::from_static("libx264")),
             r#"video encoder name("libx264")"#
         );
+    }
+
+    /// The associated consts must spell exactly the literal they replace —
+    /// this is the characterization test locking the refactor in #653: every
+    /// call site that used to spell `CodecName::from_static("h264")` etc.
+    /// now reads `CodecName::H264`, and this test is what proves the two are
+    /// the same value.
+    #[test]
+    fn codec_name_associated_consts_match_their_literal() {
+        assert_eq!(CodecName::H264.as_str(), "h264");
+        assert_eq!(CodecName::HEVC.as_str(), "hevc");
+        assert_eq!(CodecName::VP9.as_str(), "vp9");
+        assert_eq!(CodecName::VP8.as_str(), "vp8");
+        assert_eq!(CodecName::AV1.as_str(), "av1");
+        assert_eq!(CodecName::AAC.as_str(), "aac");
+        assert_eq!(CodecName::AC3.as_str(), "ac3");
+        assert_eq!(CodecName::EAC3.as_str(), "eac3");
+        assert_eq!(CodecName::OPUS.as_str(), "opus");
+        assert_eq!(CodecName::FLAC.as_str(), "flac");
+        assert_eq!(CodecName::VORBIS.as_str(), "vorbis");
     }
 
     /// A deserialisation failure must say which vocabulary rejected the value.

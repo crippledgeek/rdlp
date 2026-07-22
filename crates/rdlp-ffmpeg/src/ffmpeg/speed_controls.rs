@@ -111,17 +111,17 @@ const fn video_default_for(container: ContainerFormat) -> ContainerDefault<Video
             // MPEG-TS payload. ITU-T H.222.0 stream_type 0x1B = AVC, and
             // every real-world HLS ladder is h264 — the muxer's own default
             // is the historical outlier here.
-            ContainerDefault::new(Policy::Override(CodecName::from_static("h264")))
+            ContainerDefault::new(Policy::Override(CodecName::H264))
         }
         ContainerFormat::Flv => {
             // Adobe FLV spec CodecID 7 = AVC; the muxer declares flv1
             // (Sorenson H.263), a codec no encoder ships for in 2026.
-            ContainerDefault::new(Policy::Override(CodecName::from_static("h264")))
+            ContainerDefault::new(Policy::Override(CodecName::H264))
         }
         ContainerFormat::F4v => {
             // ISOBMFF-derived via movenc; h264 is F4V's actual install base
             // (Flash Video's MP4-compatible successor format).
-            ContainerDefault::new(Policy::Override(CodecName::from_static("h264")))
+            ContainerDefault::new(Policy::Override(CodecName::H264))
         }
         ContainerFormat::Avi => {
             // avienc.c declares mpeg4 part 2. AVI is FOURCC-dispatched with
@@ -142,7 +142,7 @@ const fn video_default_for(container: ContainerFormat) -> ContainerDefault<Video
             // benign for the CFR output rdlp produces, but would drift on a
             // VFR source, and B-frame seeking in legacy AVI parsers stays
             // imprecise.
-            ContainerDefault::new(Policy::Override(CodecName::from_static("h264")))
+            ContainerDefault::new(Policy::Override(CodecName::H264))
         }
         ContainerFormat::Asf | ContainerFormat::Wmv => {
             // asfenc.c declares msmpeg4v3. Like AVI, ASF/WMV are
@@ -150,12 +150,12 @@ const fn video_default_for(container: ContainerFormat) -> ContainerDefault<Video
             // reasoning applies — including the PSNR-measurement-artifact
             // retraction on the `Avi` arm above (`-lavfi psnr` desyncs on
             // ASF/WMV's missing PTS the same way it does on AVI's).
-            ContainerDefault::new(Policy::Override(CodecName::from_static("h264")))
+            ContainerDefault::new(Policy::Override(CodecName::H264))
         }
         ContainerFormat::Nut => {
             // nutenc.c declares mpeg4. NUT is codec-agnostic by
             // construction — it has no legacy install base to defer to.
-            ContainerDefault::new(Policy::Override(CodecName::from_static("h264")))
+            ContainerDefault::new(Policy::Override(CodecName::H264))
         }
         ContainerFormat::Mxf => {
             // mxfenc.c declares mpeg2video, but AVC-in-MXF is standardized
@@ -167,13 +167,13 @@ const fn video_default_for(container: ContainerFormat) -> ContainerDefault<Video
             // frame rate is never set and `mxfenc` demands a non-zero one.
             // That failure sits upstream of codec choice — do not "fix" this
             // arm in response to it.
-            ContainerDefault::new(Policy::Override(CodecName::from_static("h264")))
+            ContainerDefault::new(Policy::Override(CodecName::H264))
         }
         ContainerFormat::ThreeGp => {
             // 3GPP TS 26.244 §5 lists AVC (H.264) among 3GP's permitted
             // video codecs; the muxer's own declared default predates that
             // profile and is not what modern 3GP consumers expect.
-            ContainerDefault::new(Policy::Override(CodecName::from_static("h264")))
+            ContainerDefault::new(Policy::Override(CodecName::H264))
         }
         ContainerFormat::M4a
         | ContainerFormat::Mp3
