@@ -167,6 +167,21 @@ impl FFmpegRunner {
             octx.stream_mut(ost_idx)
                 .expect("just-added stream")
                 .set_metadata(ist.metadata().to_owned());
+
+            // Frame rates live on `AVStream`, not in the parameters
+            // `add_stream_copy` copied, so they must be carried across
+            // explicitly (#629). MXF refuses the file outright without them;
+            // the raw-FFI MKV path has always done this for Matroska's
+            // "Default duration".
+            //
+            // SAFETY: both pointers address live streams — `ist` belongs to
+            // the open input context, and `ost_idx` was just returned by
+            // `add_stream_copy` on `octx`, which owns it for the rest of this
+            // function.
+            unsafe {
+                let ost_ptr = *(*octx.as_mut_ptr()).streams.add(ost_idx);
+                super::ffi_helpers::copy_stream_frame_rates(ost_ptr, ist.as_ptr());
+            }
         }
 
         // Copy format-level metadata and add encoding_tool tag

@@ -32,7 +32,6 @@ use std::process::Command;
 use std::sync::Arc;
 
 use tempfile::TempDir;
-use tokio::sync::oneshot;
 
 use rdlp_postprocess::pipeline::{FileTracker, PipelineMessage, PipelineStage, TempRegistry};
 use rdlp_postprocess::{FFmpegRunner, PostProcess, RecodeStage};
@@ -90,7 +89,6 @@ async fn empty_video_encoder_override_is_treated_as_no_override_in_process() {
         ..PostProcess::default()
     };
     let reg = Arc::new(TempRegistry::new());
-    let (error_tx, _rx) = oneshot::channel();
     let msg = PipelineMessage {
         info: InfoDict::new(
             "id".to_string(),
@@ -104,7 +102,6 @@ async fn empty_video_encoder_override_is_treated_as_no_override_in_process() {
         is_hls: false,
         verbose: false,
         callback_factory: None,
-        error_tx: Some(error_tx),
         warnings: Vec::new(),
         encoding_tool: None,
         cancel: tokio_util::sync::CancellationToken::new(),
