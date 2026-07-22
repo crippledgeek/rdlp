@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::audio_format::AudioFormat;
 use crate::container::ContainerFormat;
 use crate::fixup_policy::FixupPolicy;
+use crate::media_name::VideoEncoderName;
 use crate::recode_audio_mode::RecodeAudioMode;
 use crate::vpx_deadline::VpxDeadline;
 
@@ -169,7 +170,14 @@ pub struct PostProcess {
     /// Gain applied by the limiter-boost stage (dB).
     pub normalize_boost_db: Option<f64>,
     /// `FFmpeg` encoder name for the video stream (e.g. `"libx265"`).
-    pub video_encoder: Option<String>,
+    ///
+    /// An empty override is no longer representable here — see
+    /// [`VideoEncoderName`] — so `None` is the only spelling of "no
+    /// override". A `config.toml` `video_encoder = ""` (or an API caller
+    /// passing the empty string) now fails to deserialize with a clear
+    /// `InvalidMediaName` message instead of silently reaching the recode
+    /// stage as a would-be empty encoder name (#642).
+    pub video_encoder: Option<VideoEncoderName>,
     /// How to handle audio during video recode.
     pub recode_audio: RecodeAudioMode,
     /// Override the output container for recode (independent of `recode_video`).

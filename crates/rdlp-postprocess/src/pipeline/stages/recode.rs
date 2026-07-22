@@ -12,7 +12,7 @@ use log::{debug, info, warn};
 
 use rdlp_ffmpeg::ffmpeg::{audio_encoder_registry, video_codecs};
 use rdlp_ffmpeg::{FFmpegRunner, PostProcessError, VideoConvertOptions};
-use rdlp_types::{ContainerFormat, RecodeAudioMode};
+use rdlp_types::{AudioEncoderName, ContainerFormat, RecodeAudioMode, VideoEncoderName};
 
 use crate::pipeline::stages::recode_audio_only::{self, SourceAudio};
 use crate::pipeline::{PipelineMessage, PipelineStage};
@@ -24,9 +24,9 @@ use crate::pipeline::{PipelineMessage, PipelineStage};
 #[derive(Debug, Clone)]
 pub(super) struct RecodeParams {
     pub target: ContainerFormat,
-    pub encoder_override: Option<String>,
+    pub encoder_override: Option<VideoEncoderName>,
     pub audio_copy: bool,
-    pub audio_codec: Option<String>,
+    pub audio_codec: Option<AudioEncoderName>,
     /// Resolved-or-configured encoder thread count (None = auto at encode layer).
     pub threads: Option<u32>,
     /// Encoder preset override; None preserves the per-codec default preset.
@@ -76,6 +76,41 @@ impl<'a> SourceVideo<'a> {
         }
     }
 }
+
+/// An encoder whose output only one container can carry.
+///
+/// Expressed as data rather than as a hardcoded condition so that the matching
+/// rule, the refusal, and the operator-facing explanation all derive from the
+/// same row. Adding an encoder here needs no change to any predicate.
+struct EncoderRestriction {
+    /// The encoder this restriction constrains.
+    encoder: VideoEncoderName,
+    /// The only container that can carry its output.
+    only: ContainerFormat,
+    /// What goes wrong otherwise — quoted verbatim in the refusal so the
+    /// operator learns the symptom, not just the rule.
+    symptom: &'static str,
+}
+
+impl EncoderRestriction {
+    /// `true` when this restriction permits `encoder` into `target`.
+    ///
+    /// A restriction has nothing to say about any encoder but its own, so an
+    /// unrelated encoder is always allowed through.
+    fn allows(&self, encoder: &VideoEncoderName, target: ContainerFormat) -> bool {
+        *encoder != self.encoder || target == self.only
+    }
+}
+
+/// Every known encoder/container restriction.
+///
+/// `from_static` validates each encoder name at const-eval, so a typo here is a
+/// build error rather than a restriction that silently never matches.
+static ENCODER_CONTAINER_RESTRICTIONS: &[EncoderRestriction] = &[EncoderRestriction {
+    encoder: VideoEncoderName::from_static("libxavs2"),
+    only: ContainerFormat::Mkv,
+    symptom: "libxavs2 into any other container writes an empty file",
+}];
 
 /// Transcodes video to a different container/codec.
 ///
@@ -267,12 +302,30 @@ impl RecodeStage {
         }
     }
 
-    /// Whether `encoder` can be muxed into `target`. AVS2 (`libxavs2`) only
-    /// muxes into Matroska — `libxavs2 -> MP4` writes nothing — so a recode to
-    /// any other container must be refused with a clear reason rather than
-    /// producing an empty file.
-    fn encoder_container_compatible(encoder: &str, target: ContainerFormat) -> bool {
-        encoder != "libxavs2" || matches!(target, ContainerFormat::Mkv)
+    /// The restriction `encoder` violates by targeting `target`, if any.
+    ///
+    /// Returns the offending row rather than a bare `bool` so the caller can
+    /// name the container the encoder *does* mux into. The previous form
+    /// hardcoded both the encoder (`"libxavs2"`) in the predicate and "MKV" in
+    /// the caller's error string, so a second restricted encoder would have
+    /// produced a confidently wrong message.
+    fn violated_restriction(
+        encoder: &VideoEncoderName,
+        target: ContainerFormat,
+    ) -> Option<&'static EncoderRestriction> {
+        ENCODER_CONTAINER_RESTRICTIONS
+            .iter()
+            .find(|restriction| !restriction.allows(encoder, target))
+    }
+
+    /// Whether `encoder` can be muxed into `target`.
+    ///
+    /// The yes/no form of [`Self::violated_restriction`]. Test-only: the
+    /// production path needs the violated row to build a truthful message, so
+    /// keeping this compiled into the library would be dead code.
+    #[cfg(test)]
+    fn encoder_container_compatible(encoder: &VideoEncoderName, target: ContainerFormat) -> bool {
+        Self::violated_restriction(encoder, target).is_none()
     }
 
     /// Build video conversion options.
@@ -281,11 +334,10 @@ impl RecodeStage {
     /// available in this `FFmpeg` build. `audio_codec` is `None` for copy,
     /// `Some(name)` for re-encode.
     ///
-    /// `params.encoder_override` is filtered for an empty string here too
-    /// (not only at `process()`'s call site): an empty override must mean
-    /// "no override" wherever this function is reached, mirroring
-    /// `resolve_recode_encoder`'s `.filter(|s| !s.is_empty())` — Item 17 of
-    /// PR-3's re-review.
+    /// `params.encoder_override` no longer needs an empty-string filter here:
+    /// [`VideoEncoderName`] cannot hold an empty value, so `None` is the only
+    /// spelling of "no override" that reaches this function (#642 removed the
+    /// `Option<String>` shape Item 17 of PR-3's re-review had to defend against).
     fn build_convert_options(
         params: &RecodeParams,
         can_remux: bool,
@@ -298,9 +350,9 @@ impl RecodeStage {
             });
         }
 
-        if let Some(requested) = params.encoder_override.as_deref().filter(|s| !s.is_empty()) {
-            let encoder_name = video_codecs::resolve_encoder(requested)?;
-            let (default_preset, crf) = Self::default_preset_crf(encoder_name.as_str());
+        if let Some(requested) = params.encoder_override.as_ref() {
+            let encoder_name = video_codecs::resolve_encoder(requested.as_str())?;
+            let (default_preset, crf) = Self::default_preset_crf(&encoder_name);
             let preset = params.preset_override.clone().or(default_preset);
             return Some(VideoConvertOptions {
                 remux_only: false,
@@ -359,23 +411,17 @@ impl RecodeStage {
         })
     }
 
-    /// Converts `params.audio_codec` (a plain, already-resolved encoder name
-    /// string — see `RecodeParams::audio_codec`) into the typed
+    /// Returns `params.audio_codec` for the typed
     /// [`VideoConvertOptions::audio_codec`] field.
     ///
-    /// `params.audio_codec` is populated exclusively by
-    /// [`Self::resolve_audio_params`] / `resolve_audio_only_params`, both of
-    /// which resolve through `audio_encoder_registry` before stringifying —
-    /// so a value that fails this parse would itself be an upstream bug, not
-    /// a legitimate "unresolvable name" the caller should degrade to `None`
-    /// for.
-    fn audio_codec_option(
-        params: &RecodeParams,
-    ) -> Option<rdlp_types::media_name::AudioEncoderName> {
-        params.audio_codec.as_deref().map(|s| {
-            rdlp_types::media_name::AudioEncoderName::new(s)
-                .expect("RecodeParams.audio_codec was already resolved via the audio registry")
-        })
+    /// `params.audio_codec` is already an [`AudioEncoderName`] populated
+    /// exclusively by [`Self::resolve_audio_params`] / `resolve_audio_only_params`,
+    /// both of which resolve through `audio_encoder_registry` — so this is a
+    /// plain clone, not a re-parse. Before #642 this field was a plain
+    /// `String` and this helper re-validated it through `AudioEncoderName::new(..)
+    /// .expect(..)`, which existed only to undo the earlier stringification.
+    fn audio_codec_option(params: &RecodeParams) -> Option<AudioEncoderName> {
+        params.audio_codec.clone()
     }
 
     /// Resolves `(audio_copy, audio_codec)` for a transcode (never called on
@@ -397,7 +443,7 @@ impl RecodeStage {
         recode_audio: &RecodeAudioMode,
         target: ContainerFormat,
         has_audio: bool,
-    ) -> Result<(bool, Option<String>), PostProcessError> {
+    ) -> Result<(bool, Option<AudioEncoderName>), PostProcessError> {
         if !has_audio {
             return Ok((false, None));
         }
@@ -427,7 +473,7 @@ impl RecodeStage {
                     });
                 };
                 debug!("RecodeStage: auto audio encoder for {target_ext}: {encoder}");
-                Ok((false, Some(encoder.to_string())))
+                Ok((false, Some(encoder)))
             }
             RecodeAudioMode::Encoder { name } => {
                 if !audio_encoder_registry::container_supports_audio_codec(target, name) {
@@ -453,16 +499,16 @@ impl RecodeStage {
                     });
                 };
                 debug!("RecodeStage: using audio encoder: {resolved}");
-                Ok((false, Some(resolved.to_string())))
+                Ok((false, Some(resolved)))
             }
         }
     }
 
-    fn default_preset_crf(encoder: &str) -> (Option<String>, Option<u32>) {
+    fn default_preset_crf(encoder: &VideoEncoderName) -> (Option<String>, Option<u32>) {
         // Explicit per-encoder match (not substring): x265's default crf is 28,
         // not x264's 23; and libopenh264/kvazaar (substring "264"/"kvazaar") are
         // NOT x264-style-CRF encoders, so they must NOT inherit crf 23.
-        match encoder {
+        match encoder.as_str() {
             "libx264" | "libx264rgb" => (Some("medium".to_string()), Some(23)),
             "libx265" => (Some("medium".to_string()), Some(28)),
             "libvpx-vp9" | "libvpx" => (None, Some(30)),
@@ -492,23 +538,15 @@ impl PipelineStage for RecodeStage {
 
         let input_file = msg.tracker.primary();
 
-        // An empty string is treated as "no override" everywhere in this
-        // stage, mirroring `resolve_recode_encoder`'s
-        // `.filter(|s| !s.is_empty())`. Before this fix, the CLI pre-flight
+        // "No override" has exactly one representation since #642:
+        // `msg.config.video_encoder` is `Option<VideoEncoderName>`, which
+        // cannot hold an empty string, so there is no longer a blank-value
+        // case to normalize here (or at the five sites below it used to be
+        // filtered at — Item 17 of PR-3's re-review). The CLI pre-flight
         // validator (`rdlp_ffmpeg::resolve_recode_encoder`, called from
-        // `config.rs`) already treated `--video-encoder ""` / a
-        // `video_encoder = ""` in config.toml as "no override", while this
-        // stage discriminated on `Some(_)` directly and took the override
-        // branch — producing a blank-name error ("video encoder '' is not
-        // available in this FFmpeg build") the CLI validator itself would
-        // never have surfaced. Normalizing once here, rather than filtering
-        // at each of the five sites below, keeps the two entry points from
-        // drifting apart again (Item 17 of PR-3's re-review).
-        let video_encoder = msg
-            .config
-            .video_encoder
-            .as_deref()
-            .filter(|s| !s.is_empty());
+        // `config.rs`) and this stage now agree structurally, not by
+        // convention.
+        let video_encoder = msg.config.video_encoder.as_ref();
 
         // Resolve target container: prefer recode_container, fallback to
         // recode_video, fallback again to MP4.
@@ -599,12 +637,16 @@ impl PipelineStage for RecodeStage {
         // into MP4. Only relevant when actually transcoding (not remuxing).
         if !can_remux
             && let Some(req) = video_encoder
-            && let Some(enc) = video_codecs::resolve_encoder(req)
-            && !Self::encoder_container_compatible(enc.as_str(), target)
+            && let Some(enc) = video_codecs::resolve_encoder(req.as_str())
+            && let Some(restriction) = Self::violated_restriction(&enc, target)
         {
             return Err(PostProcessError::UnsupportedFormat {
                 format: enc.to_string(),
-                operation: format!("{enc} only muxes into MKV; requested container {target:?}"),
+                operation: format!(
+                    "{enc} only muxes into {only}; requested container {target:?} ({symptom})",
+                    only = restriction.only.as_ext(),
+                    symptom = restriction.symptom,
+                ),
             }
             .into());
         }
@@ -612,7 +654,7 @@ impl PipelineStage for RecodeStage {
         let Some(mut opts) = Self::build_convert_options(
             &RecodeParams {
                 target,
-                encoder_override: video_encoder.map(ToOwned::to_owned),
+                encoder_override: video_encoder.cloned(),
                 audio_copy,
                 audio_codec,
                 threads: msg.config.recode_threads,
@@ -752,7 +794,7 @@ mod tests {
             (Some("medium".into()), Some(28))
         );
         assert_eq!(
-            RecodeStage::default_preset_crf("libx265"),
+            RecodeStage::default_preset_crf(&VideoEncoderName::from_static("libx265")),
             (Some("medium".into()), Some(28))
         );
     }
@@ -764,7 +806,7 @@ mod tests {
             (Some("medium".into()), Some(23))
         );
         assert_eq!(
-            RecodeStage::default_preset_crf("libx264"),
+            RecodeStage::default_preset_crf(&VideoEncoderName::from_static("libx264")),
             (Some("medium".into()), Some(23))
         );
     }
@@ -866,9 +908,18 @@ mod tests {
 
     #[test]
     fn new_codecs_get_no_forced_crf() {
-        assert_eq!(RecodeStage::default_preset_crf("libvvenc"), (None, None));
-        assert_eq!(RecodeStage::default_preset_crf("libxeve"), (None, None));
-        assert_eq!(RecodeStage::default_preset_crf("libxavs2"), (None, None));
+        assert_eq!(
+            RecodeStage::default_preset_crf(&VideoEncoderName::from_static("libvvenc")),
+            (None, None)
+        );
+        assert_eq!(
+            RecodeStage::default_preset_crf(&VideoEncoderName::from_static("libxeve")),
+            (None, None)
+        );
+        assert_eq!(
+            RecodeStage::default_preset_crf(&VideoEncoderName::from_static("libxavs2")),
+            (None, None)
+        );
         assert_eq!(
             RecodeStage::default_preset_crf_for_codec("vvc"),
             (None, None)
@@ -1206,25 +1257,26 @@ mod tests {
         // AVS2 (libxavs2) recode is refused for non-MKV containers (the caller
         // turns this into a truthful "only muxes into MKV" error). Pure helper,
         // no FFmpeg needed.
+        let xavs2 = VideoEncoderName::from_static("libxavs2");
         assert!(!RecodeStage::encoder_container_compatible(
-            "libxavs2",
+            &xavs2,
             ContainerFormat::Mp4
         ));
         assert!(!RecodeStage::encoder_container_compatible(
-            "libxavs2",
+            &xavs2,
             ContainerFormat::WebM
         ));
         assert!(RecodeStage::encoder_container_compatible(
-            "libxavs2",
+            &xavs2,
             ContainerFormat::Mkv
         ));
         // Other encoders are unaffected by the AVS2-specific guard.
         assert!(RecodeStage::encoder_container_compatible(
-            "libx265",
+            &VideoEncoderName::from_static("libx265"),
             ContainerFormat::Mp4
         ));
         assert!(RecodeStage::encoder_container_compatible(
-            "libvvenc",
+            &VideoEncoderName::from_static("libvvenc"),
             ContainerFormat::Mp4
         ));
     }
@@ -1235,7 +1287,7 @@ mod tests {
             target: ContainerFormat::Mp4,
             encoder_override: None,
             audio_copy: false,
-            audio_codec: Some("libopus".to_string()),
+            audio_codec: Some(AudioEncoderName::from_static("libopus")),
             threads: None,
             preset_override: None,
             deadline: None,
@@ -1293,7 +1345,7 @@ mod tests {
             target: ContainerFormat::Mp4,
             encoder_override: None,
             audio_copy: false,
-            audio_codec: Some("libopus".to_string()),
+            audio_codec: Some(AudioEncoderName::from_static("libopus")),
             threads: None,
             preset_override: None,
             deadline: None,
@@ -1309,7 +1361,7 @@ mod tests {
     fn build_convert_options_unavailable_encoder_returns_none() {
         let params = RecodeParams {
             target: ContainerFormat::Mp4,
-            encoder_override: Some("nonexistent_enc_xyz".to_string()),
+            encoder_override: Some(VideoEncoderName::from_static("nonexistent_enc_xyz")),
             audio_copy: true,
             audio_codec: None,
             threads: None,
@@ -1376,7 +1428,7 @@ mod tests {
     fn threads_and_preset_override_flow_into_options() {
         let params = RecodeParams {
             target: ContainerFormat::Mkv,
-            encoder_override: Some("libx265".to_string()),
+            encoder_override: Some(VideoEncoderName::from_static("libx265")),
             audio_copy: true,
             audio_codec: None,
             threads: Some(6),
@@ -1394,7 +1446,7 @@ mod tests {
     fn preset_none_keeps_per_codec_default() {
         let params = RecodeParams {
             target: ContainerFormat::Mp4,
-            encoder_override: Some("libx265".to_string()),
+            encoder_override: Some(VideoEncoderName::from_static("libx265")),
             audio_copy: true,
             audio_codec: None,
             threads: None,
@@ -1414,7 +1466,7 @@ mod tests {
         // threads them regardless — that's what this test verifies.
         let params = RecodeParams {
             target: ContainerFormat::Mp4,
-            encoder_override: Some("libx264".to_string()),
+            encoder_override: Some(VideoEncoderName::from_static("libx264")),
             audio_copy: true,
             audio_codec: None,
             threads: None,
@@ -1429,22 +1481,22 @@ mod tests {
         assert_eq!(opts.speed_level, None);
     }
 
-    /// Item 17 of PR-3's re-review, `build_convert_options` entry point: an
-    /// empty `encoder_override` must be treated as "no override" — resolving
-    /// the target container's default codec — not as a request for an
-    /// encoder literally named `""`. Before the fix, `resolve_encoder("")`
-    /// returned `None` and this whole function returned `None`, producing a
-    /// blank-name error at the `process()` call site
-    /// ("video encoder '' is not available in this `FFmpeg` build"), even
-    /// though the CLI pre-flight validator (`rdlp_ffmpeg::resolve_recode_encoder`,
-    /// which already filters empty strings) would have let `--video-encoder ""`
-    /// through as "no override".
+    /// Item 17 of PR-3's re-review (pre-#642) needed a runtime test proving
+    /// an empty `encoder_override` was treated as "no override" — `Option<String>`
+    /// could hold `Some("")`, a state indistinguishable from a real encoder
+    /// name request until `build_convert_options` filtered it. #642 replaced
+    /// `Option<String>` with `Option<VideoEncoderName>`, and `VideoEncoderName`
+    /// cannot hold an empty value (see `media_name::validate`) — so that state
+    /// is no longer constructible, and this is now a compile-time guarantee
+    /// rather than a runtime behaviour to test. This positive test replaces
+    /// the old one: it pins that `RecodeParams::encoder_override` genuinely
+    /// requires a `VideoEncoderName`, not a raw string, at every call site.
     #[test]
-    fn build_convert_options_empty_encoder_override_is_treated_as_no_override() {
+    fn encoder_override_is_a_validated_video_encoder_name_not_a_raw_string() {
         rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
         let params = RecodeParams {
             target: ContainerFormat::Mp4,
-            encoder_override: Some(String::new()),
+            encoder_override: None,
             audio_copy: true,
             audio_codec: None,
             threads: None,
@@ -1454,19 +1506,18 @@ mod tests {
             speed_level: None,
         };
         let opts = RecodeStage::build_convert_options(&params, false)
-            .expect("an empty encoder_override must fall through to the default codec, not refuse");
+            .expect("None must fall through to the default codec");
         assert!(!opts.remux_only);
         assert!(
             opts.video_codec.is_some(),
-            "must resolve mp4's default codec, not treat \"\" as a literal encoder name"
+            "must resolve mp4's default codec when no override is given"
         );
     }
 
-    // The `process()`-entry-point companion to the test above (Item 17 of
-    // PR-3's re-review) lives in `tests/empty_video_encoder_e2e.rs`, not
-    // here: it needs the `ffmpeg` CLI to build its input fixture, and
-    // `scripts/check-no-cli.sh` forbids `std::process::Command` anywhere
-    // under `crates/*/src/` (production code enforces pure libav-only
-    // `FFmpeg` usage) — `tests/` is the sanctioned home for CLI-built
-    // fixtures, per `tests/cancel_e2e.rs`'s existing convention.
+    // The `process()`-entry-point companion to the removed empty-encoder
+    // test (Item 17 of PR-3's re-review) lives in `tests/empty_video_encoder_e2e.rs`.
+    // Since #642 that scenario constructs `PostProcess { video_encoder: None, .. }`
+    // rather than `Some(String::new())` — the type change is the fix, so the
+    // e2e test now documents "no override reaches RecodeStage cleanly" rather
+    // than "an empty override is normalized to no override".
 }

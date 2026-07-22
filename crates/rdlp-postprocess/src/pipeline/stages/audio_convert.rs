@@ -22,6 +22,7 @@ use anyhow::Context as _;
 use log::info;
 
 use rdlp_ffmpeg::{AudioExtractOptions, FFmpegRunner};
+use rdlp_types::CodecName;
 
 use crate::pipeline::PipelineMessage;
 
@@ -45,7 +46,7 @@ pub(super) struct AudioExtractJob<'a> {
     /// `wav`/PCM row). A **codec** name, never a container: this field is what
     /// stops the `encoding_tool` slot being filled with something that does
     /// not name an encoder.
-    pub fallback_codec: Option<String>,
+    pub fallback_codec: Option<CodecName>,
     /// Context prefix for a failure, e.g. `"audio extract stage failed"`.
     pub error_context: &'static str,
 }

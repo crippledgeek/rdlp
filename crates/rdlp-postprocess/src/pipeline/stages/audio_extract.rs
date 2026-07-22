@@ -148,8 +148,10 @@ impl PipelineStage for AudioExtractStage {
                 summary: None,
                 // `wav`'s row carries no encoder name — `extract_audio` defers
                 // to the muxer's PCM default — so the target codec is what
-                // names the encoding for the tag.
-                fallback_codec: Some(target_format.to_string()),
+                // names the encoding for the tag. `target_format` is always
+                // one of the static `AudioFormat::codec_name()` values (or the
+                // `"mp3"` default), so `from_static` never panics here.
+                fallback_codec: Some(rdlp_types::CodecName::from_static(target_format)),
                 error_context: "audio extract stage failed",
             },
         )

@@ -77,6 +77,19 @@ fn reject_blank(value: &str) -> Result<&str, String> {
     }
 }
 
+/// `value_parser` for `--video-encoder`.
+///
+/// Reuses [`reject_blank`] for the same blank-rejection UX every other
+/// string-valued flag gets, then validates through [`VideoEncoderName`]
+/// itself so a value with an embedded control character is rejected here
+/// too, not just at the empty/whitespace floor `reject_blank` alone checks.
+///
+/// [`VideoEncoderName`]: rdlp_types::VideoEncoderName
+fn video_encoder_name(value: &str) -> Result<rdlp_types::VideoEncoderName, String> {
+    let value = reject_blank(value)?;
+    rdlp_types::VideoEncoderName::new(value).map_err(|e| e.to_string())
+}
+
 /// `value_parser` for string-valued arguments.
 ///
 /// A bare `Fn(&str) -> Result<T, E>` is itself a `TypedValueParser` (clap's
@@ -319,8 +332,8 @@ pub struct Args {
 
     /// Video encoder to use (e.g., libsvtav1, libx264).
     /// Overrides automatic encoder selection.
-    #[arg(long, value_name = "NAME", value_parser = non_blank, help_heading = HELP_HEADING_RECODE, hide_short_help = true)]
-    pub video_encoder: Option<String>,
+    #[arg(long, value_name = "NAME", value_parser = video_encoder_name, help_heading = HELP_HEADING_RECODE, hide_short_help = true)]
+    pub video_encoder: Option<rdlp_types::VideoEncoderName>,
 
     /// List available video encoders and exit.
     #[arg(long, help_heading = HELP_HEADING_INFO, hide_short_help = true)]

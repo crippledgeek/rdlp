@@ -8,6 +8,7 @@ use super::types::{HlsInfo, HlsVariantInfo};
 use crate::base::common::BaseExtractor;
 use log::debug;
 use rdlp_core::{RdlpError, Result};
+use rdlp_types::CodecName;
 
 /// Validate an HLS playlist/segment URL before fetching.
 ///
@@ -69,13 +70,14 @@ pub(crate) fn expand_master_variants(
             .as_deref()
             .map(rdlp_core::parse_hls_codecs)
             .unwrap_or((None, None));
-        let audio_codec = infer_muxed_audio(video_codec, audio_codec, variant.audio.is_some());
+        let audio_codec =
+            infer_muxed_audio(video_codec.as_ref(), audio_codec, variant.audio.is_some());
 
         variants.push(HlsVariantInfo {
             media_playlist_url: media_url.to_string(),
             resolution: variant.resolution.as_ref().map(|r| (r.width, r.height)),
-            video_codec: video_codec.map(String::from),
-            audio_codec: audio_codec.map(String::from),
+            video_codec,
+            audio_codec,
             frame_rate: variant.frame_rate,
             bandwidth: variant.bandwidth,
             average_bandwidth: variant.average_bandwidth,
@@ -112,9 +114,9 @@ pub(crate) fn expand_master_variants(
             .find_map(|v| {
                 let codecs = v.codecs.as_deref()?;
                 let (_, a) = rdlp_core::parse_hls_codecs(codecs);
-                a.map(String::from)
+                a
             })
-            .unwrap_or_else(|| "mp4a".to_string());
+            .unwrap_or_else(|| CodecName::from_static("mp4a"));
 
         variants.push(HlsVariantInfo {
             media_playlist_url: audio_playlist_url.to_string(),
@@ -150,15 +152,13 @@ pub(crate) fn expand_master_variants(
 /// stream segments. Default to "aac" — the universal HLS muxed audio codec.
 ///
 /// Returns the audio codec to use: either the declared one or the inferred one.
-pub(crate) fn infer_muxed_audio<'a>(
-    video_codec: Option<&'a str>,
-    audio_codec: Option<&'a str>,
+pub(crate) fn infer_muxed_audio(
+    video_codec: Option<&CodecName>,
+    audio_codec: Option<CodecName>,
     has_separate_audio_group: bool,
-) -> Option<&'a str> {
-    audio_codec.or(if video_codec.is_some() && !has_separate_audio_group {
-        Some("aac")
-    } else {
-        None
+) -> Option<CodecName> {
+    audio_codec.or_else(|| {
+        (video_codec.is_some() && !has_separate_audio_group).then(|| CodecName::from_static("aac"))
     })
 }
 
@@ -243,7 +243,7 @@ impl HlsSizeDetector {
                     .map(rdlp_core::parse_hls_codecs)
                     .unwrap_or((None, None));
                 let audio_codec =
-                    infer_muxed_audio(video_codec, audio_codec, variant.audio.is_some());
+                    infer_muxed_audio(video_codec.as_ref(), audio_codec, variant.audio.is_some());
                 let frame_rate = variant.frame_rate;
                 let bandwidth = Some(variant.bandwidth);
                 let average_bandwidth = variant.average_bandwidth;
@@ -283,8 +283,8 @@ impl HlsSizeDetector {
                             segment_count: 0,
                             total_duration: None,
                             resolution,
-                            video_codec: video_codec.map(String::from),
-                            audio_codec: audio_codec.map(String::from),
+                            video_codec,
+                            audio_codec,
                             frame_rate,
                             bandwidth,
                             average_bandwidth,
@@ -300,8 +300,8 @@ impl HlsSizeDetector {
                     segment_count: media_info.segment_count,
                     total_duration: Some(media_info.total_duration),
                     resolution,
-                    video_codec: video_codec.map(String::from),
-                    audio_codec: audio_codec.map(String::from),
+                    video_codec,
+                    audio_codec,
                     frame_rate,
                     bandwidth,
                     average_bandwidth,

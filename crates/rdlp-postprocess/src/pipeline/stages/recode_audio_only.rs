@@ -17,7 +17,7 @@
 use log::{debug, warn};
 
 use rdlp_ffmpeg::{AudioExtractOptions, FFmpegRunner, PostProcessError};
-use rdlp_types::{ContainerFormat, RecodeAudioMode};
+use rdlp_types::{AudioEncoderName, ContainerFormat, RecodeAudioMode};
 
 use super::audio_convert;
 use super::recode::RecodeStage;
@@ -130,13 +130,10 @@ pub(super) async fn recode_audio_only(
 
     let output_path = msg.tracker.temp_path(&input_file, target_ext);
     let opts = AudioExtractOptions {
-        // `encoder_name` is already a resolved encoder name from the audio
-        // registry (see `RecodeStage::resolve_audio_params`), so this parse
-        // is infallible in practice.
-        encoder_name: encoder_name.as_deref().map(|s| {
-            rdlp_types::media_name::AudioEncoderName::new(s)
-                .expect("resolve_audio_params returns an already-validated encoder name")
-        }),
+        // `encoder_name` is already an `AudioEncoderName` resolved through the
+        // audio registry (see `resolve_audio_only_params`), so this is a
+        // plain clone rather than a re-parse.
+        encoder_name: encoder_name.clone(),
         copy: audio_copy,
         bitrate_kbps: None,
         quality_scale: None,
@@ -174,7 +171,7 @@ pub(super) fn resolve_audio_only_params(
     recode_audio: &RecodeAudioMode,
     target: ContainerFormat,
     audio: SourceAudio<'_>,
-) -> Result<(bool, Option<String>), PostProcessError> {
+) -> Result<(bool, Option<AudioEncoderName>), PostProcessError> {
     let target_ext = target.as_ext();
 
     if can_copy_audio_only(target, audio) {

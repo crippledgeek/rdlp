@@ -1,16 +1,22 @@
-//! End-to-end proof that an empty `--video-encoder` override reaching
-//! [`RecodeStage::process`] is treated as "no override", not as a request
-//! for an encoder literally named `""` (Item 17 of PR-3's `#618` re-review).
+//! End-to-end proof that no `--video-encoder` override reaching
+//! [`RecodeStage::process`] resolves the target container's own default
+//! encoder rather than refusing (Item 17 of PR-3's `#618` re-review).
 //!
-//! Before the fix, the CLI pre-flight validator
+//! Originally this test drove an *empty string* override (`Some(String::new())`)
+//! through the pipeline: before the fix, the CLI pre-flight validator
 //! (`rdlp_ffmpeg::resolve_recode_encoder`, called from `rdlp-cli/src/config.rs`)
 //! already filtered an empty string as "no override", while `RecodeStage`
 //! discriminated on `Some(_)` directly and took the override branch —
 //! producing a blank-name error ("video encoder '' is not available in this
-//! `FFmpeg` build") the CLI validator itself would never have surfaced. This
-//! test drives the real [`Pipeline`] end to end so the fix is proven at the
-//! `process()` entry point, not only at the `build_convert_options` helper
-//! (covered by a synchronous unit test alongside `RecodeStage` itself).
+//! `FFmpeg` build") the CLI validator itself would never have surfaced.
+//!
+//! #642 replaced `PostProcess::video_encoder`'s `Option<String>` with
+//! `Option<VideoEncoderName>`, which cannot hold an empty value — so
+//! `Some(String::new())` is no longer constructible here, and the scenario
+//! this test guards against can no longer arise at all. It is kept as the
+//! "no override reaches `RecodeStage` cleanly" companion to the synchronous
+//! unit tests in `recode.rs`, driving the real [`Pipeline`] end to end rather
+//! than only the `build_convert_options` helper.
 //!
 //! Self-skips when the system `ffmpeg` CLI is absent (used only to build the
 //! input fixture, mirroring `tests/cancel_e2e.rs`'s convention) — CLI-spawn
@@ -71,7 +77,7 @@ fn build_fixture(dir: &std::path::Path) -> Result<std::path::PathBuf, ()> {
 }
 
 #[tokio::test]
-async fn empty_video_encoder_override_is_treated_as_no_override_in_process() {
+async fn no_video_encoder_override_resolves_target_default_in_process() {
     if !ffmpeg_available() {
         eprintln!("skipping: ffmpeg CLI unavailable to build fixture");
         return;
@@ -85,7 +91,7 @@ async fn empty_video_encoder_override_is_treated_as_no_override_in_process() {
 
     let config = PostProcess {
         recode_video: Some(ContainerFormat::Mkv),
-        video_encoder: Some(String::new()),
+        video_encoder: None,
         ..PostProcess::default()
     };
     let reg = Arc::new(TempRegistry::new());
@@ -110,9 +116,9 @@ async fn empty_video_encoder_override_is_treated_as_no_override_in_process() {
     let result = stage.process(msg).await;
     assert!(
         result.is_ok(),
-        "an empty --video-encoder override reaching RecodeStage::process must be \
-         treated as \"no override\" (matching the CLI pre-flight validator), not \
-         produce a blank-encoder-name error: {:?}",
+        "no --video-encoder override reaching RecodeStage::process must resolve \
+         the target container's default encoder, not produce a blank-encoder-name \
+         error: {:?}",
         result.err()
     );
 }

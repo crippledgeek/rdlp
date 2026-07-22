@@ -18,7 +18,7 @@ use rdlp_api::request::{
     DownloadRequest, FormatOptions, NetworkOptions, OutputOptions, PostProcessOptions,
     SubtitleOptions,
 };
-use rdlp_types::{AudioFormat, BrowserType, ContainerFormat, RecodeAudioMode};
+use rdlp_types::{AudioFormat, BrowserType, ContainerFormat, RecodeAudioMode, VideoEncoderName};
 
 /// Frontend-supplied download options.
 ///
@@ -85,8 +85,10 @@ pub struct DownloadOptions {
     pub embed_subtitles: Option<bool>,
     /// Explicit video encoder override (e.g., "libsvtav1", "libx264").
     /// `None` = auto-select best available encoder for the target codec.
+    /// An empty string fails to deserialize with a clear error (#642) rather
+    /// than silently reaching the recode stage as a would-be empty override.
     #[serde(default)]
-    pub video_encoder: Option<String>,
+    pub video_encoder: Option<VideoEncoderName>,
     /// Target container for recode (e.g. `Mp4`, `Mkv`, `WebM`).
     /// Takes precedence over `recode_video` when both are set.
     /// `None` = use `recode_video` value.

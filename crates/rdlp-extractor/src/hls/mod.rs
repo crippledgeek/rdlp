@@ -52,6 +52,8 @@ pub use expand_in_place::expand_hls_in_place;
 pub use format_detection::{detect_format_sizes, detect_format_sizes_lazy};
 pub use types::{HlsInfo, HlsStreamFlags, HlsVariantInfo};
 
+use rdlp_types::Rfc6381Codec;
+
 /// Parsed entry from an HLS master playlist — schema mirrors yt-dlp's
 /// `_extract_m3u8_formats_and_subtitles` per-format dict, lossless.
 #[derive(Debug, Clone)]
@@ -72,10 +74,12 @@ pub struct M3u8Variant {
     pub height: Option<u32>,
     /// Frame rate (from FRAME-RATE attribute).
     pub fps: Option<f32>,
-    /// Video codec string (first codec token from CODECS attribute).
-    pub vcodec: Option<String>,
-    /// Audio codec string (second codec token from CODECS attribute).
-    pub acodec: Option<String>,
+    /// Video codec string (first codec token from CODECS attribute) — an
+    /// RFC 6381 identifier (`avc1.640028`), not an `FFmpeg` descriptor name.
+    pub vcodec: Option<Rfc6381Codec>,
+    /// Audio codec string (second codec token from CODECS attribute) — an
+    /// RFC 6381 identifier (`mp4a.40.2`), not an `FFmpeg` descriptor name.
+    pub acodec: Option<Rfc6381Codec>,
     /// Video bitrate in kbps (not populated from master playlist).
     pub vbr: Option<f32>,
     /// Audio bitrate in kbps (not populated from master playlist).
@@ -149,7 +153,12 @@ pub fn parse_master_playlist(master_url: &str, text: &str) -> Result<Vec<M3u8Var
 /// Split a HLS CODECS attribute string ("avc1.640028,mp4a.40.2") into
 /// (vcodec, acodec). Naive: first token starting with "avc"/"hev"/"vp"
 /// is video; first starting with "mp4a"/"opus"/"aac" is audio.
-fn split_codecs(codecs: Option<&str>) -> (Option<String>, Option<String>) {
+///
+/// Each token is a raw RFC 6381 identifier straight from the manifest, so it
+/// is validated (rather than assumed non-empty/ASCII) via [`Rfc6381Codec::new`]
+/// — a token that somehow fails that floor is dropped rather than
+/// propagated as a would-be codec value.
+fn split_codecs(codecs: Option<&str>) -> (Option<Rfc6381Codec>, Option<Rfc6381Codec>) {
     let Some(s) = codecs else {
         return (None, None);
     };
@@ -158,11 +167,11 @@ fn split_codecs(codecs: Option<&str>) -> (Option<String>, Option<String>) {
     for tok in s.split(',') {
         let t = tok.trim();
         if v.is_none() && (t.starts_with("avc") || t.starts_with("hev") || t.starts_with("vp")) {
-            v = Some(t.to_string());
+            v = Rfc6381Codec::new(t).ok();
         } else if a.is_none()
             && (t.starts_with("mp4a") || t.starts_with("opus") || t.starts_with("aac"))
         {
-            a = Some(t.to_string());
+            a = Rfc6381Codec::new(t).ok();
         }
     }
     (v, a)
@@ -249,19 +258,25 @@ mod tests {
     // because they require network access and are marked with #[ignore]
 
     use super::variants::infer_muxed_audio;
+    use rdlp_types::CodecName;
 
     #[test]
     fn test_infer_muxed_audio_video_only_no_audio_group() {
         // AV1 with no declared audio and no separate audio rendition
         // → should infer muxed AAC
-        assert_eq!(infer_muxed_audio(Some("av1"), None, false), Some("aac"),);
+        let av1 = CodecName::from_static("av1");
+        assert_eq!(
+            infer_muxed_audio(Some(&av1), None, false).as_deref(),
+            Some("aac"),
+        );
     }
 
     #[test]
     fn test_infer_muxed_audio_declared_audio_preserved() {
         // h264+aac declared → should keep declared aac
+        let h264 = CodecName::from_static("h264");
         assert_eq!(
-            infer_muxed_audio(Some("h264"), Some("aac"), false),
+            infer_muxed_audio(Some(&h264), Some(CodecName::from_static("aac")), false).as_deref(),
             Some("aac"),
         );
     }
@@ -269,8 +284,9 @@ mod tests {
     #[test]
     fn test_infer_muxed_audio_opus_preserved() {
         // AV1+opus declared → should keep declared opus
+        let av1 = CodecName::from_static("av1");
         assert_eq!(
-            infer_muxed_audio(Some("av1"), Some("opus"), false),
+            infer_muxed_audio(Some(&av1), Some(CodecName::from_static("opus")), false).as_deref(),
             Some("opus"),
         );
     }
@@ -278,13 +294,17 @@ mod tests {
     #[test]
     fn test_infer_muxed_audio_separate_audio_group() {
         // Video only with separate AUDIO rendition → should NOT infer
-        assert_eq!(infer_muxed_audio(Some("av1"), None, true), None,);
+        let av1 = CodecName::from_static("av1");
+        assert_eq!(infer_muxed_audio(Some(&av1), None, true), None,);
     }
 
     #[test]
     fn test_infer_muxed_audio_no_video() {
         // Audio-only stream (no video) → should NOT infer
-        assert_eq!(infer_muxed_audio(None, Some("aac"), false), Some("aac"),);
+        assert_eq!(
+            infer_muxed_audio(None, Some(CodecName::from_static("aac")), false).as_deref(),
+            Some("aac"),
+        );
     }
 
     #[test]
@@ -317,18 +337,22 @@ mod tests {
         // AV1 variant: video only in CODECS, no AUDIO attribute
         let av1 = &master.variants[0];
         let (v, a) = rdlp_core::parse_hls_codecs(av1.codecs.as_deref().unwrap());
-        let inferred = infer_muxed_audio(v, a, av1.audio.is_some());
-        assert_eq!(v, Some("av1"));
+        let inferred = infer_muxed_audio(v.as_ref(), a.clone(), av1.audio.is_some());
+        assert_eq!(v.as_deref(), Some("av1"));
         assert_eq!(a, None, "Raw CODECS should have no audio");
-        assert_eq!(inferred, Some("aac"), "Should infer muxed AAC");
+        assert_eq!(inferred.as_deref(), Some("aac"), "Should infer muxed AAC");
 
         // h264+aac variant: both declared
         let h264 = &master.variants[1];
         let (v2, a2) = rdlp_core::parse_hls_codecs(h264.codecs.as_deref().unwrap());
-        let inferred2 = infer_muxed_audio(v2, a2, h264.audio.is_some());
-        assert_eq!(v2, Some("h264"));
-        assert_eq!(a2, Some("aac"));
-        assert_eq!(inferred2, Some("aac"), "Declared audio preserved");
+        let inferred2 = infer_muxed_audio(v2.as_ref(), a2.clone(), h264.audio.is_some());
+        assert_eq!(v2.as_deref(), Some("h264"));
+        assert_eq!(a2.as_deref(), Some("aac"));
+        assert_eq!(
+            inferred2.as_deref(),
+            Some("aac"),
+            "Declared audio preserved"
+        );
     }
 
     /// Lock in that `EXT-X-MEDIA TYPE=AUDIO` rendition groups are surfaced
@@ -480,8 +504,8 @@ mod tests {
 
         let variant = &master.variants[0];
         let (v, a) = rdlp_core::parse_hls_codecs(variant.codecs.as_deref().unwrap());
-        let inferred = infer_muxed_audio(v, a, variant.audio.is_some());
-        assert_eq!(v, Some("av1"));
+        let inferred = infer_muxed_audio(v.as_ref(), a, variant.audio.is_some());
+        assert_eq!(v.as_deref(), Some("av1"));
         assert!(variant.audio.is_some(), "AUDIO attribute should be present");
         assert_eq!(
             inferred, None,

@@ -3,6 +3,8 @@
 //! Contains the public types used across the HLS module: `HlsStreamFlags`,
 //! `HlsInfo`, `HlsVariantInfo`, and the internal `MediaPlaylistInfo`.
 
+use rdlp_types::CodecName;
+
 /// Stream-level flags aggregated from HLS format detection
 ///
 /// These flags represent properties of the entire stream, not individual formats.
@@ -28,9 +30,9 @@ pub struct HlsInfo {
     /// Video resolution (width, height) from master playlist variant
     pub resolution: Option<(u64, u64)>,
     /// Parsed video codec name (e.g., "h264", "hevc", "vp9")
-    pub video_codec: Option<String>,
+    pub video_codec: Option<CodecName>,
     /// Parsed audio codec name (e.g., "aac", "ac3", "opus")
-    pub audio_codec: Option<String>,
+    pub audio_codec: Option<CodecName>,
     /// Frame rate from master playlist variant
     pub frame_rate: Option<f64>,
     /// Peak bandwidth in bits per second from variant
@@ -62,9 +64,9 @@ pub struct HlsVariantInfo {
     /// Video resolution (width, height)
     pub resolution: Option<(u64, u64)>,
     /// Parsed video codec name (e.g., "h264", "av1")
-    pub video_codec: Option<String>,
+    pub video_codec: Option<CodecName>,
     /// Parsed audio codec name (e.g., "aac", "opus")
-    pub audio_codec: Option<String>,
+    pub audio_codec: Option<CodecName>,
     /// Frame rate
     pub frame_rate: Option<f64>,
     /// Peak bandwidth in bits per second

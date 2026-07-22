@@ -14,6 +14,7 @@
 
 use std::time::Duration;
 
+use rdlp_types::Rfc6381Codec;
 use url::Url;
 
 use crate::dash::errors::DashError;
@@ -48,8 +49,13 @@ pub struct RepresentationInfo {
     /// Declared average bandwidth in bits per second; `0` when missing.
     pub bandwidth: u64,
     /// RFC 6381 codec string, e.g. `"avc1.640028"`. Inherited from
-    /// AdaptationSet when not present on the Representation.
-    pub codecs: Option<String>,
+    /// AdaptationSet when not present on the Representation. `None` both
+    /// when the source MPD declares no `codecs` attribute anywhere in the
+    /// chain, and when a declared value fails [`Rfc6381Codec`]'s validation
+    /// floor — this field is informational only (no downstream reader
+    /// currently consumes it), so a malformed manifest value degrades
+    /// silently rather than failing the parse.
+    pub codecs: Option<Rfc6381Codec>,
     /// MIME type, e.g. `"video/mp4"`. Inherited from AdaptationSet when not
     /// present on the Representation.
     pub mime_type: Option<String>,
@@ -287,7 +293,11 @@ fn pick_representation(
         .clone()
         .unwrap_or_else(|| format!("repr-{bandwidth}"));
 
-    let codecs = repr.codecs.clone().or_else(|| aset.codecs.clone());
+    let codecs = repr
+        .codecs
+        .clone()
+        .or_else(|| aset.codecs.clone())
+        .and_then(|s| Rfc6381Codec::new(s).ok());
     let mime_type = repr.mimeType.clone().or_else(|| aset.mimeType.clone());
 
     let plan = build_segment_plan(aset, repr, period_duration, &id, bandwidth)?;
