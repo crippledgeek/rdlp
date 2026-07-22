@@ -641,19 +641,38 @@ mod tests {
         }
     }
 
-    /// The audio and video registries must not share a cache. Resolving a
-    /// video codec first must not change what the audio registry answers.
+    /// REGRESSION GUARD: the audio and video registries must not share a cache.
+    ///
+    /// The two codec tables are disjoint, so a codec belonging to one registry
+    /// must resolve to `None` through the other. A shared cache would leak the
+    /// first registry's entry and return `Some(..)` instead. Resolve through
+    /// each registry FIRST so both caches are populated before the cross checks.
     #[test]
     fn audio_and_video_registries_have_independent_caches() {
-        crate::ffmpeg::ensure_init().expect("ffmpeg init");
-        let video_h264 = preferred_video_encoder("h264");
-        let audio_aac = crate::ffmpeg::audio_encoder_registry::preferred_audio_encoder("aac");
+        use crate::ffmpeg::audio_encoder_registry::preferred_audio_encoder;
 
-        assert!(video_h264.is_some(), "h264 encoder should resolve");
-        assert!(audio_aac.is_some(), "aac encoder should resolve");
-        assert_ne!(
-            video_h264, audio_aac,
-            "audio registry returned the video registry's answer — caches are shared"
+        crate::ffmpeg::ensure_init().expect("ffmpeg init");
+
+        // Populate both caches.
+        assert!(
+            preferred_video_encoder("h264").is_some(),
+            "h264 is a video codec"
+        );
+        assert!(
+            preferred_audio_encoder("aac").is_some(),
+            "aac is an audio codec"
+        );
+
+        // Cross checks — these are what a shared cache would break.
+        assert_eq!(
+            preferred_video_encoder("aac"),
+            None,
+            "video registry returned an answer for an audio-only codec — caches are shared"
+        );
+        assert_eq!(
+            preferred_audio_encoder("h264"),
+            None,
+            "audio registry returned an answer for a video-only codec — caches are shared"
         );
     }
 }
