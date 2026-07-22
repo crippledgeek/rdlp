@@ -8,42 +8,56 @@
 //! A closed enum would be wrong here, unlike [`ContainerFormat`](crate::ContainerFormat),
 //! whose set rdlp genuinely fixes.
 //!
-//! Wrapping [`ffmpeg_the_third::codec::Id`] (a closed 538-variant enum) was
+//! Wrapping `ffmpeg_the_third::codec::Id` (a closed 538-variant enum) was
 //! considered and rejected for the same reason: `muxer_defaults.rs` documents
 //! live ABI skew where the linked libavcodec has no name for a muxer-declared
 //! id, and a closed enum makes that state unrepresentable.
 //!
 //! So: an **open** newtype with **closed validation**.
 //!
-//! # Why several types and not one
+//! # One generic type, several kinds
 //!
 //! These are four vocabularies, not four spellings of one:
 //!
-//! | Type | Example | Boundary API |
+//! | Alias | Example | Boundary API |
 //! |---|---|---|
 //! | [`CodecName`] | `h264`, `aac` | `avcodec_descriptor_get_by_name` |
 //! | [`AudioEncoderName`] | `libfdk_aac` | `encoder::find_by_name` |
 //! | [`VideoEncoderName`] | `libx264` | `encoder::find_by_name` |
 //! | [`Rfc6381Codec`] | `avc1.640028` | HLS `CODECS=` / DASH `codecs=` |
 //!
+//! They share their representation, validation, and wire format entirely, and
+//! differ only in *which vocabulary they belong to*. So rather than four
+//! separate structs — whether hand-written or macro-expanded, both of which are
+//! four copies of one constructor waiting to drift — there is a single generic
+//! [`MediaName<K>`] carrying a zero-sized [`NameKind`] marker. One impl block,
+//! one constructor, one validation path.
+//!
+//! `MediaName<Codec>` and `MediaName<VideoEncoder>` are still **distinct
+//! types**, so mixing them remains a compile error: the aliases below are type
+//! aliases, but the underlying generic instantiations are not interchangeable.
+//!
+//! # Why the kinds must stay apart
+//!
 //! Codec and encoder names genuinely **overlap** — `aac` is valid in both sets,
 //! while `libfdk_aac` is only an encoder — which is precisely why keeping them
-//! apart earns its keep. The `"avc"` collision recorded in
-//! `muxer_defaults.rs` is the concrete hazard: `"avc"` is a real descriptor,
-//! but it is `AV_CODEC_ID_ON2AVC`, an *audio* codec, so a video routing
-//! decision could be settled by an audio codec's representability.
+//! apart earns its keep. The `"avc"` collision recorded in `muxer_defaults.rs`
+//! is the concrete hazard: `"avc"` is a real descriptor, but it is
+//! `AV_CODEC_ID_ON2AVC`, an *audio* codec, so a video routing decision could be
+//! settled by an audio codec's representability.
 //!
 //! [`Rfc6381Codec`] is a different alphabet entirely: `avc1.640028` is not an
 //! `FFmpeg` descriptor name, so feeding one to a muxer predicate answers
-//! `false` for the wrong reason. Keeping it a separate type makes that
+//! `false` for the wrong reason. Keeping it a separate kind makes that
 //! confusion a compile error rather than a silent wrong answer.
 //!
 //! # Representation
 //!
-//! Each wraps `Cow<'static, str>`, which lets the static preference tables stay
-//! allocation-free via the `const` [`CodecName::from_static`] constructor while
-//! runtime-discovered names own their storage. `const` validation means an
-//! invalid table entry is a **build error**, not a runtime surprise.
+//! [`MediaName`] wraps `Cow<'static, str>`, which lets the static preference
+//! tables stay allocation-free via the `const` [`MediaName::from_static`]
+//! constructor while runtime-discovered names own their storage. `const`
+//! validation means an invalid table entry is a **build error**, not a runtime
+//! surprise.
 //!
 //! This crate is `unsafe_code = "forbid"`, so the unsized-`str`-transmute shape
 //! used by validated-string crates such as `strck` is not available here; the
@@ -58,7 +72,7 @@
 //! # The separation is compiler-enforced
 //!
 //! These `compile_fail` doctests are the executable form of this module's whole
-//! reason to exist — if any of them ever starts compiling, the type distinction
+//! reason to exist — if any of them ever starts compiling, the kind distinction
 //! has been lost and the silent-wrong-answer hazards described above are back.
 //! They are doctests rather than a `trybuild` suite so the guarantee costs no
 //! extra dependency.
@@ -96,15 +110,44 @@
 //! wants_codec("h264");
 //! ```
 
+use std::borrow::Cow;
 use std::fmt;
+use std::hash::Hash;
+use std::marker::PhantomData;
 
-mod codec_name;
-mod encoder_name;
-mod rfc6381;
+mod kind;
 
-pub use codec_name::CodecName;
-pub use encoder_name::{AudioEncoderName, VideoEncoderName};
-pub use rfc6381::Rfc6381Codec;
+pub use kind::{AudioEncoder, Codec, Rfc6381, VideoEncoder};
+
+/// An `FFmpeg` codec descriptor name (`h264`, `pcm_s16le`). See [`Codec`].
+pub type CodecName = MediaName<Codec>;
+
+/// An audio encoder to invoke (`libfdk_aac`, `libopus`). See [`AudioEncoder`].
+pub type AudioEncoderName = MediaName<AudioEncoder>;
+
+/// A video encoder to invoke (`libx264`, `libsvtav1`). See [`VideoEncoder`].
+pub type VideoEncoderName = MediaName<VideoEncoder>;
+
+/// An RFC 6381 manifest codec string (`avc1.640028`). See [`Rfc6381`].
+pub type Rfc6381Codec = MediaName<Rfc6381>;
+
+/// Marker trait identifying which media-name vocabulary a [`MediaName`] belongs to.
+///
+/// Implementors are zero-sized markers; the trait carries no behaviour beyond
+/// naming the concept for error and `Debug` output. It is sealed — the set of
+/// vocabularies is rdlp's to define, and an external kind would not correspond
+/// to any real `FFmpeg` boundary.
+pub trait NameKind:
+    sealed::Sealed + Copy + Clone + fmt::Debug + PartialEq + Eq + PartialOrd + Ord + Hash
+{
+    /// Human-readable name of the concept, used in `Debug` and error output.
+    const CONCEPT: &'static str;
+}
+
+pub(crate) mod sealed {
+    /// Prevents external implementations of [`super::NameKind`].
+    pub trait Sealed {}
+}
 
 /// Why a string was rejected as a media name.
 ///
@@ -127,14 +170,22 @@ pub enum InvalidMediaName {
     ControlCharacter,
 }
 
+impl InvalidMediaName {
+    /// The failure reason, without any concept prefix.
+    #[must_use]
+    pub const fn reason(self) -> &'static str {
+        match self {
+            Self::Empty => "must not be empty",
+            Self::NonAscii => "must be ASCII",
+            Self::Whitespace => "must not contain whitespace",
+            Self::ControlCharacter => "must not contain control characters",
+        }
+    }
+}
+
 impl fmt::Display for InvalidMediaName {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Empty => "media name must not be empty",
-            Self::NonAscii => "media name must be ASCII",
-            Self::Whitespace => "media name must not contain whitespace",
-            Self::ControlCharacter => "media name must not contain control characters",
-        })
+        write!(f, "media name {}", self.reason())
     }
 }
 
@@ -142,8 +193,8 @@ impl std::error::Error for InvalidMediaName {}
 
 /// Validates a candidate media name, returning the reason it is unacceptable.
 ///
-/// `const` so the [`from_static`](CodecName::from_static) constructors can run
-/// it during const-eval and turn a bad static-table entry into a build error.
+/// `const` so [`MediaName::from_static`] can run it during const-eval and turn
+/// a bad static-table entry into a build error.
 ///
 /// # Why this floor and not a stricter charset
 ///
@@ -154,6 +205,10 @@ impl std::error::Error for InvalidMediaName {}
 /// vocabulary — the same doctrine the muxer allow-list follows: a rejected
 /// valid name is a hard failure, whereas the floor above only rejects values
 /// that could never have worked.
+///
+/// All four kinds share this floor, so it is one free function rather than a
+/// per-kind trait method — which also keeps it callable from `const` context,
+/// where trait methods are not available on stable.
 #[must_use]
 const fn validate(bytes: &[u8]) -> Option<InvalidMediaName> {
     if bytes.is_empty() {
@@ -184,121 +239,110 @@ const fn validate(bytes: &[u8]) -> Option<InvalidMediaName> {
     None
 }
 
-/// Generates one validated media-name newtype.
+/// A validated media name belonging to the vocabulary `K`.
 ///
-/// Every one of these types has the same representation, validation, and wire
-/// format; only the doc comment and the concept differ. Generating them keeps
-/// the four definitions from drifting apart — a hand-written fourth copy is
-/// exactly how one of them would end up with a subtly different constructor.
-macro_rules! define_media_name {
-    ($(#[$meta:meta])* $name:ident) => {
-        $(#[$meta])*
-        ///
-        /// Construct via [`new`](Self::new) at runtime or
-        /// [`from_static`](Self::from_static) in a `const` / static table.
-        /// Both enforce the invariant documented on
-        /// [`InvalidMediaName`](crate::media_name::InvalidMediaName).
-        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, ::serde::Serialize)]
-        #[serde(transparent)]
-        pub struct $name(::std::borrow::Cow<'static, str>);
+/// Prefer the aliases — [`CodecName`], [`AudioEncoderName`],
+/// [`VideoEncoderName`], [`Rfc6381Codec`] — over spelling the generic form.
+///
+/// Construct via [`new`](Self::new) at runtime or
+/// [`from_static`](Self::from_static) in a `const` / static table. Both enforce
+/// the invariant documented on [`InvalidMediaName`].
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MediaName<K: NameKind>(Cow<'static, str>, PhantomData<K>);
 
-        impl $name {
-            /// Validates and wraps a runtime-discovered name.
-            ///
-            /// # Errors
-            ///
-            /// Returns [`InvalidMediaName`](crate::media_name::InvalidMediaName)
-            /// if the name is empty, non-ASCII, or contains whitespace or a
-            /// control character.
-            pub fn new(
-                name: impl AsRef<str>,
-            ) -> ::std::result::Result<Self, crate::media_name::InvalidMediaName> {
-                let name = name.as_ref();
-                match crate::media_name::validate(name.as_bytes()) {
-                    ::std::option::Option::Some(e) => ::std::result::Result::Err(e),
-                    ::std::option::Option::None => ::std::result::Result::Ok(Self(
-                        ::std::borrow::Cow::Owned(name.to_owned()),
-                    )),
-                }
-            }
+impl<K: NameKind> MediaName<K> {
+    /// Validates and wraps a runtime-discovered name.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidMediaName`] if the name is empty, non-ASCII, or
+    /// contains whitespace or a control character.
+    pub fn new(name: impl AsRef<str>) -> Result<Self, InvalidMediaName> {
+        let name = name.as_ref();
+        if let Some(reason) = validate(name.as_bytes()) {
+            return Err(reason);
+        }
+        Ok(Self(Cow::Owned(name.to_owned()), PhantomData))
+    }
 
-            /// Wraps a compile-time-known name without allocating.
-            ///
-            /// # Panics
-            ///
-            /// Panics during const-eval if the name is invalid, which surfaces
-            /// as a build error rather than a runtime failure. That is the
-            /// point: a malformed static-table entry cannot ship.
-            #[must_use]
-            pub const fn from_static(name: &'static str) -> Self {
-                match crate::media_name::validate(name.as_bytes()) {
-                    ::std::option::Option::None => {
-                        Self(::std::borrow::Cow::Borrowed(name))
-                    }
-                    ::std::option::Option::Some(
-                        crate::media_name::InvalidMediaName::Empty,
-                    ) => panic!("media name must not be empty"),
-                    ::std::option::Option::Some(
-                        crate::media_name::InvalidMediaName::NonAscii,
-                    ) => panic!("media name must be ASCII"),
-                    ::std::option::Option::Some(
-                        crate::media_name::InvalidMediaName::Whitespace,
-                    ) => panic!("media name must not contain whitespace"),
-                    ::std::option::Option::Some(
-                        crate::media_name::InvalidMediaName::ControlCharacter,
-                    ) => panic!("media name must not contain control characters"),
-                }
-            }
-
-            /// Borrows the underlying name.
-            #[must_use]
-            pub fn as_str(&self) -> &str {
-                &self.0
-            }
-
-            /// `true` when this value borrows a `'static` name rather than
-            /// owning one — i.e. it came from [`from_static`](Self::from_static)
-            /// and cost no allocation.
-            #[must_use]
-            pub const fn is_borrowed(&self) -> bool {
-                matches!(self.0, ::std::borrow::Cow::Borrowed(_))
+    /// Wraps a compile-time-known name without allocating.
+    ///
+    /// # Panics
+    ///
+    /// Panics during const-eval if the name is invalid, which surfaces as a
+    /// build error rather than a runtime failure. That is the point: a
+    /// malformed static-table entry cannot ship.
+    #[must_use]
+    pub const fn from_static(name: &'static str) -> Self {
+        match validate(name.as_bytes()) {
+            None => Self(Cow::Borrowed(name), PhantomData),
+            // `K::CONCEPT` cannot be interpolated here — const panic messages
+            // must be literals — so the reason alone is the message. The build
+            // error names the offending expression, which supplies the rest.
+            Some(InvalidMediaName::Empty) => panic!("media name must not be empty"),
+            Some(InvalidMediaName::NonAscii) => panic!("media name must be ASCII"),
+            Some(InvalidMediaName::Whitespace) => panic!("media name must not contain whitespace"),
+            Some(InvalidMediaName::ControlCharacter) => {
+                panic!("media name must not contain control characters")
             }
         }
+    }
 
-        impl ::std::fmt::Display for $name {
-            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
-                f.write_str(&self.0)
-            }
-        }
+    /// Borrows the underlying name.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 
-        impl ::std::convert::AsRef<str> for $name {
-            fn as_ref(&self) -> &str {
-                &self.0
-            }
-        }
-
-        impl ::std::str::FromStr for $name {
-            type Err = crate::media_name::InvalidMediaName;
-
-            fn from_str(s: &str) -> ::std::result::Result<Self, Self::Err> {
-                Self::new(s)
-            }
-        }
-
-        impl<'de> ::serde::Deserialize<'de> for $name {
-            fn deserialize<D: ::serde::Deserializer<'de>>(
-                deserializer: D,
-            ) -> ::std::result::Result<Self, D::Error> {
-                let raw = <::std::string::String as ::serde::Deserialize>::deserialize(
-                    deserializer,
-                )?;
-                Self::new(raw).map_err(::serde::de::Error::custom)
-            }
-        }
-    };
+    /// `true` when this value borrows a `'static` name rather than owning one —
+    /// i.e. it came from [`from_static`](Self::from_static) and cost no
+    /// allocation.
+    #[must_use]
+    pub const fn is_borrowed(&self) -> bool {
+        matches!(self.0, Cow::Borrowed(_))
+    }
 }
 
-pub(crate) use define_media_name;
+/// Renders as `codec name("h264")` rather than exposing the `PhantomData`
+/// field, so the kind stays visible in test failures and logs without the noise.
+impl<K: NameKind> fmt::Debug for MediaName<K> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}({:?})", K::CONCEPT, self.0)
+    }
+}
+
+impl<K: NameKind> fmt::Display for MediaName<K> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl<K: NameKind> AsRef<str> for MediaName<K> {
+    fn as_ref(&self) -> &str {
+        &self.0
+    }
+}
+
+impl<K: NameKind> std::str::FromStr for MediaName<K> {
+    type Err = InvalidMediaName;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Self::new(s)
+    }
+}
+
+impl<K: NameKind> serde::Serialize for MediaName<K> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.0)
+    }
+}
+
+impl<'de, K: NameKind> serde::Deserialize<'de> for MediaName<K> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = String::deserialize(deserializer)?;
+        Self::new(raw).map_err(|e| serde::de::Error::custom(format!("{}: {}", K::CONCEPT, e)))
+    }
+}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
@@ -340,6 +384,30 @@ mod tests {
         assert_eq!(
             InvalidMediaName::ControlCharacter.to_string(),
             "media name must not contain control characters"
+        );
+    }
+
+    /// `Debug` must name the kind — otherwise a mixed-up value in a test
+    /// failure looks identical whichever vocabulary it came from.
+    #[test]
+    fn debug_names_the_kind() {
+        assert_eq!(
+            format!("{:?}", CodecName::from_static("h264")),
+            r#"codec name("h264")"#
+        );
+        assert_eq!(
+            format!("{:?}", VideoEncoderName::from_static("libx264")),
+            r#"video encoder name("libx264")"#
+        );
+    }
+
+    /// A deserialisation failure must say which vocabulary rejected the value.
+    #[test]
+    fn deserialise_error_names_the_kind() {
+        let err = serde_json::from_str::<AudioEncoderName>("\"\"").unwrap_err();
+        assert!(
+            err.to_string().contains("audio encoder name"),
+            "expected the kind in: {err}"
         );
     }
 }
