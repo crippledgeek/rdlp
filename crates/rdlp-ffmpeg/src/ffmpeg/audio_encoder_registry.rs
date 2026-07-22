@@ -55,6 +55,12 @@ struct AudioCodecEntry {
     encoders: &'static [(&'static str, &'static str)],
     /// Container formats this codec is compatible with.
     supported_containers: &'static [ContainerFormat],
+    /// Alternate names that should also resolve to this row. Declared next
+    /// to the row it describes rather than in a separate `match self.codec`
+    /// keyed by string — that indirection let a rename of `codec` silently
+    /// drop the alias through the `CodecRow::aliases` trait default. Empty
+    /// for every row but `pcm_s16le`.
+    aliases: &'static [&'static str],
 }
 
 impl codec_registry::CodecRow for AudioCodecEntry {
@@ -65,14 +71,7 @@ impl codec_registry::CodecRow for AudioCodecEntry {
         self.encoders
     }
     fn aliases(&self) -> &'static [&'static str] {
-        // "pcm" predates this row being keyed to its exact codec-ID name
-        // (`pcm_s16le`) and is a CLI vocabulary word a user may still type
-        // from muscle memory; the alias keeps it resolving without
-        // reintroducing the exact-key mismatch the rename fixes.
-        match self.codec {
-            "pcm_s16le" => &["pcm"],
-            _ => &[],
-        }
+        self.aliases
     }
 }
 
@@ -106,6 +105,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::M4v,
             ContainerFormat::F4v,
         ],
+        aliases: &[],
     },
     AudioCodecEntry {
         codec: "mp3",
@@ -121,6 +121,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             // Flv's muxer declares mp3 as its default audio codec.
             ContainerFormat::Flv,
         ],
+        aliases: &[],
     },
     AudioCodecEntry {
         codec: "opus",
@@ -136,6 +137,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Ogg,
             ContainerFormat::Opus,
         ],
+        aliases: &[],
     },
     AudioCodecEntry {
         codec: "vorbis",
@@ -147,6 +149,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Ogg,
             ContainerFormat::Nut,
         ],
+        aliases: &[],
     },
     AudioCodecEntry {
         codec: "flac",
@@ -157,6 +160,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Ogg,
             ContainerFormat::Flac,
         ],
+        aliases: &[],
     },
     AudioCodecEntry {
         codec: "alac",
@@ -167,6 +171,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Mov,
             ContainerFormat::Mkv,
         ],
+        aliases: &[],
     },
     AudioCodecEntry {
         codec: "ac3",
@@ -180,6 +185,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Ts,
             ContainerFormat::Ac3,
         ],
+        aliases: &[],
     },
     AudioCodecEntry {
         codec: "eac3",
@@ -191,12 +197,14 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Mkv,
             ContainerFormat::Ts,
         ],
+        aliases: &[],
     },
     AudioCodecEntry {
         codec: "dts",
         display_name: "DTS",
         encoders: &[("dca", "DTS (built-in)")],
         supported_containers: &[ContainerFormat::Mkv],
+        aliases: &[],
     },
     AudioCodecEntry {
         codec: "mp2",
@@ -209,6 +217,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Mpg,
             ContainerFormat::Vob,
         ],
+        aliases: &[],
     },
     // Keyed to the exact FFmpeg codec-ID name (rather than the historical
     // "pcm" vocabulary word) so it matches `muxer_defaults::declared_codec`
@@ -236,15 +245,16 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Mxf,
             ContainerFormat::Dv,
         ],
+        aliases: &["pcm"],
     },
     // Big-endian PCM is a distinct codec-ID from the little-endian
     // `pcm_s16le` row above (AIFF/CAF declare `pcm_s16be`; WAV/AVI/MKV
     // declare `pcm_s16le`). Keyed to the exact FFmpeg codec-ID name so it
     // matches `muxer_defaults::declared_codec` and stays in tier 1 rather
-    // than silently falling through to tier 3's literal-encoder-name
+    // than silently falling through to tier 2's literal-encoder-name
     // fallback in `resolve_declared_codec`.
     //
-    // Behavioural neutrality of this row being in tier 1 rather than tier 3
+    // Behavioural neutrality of this row being in tier 1 rather than tier 2
     // depends on `encoders` staying the singleton `[("pcm_s16be", _)]` where
     // the encoder name equals the codec key — see `resolve_declared_codec`'s
     // doc comment for the structural argument. Adding a second encoder here
@@ -254,12 +264,14 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         display_name: "PCM 16-bit big-endian",
         encoders: &[("pcm_s16be", "PCM 16-bit big-endian (built-in)")],
         supported_containers: &[ContainerFormat::Aiff, ContainerFormat::Caf],
+        aliases: &[],
     },
     AudioCodecEntry {
         codec: "wavpack",
         display_name: "WavPack",
         encoders: &[("wavpack", "WavPack (built-in)")],
         supported_containers: &[ContainerFormat::Mkv, ContainerFormat::Wv],
+        aliases: &[],
     },
     // WMA had no compatibility-matrix row at all; `.wma`/`.wmv`/`.asf` all
     // declare `wmav2` as their default audio codec (see `asf_family_gets_wmav2`).
@@ -268,7 +280,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
     //
     // Same singleton dependency as `pcm_s16be`: `encoders` must stay
     // `[("wmav2", _)]` (key == encoder name) for tier 1 to be behaviourally
-    // identical to tier 3's fallback — see `resolve_declared_codec`.
+    // identical to tier 2's fallback — see `resolve_declared_codec`.
     AudioCodecEntry {
         codec: "wmav2",
         display_name: "WMA v2",
@@ -278,12 +290,14 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Wmv,
             ContainerFormat::Asf,
         ],
+        aliases: &[],
     },
     AudioCodecEntry {
         codec: "tta",
         display_name: "TTA",
         encoders: &[("tta", "TTA (built-in)")],
         supported_containers: &[ContainerFormat::Mkv],
+        aliases: &[],
     },
 ];
 
@@ -498,7 +512,7 @@ pub fn select_audio_encoder_for_container(container: ContainerFormat) -> Option<
                 muxer_defaults::declared_codec(container, codec_registry::MediaKind::Audio)
             else {
                 // Every other `None` path logs (the ABI-skew warn inside
-                // `declared_codec`, the tier-4 AAC-fallback warn below) or is
+                // `declared_codec`, the tier-3 AAC-fallback warn below) or is
                 // a declared policy (`NoAudio`). "No muxer claims this
                 // extension" is the one case that would otherwise pass
                 // through silently — the case an operator would most want to
@@ -517,19 +531,23 @@ pub fn select_audio_encoder_for_container(container: ContainerFormat) -> Option<
     resolve_declared_codec(codec, container)
 }
 
-/// Resolves a declared codec-ID name to an available encoder, falling back
-/// to AAC-with-a-warning (tier 4) when nothing else works.
+/// Resolves a declared codec-ID name to an available encoder, in three tiers:
+///
+/// 1. **Preference-table match** — `codec` is an exact key in
+///    `AUDIO_CODEC_PREFERENCES` (or one of its aliases); use the best
+///    available encoder for that row (e.g. `libfdk_aac` over `aac`).
+/// 2. **Literal encoder-name fallback** — `codec` has no table row (native
+///    single-encoder codecs like PCM/WMA have none: the codec-ID name IS the
+///    encoder name), so accept it directly if it's available in this build.
+/// 3. **AAC-with-a-warning fallback** — neither tier resolved anything;
+///    substitute AAC, but only when `container` can actually carry it (see
+///    Important-2), and always log so this never becomes a silent
+///    catch-all.
 ///
 /// `codec` is `FFmpeg`'s codec-ID name (e.g. "`pcm_s16le`", "`wmav2`", "vorbis"),
-/// not necessarily a key in `AUDIO_CODEC_PREFERENCES`: aliased codecs like
-/// mp3/vorbis have a table row that maps to a differently-named lib encoder,
-/// but native single-encoder codecs like PCM/WMA have no row at all — for
-/// those, the codec-ID name IS the encoder name. Try the preference-table
-/// mapping first (it also picks the *best* of several encoders, e.g.
-/// `libfdk_aac` over `aac`), then fall back to treating the declared name as
-/// a literal encoder.
+/// not necessarily a key in `AUDIO_CODEC_PREFERENCES` — see tier 2 above.
 ///
-/// Split out of [`select_audio_encoder_for_container`] so tier 4 is
+/// Split out of [`select_audio_encoder_for_container`] so tier 3 is
 /// testable with an arbitrary/bogus codec name, independent of what any
 /// particular linked `FFmpeg` build actually declares.
 ///
@@ -537,7 +555,7 @@ pub fn select_audio_encoder_for_container(container: ContainerFormat) -> Option<
 /// — it does not check `AV_CODEC_CAP_EXPERIMENTAL`. `FFmpeg`'s native
 /// `vorbis`/`opus` encoders both carry that flag and fail to open without
 /// `strict_std_compliance = experimental`, so on a build lacking
-/// `libvorbis`/`libopus` this tier can resolve a codec-ID name (`vorbis`)
+/// `libvorbis`/`libopus` tier 2 can resolve a codec-ID name (`vorbis`)
 /// that "is available" by this check yet won't actually open. Not filtered
 /// here: none of rdlp's transcode call sites set `strict_std_compliance`, so
 /// this is a real gap. It is deferred, not because filtering would require
@@ -552,9 +570,23 @@ fn resolve_declared_codec(codec: &'static str, container: ContainerFormat) -> Op
         .or_else(|| is_audio_encoder_available(codec).then_some(codec))
         .or_else(|| {
             // Neither the preference table nor a direct name match resolved
-            // an available encoder. Fall back to AAC, but SAY SO — a silent
-            // fallback would recreate the invisible `_ => aac` this change
-            // exists to remove.
+            // an available encoder. AAC is only a sane fallback when the
+            // container can actually carry it — substituting it into a
+            // container that provably cannot (e.g. `.mp3` on a build without
+            // libmp3lame) would recreate the #618 failure class in reduced
+            // form. Refuse truthfully instead; the caller already turns a
+            // `None` here into `RecodeStage`'s/normalize's honest refusal.
+            if !container_supports_audio_codec(container, "aac") {
+                log::warn!(
+                    "no encoder available for {codec} (default for {}), and that \
+                     container cannot carry AAC either; refusing rather than \
+                     producing a container-incompatible file",
+                    container.as_ext()
+                );
+                return None;
+            }
+            // Fall back to AAC, but SAY SO — a silent fallback would
+            // recreate the invisible `_ => aac` this change exists to remove.
             log::warn!(
                 "no encoder available for {codec} (default for {}); falling back to AAC",
                 container.as_ext()
@@ -703,7 +735,7 @@ mod tests {
 
     /// Guarded against a thin build lacking `libmp3lame`: on a build with it,
     /// this fails under the old `_ => "aac"` catch-all (mutation-verified,
-    /// see the module report). On a build WITHOUT it, tier 4's AAC-fallback
+    /// see the module report). On a build WITHOUT it, tier 3's AAC-fallback
     /// is correct by design, so a bare "must not be aac" would itself be a
     /// false failure — the honest form only asserts the exact
     /// codec when it's actually available.
@@ -754,10 +786,12 @@ mod tests {
     /// against `declared_codec(..)`, which would be a tautology that
     /// survives mutating the override away. Guarded the same honest way as
     /// `asf_family_gets_wmav2`: only asserted when the encoder is
-    /// actually available, since tier 4's AAC fallback is correct by design
+    /// actually available, since tier 3's AAC fallback is correct by design
     /// otherwise.
     #[test]
     fn overrides_are_exactly_these_four() {
+        use strum::IntoEnumIterator;
+
         ensure_init_for_test();
         for c in [
             ContainerFormat::Mkv,
@@ -776,12 +810,32 @@ mod tests {
             threegp == Some("aac") || threegp == Some("libfdk_aac"),
             "expected an aac-family encoder for 3gp, got {threegp:?}"
         );
+
+        // The "exactly" half: no OTHER container may be classified
+        // `AudioDefault::Override`. Without this, adding e.g.
+        // `Avi => Override("opus")` to `audio_default_for` would leave the
+        // assertions above green.
+        let known_overrides = [
+            ContainerFormat::Mkv,
+            ContainerFormat::Mka,
+            ContainerFormat::Ogg,
+            ContainerFormat::ThreeGp,
+        ];
+        for container in ContainerFormat::iter() {
+            let is_override = matches!(audio_default_for(container), AudioDefault::Override(_));
+            assert_eq!(
+                is_override,
+                known_overrides.contains(&container),
+                "{container:?}: AudioDefault::Override classification does not \
+                 match the known set of four overrides"
+            );
+        }
     }
 
     /// Containers that defer to the muxer must NOT all be AAC — that was the
     /// old catch-all's signature failure. Guarded the same honest way as
     /// `asf_family_gets_wmav2`: on a thin build missing
-    /// `mp2`/`libvorbis`, tier 4's AAC fallback is correct by design, so
+    /// `mp2`/`libvorbis`, tier 3's AAC fallback is correct by design, so
     /// these only assert the exact codec when it's actually available.
     #[test]
     fn from_muxer_containers_are_not_uniformly_aac() {
@@ -828,17 +882,37 @@ mod tests {
     }
 
     /// Tier 4 (the AAC-with-warning fallback the whole design hinges on
-    /// being VISIBLE) had no test — tiers 1-3 were covered, tier 4 wasn't.
+    /// being VISIBLE) had no test — tiers 1-2 were covered, tier 3 wasn't.
     /// A bogus codec name skips the preference table (tier 1) and the
-    /// direct-name check (tier 3) unconditionally, landing on tier 4
+    /// direct-name check (tier 2) unconditionally, landing on tier 3
     /// regardless of what any particular linked `FFmpeg` build declares.
     #[test]
-    fn tier_four_falls_back_to_aac_for_an_unresolvable_codec() {
+    fn tier_three_falls_back_to_aac_for_an_unresolvable_codec() {
         ensure_init_for_test();
         let enc = resolve_declared_codec("definitely_not_a_real_codec_xyz", ContainerFormat::Mp4);
         assert!(
             enc == Some("aac") || enc == Some("libfdk_aac"),
-            "expected tier 4 to fall back to an aac-family encoder, got {enc:?}"
+            "expected tier 3 to fall back to an aac-family encoder, got {enc:?}"
+        );
+    }
+
+    /// Important-2: tier 3 must NOT hand back AAC when the target container
+    /// provably cannot carry it — that would recreate the #618 failure class
+    /// in reduced form (a thin build without libmp3lame would still resolve
+    /// AAC for `.mp3`, which the mp3 muxer rejects). `Wav` is not in the
+    /// `aac` row's `supported_containers`, so this is a genuine mismatch, not
+    /// a build-availability accident.
+    #[test]
+    fn tier_three_refuses_rather_than_returning_aac_for_a_container_that_cannot_carry_it() {
+        ensure_init_for_test();
+        assert!(
+            !container_supports_audio_codec(ContainerFormat::Wav, "aac"),
+            "test premise: wav must not accept aac"
+        );
+        let enc = resolve_declared_codec("definitely_not_a_real_codec_xyz", ContainerFormat::Wav);
+        assert_eq!(
+            enc, None,
+            "wav cannot carry aac; tier 3 must refuse rather than substitute it"
         );
     }
 
@@ -889,7 +963,7 @@ mod tests {
     /// little-endian `pcm` row's `pcm_s16le`) had no compatibility-matrix
     /// row at all — `container_supports_audio_codec` returned `false` for a
     /// combination `select_audio_encoder_for_container` already produces by
-    /// default via tier 3. Keyed to the exact muxer-declared codec-ID name so
+    /// default via tier 2. Keyed to the exact muxer-declared codec-ID name so
     /// it doesn't drift from `muxer_defaults::declared_codec`.
     #[test]
     fn big_endian_pcm_containers_recognized() {
@@ -965,6 +1039,11 @@ mod tests {
                     // returns `None` for `NoAudio` via this same
                     // `audio_default_for` call: asserting against that would
                     // be one classification read twice, not a cross-check.
+                    // Residual gap: `declared_codec`'s own doc warns `None`
+                    // has three causes, only one of which is "no audio slot
+                    // at all" — an ABI-skew `None` (muxer declares a codec id
+                    // this build's libavcodec can't name) would let a
+                    // misclassified `NoAudio` through this cross-check too.
                     assert!(
                         muxer_defaults::declared_codec(container, codec_registry::MediaKind::Audio)
                             .is_none(),
