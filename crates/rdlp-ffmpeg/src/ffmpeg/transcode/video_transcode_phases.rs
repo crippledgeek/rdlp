@@ -300,7 +300,16 @@ impl FFmpegRunner {
             // without this MXF sees `0/0` and refuses the file at
             // `write_header` for every encoder (#629). Sourced from
             // `video_ist_frame_rate`, which already resolves
-            // `avg_frame_rate` with an `r_frame_rate` fallback.
+            // `avg_frame_rate` with an `r_frame_rate` fallback — and, when
+            // both are unusable, a 30/1 default. So this path always writes a
+            // rate; `set_stream_frame_rates`'s non-positive skip can only
+            // fire on the stream-copy path, never here.
+            //
+            // `avg` and `r` are deliberately the same value: the encoder is
+            // driven at exactly this rate (`video_enc_time_base` is its
+            // reciprocal), so the output is constant-frame-rate by
+            // construction even when the source was not, and for CFR output
+            // the average rate and the base rate coincide.
             let rate = ffmpeg_the_third::ffi::AVRational {
                 num: video_ist_frame_rate.numerator(),
                 den: video_ist_frame_rate.denominator(),

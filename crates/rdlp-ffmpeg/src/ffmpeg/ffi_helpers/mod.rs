@@ -50,6 +50,41 @@ pub(crate) enum CodecTagAction {
     Clear,
 }
 
+/// Which of the two frame-rate fields a write should actually touch.
+///
+/// Split out of [`set_stream_frame_rates`] so the threshold is testable
+/// without a live `AVStream`: it decides behaviour, and a decision buried
+/// behind a raw pointer is a decision no boundary test can reach.
+///
+/// A non-positive rate yields `None` — the field already holds `0/0`, and
+/// writing a nonsense rate would trade a precise muxer refusal for a file
+/// asserting a rate its essence does not have. Zero **denominator** matters as
+/// much as zero numerator: `av_q2d` on `n/0` is a division by zero, and
+/// `mxf_init` inverts the rate (`av_inv_q`) before using it.
+///
+/// The two fields are decided independently: a source can carry a usable
+/// `avg_frame_rate` and a junk `r_frame_rate`, and the good one should still
+/// be written.
+const fn frame_rates_to_apply(
+    avg: ffmpeg_the_third::ffi::AVRational,
+    r: ffmpeg_the_third::ffi::AVRational,
+) -> (
+    Option<ffmpeg_the_third::ffi::AVRational>,
+    Option<ffmpeg_the_third::ffi::AVRational>,
+) {
+    const fn usable(
+        rate: ffmpeg_the_third::ffi::AVRational,
+    ) -> Option<ffmpeg_the_third::ffi::AVRational> {
+        if rate.num > 0 && rate.den > 0 {
+            Some(rate)
+        } else {
+            None
+        }
+    }
+
+    (usable(avg), usable(r))
+}
+
 /// Set the frame-rate fields on an output `AVStream`.
 ///
 /// These live on `AVStream`, **not** in `AVCodecParameters`, so neither
@@ -64,29 +99,33 @@ pub(crate) enum CodecTagAction {
 /// 0/0" at `write_header`. That is #629, on both the transcode and the
 /// stream-copy path.
 ///
-/// A zero or negative rate is skipped rather than written: `0/0` is what the
-/// field already holds, and writing a nonsense rate would trade a clear
-/// muxer refusal for a file that claims a rate it does not have.
-pub(crate) fn set_stream_frame_rates(
+/// Non-positive rates are skipped ([`frame_rates_to_apply`]). Note that this
+/// only ever *fires* on the stream-copy path: the transcode caller passes
+/// `video_ist_frame_rate`, which substitutes a 30/1 default when the source
+/// carries no usable rate, so a transcode always writes some rate by
+/// construction. The skip is therefore a guarantee about remuxes, not a
+/// global one.
+///
+/// # Safety
+///
+/// `stream` must be non-null and point to a live `AVStream` belonging to an
+/// output context that stays alive for the call. Re-read the pointer after any
+/// subsequent `add_stream`: `AVFormatContext::streams` is reallocated as it
+/// grows, which invalidates pointers taken before.
+pub(crate) unsafe fn set_stream_frame_rates(
     stream: *mut ffmpeg_the_third::ffi::AVStream,
     avg: ffmpeg_the_third::ffi::AVRational,
     r: ffmpeg_the_third::ffi::AVRational,
 ) {
-    const fn is_positive(rate: ffmpeg_the_third::ffi::AVRational) -> bool {
-        rate.num > 0 && rate.den > 0
-    }
+    let (avg, r) = frame_rates_to_apply(avg, r);
 
-    // SAFETY: `stream` is non-null and live. Both call sites derive it from
-    // the index `add_stream`/`add_stream_copy` itself returned for a stream
-    // it just created on an output context the caller owns for the whole
-    // call — never from a caller-supplied index — so the pointer is
-    // in-bounds by construction rather than by assumption. Both writes are of
-    // plain `AVRational` values into that stream.
+    // SAFETY: the caller guarantees `stream` is non-null, live, and not stale
+    // (see `# Safety`). Both writes are of plain `AVRational` values.
     unsafe {
-        if is_positive(avg) {
+        if let Some(avg) = avg {
             (*stream).avg_frame_rate = avg;
         }
-        if is_positive(r) {
+        if let Some(r) = r {
             (*stream).r_frame_rate = r;
         }
     }
@@ -94,16 +133,19 @@ pub(crate) fn set_stream_frame_rates(
 
 /// Carry the source stream's frame rates onto the output stream — the
 /// stream-copy form of [`set_stream_frame_rates`].
-pub(crate) fn copy_stream_frame_rates(
+///
+/// # Safety
+///
+/// `dst` carries [`set_stream_frame_rates`]'s contract. `src` must be non-null
+/// and point to a live `AVStream` — in practice one borrowed from an open
+/// input context — and must not alias `dst`.
+pub(crate) unsafe fn copy_stream_frame_rates(
     dst: *mut ffmpeg_the_third::ffi::AVStream,
     src: *const ffmpeg_the_third::ffi::AVStream,
 ) {
-    // SAFETY: both pointers are non-null and live for this call. `src` is a
-    // stream borrowed from an open input context (the borrow outlives this
-    // call — the remux loop uses `ist` again afterwards), `dst` an
-    // output-context stream per `set_stream_frame_rates`'s contract above.
-    // The two contexts are distinct allocations, so the read and the write
-    // cannot alias. Both fields are plain `AVRational` values.
+    // SAFETY: the caller guarantees both pointers are live, non-null and
+    // non-aliasing (distinct format contexts at the only call site). The read
+    // and the write are of plain `AVRational` fields.
     unsafe {
         set_stream_frame_rates(dst, (*src).avg_frame_rate, (*src).r_frame_rate);
     }
@@ -718,6 +760,63 @@ pub const fn codec_threading_info(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Terser than spelling out the FFI struct in every case below.
+    const fn rate(num: i32, den: i32) -> ffmpeg_the_third::ffi::AVRational {
+        ffmpeg_the_third::ffi::AVRational { num, den }
+    }
+
+    /// A usable rate is written through unchanged — the case #629 needs to
+    /// work at all.
+    #[test]
+    fn a_positive_rate_is_applied() {
+        let (avg, r) = frame_rates_to_apply(rate(25, 1), rate(30000, 1001));
+        assert_eq!(avg.map(|q| (q.num, q.den)), Some((25, 1)));
+        assert_eq!(r.map(|q| (q.num, q.den)), Some((30000, 1001)));
+    }
+
+    /// Both sides of the threshold, per field. `1/1` is the smallest usable
+    /// rate and must pass; every degenerate neighbour must not. `n/0` matters
+    /// as much as `0/n`: `mxf_init` inverts the rate, and `av_q2d` on a zero
+    /// denominator divides by zero.
+    #[test]
+    fn non_positive_rates_are_skipped() {
+        for degenerate in [
+            rate(0, 0),
+            rate(1, 0),
+            rate(0, 1),
+            rate(-25, 1),
+            rate(25, -1),
+        ] {
+            let (avg, r) = frame_rates_to_apply(degenerate, degenerate);
+            assert!(
+                avg.is_none() && r.is_none(),
+                "{}/{} must be skipped, not written",
+                degenerate.num,
+                degenerate.den
+            );
+        }
+        let (avg, _) = frame_rates_to_apply(rate(1, 1), rate(1, 1));
+        assert_eq!(
+            avg.map(|q| (q.num, q.den)),
+            Some((1, 1)),
+            "1/1 is usable and must be written"
+        );
+    }
+
+    /// The fields are decided independently: a junk `r_frame_rate` must not
+    /// suppress a good `avg_frame_rate`, which is the pairing `mxf_init`
+    /// actually reads first.
+    #[test]
+    fn each_field_is_decided_on_its_own() {
+        let (avg, r) = frame_rates_to_apply(rate(25, 1), rate(0, 0));
+        assert_eq!(avg.map(|q| (q.num, q.den)), Some((25, 1)));
+        assert!(r.is_none());
+
+        let (avg, r) = frame_rates_to_apply(rate(0, 0), rate(25, 1));
+        assert!(avg.is_none());
+        assert_eq!(r.map(|q| (q.num, q.den)), Some((25, 1)));
+    }
 
     /// IMPORTANT #2 regression guard: the shared 0-byte-output cleanup
     /// helper must actually delete the file it's given.
