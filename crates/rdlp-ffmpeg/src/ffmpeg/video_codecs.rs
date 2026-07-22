@@ -374,6 +374,33 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
         display_name: "FFV1 (Lossless)",
         encoders: &[("ffv1", "FFV1 (built-in)")],
     },
+    // Keyed to the exact FFmpeg codec-ID name (matching
+    // `muxer_defaults::declared_codec`'s output, same discipline as the
+    // audio registry's `pcm_s16le`/`wmav2` rows) rather than a friendlier
+    // alias, so `resolve_encoder(default_codec_for_container(Dv))` actually
+    // finds this row. Added alongside Task 13 (#618): before this row
+    // existed, `default_codec_for_container(Dv)` correctly returned
+    // "dvvideo" but `resolve_encoder("dvvideo")` returned `None` (no row
+    // matched by either codec-key or literal-encoder-name), so
+    // `--recode-video=dv` failed with "pipeline terminated with no output
+    // and no error" — a different failure than the original #618 bug
+    // (`h264` rejected by the dv muxer), but still failing end-to-end.
+    CodecEntry {
+        codec: "dvvideo",
+        display_name: "DV (Digital Video)",
+        encoders: &[("dvvideo", "DV Video (built-in)")],
+    },
+    // Same discipline and same #618 discovery as `dvvideo` above: the
+    // Wmv/Asf muxers declare codec-ID `msmpeg4v3`, but FFmpeg's *encoder*
+    // for that codec ID is named `msmpeg4` (see `ffmpeg -encoders`), not
+    // `msmpeg4v3` — so this row must be keyed to the codec-ID name with the
+    // differently-named encoder, the same shape as the `mpeg2`/`mpeg2video`
+    // and `mpeg1`/`mpeg1video` rows above.
+    CodecEntry {
+        codec: "msmpeg4v3",
+        display_name: "MS MPEG-4 v3 (WMV1-era)",
+        encoders: &[("msmpeg4", "MS MPEG-4 v3 (built-in)")],
+    },
 ];
 
 /// The video codec registry, owning its own cache over [`CODEC_PREFERENCES`].

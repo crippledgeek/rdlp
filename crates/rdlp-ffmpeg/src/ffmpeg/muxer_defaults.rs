@@ -23,14 +23,6 @@ impl MediaKind {
     }
 }
 
-// `declared_codec(_, MediaKind::Video)` has no production caller yet — it is
-// exercised only by `video_kind_answers_separately` below. The planned
-// consumer is deriving a container's default video codec the same
-// muxer-declared way `select_audio_encoder_for_container` does for audio,
-// wiring into `default_codec_for_container`/`validate_speed_controls`. Not
-// speculative surface: it is real, planned follow-up work landing in a later
-// PR, kept here now because the audio and video code paths share this module.
-
 /// The codec the linked build's muxer declares as its default for `container`.
 ///
 /// Returns `None` when the container carries no stream of that kind at all

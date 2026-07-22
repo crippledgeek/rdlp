@@ -118,7 +118,7 @@ impl RecodeStage {
     /// Pick the default video codec to encode toward when no explicit
     /// encoder override is given. Delegates to the single source in `rdlp-ffmpeg`
     /// so the recode pipeline and `validate_speed_controls` never resolve differently.
-    const fn default_codec_for(target: ContainerFormat) -> &'static str {
+    fn default_codec_for(target: ContainerFormat) -> &'static str {
         rdlp_ffmpeg::default_codec_for_container(target)
     }
 
