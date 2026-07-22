@@ -50,7 +50,7 @@ const DEFAULT_VIDEO_CODEC: CodecName = CodecName::from_static(DEFAULT_VIDEO_CODE
 ///
 /// - **No video slot at all** (`Wav`, `Opus`, `Aac`, `Mka`, `Wv`, `Caf`,
 ///   `Ac3`): the muxer genuinely declares no video codec (`None`), which
-///   `FromMuxer` would resolve to [`DEFAULT_VIDEO_CODEC`] anyway —
+///   `FromMuxer` would resolve to [`DEFAULT_VIDEO_CODEC_STR`] anyway —
 ///   `Policy::NotATarget` makes that outcome explicit and independent of
 ///   what any particular linked build declares.
 /// - **An image slot, not a video slot** (`Mp3`, `Flac`, `Aiff`): these
@@ -80,7 +80,7 @@ const DEFAULT_VIDEO_CODEC: CodecName = CodecName::from_static(DEFAULT_VIDEO_CODE
 /// `select_audio_encoder_for_container`'s return type to `None`), the video
 /// side's [`default_codec_for_container`] keeps an infallible `&'static str`
 /// contract, so this arm still has to produce *a* value — it resolves to
-/// [`DEFAULT_VIDEO_CODEC`], which is never actually muxed since nothing in
+/// [`DEFAULT_VIDEO_CODEC_STR`], which is never actually muxed since nothing in
 /// this codebase recodes a video stream into these twelve containers.
 //
 // Mutation-verified exhaustiveness guard: this match MUST have no `_` arm.
