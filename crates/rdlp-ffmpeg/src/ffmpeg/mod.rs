@@ -57,6 +57,7 @@ mod normalize_types;
 mod options;
 mod probe;
 mod remux;
+pub mod source;
 // `#[doc(hidden)] pub`, not `pub(crate)`: the corruption-recovery path
 // (`salvage_remux_sync`) is otherwise unreachable from `tests/`, where its
 // only meaningful coverage can live — `scripts/check-no-cli.sh` forbids
@@ -95,6 +96,13 @@ pub use normalize_types::{
 };
 pub use options::{AudioExtractOptions, ChapterEntry, RemuxOptions, VideoConvertOptions};
 pub use probe::{MediaInfo, StreamInfo, StreamKind};
+// `source::StreamKind` is deliberately NOT re-exported here: `probe::StreamKind`
+// (an enum: which stream a probed `MediaInfo` entry is) already owns this name
+// at `ffmpeg::` scope, and `source::StreamKind` (a sealed marker trait) is a
+// different concept with the same name. Re-exporting both would be E0255.
+// The Interfaces contract for #651 Task 2 already scopes the new trait to
+// `rdlp_ffmpeg::ffmpeg::source::StreamKind`, so this is not a narrowing.
+pub use source::{Audio, Source, SourceAudio, SourceState, SourceVideo, Video};
 pub use video_codecs::{
     VideoCodecInfo, VideoEncoderInfo, available_encoders_for_codec, is_encoder_available,
     list_available_codecs, preferred_video_encoder, resolve_encoder,
