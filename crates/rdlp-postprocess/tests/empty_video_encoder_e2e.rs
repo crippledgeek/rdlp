@@ -17,6 +17,15 @@
 //! use is restricted to `tests/` by `scripts/check-no-cli.sh`, which forbids
 //! `std::process::Command` anywhere under `crates/*/src/` (production code
 //! enforces pure libav-only `FFmpeg` usage via `ffmpeg-the-third`).
+//!
+//! Route note: with the fix applied, `RecodeStage::can_remux` currently
+//! returns unconditionally `true` for [`ContainerFormat::Mkv`] (tracked as
+//! **#630**), so this scenario reaches `Ok` via the remux path, not the
+//! transcode path — it still proves the fix (pre-fix, it failed on the
+//! transcode branch, before remux short-circuiting was even reached). Once
+//! `#630` resolves `can_remux` to something conditional, this test's route
+//! through the code may change; it should not be read as coverage of the
+//! transcode branch specifically.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::disallowed_methods)]
 
 use std::process::Command;

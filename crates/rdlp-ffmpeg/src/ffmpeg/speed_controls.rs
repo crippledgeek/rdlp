@@ -149,6 +149,13 @@ const fn video_default_for(container: ContainerFormat) -> VideoDefault {
         ContainerFormat::Mxf => {
             // mxfenc.c declares mpeg2video, but AVC-in-MXF is standardized
             // by SMPTE ST 381-3 (revised 2025) — not a workaround.
+            //
+            // Known separate failure (**#629**, not caused by this override):
+            // `--recode-video=mxf` currently fails at mux time regardless of
+            // which encoder is selected here, because the output stream's
+            // frame rate is never set and `mxfenc` demands a non-zero one.
+            // That failure sits upstream of codec choice — do not "fix" this
+            // arm in response to it.
             VideoDefault::Override("h264")
         }
         ContainerFormat::ThreeGp => {
@@ -824,6 +831,10 @@ mod tests {
     /// preset knob at all — more correct (x264-in-.dv made `FFmpeg` refuse the
     /// header), but a regression in the narrow sense that this exact
     /// combination used to be accepted and now errors.
+    ///
+    /// This is a deliberate pin on a full-featured `FFmpeg` build: if it
+    /// fires on a minimal build lacking `dvvideo`, the fix is widening the
+    /// expected set, not treating it as a real regression.
     #[test]
     fn dv_preset_now_errors_not_applicable_to_dvvideo() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
@@ -849,6 +860,10 @@ mod tests {
     /// that the old hand-copied table implicitly assumed for any VPX target.
     /// `9` is out of range for vp9 (see `cpu_used_range_is_per_encoder`
     /// above) but in range here — untested until now.
+    ///
+    /// This is a deliberate pin on a full-featured `FFmpeg` build: if it
+    /// fires on a minimal build lacking `libvpx`, the fix is widening the
+    /// expected set, not treating it as a real regression.
     #[test]
     fn ivf_cpu_used_range_widened_from_vp9_to_vp8() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
