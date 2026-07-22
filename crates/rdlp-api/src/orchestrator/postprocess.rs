@@ -244,8 +244,10 @@ mod classify_tests {
     /// Any non-cancel pipeline error MUST classify as `PostProcessingFailed`,
     /// NOT as `Ok(files)`. This pins the fix: before the change the non-cancel
     /// arm silently returned `Ok(files)` — the error was swallowed entirely so
-    /// this test didn't exist (no classifier fn existed). A `StageFailure` error
-    /// classified here would previously have been silently swallowed.
+    /// this test didn't exist (no classifier fn existed). A stage failure
+    /// classified here would previously have been silently swallowed. Since
+    /// #632 such a failure arrives as the stage's own `anyhow` chain rather
+    /// than a typed variant, which is what this test constructs.
     #[test]
     fn non_cancel_pipeline_error_maps_to_postprocessing_failed() {
         let err = anyhow::anyhow!("stage failed: remux codec error");

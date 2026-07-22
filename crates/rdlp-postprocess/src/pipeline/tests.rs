@@ -64,22 +64,19 @@ impl PipelineStage for FailStage {
         true
     }
     async fn process(&self, _: PipelineMessage) -> anyhow::Result<PipelineMessage> {
-        Err(PipelineError::StageFailure {
-            stage: "fail".into(),
-            cause: "test error".into(),
-        }
-        .into())
+        Err(anyhow::anyhow!("test error"))
     }
 }
 
 /// A fatal stage that fails the way every production stage actually fails:
-/// propagating with `?` and a `.context(...)` wrapper, never touching
-/// `msg.error_tx`.
+/// propagating with `?` and a `.context(...)` wrapper.
 ///
-/// `FailStage` above sends on `msg.error_tx` by hand, which is the one thing
-/// no production stage does — so it exercised a path only the test double
-/// took, and the real one (#632) went unnoticed: the error was dropped and the
-/// user saw "pipeline terminated with no output and no error".
+/// Before #632 the message carried an `error_tx` that `FailStage` sent on by
+/// hand — a path no production stage could take, because `process()` consumes
+/// the message a stage would have to send from. So the suite only ever
+/// exercised the test double's route, and the real one went unnoticed: the
+/// error was dropped and the user saw "pipeline terminated with no output and
+/// no error". Both doubles now fail like real stages.
 struct ContextFailStage;
 #[async_trait]
 impl PipelineStage for ContextFailStage {
@@ -112,6 +109,27 @@ impl PipelineStage for PanickingStage {
     }
     async fn process(&self, _: PipelineMessage) -> anyhow::Result<PipelineMessage> {
         panic!("stage task died");
+    }
+}
+
+/// A *non-fatal* stage that returns `Err` anyway. It has consumed the
+/// message, so the run ends — and its cause must reach the caller rather than
+/// being replaced by the generic message, which is #632 on a second path.
+struct NonFatalErrStage;
+#[async_trait]
+impl PipelineStage for NonFatalErrStage {
+    fn name(&self) -> &str {
+        "nonfatalerr"
+    }
+    fn should_run(&self, _: &PipelineMessage) -> bool {
+        true
+    }
+    fn is_fatal(&self) -> bool {
+        false
+    }
+    async fn process(&self, _: PipelineMessage) -> anyhow::Result<PipelineMessage> {
+        use anyhow::Context;
+        Err(anyhow::anyhow!("sidecar write failed")).context("subtitle stage failed")
     }
 }
 
@@ -198,6 +216,26 @@ async fn fatal_stage_error_reaches_the_caller_with_its_cause_chain() {
     assert!(
         flat.contains("recode stage failed"),
         "the context layer was dropped: {flat}"
+    );
+    assert!(
+        !flat.contains("no output and no error"),
+        "fell back to the generic message despite having a real error: {flat}"
+    );
+}
+
+/// A non-fatal stage that breaks its contract by returning `Err` still ends
+/// the run — the message is gone — and must surface its own cause. Before this
+/// fix that path reproduced #632 exactly: the error was in hand and thrown
+/// away.
+#[tokio::test]
+async fn a_non_fatal_stage_that_errs_still_reports_its_cause() {
+    let result = run_stages(vec![Arc::new(NonFatalErrStage), Arc::new(PassthroughStage)]).await;
+
+    let err = result.expect_err("a consumed message cannot be passed through");
+    let flat = format!("{err:#}");
+    assert!(
+        flat.contains("sidecar write failed") && flat.contains("subtitle stage failed"),
+        "the non-fatal stage's cause was dropped: {flat}"
     );
     assert!(
         !flat.contains("no output and no error"),
