@@ -64,11 +64,35 @@ impl RecodeStage {
         match output {
             ContainerFormat::Mp4 | ContainerFormat::F4v => video_codec
                 .is_some_and(|c| codec_is(c, &["h264", "avc", "h265", "hevc", "mpeg4", "av1"])),
+            // Ask the linked build whether this container can represent *this
+            // source's* codec, rather than asserting the container is
+            // permissive (#630). "Holds many codecs" and "holds the one in
+            // front of us" are different questions, and the old unconditional
+            // `true` answered the first: `hevc → avi` routed to a remux the
+            // mux path then refused outright ("avi cannot represent hevc
+            // video"), and #618's `Override("h264")` policy for Nut/Mxf/Avi
+            // was unreachable because remux short-circuited before
+            // `default_codec_for_container` was ever consulted.
+            //
+            // A `None` codec (ffprobe could not name the source's codec)
+            // proves nothing, so it transcodes — the safe direction, and the
+            // one that still produces a playable file.
+            //
+            // `Mka` is deliberately excluded and keeps its unconditional
+            // `true`. `av_guess_format("x.mka")` resolves to matroska's
+            // *audio* muxer (identical `name`, different muxer), which
+            // rejects every video codec — so the predicate would answer
+            // "transcode", and the transcode path does succeed in writing
+            // H.264 video into a `.mka`. Whether an audio-only container may
+            // carry video is #577's call, not a side effect of this routing
+            // fix; today's hard failure is left as-is.
             ContainerFormat::Mkv
-            | ContainerFormat::Mka
             | ContainerFormat::Nut
             | ContainerFormat::Mxf
-            | ContainerFormat::Avi => true,
+            | ContainerFormat::Avi => video_codec.is_some_and(|c| {
+                rdlp_ffmpeg::muxer_can_represent(output, c, rdlp_ffmpeg::MediaKind::Video)
+            }),
+            ContainerFormat::Mka => true,
             ContainerFormat::WebM | ContainerFormat::Ivf => {
                 video_codec.is_some_and(|c| codec_is(c, &["vp8", "vp9", "av1"]))
             }
@@ -797,6 +821,7 @@ mod tests {
 
     #[test]
     fn can_remux_anything_to_mkv() {
+        rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
         assert!(RecodeStage::can_remux(
             "mp4",
             ContainerFormat::Mkv,
@@ -806,6 +831,87 @@ mod tests {
             "webm",
             ContainerFormat::Mkv,
             Some("vp9")
+        ));
+    }
+
+    /// The three `avformat_query_codec` answers, one test each, on the
+    /// containers #630 re-routes. `mkv`+`hevc` is the *positive* arm: the
+    /// matroska muxer's own `mkv_query_codec` returns 1 even though `hevc`
+    /// has no entry in matroska's codec-tag table, so a tag-table-only
+    /// predicate would wrongly transcode it.
+    #[test]
+    fn remuxes_when_the_muxer_reports_the_codec_representable() {
+        rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
+        assert!(
+            RecodeStage::can_remux("mp4", ContainerFormat::Mkv, Some("hevc")),
+            "mkv must still remux hevc (mkv_query_codec reports 1)"
+        );
+        assert!(
+            RecodeStage::can_remux("mp4", ContainerFormat::Nut, Some("hevc")),
+            "nut carries hevc under its own codec tag"
+        );
+        assert!(
+            RecodeStage::can_remux("mkv", ContainerFormat::Avi, Some("h264")),
+            "avi carries h264 under a tag-table entry"
+        );
+    }
+
+    /// The `0` (explicitly unsupported) arm. `avi` has no tag-table entry for
+    /// `hevc` and `avienc` defines no `query_codec`, so the tag-table fallback
+    /// answers 0 — and rdlp's own remux path refuses this pair downstream
+    /// ("avi cannot represent hevc video"). Routing must reach the transcode
+    /// instead of walking into that refusal.
+    #[test]
+    fn transcodes_when_the_muxer_reports_the_codec_unsupported() {
+        rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
+        assert!(
+            !RecodeStage::can_remux("mp4", ContainerFormat::Avi, Some("hevc")),
+            "avi cannot represent hevc; must transcode, not attempt a doomed remux"
+        );
+        assert!(
+            !RecodeStage::can_remux("mov", ContainerFormat::Nut, Some("prores")),
+            "nut has neither a prores tag nor a positive query answer"
+        );
+    }
+
+    /// The negative (`AVERROR_PATCHWELCOME`, "information unavailable") arm.
+    /// `mxfenc` ships no `query_codec` callback and a null `codec_tag` table,
+    /// so every pair answers negative. "Unknown" is not evidence a stream copy
+    /// works, so it takes the same conservative branch as an explicit 0 —
+    /// mirroring `resolve_codec_tag`'s `query > 0` rule.
+    #[test]
+    fn transcodes_when_representability_is_unknown() {
+        rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
+        assert!(
+            !RecodeStage::can_remux("mp4", ContainerFormat::Mxf, Some("h264")),
+            "mxf answers AVERROR_PATCHWELCOME for every codec; unknown != supported"
+        );
+    }
+
+    /// A source whose codec ffprobe could not name proves nothing about
+    /// representability, so it must transcode rather than inherit the old
+    /// unconditional `true`.
+    #[test]
+    fn transcodes_when_the_source_codec_is_unknown() {
+        rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
+        assert!(!RecodeStage::can_remux("mp4", ContainerFormat::Avi, None));
+        assert!(!RecodeStage::can_remux("mp4", ContainerFormat::Mkv, None));
+    }
+
+    /// `Mka` is deliberately NOT re-routed by #630. `av_guess_format("x.mka")`
+    /// resolves to matroska's *audio* muxer (same `name`, different muxer),
+    /// which rejects every video codec — so the representability predicate
+    /// would answer "transcode", and the transcode path demonstrably succeeds
+    /// in writing an H.264 video stream into a `.mka`. That is the audio-only
+    /// container question #577 owns; turning today's hard failure into a
+    /// silent category error is not this fix's call to make.
+    #[test]
+    fn mka_routing_is_unchanged_pending_577() {
+        rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
+        assert!(RecodeStage::can_remux(
+            "mp4",
+            ContainerFormat::Mka,
+            Some("h264")
         ));
     }
 

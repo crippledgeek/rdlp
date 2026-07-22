@@ -50,6 +50,57 @@ pub(crate) enum CodecTagAction {
     Clear,
 }
 
+/// Whether `oformat` can represent `codec_id` — the single accept rule every
+/// stream-copy decision consults, whether it is *routing* toward a remux
+/// ([`crate::ffmpeg::muxer_defaults::muxer_can_represent`]) or *enforcing* one
+/// mid-mux ([`FFmpegRunner::resolve_codec_tag`]).
+///
+/// Both questions must be answered by the same rule. #630 is what happens when
+/// they aren't: `RecodeStage::can_remux` routed `hevc → avi` to the remux path
+/// on a hand-written codec list, and `resolve_codec_tag` — 200 lines and one
+/// FFI boundary later — refused the very same pairing with "avi cannot
+/// represent hevc video". The user got a fatal error where a transcode was
+/// available.
+///
+/// Positive evidence only, in the two forms `FFmpeg` offers:
+///
+/// - the muxer's codec-tag table has an entry for `codec_id`, or
+/// - `avformat_query_codec` answers strictly positive.
+///
+/// `> 0` rather than `!= 0` is load-bearing: per `avformat.h` the call returns
+/// `1` (supported), `0` (not supported), or **negative**
+/// (`AVERROR_PATCHWELCOME` — "information unavailable"), and the negative case
+/// is real, not theoretical. `mxfenc` ships no `query_codec` callback and a
+/// null `codec_tag` table, so *every* codec answers `AVERROR_PATCHWELCOME`
+/// there. "Unknown" is not evidence a stream copy works, so it takes the same
+/// branch as an explicit `0`.
+///
+/// A positive answer is not always `1`: `mp3enc`'s `query_codec` returns
+/// `MKTAG('A','P','I','C')` for attached-picture codecs, which is why the
+/// predicate is `> 0` and not `== 1` (see `mp3_widened_thumbnail_gate.rs`).
+pub(crate) fn oformat_can_represent(
+    oformat: *const ffmpeg_the_third::ffi::AVOutputFormat,
+    codec_id: ffmpeg_the_third::ffi::AVCodecID,
+) -> bool {
+    // SAFETY: `oformat` is a non-null descriptor from FFmpeg's static muxer
+    // registry (never freed). Both calls are pure reads: `av_codec_get_tag`
+    // over the muxer's compiled-in tag table (null-checked first), and
+    // `avformat_query_codec` over the muxer's own `query_codec` callback or
+    // that same table.
+    unsafe {
+        let tags = (*oformat).codec_tag;
+        if !tags.is_null() && ffmpeg_the_third::ffi::av_codec_get_tag(tags, codec_id) != 0 {
+            return true;
+        }
+
+        ffmpeg_the_third::ffi::avformat_query_codec(
+            oformat,
+            codec_id,
+            ffmpeg_the_third::ffi::FF_COMPLIANCE_NORMAL,
+        ) > 0
+    }
+}
+
 impl FFmpegRunner {
     /// Add a stream-copy output stream: add stream, copy parameters, resolve
     /// the codec tag for the target container.
@@ -247,16 +298,10 @@ impl FFmpegRunner {
             return Ok(CodecTagAction::Clear);
         }
 
-        // Ask representability, not tag choice.
-        // SAFETY: `oformat` is the same live, non-null descriptor read above.
-        let query = unsafe {
-            ffmpeg_the_third::ffi::avformat_query_codec(
-                oformat,
-                codec_id,
-                ffmpeg_the_third::ffi::FF_COMPLIANCE_NORMAL,
-            )
-        };
-        if query > 0 {
+        // Ask representability, not tag choice — through the shared rule, so
+        // this enforcement point and the routing predicate that decides
+        // whether to remux at all can never disagree again (#630).
+        if oformat_can_represent(oformat, codec_id) {
             return Ok(CodecTagAction::Clear);
         }
 

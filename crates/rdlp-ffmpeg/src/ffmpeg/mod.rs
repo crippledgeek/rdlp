@@ -52,6 +52,8 @@ pub mod log_capture;
 mod merge;
 mod metadata;
 pub(crate) mod muxer_defaults;
+pub use codec_registry::MediaKind;
+pub use muxer_defaults::muxer_can_represent;
 mod normalize;
 mod normalize_types;
 mod options;
