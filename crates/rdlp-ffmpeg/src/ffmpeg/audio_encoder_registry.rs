@@ -24,6 +24,21 @@ use crate::ffmpeg::container_default::{ContainerDefault, Policy};
 use crate::ffmpeg::source::Audio;
 use crate::ffmpeg::{codec_registry, muxer_defaults};
 
+/// The codec tier 3 substitutes when neither the preference table nor a
+/// literal encoder-name match resolved anything.
+///
+/// AAC because it is the one audio codec essentially every general-purpose
+/// delivery container carries and every build can encode. Named rather than
+/// repeated as a literal at each of its three sites: it encodes a *policy*
+/// ("when all else fails, this"), and three spellings can drift — including
+/// out of sync with the `container_supports_audio_codec` gate that decides
+/// whether the substitution is legal at all.
+///
+/// A `const` item, so `from_static`'s "invalid input is a build error"
+/// contract genuinely applies; called in a function body it is an ordinary
+/// runtime call that would panic instead.
+const FALLBACK_AUDIO_CODEC: CodecName = CodecName::from_static("aac");
+
 /// Information about a specific audio encoder.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -86,6 +101,9 @@ impl codec_registry::CodecRow for AudioCodecEntry {
 /// the `container_supports_audio_codec` gate and the frontend greying logic.
 static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
     AudioCodecEntry {
+        // Keeps its own literal rather than `FALLBACK_AUDIO_CODEC`: this row
+        // IS the table `FALLBACK_AUDIO_CODEC` is defined independently of —
+        // referencing it here would make the const define itself.
         codec: CodecName::from_static("aac"),
         display_name: "AAC",
         encoders: &[
@@ -625,7 +643,7 @@ fn resolve_declared_codec(
             // libmp3lame) would recreate the #618 failure class in reduced
             // form. Refuse truthfully instead; the caller already turns a
             // `None` here into `RecodeStage`'s/normalize's honest refusal.
-            if !container_supports_audio_codec(container, &CodecName::from_static("aac")) {
+            if !container_supports_audio_codec(container, &FALLBACK_AUDIO_CODEC) {
                 log::warn!(
                     "no encoder available for {codec} (default for {}), and that \
                      container cannot carry AAC either; refusing rather than \
@@ -640,7 +658,7 @@ fn resolve_declared_codec(
                 "no encoder available for {codec} (default for {}); falling back to AAC",
                 container.as_ext()
             );
-            preferred_audio_encoder("aac")
+            preferred_audio_encoder(FALLBACK_AUDIO_CODEC.as_str())
         })
 }
 
@@ -663,6 +681,20 @@ mod tests {
     fn resolve_encoder_by_codec_name() {
         let enc = resolve_audio_encoder("aac");
         assert!(enc.is_some(), "should resolve aac codec");
+    }
+
+    /// The tier-3 fallback is one named constant, not three literals. Guards the
+    /// #618 failure class: three independent spellings can drift, and the tier-3
+    /// gate (`container_supports_audio_codec`) must ask about the same codec the
+    /// fallback actually resolves.
+    #[test]
+    fn the_fallback_codec_is_the_one_tier_three_resolves() {
+        ensure_init_for_test();
+        assert_eq!(FALLBACK_AUDIO_CODEC.as_str(), "aac");
+        assert!(
+            preferred_audio_encoder(FALLBACK_AUDIO_CODEC.as_str()).is_some(),
+            "the named fallback must actually resolve an encoder"
+        );
     }
 
     /// CRITICAL-8 regression guard: `resolve_audio_encoder("pcm")` must
