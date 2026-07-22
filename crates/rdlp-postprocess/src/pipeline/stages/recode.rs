@@ -578,12 +578,11 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::sync::Arc;
-    use tokio::sync::oneshot;
 
     use rdlp_types::InfoDict;
     use rdlp_types::PostProcess;
 
-    use crate::pipeline::{FileTracker, PipelineError, TempRegistry};
+    use crate::pipeline::{FileTracker, TempRegistry};
 
     #[test]
     fn hevc_default_crf_is_28_not_23() {
@@ -725,7 +724,6 @@ mod tests {
 
     fn make_msg(files: Vec<PathBuf>, config: PostProcess) -> PipelineMessage {
         let reg = Arc::new(TempRegistry::new());
-        let (error_tx, _) = oneshot::channel::<PipelineError>();
         PipelineMessage {
             info: InfoDict::new(
                 "id".to_string(),
@@ -739,7 +737,6 @@ mod tests {
             is_hls: false,
             verbose: false,
             callback_factory: None,
-            error_tx: Some(error_tx),
             warnings: Vec::new(),
             encoding_tool: None,
             cancel: tokio_util::sync::CancellationToken::new(),

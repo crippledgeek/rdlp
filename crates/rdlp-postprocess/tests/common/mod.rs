@@ -24,7 +24,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
 
-use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use rdlp_postprocess::PostProcess;
@@ -133,7 +132,6 @@ pub fn opts(stem: &'static str, borrowing: bool) -> MsgOptions {
 /// Build a `PipelineMessage` around `files` for a single-stage test.
 pub fn make_msg(files: Vec<PathBuf>, config: PostProcess, opts: MsgOptions) -> PipelineMessage {
     let reg = Arc::new(TempRegistry::new());
-    let (error_tx, _) = oneshot::channel();
     let tracker = if opts.borrowing {
         FileTracker::new_borrowing(files, reg)
     } else {
@@ -152,7 +150,6 @@ pub fn make_msg(files: Vec<PathBuf>, config: PostProcess, opts: MsgOptions) -> P
         is_hls: opts.is_hls,
         verbose: false,
         callback_factory: None,
-        error_tx: Some(error_tx),
         warnings: Vec::new(),
         encoding_tool: None,
         cancel: CancellationToken::new(),

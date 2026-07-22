@@ -206,7 +206,6 @@ mod tests {
             is_hls: false,
             verbose: false,
             callback_factory: None,
-            error_tx: None,
             warnings: Vec::new(),
             encoding_tool: None,
             cancel: tokio_util::sync::CancellationToken::new(),

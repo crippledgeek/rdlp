@@ -28,7 +28,6 @@ use std::process::Command;
 use std::sync::Arc;
 
 use tempfile::TempDir;
-use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use rdlp_postprocess::pipeline::{FileTracker, PipelineMessage, PipelineStage, TempRegistry};
@@ -84,7 +83,6 @@ fn build_still_image_fixture(path: &Path) -> Result<(), ()> {
 
 fn make_msg(files: Vec<std::path::PathBuf>, config: PostProcess) -> PipelineMessage {
     let reg = Arc::new(TempRegistry::new());
-    let (error_tx, _) = oneshot::channel();
     PipelineMessage {
         info: InfoDict::new(
             "id".to_string(),
@@ -98,7 +96,6 @@ fn make_msg(files: Vec<std::path::PathBuf>, config: PostProcess) -> PipelineMess
         is_hls: false,
         verbose: false,
         callback_factory: None,
-        error_tx: Some(error_tx),
         warnings: Vec::new(),
         encoding_tool: None,
         cancel: CancellationToken::new(),
