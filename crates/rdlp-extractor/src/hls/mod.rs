@@ -266,7 +266,9 @@ mod tests {
         // → should infer muxed AAC
         let av1 = CodecName::from_static("av1");
         assert_eq!(
-            infer_muxed_audio(Some(&av1), None, false).as_deref(),
+            infer_muxed_audio(Some(&av1), None, false)
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
             Some("aac"),
         );
     }
@@ -276,7 +278,9 @@ mod tests {
         // h264+aac declared → should keep declared aac
         let h264 = CodecName::from_static("h264");
         assert_eq!(
-            infer_muxed_audio(Some(&h264), Some(CodecName::from_static("aac")), false).as_deref(),
+            infer_muxed_audio(Some(&h264), Some(CodecName::from_static("aac")), false)
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
             Some("aac"),
         );
     }
@@ -286,7 +290,9 @@ mod tests {
         // AV1+opus declared → should keep declared opus
         let av1 = CodecName::from_static("av1");
         assert_eq!(
-            infer_muxed_audio(Some(&av1), Some(CodecName::from_static("opus")), false).as_deref(),
+            infer_muxed_audio(Some(&av1), Some(CodecName::from_static("opus")), false)
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
             Some("opus"),
         );
     }
@@ -302,7 +308,9 @@ mod tests {
     fn test_infer_muxed_audio_no_video() {
         // Audio-only stream (no video) → should NOT infer
         assert_eq!(
-            infer_muxed_audio(None, Some(CodecName::from_static("aac")), false).as_deref(),
+            infer_muxed_audio(None, Some(CodecName::from_static("aac")), false)
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
             Some("aac"),
         );
     }
@@ -338,18 +346,35 @@ mod tests {
         let av1 = &master.variants[0];
         let (v, a) = rdlp_core::parse_hls_codecs(av1.codecs.as_deref().unwrap());
         let inferred = infer_muxed_audio(v.as_ref(), a.clone(), av1.audio.is_some());
-        assert_eq!(v.as_deref(), Some("av1"));
+        assert_eq!(
+            v.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("av1")
+        );
         assert_eq!(a, None, "Raw CODECS should have no audio");
-        assert_eq!(inferred.as_deref(), Some("aac"), "Should infer muxed AAC");
+        assert_eq!(
+            inferred
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("aac"),
+            "Should infer muxed AAC"
+        );
 
         // h264+aac variant: both declared
         let h264 = &master.variants[1];
         let (v2, a2) = rdlp_core::parse_hls_codecs(h264.codecs.as_deref().unwrap());
         let inferred2 = infer_muxed_audio(v2.as_ref(), a2.clone(), h264.audio.is_some());
-        assert_eq!(v2.as_deref(), Some("h264"));
-        assert_eq!(a2.as_deref(), Some("aac"));
         assert_eq!(
-            inferred2.as_deref(),
+            v2.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("h264")
+        );
+        assert_eq!(
+            a2.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("aac")
+        );
+        assert_eq!(
+            inferred2
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
             Some("aac"),
             "Declared audio preserved"
         );
@@ -430,7 +455,12 @@ mod tests {
         assert_eq!(audio_only.len(), 1, "expect one audio-only rendition");
 
         let v = video_only[0];
-        assert_eq!(v.video_codec.as_deref(), Some("av1"));
+        assert_eq!(
+            v.video_codec
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("av1")
+        );
         assert_eq!(v.audio_group_id.as_deref(), Some("aac"));
         assert_eq!(v.resolution, Some((1920, 1080)));
         assert_eq!(
@@ -440,7 +470,12 @@ mod tests {
 
         let a = audio_only[0];
         assert!(a.video_codec.is_none());
-        assert_eq!(a.audio_codec.as_deref(), Some("aac"));
+        assert_eq!(
+            a.audio_codec
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("aac")
+        );
         assert_eq!(a.audio_group_id.as_deref(), Some("aac"));
         assert_eq!(a.rendition_name.as_deref(), Some("Stereo"));
         assert!(a.resolution.is_none());
@@ -478,9 +513,11 @@ mod tests {
             "no audio-only rows when EXT-X-MEDIA is absent"
         );
         assert!(
-            variants
-                .iter()
-                .all(|v| v.audio_codec.as_deref() == Some("aac")),
+            variants.iter().all(|v| v
+                .audio_codec
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str)
+                == Some("aac")),
             "muxed AAC is preserved on both variants"
         );
     }
@@ -505,7 +542,10 @@ mod tests {
         let variant = &master.variants[0];
         let (v, a) = rdlp_core::parse_hls_codecs(variant.codecs.as_deref().unwrap());
         let inferred = infer_muxed_audio(v.as_ref(), a, variant.audio.is_some());
-        assert_eq!(v.as_deref(), Some("av1"));
+        assert_eq!(
+            v.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("av1")
+        );
         assert!(variant.audio.is_some(), "AUDIO attribute should be present");
         assert_eq!(
             inferred, None,

@@ -92,8 +92,13 @@ pub(super) async fn run_audio_extract(
     let encoder_for_tag = job
         .opts
         .encoder_name
-        .as_deref()
-        .or(job.fallback_codec.as_deref());
+        .as_ref()
+        .map(rdlp_types::media_name::MediaName::as_str)
+        .or_else(|| {
+            job.fallback_codec
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str)
+        });
     msg.encoding_tool =
         Some(rdlp_ffmpeg::ffmpeg::audio_tag_component(job.opts.copy, encoder_for_tag).to_string());
 

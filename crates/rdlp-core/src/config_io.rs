@@ -146,7 +146,14 @@ mod tests {
         writeln!(file, "video_encoder = \"libx264\"").unwrap();
 
         let config = from_toml_file(file.path()).unwrap();
-        assert_eq!(config.postprocess.video_encoder.as_deref(), Some("libx264"));
+        assert_eq!(
+            config
+                .postprocess
+                .video_encoder
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("libx264")
+        );
     }
 
     /// Negative companion: an empty `video_encoder` value — tolerated as

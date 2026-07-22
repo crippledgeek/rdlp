@@ -23,13 +23,14 @@ use rdlp_types::CodecName;
 /// # Examples
 /// ```
 /// use rdlp_core::codecs::parse_hls_codecs;
+/// use rdlp_types::CodecName;
 ///
 /// let (video, audio) = parse_hls_codecs("avc1.64001f,mp4a.40.2");
-/// assert_eq!(video.as_deref(), Some("h264"));
-/// assert_eq!(audio.as_deref(), Some("aac"));
+/// assert_eq!(video, Some(CodecName::from_static("h264")));
+/// assert_eq!(audio, Some(CodecName::from_static("aac")));
 ///
 /// let (video, audio) = parse_hls_codecs("hvc1.1.6.L93.B0");
-/// assert_eq!(video.as_deref(), Some("hevc"));
+/// assert_eq!(video, Some(CodecName::from_static("hevc")));
 /// assert_eq!(audio, None);
 /// ```
 pub fn parse_hls_codecs(codecs: &str) -> (Option<CodecName>, Option<CodecName>) {
@@ -72,57 +73,93 @@ mod tests {
     #[test]
     fn test_h264_aac() {
         let (v, a) = parse_hls_codecs("avc1.64001f,mp4a.40.2");
-        assert_eq!(v.as_deref(), Some("h264"));
-        assert_eq!(a.as_deref(), Some("aac"));
+        assert_eq!(
+            v.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("h264")
+        );
+        assert_eq!(
+            a.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("aac")
+        );
     }
 
     #[test]
     fn test_hevc_aac() {
         let (v, a) = parse_hls_codecs("hvc1.1.6.L93.B0,mp4a.40.2");
-        assert_eq!(v.as_deref(), Some("hevc"));
-        assert_eq!(a.as_deref(), Some("aac"));
+        assert_eq!(
+            v.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("hevc")
+        );
+        assert_eq!(
+            a.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("aac")
+        );
     }
 
     #[test]
     fn test_hev1_variant() {
         let (v, a) = parse_hls_codecs("hev1.1.6.L120.90,mp4a.40.5");
-        assert_eq!(v.as_deref(), Some("hevc"));
-        assert_eq!(a.as_deref(), Some("aac"));
+        assert_eq!(
+            v.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("hevc")
+        );
+        assert_eq!(
+            a.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("aac")
+        );
     }
 
     #[test]
     fn test_vp9() {
         let (v, a) = parse_hls_codecs("vp09.00.10.08");
-        assert_eq!(v.as_deref(), Some("vp9"));
+        assert_eq!(
+            v.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("vp9")
+        );
         assert_eq!(a, None);
     }
 
     #[test]
     fn test_av1_opus() {
         let (v, a) = parse_hls_codecs("av01.0.08M.08,opus");
-        assert_eq!(v.as_deref(), Some("av1"));
-        assert_eq!(a.as_deref(), Some("opus"));
+        assert_eq!(
+            v.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("av1")
+        );
+        assert_eq!(
+            a.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("opus")
+        );
     }
 
     #[test]
     fn test_audio_only_aac() {
         let (v, a) = parse_hls_codecs("mp4a.40.2");
         assert_eq!(v, None);
-        assert_eq!(a.as_deref(), Some("aac"));
+        assert_eq!(
+            a.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("aac")
+        );
     }
 
     #[test]
     fn test_audio_only_ac3() {
         let (v, a) = parse_hls_codecs("ac-3");
         assert_eq!(v, None);
-        assert_eq!(a.as_deref(), Some("ac3"));
+        assert_eq!(
+            a.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("ac3")
+        );
     }
 
     #[test]
     fn test_audio_only_eac3() {
         let (v, a) = parse_hls_codecs("ec-3");
         assert_eq!(v, None);
-        assert_eq!(a.as_deref(), Some("eac3"));
+        assert_eq!(
+            a.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("eac3")
+        );
     }
 
     #[test]
@@ -142,27 +179,45 @@ mod tests {
     #[test]
     fn test_whitespace_handling() {
         let (v, a) = parse_hls_codecs(" avc1.64001f , mp4a.40.2 ");
-        assert_eq!(v.as_deref(), Some("h264"));
-        assert_eq!(a.as_deref(), Some("aac"));
+        assert_eq!(
+            v.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("h264")
+        );
+        assert_eq!(
+            a.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("aac")
+        );
     }
 
     #[test]
     fn test_avc3_variant() {
         let (v, _) = parse_hls_codecs("avc3.64001f");
-        assert_eq!(v.as_deref(), Some("h264"));
+        assert_eq!(
+            v.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("h264")
+        );
     }
 
     #[test]
     fn test_vp8() {
         let (v, a) = parse_hls_codecs("vp8,vorbis");
-        assert_eq!(v.as_deref(), Some("vp8"));
-        assert_eq!(a.as_deref(), Some("vorbis"));
+        assert_eq!(
+            v.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("vp8")
+        );
+        assert_eq!(
+            a.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("vorbis")
+        );
     }
 
     #[test]
     fn test_flac() {
         let (v, a) = parse_hls_codecs("flac");
         assert_eq!(v, None);
-        assert_eq!(a.as_deref(), Some("flac"));
+        assert_eq!(
+            a.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("flac")
+        );
     }
 }

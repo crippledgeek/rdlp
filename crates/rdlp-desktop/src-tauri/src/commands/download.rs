@@ -326,7 +326,10 @@ pub async fn start_download(
     validate_recode_preset(options.recode_preset.as_deref())?;
     rdlp_ffmpeg::validate_speed_controls(
         rdlp_ffmpeg::resolve_recode_encoder(
-            options.video_encoder.as_deref(),
+            options
+                .video_encoder
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
             options.recode_video.map(|c| c.as_ext()),
             options.recode_container.map(|c| c.as_ext()),
         ),

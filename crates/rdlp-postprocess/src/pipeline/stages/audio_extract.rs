@@ -36,9 +36,14 @@ impl AudioExtractStage {
         quality: Option<&str>,
     ) -> AudioExtractOptions {
         let mut opts = AudioExtractOptions {
+            // `from_static` is only const-eval-safe (invalid input = build
+            // error) when called from a `const`/static-table context; this is
+            // a plain runtime function body, so `new_static` is the correct
+            // form here — an invalid entry degrades to `None` rather than
+            // aborting the process.
             encoder_name: codec_config
                 .encoder
-                .map(rdlp_types::media_name::AudioEncoderName::from_static),
+                .and_then(|e| rdlp_types::media_name::AudioEncoderName::new_static(e).ok()),
             copy: can_copy,
             ..Default::default()
         };
@@ -150,8 +155,11 @@ impl PipelineStage for AudioExtractStage {
                 // to the muxer's PCM default — so the target codec is what
                 // names the encoding for the tag. `target_format` is always
                 // one of the static `AudioFormat::codec_name()` values (or the
-                // `"mp3"` default), so `from_static` never panics here.
-                fallback_codec: Some(rdlp_types::CodecName::from_static(target_format)),
+                // `"mp3"` default), so this never actually degrades to `None`
+                // in practice — but `new_static` (not `from_static`) is the
+                // correct constructor for a runtime function body: an invalid
+                // value would surface as a missing tag, not a process abort.
+                fallback_codec: rdlp_types::CodecName::new_static(target_format).ok(),
                 error_context: "audio extract stage failed",
             },
         )
@@ -261,7 +269,12 @@ mod tests {
 
         // Without the fallback the tag degrades to "none"...
         assert_eq!(
-            rdlp_ffmpeg::ffmpeg::audio_tag_component(opts.copy, opts.encoder_name.as_deref()),
+            rdlp_ffmpeg::ffmpeg::audio_tag_component(
+                opts.copy,
+                opts.encoder_name
+                    .as_ref()
+                    .map(rdlp_types::media_name::MediaName::as_str)
+            ),
             "none"
         );
         // ...and with it, the codec name is recorded, as before #637.

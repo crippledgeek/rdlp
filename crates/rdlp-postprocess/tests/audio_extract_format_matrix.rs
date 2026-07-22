@@ -102,7 +102,9 @@ fn encoder_present(format: AudioFormat) -> bool {
     };
     match cfg.encoder {
         // A named encoder must actually exist in this build.
-        Some(enc) => rdlp_ffmpeg::ffmpeg::audio_encoder_registry::is_audio_encoder_available(enc),
+        Some(enc) => rdlp_ffmpeg::ffmpeg::audio_encoder_registry::is_audio_encoder_available(
+            &rdlp_types::media_name::AudioEncoderName::from_static(enc),
+        ),
         // `None` is not "unsupported" — it means the row defers to the output
         // muxer's default codec (the `wav`/PCM row). That is a real, reachable
         // branch of `extract_audio_transcode_sync` and must be exercised, not

@@ -416,7 +416,11 @@ pub fn merge_config(
     // Validate recode speed controls against the resolved encoder
     rdlp_ffmpeg::validate_speed_controls(
         rdlp_ffmpeg::resolve_recode_encoder(
-            config.postprocess.video_encoder.as_deref(),
+            config
+                .postprocess
+                .video_encoder
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
             config.postprocess.recode_video.map(|c| c.as_ext()),
             config.postprocess.recode_container.map(|c| c.as_ext()),
         ),

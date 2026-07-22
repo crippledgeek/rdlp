@@ -281,7 +281,7 @@ impl FFmpegRunner {
 
         // Find encoder codec
         let enc_codec = if let Some(ref name) = opts.encoder_name {
-            ffmpeg_the_third::encoder::find_by_name(name).ok_or_else(|| {
+            ffmpeg_the_third::encoder::find_by_name(name.as_str()).ok_or_else(|| {
                 PostProcessError::UnsupportedCodec {
                     codec: name.to_string(),
                     operation: "audio extraction".into(),

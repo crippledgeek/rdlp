@@ -109,13 +109,28 @@
 //! fn wants_codec(_: CodecName) {}
 //! wants_codec("h264");
 //! ```
+//!
+//! Nor can a wrong-vocabulary value reach a `&str` parameter **by reference**.
+//! `MediaName` does not implement [`Deref`](std::ops::Deref) precisely because
+//! Rust's deref coercion would let `&AudioEncoderName` silently satisfy a
+//! `&str` parameter — which is how a registry lookup keyed on the wrong
+//! vocabulary used to typecheck at all: `speed_controls_def(&some_audio_name)`
+//! compiled and quietly returned `&[]`. [`AsRef::as_ref`] and
+//! [`Borrow::borrow`](std::borrow::Borrow) stay implemented because both
+//! require an explicit call, so they can't be reached by coercion:
+//!
+//! ```compile_fail
+//! use rdlp_types::media_name::AudioEncoderName;
+//! fn wants_str(_: &str) {}
+//! let name = AudioEncoderName::from_static("libopus");
+//! wants_str(&name);
+//! ```
 
 use std::borrow::Cow;
 use std::ffi::CString;
 use std::fmt;
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::ops::Deref;
 
 mod kind;
 
@@ -174,8 +189,11 @@ pub enum InvalidMediaName {
 
 impl InvalidMediaName {
     /// The failure reason, without any concept prefix.
+    ///
+    /// Private: [`Display`](fmt::Display) is the only caller, and the reason
+    /// is not meaningful without the concept prefix `Display` adds.
     #[must_use]
-    pub const fn reason(self) -> &'static str {
+    const fn reason(self) -> &'static str {
         match self {
             Self::Empty => "must not be empty",
             Self::NonAscii => "must be ASCII",
@@ -369,6 +387,26 @@ impl<K: NameKind> MediaName<K> {
         CString::new(self.0.as_bytes())
             .expect("MediaName invariant: validate() rejects interior NUL bytes")
     }
+
+    /// Reinterprets this validated name under a different vocabulary `K2`.
+    ///
+    /// The **only** sanctioned way to cross between vocabularies — greppable
+    /// so every crossing can be audited. Infallible by construction: every
+    /// kind shares the exact same [`validate`] floor (see the module
+    /// documentation), so a byte sequence that is already a valid
+    /// `MediaName<K>` is necessarily a valid `MediaName<K2>` too. Preserves
+    /// the `Cow` variant untouched — a `from_static`/`new_static`-backed
+    /// value stays allocation-free — unlike a `to_string()` + reparse
+    /// round-trip.
+    ///
+    /// Justify each call site with *why* the value genuinely belongs to both
+    /// vocabularies (e.g. `aac` names both a codec and an encoder to invoke);
+    /// this is a deliberate, audited vocabulary crossing, not a generic
+    /// escape hatch around the kind system.
+    #[must_use]
+    pub fn retag<K2: NameKind>(self) -> MediaName<K2> {
+        MediaName(self.0, PhantomData)
+    }
 }
 
 /// Borrows the underlying name as a plain `&str`, so a `MediaName` can be
@@ -380,18 +418,6 @@ impl<K: NameKind> MediaName<K> {
 /// the contract [`std::borrow::Borrow`] requires.
 impl<K: NameKind> std::borrow::Borrow<str> for MediaName<K> {
     fn borrow(&self) -> &str {
-        &self.0
-    }
-}
-
-/// Derefs to the underlying `str`, so `Option<MediaName<K>>::as_deref()`
-/// yields an `Option<&str>` comparable against a string-literal expectation
-/// in a test, and so borrowing APIs that accept `&str` keep working through
-/// an `&MediaName`.
-impl<K: NameKind> Deref for MediaName<K> {
-    type Target = str;
-
-    fn deref(&self) -> &str {
         &self.0
     }
 }

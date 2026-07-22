@@ -130,17 +130,21 @@ pub(super) async fn recode_audio_only(
 
     let output_path = msg.tracker.temp_path(&input_file, target_ext);
     let opts = AudioExtractOptions {
-        // `encoder_name` is already an `AudioEncoderName` resolved through the
-        // audio registry (see `resolve_audio_only_params`), so this is a
-        // plain clone rather than a re-parse.
-        encoder_name: encoder_name.clone(),
+        // `encoder_name` is not used again after this — move it rather than
+        // cloning.
+        encoder_name,
         copy: audio_copy,
         bitrate_kbps: None,
         quality_scale: None,
     };
     let summary = format!(
         "Recode: audio-only source, container={target_ext}, audio={}",
-        rdlp_ffmpeg::ffmpeg::audio_tag_component(opts.copy, opts.encoder_name.as_deref()),
+        rdlp_ffmpeg::ffmpeg::audio_tag_component(
+            opts.copy,
+            opts.encoder_name
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str)
+        ),
     );
 
     audio_convert::run_audio_extract(
@@ -225,14 +229,20 @@ pub(super) fn resolve_audio_only_params(
             "RecodeStage: cannot confirm {target_ext} carries {}, so it cannot be \
              stream-copied safely; re-encoding to {} instead (this may be lossy)",
             audio.name().unwrap_or("the source audio codec"),
-            encoder_name.as_deref().unwrap_or("the container default"),
+            encoder_name.as_ref().map_or(
+                "the container default",
+                rdlp_types::media_name::MediaName::as_str
+            ),
         );
     }
 
     if !audio_copy {
         debug!(
             "RecodeStage: audio-only source → {target_ext} (re-encoding to {})",
-            encoder_name.as_deref().unwrap_or("container default"),
+            encoder_name.as_ref().map_or(
+                "container default",
+                rdlp_types::media_name::MediaName::as_str
+            ),
         );
     }
 
@@ -271,7 +281,7 @@ mod tests {
         .expect("webm resolves an encoder");
         assert!(!copy, "webm cannot stream-copy aac");
         assert!(
-            encoder.is_some_and(|e| e.contains("opus") || e.contains("vorbis")),
+            encoder.is_some_and(|e| e.as_str().contains("opus") || e.as_str().contains("vorbis")),
             "webm must fall back to its own default audio encoder"
         );
     }

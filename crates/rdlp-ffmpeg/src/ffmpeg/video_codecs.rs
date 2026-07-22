@@ -11,7 +11,7 @@
 use rdlp_types::media_name::{CodecName, VideoEncoder, VideoEncoderName};
 use serde::{Deserialize, Serialize};
 
-use crate::ffmpeg::codec_registry;
+use crate::ffmpeg::codec_registry::{self, CodecRow};
 
 /// Information about a specific video encoder.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -224,9 +224,14 @@ const KNOBS_XAVS2: &[SpeedKnobDef] = &[SpeedKnobDef {
 
 /// Speed-control descriptor for an encoder. Empty slice = encoder exposes no
 /// panel-controllable speed knob (or is not modeled yet, e.g. unlinked encoders).
+///
+/// Takes a [`VideoEncoderName`] (not a bare `&str`): this table is keyed to
+/// the video-encoder vocabulary, and typing the parameter is what stops an
+/// audio encoder name from silently matching nothing and returning `&[]`
+/// (#642's A1).
 #[must_use]
-pub(crate) fn speed_controls_def(encoder: &str) -> &'static [SpeedKnobDef] {
-    match encoder {
+pub(crate) fn speed_controls_def(encoder: &VideoEncoderName) -> &'static [SpeedKnobDef] {
+    match encoder.as_str() {
         "libx264" => KNOBS_X264,
         "libx265" => KNOBS_X265,
         "libvvenc" => KNOBS_VVENC,
@@ -247,15 +252,26 @@ struct CodecEntry {
     display_name: &'static str,
     /// Ordered encoder preference list: (`encoder_name`, `display_name`)
     encoders: &'static [(VideoEncoderName, &'static str)],
+    /// `FFmpeg` spelling variants that identify the *same* codec (`"avc"` for
+    /// `"h264"`, `"hevc"` for `"h265"`, `"mpeg1video"` for `"mpeg1"`,
+    /// `"mpeg2video"` for `"mpeg2"`). Declared next to the row it describes —
+    /// mirrors the audio registry's `pcm`/`pcm_s16le` alias — so
+    /// [`canonical_codec_key`] can answer "do these two spellings name the
+    /// same codec" without a second, hand-maintained alias table living in
+    /// `recode.rs`'s remux-compatibility rules (#576).
+    aliases: &'static [CodecName],
 }
 
 impl codec_registry::CodecRow for CodecEntry {
     type Encoder = VideoEncoder;
-    fn codec(&self) -> CodecName {
-        self.codec.clone()
+    fn codec(&self) -> &CodecName {
+        &self.codec
     }
     fn encoders(&self) -> &'static [(VideoEncoderName, &'static str)] {
         self.encoders
+    }
+    fn aliases(&self) -> &'static [CodecName] {
+        self.aliases
     }
 }
 
@@ -275,6 +291,7 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
                 "OpenH264 (H.264)",
             ),
         ],
+        aliases: &[CodecName::from_static("avc")],
     },
     CodecEntry {
         codec: CodecName::from_static("h265"),
@@ -289,6 +306,7 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
                 "Kvazaar (H.265/HEVC)",
             ),
         ],
+        aliases: &[CodecName::from_static("hevc")],
     },
     CodecEntry {
         codec: CodecName::from_static("hevc"),
@@ -303,6 +321,7 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
                 "Kvazaar (H.265/HEVC)",
             ),
         ],
+        aliases: &[],
     },
     CodecEntry {
         codec: CodecName::from_static("av1"),
@@ -312,16 +331,19 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
             (VideoEncoderName::from_static("libaom-av1"), "libaom AV1"),
             (VideoEncoderName::from_static("librav1e"), "rav1e AV1"),
         ],
+        aliases: &[],
     },
     CodecEntry {
         codec: CodecName::from_static("vp9"),
         display_name: "VP9",
         encoders: &[(VideoEncoderName::from_static("libvpx-vp9"), "libvpx VP9")],
+        aliases: &[],
     },
     CodecEntry {
         codec: CodecName::from_static("vp8"),
         display_name: "VP8",
         encoders: &[(VideoEncoderName::from_static("libvpx"), "libvpx VP8")],
+        aliases: &[],
     },
     CodecEntry {
         codec: CodecName::from_static("vvc"),
@@ -330,6 +352,7 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
             VideoEncoderName::from_static("libvvenc"),
             "VVenC (VVC/H.266)",
         )],
+        aliases: &[],
     },
     CodecEntry {
         codec: CodecName::from_static("h266"),
@@ -338,6 +361,7 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
             VideoEncoderName::from_static("libvvenc"),
             "VVenC (VVC/H.266)",
         )],
+        aliases: &[],
     },
     CodecEntry {
         codec: CodecName::from_static("evc"),
@@ -346,11 +370,13 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
             VideoEncoderName::from_static("libxeve"),
             "xeve (MPEG-5 EVC)",
         )],
+        aliases: &[],
     },
     CodecEntry {
         codec: CodecName::from_static("avs2"),
         display_name: "AVS2 / IEEE 1857.4",
         encoders: &[(VideoEncoderName::from_static("libxavs2"), "xavs2 (AVS2)")],
+        aliases: &[],
     },
     // NOTE: APV (liboapv) intentionally NOT registered — it rejects standard
     // 8-bit yuv420p web video (pro 4:2:2/10-bit intra codec), so it is not a
@@ -359,11 +385,13 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
         codec: CodecName::from_static("theora"),
         display_name: "Theora",
         encoders: &[(VideoEncoderName::from_static("libtheora"), "libtheora")],
+        aliases: &[],
     },
     CodecEntry {
         codec: CodecName::from_static("mpeg4"),
         display_name: "MPEG-4 Part 2",
         encoders: &[(VideoEncoderName::from_static("mpeg4"), "MPEG-4 (built-in)")],
+        aliases: &[],
     },
     CodecEntry {
         codec: CodecName::from_static("mpeg2"),
@@ -372,6 +400,7 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
             VideoEncoderName::from_static("mpeg2video"),
             "MPEG-2 Video (built-in)",
         )],
+        aliases: &[CodecName::from_static("mpeg2video")],
     },
     CodecEntry {
         codec: CodecName::from_static("mpeg1"),
@@ -380,31 +409,37 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
             VideoEncoderName::from_static("mpeg1video"),
             "MPEG-1 Video (built-in)",
         )],
+        aliases: &[CodecName::from_static("mpeg1video")],
     },
     CodecEntry {
         codec: CodecName::from_static("xvid"),
         display_name: "XviD (MPEG-4)",
         encoders: &[(VideoEncoderName::from_static("libxvid"), "libxvid (XviD)")],
+        aliases: &[],
     },
     CodecEntry {
         codec: CodecName::from_static("prores"),
         display_name: "Apple ProRes",
         encoders: &[(VideoEncoderName::from_static("prores_ks"), "ProRes KS")],
+        aliases: &[],
     },
     CodecEntry {
         codec: CodecName::from_static("dnxhd"),
         display_name: "DNxHD / DNxHR",
         encoders: &[(VideoEncoderName::from_static("dnxhd"), "DNxHD (built-in)")],
+        aliases: &[],
     },
     CodecEntry {
         codec: CodecName::from_static("wmv2"),
         display_name: "WMV2",
         encoders: &[(VideoEncoderName::from_static("wmv2"), "WMV2 (built-in)")],
+        aliases: &[],
     },
     CodecEntry {
         codec: CodecName::from_static("ffv1"),
         display_name: "FFV1 (Lossless)",
         encoders: &[(VideoEncoderName::from_static("ffv1"), "FFV1 (built-in)")],
+        aliases: &[],
     },
     // Keyed to the exact FFmpeg codec-ID name (matching
     // `muxer_defaults::declared_codec`'s output, same discipline as the
@@ -424,6 +459,7 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
             VideoEncoderName::from_static("dvvideo"),
             "DV Video (built-in)",
         )],
+        aliases: &[],
     },
     // Same discipline and same #618 discovery as `dvvideo` above: the
     // Wmv/Asf muxers declare codec-ID `msmpeg4v3`, but FFmpeg's *encoder*
@@ -438,6 +474,7 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
             VideoEncoderName::from_static("msmpeg4"),
             "MS MPEG-4 v3 (built-in)",
         )],
+        aliases: &[],
     },
 ];
 
@@ -483,6 +520,26 @@ pub fn resolve_encoder(input: &str) -> Option<VideoEncoderName> {
     VIDEO_REGISTRY.resolve(input)
 }
 
+/// Resolves `name` to its codec group's canonical (primary table) key,
+/// case-insensitively, via [`CodecRow::aliases`](codec_registry::CodecRow::aliases).
+///
+/// `"avc"` and `"h264"` both resolve to `"h264"`; `"hevc"` and `"h265"` both
+/// resolve to `"h265"`. A name with no table row or alias (an unmodeled or
+/// unknown codec) resolves to `None`, so it compares unequal to every real
+/// codec group rather than aliasing itself to something arbitrary.
+///
+/// This is the single source of alias knowledge for
+/// [`rdlp_postprocess`](https://docs.rs/rdlp-postprocess)'s remux-compatibility
+/// rules (#576): a caller comparing two codec spellings for "same codec"
+/// resolves both through this function instead of hand-listing every known
+/// spelling pair.
+#[must_use]
+pub fn canonical_codec_key(name: &str) -> Option<&'static str> {
+    VIDEO_REGISTRY
+        .find_row(name)
+        .map(|row| row.codec().as_str())
+}
+
 /// Returns all available encoders for a given codec name, in preference order.
 ///
 /// Returns an empty `Vec` if the codec is unknown or has no available encoders.
@@ -497,7 +554,7 @@ pub fn available_encoders_for_codec(codec: &str) -> Vec<VideoEncoderInfo> {
                 .map(|(enc, display)| VideoEncoderInfo {
                     encoder_name: enc.as_str().to_string(),
                     display_name: display.to_string(),
-                    speed_controls: speed_controls_def(enc.as_str())
+                    speed_controls: speed_controls_def(&enc)
                         .iter()
                         .map(SpeedKnob::from_def)
                         .collect(),
@@ -524,7 +581,7 @@ pub fn list_available_codecs() -> Vec<VideoCodecInfo> {
                 .map(|(enc, display)| VideoEncoderInfo {
                     encoder_name: enc.as_str().to_string(),
                     display_name: display.to_string(),
-                    speed_controls: speed_controls_def(enc.as_str())
+                    speed_controls: speed_controls_def(&enc)
                         .iter()
                         .map(SpeedKnob::from_def)
                         .collect(),
@@ -571,7 +628,10 @@ mod tests {
     fn test_resolve_encoder_encoder_name() {
         // Built-in encoders are always available
         let enc = resolve_encoder("mpeg4");
-        assert_eq!(enc.as_deref(), Some("mpeg4"));
+        assert_eq!(
+            enc.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("mpeg4")
+        );
     }
 
     #[test]
@@ -580,8 +640,18 @@ mod tests {
         // only when their encoders are built into this ffmpeg; gate on
         // availability so a build without the codecs still passes.
         if is_encoder_available("libxeve") {
-            assert_eq!(resolve_encoder("evc").as_deref(), Some("libxeve"));
-            assert_eq!(resolve_encoder("libxeve").as_deref(), Some("libxeve"));
+            assert_eq!(
+                resolve_encoder("evc")
+                    .as_ref()
+                    .map(rdlp_types::media_name::MediaName::as_str),
+                Some("libxeve")
+            );
+            assert_eq!(
+                resolve_encoder("libxeve")
+                    .as_ref()
+                    .map(rdlp_types::media_name::MediaName::as_str),
+                Some("libxeve")
+            );
         } else {
             // Registered in the table but not built into this ffmpeg: the
             // name matches yet the availability gate rejects it → None. Pins
@@ -589,7 +659,12 @@ mod tests {
             assert_eq!(resolve_encoder("libxeve"), None);
         }
         if is_encoder_available("libxavs2") {
-            assert_eq!(resolve_encoder("avs2").as_deref(), Some("libxavs2"));
+            assert_eq!(
+                resolve_encoder("avs2")
+                    .as_ref()
+                    .map(rdlp_types::media_name::MediaName::as_str),
+                Some("libxavs2")
+            );
         } else {
             assert_eq!(resolve_encoder("libxavs2"), None);
         }
@@ -638,13 +713,21 @@ mod tests {
                 })
                 .unwrap()
         };
-        assert_eq!(cpu(speed_controls_def("libvpx-vp9")), (-8, 8));
-        assert_eq!(cpu(speed_controls_def("libvpx")), (-16, 16));
+        assert_eq!(
+            cpu(speed_controls_def(&VideoEncoderName::from_static(
+                "libvpx-vp9"
+            ))),
+            (-8, 8)
+        );
+        assert_eq!(
+            cpu(speed_controls_def(&VideoEncoderName::from_static("libvpx"))),
+            (-16, 16)
+        );
     }
 
     #[test]
     fn vvenc_presets_are_the_five_names() {
-        let knobs = speed_controls_def("libvvenc");
+        let knobs = speed_controls_def(&VideoEncoderName::from_static("libvvenc"));
         let first = knobs.first().expect("vvenc must have at least one knob");
         match first.kind {
             KnobKindDef::Choice { choices, default } => {
@@ -657,7 +740,7 @@ mod tests {
 
     #[test]
     fn svtav1_preset_is_numeric_range() {
-        let knobs = speed_controls_def("libsvtav1");
+        let knobs = speed_controls_def(&VideoEncoderName::from_static("libsvtav1"));
         let first = knobs.first().expect("svtav1 must have at least one knob");
         match first.kind {
             KnobKindDef::Int { min, max, default } => {
@@ -669,8 +752,8 @@ mod tests {
 
     #[test]
     fn unlinked_or_unknown_encoder_has_no_knobs() {
-        assert!(speed_controls_def("libkvazaar").is_empty());
-        assert!(speed_controls_def("nonsense").is_empty());
+        assert!(speed_controls_def(&VideoEncoderName::from_static("libkvazaar")).is_empty());
+        assert!(speed_controls_def(&VideoEncoderName::from_static("nonsense")).is_empty());
     }
 
     #[test]
@@ -684,8 +767,12 @@ mod tests {
                 .unwrap()
         };
         assert_eq!(
-            names(speed_controls_def("libx264")),
-            names(speed_controls_def("libx265"))
+            names(speed_controls_def(&VideoEncoderName::from_static(
+                "libx264"
+            ))),
+            names(speed_controls_def(&VideoEncoderName::from_static(
+                "libx265"
+            )))
         );
     }
 

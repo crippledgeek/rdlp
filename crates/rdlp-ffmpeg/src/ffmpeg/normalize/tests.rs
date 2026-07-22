@@ -20,29 +20,80 @@ fn test_select_audio_encoder_for_container() {
     // (verified against the linked build's `av_guess_codec`, not assumed).
     for c in [C::Mp4, C::M4a, C::Mov] {
         let enc = sel(c);
-        let enc = enc.as_deref();
+        let enc = enc.as_ref().map(rdlp_types::media_name::MediaName::as_str);
         assert!(
             enc == Some("aac") || enc == Some("libfdk_aac"),
             "expected an aac-family encoder for {c:?}, got {enc:?}"
         );
     }
 
-    if is_audio_encoder_available("libopus") {
-        assert_eq!(sel(C::WebM).as_deref(), Some("libopus"));
-        assert_eq!(sel(C::Mkv).as_deref(), Some("libopus"));
-        assert_eq!(sel(C::Ogg).as_deref(), Some("libopus"));
+    if is_audio_encoder_available(&rdlp_types::media_name::AudioEncoderName::from_static(
+        "libopus",
+    )) {
+        assert_eq!(
+            sel(C::WebM)
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("libopus")
+        );
+        assert_eq!(
+            sel(C::Mkv)
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("libopus")
+        );
+        assert_eq!(
+            sel(C::Ogg)
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("libopus")
+        );
     }
-    if is_audio_encoder_available("libmp3lame") {
+    if is_audio_encoder_available(&rdlp_types::media_name::AudioEncoderName::from_static(
+        "libmp3lame",
+    )) {
         // avi/flv/mp3 all declare (or, for .mp3, override to) the mp3 codec.
-        assert_eq!(sel(C::Avi).as_deref(), Some("libmp3lame"));
-        assert_eq!(sel(C::Flv).as_deref(), Some("libmp3lame"));
-        assert_eq!(sel(C::Mp3).as_deref(), Some("libmp3lame"));
+        assert_eq!(
+            sel(C::Avi)
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("libmp3lame")
+        );
+        assert_eq!(
+            sel(C::Flv)
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("libmp3lame")
+        );
+        assert_eq!(
+            sel(C::Mp3)
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("libmp3lame")
+        );
     }
-    if is_audio_encoder_available("mp2") {
-        assert_eq!(sel(C::Ts).as_deref(), Some("mp2"));
+    if is_audio_encoder_available(&rdlp_types::media_name::AudioEncoderName::from_static(
+        "mp2",
+    )) {
+        assert_eq!(
+            sel(C::Ts)
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("mp2")
+        );
     }
-    assert_eq!(sel(C::Flac).as_deref(), Some("flac"));
-    assert_eq!(sel(C::Wav).as_deref(), Some("pcm_s16le"));
+    assert_eq!(
+        sel(C::Flac)
+            .as_ref()
+            .map(rdlp_types::media_name::MediaName::as_str),
+        Some("flac")
+    );
+    assert_eq!(
+        sel(C::Wav)
+            .as_ref()
+            .map(rdlp_types::media_name::MediaName::as_str),
+        Some("pcm_s16le")
+    );
 
     // Behaviour CHANGES from the old `&str` shim, deliberately: IVF carries
     // no audio stream at all, so it must be refused rather than defaulted.

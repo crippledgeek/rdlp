@@ -12,7 +12,7 @@ use log::{debug, info, warn};
 
 use rdlp_ffmpeg::ffmpeg::{audio_encoder_registry, video_codecs};
 use rdlp_ffmpeg::{FFmpegRunner, PostProcessError, VideoConvertOptions};
-use rdlp_types::{AudioEncoderName, ContainerFormat, RecodeAudioMode, VideoEncoderName};
+use rdlp_types::{AudioEncoderName, CodecName, ContainerFormat, RecodeAudioMode, VideoEncoderName};
 
 use crate::pipeline::stages::recode_audio_only::{self, SourceAudio};
 use crate::pipeline::{PipelineMessage, PipelineStage};
@@ -77,6 +77,157 @@ impl<'a> SourceVideo<'a> {
     }
 }
 
+/// A first-class rule answering whether a source's video (as classified by
+/// [`SourceVideo`]) may be stream-copied into a particular container.
+///
+/// Modeling each `rule_for` arm as a `VideoRule` **value** — built by a small
+/// factory (`codec_in`, `muxer_decides`, `always`) rather than written inline
+/// — means the codec identities a container accepts live in exactly one
+/// place (the argument to `codec_in`) instead of being re-typed, with their
+/// aliases, into every arm that needs them. #576's failure mode was a hand-
+/// repeated alias pair (`"h264"`/`"avc"`) drifting out of sync across arms;
+/// a rule value built from one call site cannot drift from itself.
+type VideoRule = Box<dyn for<'a> Fn(SourceVideo<'a>) -> bool + Send + Sync>;
+
+/// Matches when the source's video codec canonically identifies as one of
+/// `identities` — alias-resolved via
+/// [`video_codecs::canonical_codec_key`], so `"avc"` and `"h264"` are the
+/// same identity and a caller only ever lists one canonical spelling.
+/// [`SourceVideo::Unnamed`]/[`SourceVideo::Absent`] never match: neither
+/// proves anything about representability (see [`RecodeStage::can_remux_video`]).
+fn codec_in(identities: &'static [&'static str]) -> VideoRule {
+    Box::new(move |video| match video {
+        SourceVideo::Codec(c) => {
+            let key = video_codecs::canonical_codec_key(c).unwrap_or(c);
+            identities.iter().any(|id| key.eq_ignore_ascii_case(id))
+        }
+        SourceVideo::Unnamed | SourceVideo::Absent => false,
+    })
+}
+
+/// Asks the linked `FFmpeg` build's own muxer whether it can represent the
+/// source's named codec in `container` (`avformat_query_codec` plus the
+/// #633 known-support allow-list, via [`rdlp_ffmpeg::muxer_can_represent`]).
+///
+/// `Unnamed` transcodes rather than asking: nothing is proven, and
+/// re-encoding still yields a playable file. `Absent` is not reachable here
+/// in production (an audio-only source is routed to
+/// [`RecodeStage::can_copy_audio_only`] first) but is kept as its own arm,
+/// not merged with `Unnamed` — the exact conflation that shipped as a
+/// regression once already (#630, #637).
+#[allow(clippy::match_same_arms)]
+fn muxer_decides(container: ContainerFormat) -> VideoRule {
+    Box::new(move |video| match video {
+        SourceVideo::Unnamed => false,
+        SourceVideo::Absent => false,
+        SourceVideo::Codec(c) => {
+            // `c` is `FFmpeg`'s own descriptor name (it came from
+            // `MediaInfo::video_codec`, already a validated `CodecName`
+            // degraded to `&str` at `SourceVideo::from_probe`), so
+            // re-validating it here can never plausibly fail — `is_ok_and`
+            // degrades to `false` rather than panicking in the theoretical
+            // case it somehow does.
+            rdlp_types::media_name::CodecName::new(c).is_ok_and(|codec| {
+                rdlp_ffmpeg::muxer_can_represent(container, &codec, rdlp_ffmpeg::MediaKind::Video)
+            })
+        }
+    })
+}
+
+/// A rule that ignores the source entirely and always answers `answer`.
+///
+/// `answer` genuinely captures nothing beyond itself, so this selects between
+/// two zero-capture `fn` items rather than allocating a closure per call.
+fn always(answer: bool) -> VideoRule {
+    const fn yes(_video: SourceVideo<'_>) -> bool {
+        true
+    }
+    const fn no(_video: SourceVideo<'_>) -> bool {
+        false
+    }
+    Box::new(if answer {
+        yes as fn(SourceVideo<'_>) -> bool
+    } else {
+        no
+    })
+}
+
+/// Matches when any of `rules` matches — the general OR-combinator
+/// `VideoRule` composition affords, for a future container whose acceptance
+/// genuinely needs more than one rule combined with logical OR.
+#[allow(dead_code)] // no `rule_for` arm needs it yet; kept as the documented combinator.
+fn any_of(rules: Vec<VideoRule>) -> VideoRule {
+    Box::new(move |video| rules.iter().any(|rule| rule(video)))
+}
+
+/// The remux-compatibility rule for `output`, given the extension `input_ext`
+/// originally carried (only the ext-compare fallback arms consult it — the
+/// container-specific arms answer from the codec or from `FFmpeg`'s own
+/// muxer, so `input_ext` is resolved into a plain `bool` via [`always`]
+/// rather than threaded through as a rule parameter).
+///
+/// Exhaustively matched with no `_` arm: a newly-added [`ContainerFormat`]
+/// variant must be classified here or the build fails. #538 is why — a
+/// catch-all would have silently swapped the ASF-family codec-compatibility
+/// rule for an extension compare when `Asf` split into three variants, with
+/// no build error and no failing test. Same discipline as
+/// `embed_strategy::for_container` (#525).
+fn rule_for(input_ext: &str, output: ContainerFormat) -> VideoRule {
+    match output {
+        ContainerFormat::Mp4 | ContainerFormat::F4v => codec_in(&["h264", "h265", "mpeg4", "av1"]),
+        // Ask the linked build whether this container can represent *this
+        // source's* codec, rather than asserting the container is permissive
+        // (#630). "Holds many codecs" and "holds the one in front of us" are
+        // different questions, and the old unconditional `true` answered the
+        // first: `hevc → avi` routed to a remux the mux path then refused
+        // outright ("avi cannot represent hevc video"), and #618's
+        // `Override("h264")` policy for Nut/Mxf/Avi was unreachable because
+        // remux short-circuited before `default_codec_for_container` was
+        // ever consulted.
+        ContainerFormat::Mkv
+        | ContainerFormat::Nut
+        | ContainerFormat::Mxf
+        | ContainerFormat::Avi => muxer_decides(output),
+        // `av_guess_format("x.mka")` resolves to matroska's *audio* muxer
+        // (identical `name`, different muxer), which rejects every video
+        // codec — so `muxer_decides` would answer "transcode", yet the
+        // transcode path demonstrably succeeds in writing H.264 video into a
+        // `.mka`. Whether an audio-only container may carry video is #577's
+        // call, not a side effect of this routing fix; today's success is
+        // left as-is via an unconditional `true`.
+        ContainerFormat::Mka => always(true),
+        ContainerFormat::WebM | ContainerFormat::Ivf => codec_in(&["vp8", "vp9", "av1"]),
+        ContainerFormat::ThreeGp => codec_in(&["h264", "h263", "mpeg4"]),
+        // All three ASF-family spellings share one muxer and therefore one
+        // codec-compatibility answer. Listed explicitly rather than folded
+        // into the ext-compare arm below: falling through would silently
+        // swap this codec check for an extension compare (#538).
+        ContainerFormat::Wmv | ContainerFormat::Wma | ContainerFormat::Asf => {
+            codec_in(&["wmv1", "wmv2", "h264", "mpeg4"])
+        }
+        ContainerFormat::Mpg | ContainerFormat::Vob => codec_in(&["mpeg1", "mpeg2", "mpeg4"]),
+        // Audio-only and any-other-video containers fall back to the
+        // input/output ext compare, resolved eagerly into a plain `bool`
+        // (this rule never needs the source's codec at all).
+        ContainerFormat::Mov
+        | ContainerFormat::M4v
+        | ContainerFormat::Ts
+        | ContainerFormat::Flv
+        | ContainerFormat::Dv
+        | ContainerFormat::Ogg
+        | ContainerFormat::M4a
+        | ContainerFormat::Mp3
+        | ContainerFormat::Wav
+        | ContainerFormat::Flac
+        | ContainerFormat::Opus
+        | ContainerFormat::Aac
+        | ContainerFormat::Aiff
+        | ContainerFormat::Wv
+        | ContainerFormat::Caf
+        | ContainerFormat::Ac3 => always(input_ext.eq_ignore_ascii_case(output.as_ext())),
+    }
+}
+
 /// An encoder whose output only one container can carry.
 ///
 /// Expressed as data rather than as a hardcoded condition so that the matching
@@ -136,126 +287,12 @@ impl RecodeStage {
     /// before asking, so this function never has to invent a video answer for
     /// a file with no video.
     ///
-    /// `clippy::match_same_arms` is allowed below deliberately: `Unnamed` and
-    /// `Absent` share a body but are different questions, and merging them
-    /// into one arm is the exact conflation `SourceVideo` exists to prevent —
-    /// #630 shipped that regression once already. Keeping them apart forces
-    /// the next edit to state an answer for each.
-    #[allow(clippy::match_same_arms)]
+    /// Delegates to [`rule_for`], the first-class-function form of this
+    /// compatibility question (#576's B3) — see that function's doc for the
+    /// per-container reasoning and [`codec_in`]/[`muxer_decides`]/[`always`]
+    /// for how each rule is built.
     fn can_remux_video(input_ext: &str, output: ContainerFormat, video: SourceVideo<'_>) -> bool {
-        /// Matches one of `names` against a *named* source codec. Absent and
-        /// unnamed video both answer `false` here, preserving the behaviour
-        /// these arms had when the parameter was an `Option`.
-        fn codec_is(video: SourceVideo<'_>, names: &[&str]) -> bool {
-            matches!(video, SourceVideo::Codec(c) if names.iter().any(|n| n.eq_ignore_ascii_case(c)))
-        }
-
-        match output {
-            ContainerFormat::Mp4 | ContainerFormat::F4v => {
-                codec_is(video, &["h264", "avc", "h265", "hevc", "mpeg4", "av1"])
-            }
-            // Ask the linked build whether this container can represent *this
-            // source's* codec, rather than asserting the container is
-            // permissive (#630). "Holds many codecs" and "holds the one in
-            // front of us" are different questions, and the old unconditional
-            // `true` answered the first: `hevc → avi` routed to a remux the
-            // mux path then refused outright ("avi cannot represent hevc
-            // video"), and #618's `Override("h264")` policy for Nut/Mxf/Avi
-            // was unreachable because remux short-circuited before
-            // `default_codec_for_container` was ever consulted.
-            //
-            // Two source states reach here, and conflating them is a
-            // regression this fix shipped once already:
-            //
-            // - `Unnamed` (a video stream this build cannot name): transcode.
-            //   Nothing is proven, and re-encoding still yields a playable
-            //   file.
-            // - `Codec(c)`: ask the muxer.
-            //
-            // `Absent` is not a state of this function — the caller routes an
-            // audio-only source to `can_copy_audio_only` before asking (#637).
-            // These four arms used to hardcode `Absent => true`, which was
-            // right for Mkv/Nut/Avi and wrong for Mxf: MXF needs *exactly one
-            // video stream*, so the blanket answer picked a remux that could
-            // not work.
-            //
-            // `Mka` is deliberately excluded and keeps its unconditional
-            // `true`. `av_guess_format("x.mka")` resolves to matroska's
-            // *audio* muxer (identical `name`, different muxer), which
-            // rejects every video codec — so the predicate would answer
-            // "transcode", and the transcode path does succeed in writing
-            // H.264 video into a `.mka`. Whether an audio-only container may
-            // carry video is #577's call, not a side effect of this routing
-            // fix; today's hard failure is left as-is.
-            ContainerFormat::Mkv
-            | ContainerFormat::Nut
-            | ContainerFormat::Mxf
-            | ContainerFormat::Avi => match video {
-                SourceVideo::Unnamed => false,
-                // Not reachable: an audio-only source never gets here. Kept
-                // distinct from `Unnamed` rather than merged into one `=> false`
-                // arm — merging the two is precisely the conflation
-                // `SourceVideo` exists to prevent, and the next edit to this
-                // match would have nothing stopping it.
-                SourceVideo::Absent => false,
-                SourceVideo::Codec(c) => {
-                    // `c` is `FFmpeg`'s own descriptor name (it came from
-                    // `MediaInfo::video_codec`, which is already a validated
-                    // `CodecName` degraded to `&str` at `SourceVideo::from_probe`),
-                    // so re-validating it here can never plausibly fail —
-                    // `is_ok_and` degrades to `false` rather than panicking in
-                    // the theoretical case it somehow does.
-                    rdlp_types::media_name::CodecName::new(c).is_ok_and(|codec| {
-                        rdlp_ffmpeg::muxer_can_represent(
-                            output,
-                            &codec,
-                            rdlp_ffmpeg::MediaKind::Video,
-                        )
-                    })
-                }
-            },
-            ContainerFormat::Mka => true,
-            ContainerFormat::WebM | ContainerFormat::Ivf => codec_is(video, &["vp8", "vp9", "av1"]),
-            ContainerFormat::ThreeGp => codec_is(video, &["h264", "avc", "h263", "mpeg4"]),
-            // All three ASF-family spellings share one muxer and therefore one
-            // codec-compatibility answer. Listed explicitly rather than left to
-            // the `other` arm below: falling through would silently swap this
-            // codec check for an extension compare when #538 split the variants.
-            ContainerFormat::Wmv | ContainerFormat::Wma | ContainerFormat::Asf => {
-                codec_is(video, &["wmv1", "wmv2", "h264", "avc", "mpeg4"])
-            }
-            ContainerFormat::Mpg | ContainerFormat::Vob => codec_is(
-                video,
-                &["mpeg1", "mpeg1video", "mpeg2", "mpeg2video", "mpeg4"],
-            ),
-            // Audio-only and any-other-video containers fall back to the
-            // input/output ext compare.
-            //
-            // Enumerated rather than left as `other =>` so a newly-added
-            // `ContainerFormat` fails to compile here instead of silently
-            // inheriting an extension compare in place of a codec check. #538
-            // is why: splitting `Asf` into three variants added two containers
-            // to this match, and a catch-all would have swapped the ASF
-            // codec-compatibility list above for an ext compare with no build
-            // error and no test failure. Same discipline as
-            // `embed_strategy::for_container` (#525).
-            ContainerFormat::Mov
-            | ContainerFormat::M4v
-            | ContainerFormat::Ts
-            | ContainerFormat::Flv
-            | ContainerFormat::Dv
-            | ContainerFormat::Ogg
-            | ContainerFormat::M4a
-            | ContainerFormat::Mp3
-            | ContainerFormat::Wav
-            | ContainerFormat::Flac
-            | ContainerFormat::Opus
-            | ContainerFormat::Aac
-            | ContainerFormat::Aiff
-            | ContainerFormat::Wv
-            | ContainerFormat::Caf
-            | ContainerFormat::Ac3 => input_ext.eq_ignore_ascii_case(output.as_ext()),
-        }
+        rule_for(input_ext, output)(video)
     }
 
     /// The audio mode this run should use, forcing `Copy` when audio
@@ -283,23 +320,6 @@ impl RecodeStage {
     /// so the recode pipeline and `validate_speed_controls` never resolve differently.
     fn default_codec_for(target: ContainerFormat) -> &'static str {
         rdlp_ffmpeg::default_codec_for_container(target)
-    }
-
-    /// Default `(preset, crf)` for a known target codec. Returns `(None, None)`
-    /// for codecs without a meaningful default — the codec falls back to its
-    /// FFmpeg-shipped defaults.
-    fn default_preset_crf_for_codec(target_codec: &str) -> (Option<String>, Option<u32>) {
-        match target_codec {
-            "h264" => (Some("medium".to_string()), Some(23)),
-            // x265's native default is 28; reusing x264's 23 on x265 is ~5 CRF
-            // points too low and yields oversized HEVC output.
-            "h265" | "hevc" => (Some("medium".to_string()), Some(28)),
-            "vp9" | "vp8" => (None, Some(30)),
-            "av1" => (None, Some(28)),
-            // VVC/EVC/AVS/APV are not x264-style-CRF encoders (libvvenc/libxavs2
-            // take qp+preset; libxeve needs rc_mode=CRF) — defer to encoder defaults.
-            _ => (None, None),
-        }
     }
 
     /// The restriction `encoder` violates by targeting `target`, if any.
@@ -364,7 +384,7 @@ impl RecodeStage {
                 cpu_used: params.cpu_used,
                 speed_level: params.speed_level,
                 audio_copy: params.audio_copy,
-                audio_codec: Self::audio_codec_option(params),
+                audio_codec: params.audio_codec.clone(),
                 ..Default::default()
             });
         }
@@ -388,12 +408,22 @@ impl RecodeStage {
     /// that hid the `dvvideo` bug ("pipeline terminated with no output and
     /// no error"). Mirrors the audio side's honest refusal in
     /// `resolve_declared_codec`.
+    ///
+    /// Preset/CRF are looked up by the *resolved encoder*, via
+    /// [`Self::default_preset_crf`] — the same table
+    /// `build_convert_options`'s explicit-override branch uses — not by
+    /// `target_codec`. A codec can resolve to more than one encoder (h264's
+    /// row lists both `libx264` and `libopenh264`), and only some of a
+    /// codec's encoders are x264-style CRF encoders; keying by codec name
+    /// alone (the pre-#576 shape, a second hand-maintained table) would have
+    /// forced CRF 23 onto `libopenh264` too, which is not an x264-style-CRF
+    /// encoder (#576's B2).
     fn options_for_codec(
         target_codec: &'static str,
         params: &RecodeParams,
     ) -> Option<VideoConvertOptions> {
         let encoder = video_codecs::resolve_encoder(target_codec)?;
-        let (default_preset, crf) = Self::default_preset_crf_for_codec(target_codec);
+        let (default_preset, crf) = Self::default_preset_crf(&encoder);
         let preset = params.preset_override.clone().or(default_preset);
 
         Some(VideoConvertOptions {
@@ -406,22 +436,13 @@ impl RecodeStage {
             cpu_used: params.cpu_used,
             speed_level: params.speed_level,
             audio_copy: params.audio_copy,
-            audio_codec: Self::audio_codec_option(params),
+            // `params.audio_codec` is already an `AudioEncoderName` populated
+            // exclusively by `Self::resolve_audio_params` / `resolve_audio_only_params`,
+            // both of which resolve through `audio_encoder_registry` — so
+            // this is a plain clone, not a re-parse.
+            audio_codec: params.audio_codec.clone(),
             ..Default::default()
         })
-    }
-
-    /// Returns `params.audio_codec` for the typed
-    /// [`VideoConvertOptions::audio_codec`] field.
-    ///
-    /// `params.audio_codec` is already an [`AudioEncoderName`] populated
-    /// exclusively by [`Self::resolve_audio_params`] / `resolve_audio_only_params`,
-    /// both of which resolve through `audio_encoder_registry` — so this is a
-    /// plain clone, not a re-parse. Before #642 this field was a plain
-    /// `String` and this helper re-validated it through `AudioEncoderName::new(..)
-    /// .expect(..)`, which existed only to undo the earlier stringification.
-    fn audio_codec_option(params: &RecodeParams) -> Option<AudioEncoderName> {
-        params.audio_codec.clone()
     }
 
     /// Resolves `(audio_copy, audio_codec)` for a transcode (never called on
@@ -476,7 +497,15 @@ impl RecodeStage {
                 Ok((false, Some(encoder)))
             }
             RecodeAudioMode::Encoder { name } => {
-                if !audio_encoder_registry::container_supports_audio_codec(target, name) {
+                // `name` is a raw operator-supplied string (`--recode-audio=<name>`),
+                // not yet validated against the `CodecName` vocabulary. An
+                // invalid value can never match a compatibility-matrix row
+                // either way, so treating it as "not confirmed compatible"
+                // preserves this warn-then-proceed path's existing behaviour.
+                let compatible = CodecName::new(name.as_str()).is_ok_and(|codec| {
+                    audio_encoder_registry::container_supports_audio_codec(target, &codec)
+                });
+                if !compatible {
                     warn!(
                         "RecodeStage: audio codec '{name}' may not be compatible with \
                          container '{target_ext}'; proceeding anyway"
@@ -504,10 +533,29 @@ impl RecodeStage {
         }
     }
 
+    /// Default `(preset, crf)` for a resolved video encoder. Returns
+    /// `(None, None)` for an encoder without a meaningful rdlp-chosen default
+    /// — it falls back to its own `FFmpeg`-shipped defaults.
+    ///
+    /// The **single** source for this tuning — both `build_convert_options`'s
+    /// explicit-`--video-encoder`-override branch and `options_for_codec`'s
+    /// no-override (default-codec) branch call this, keyed by the resolved
+    /// encoder. Before #576 (B2) there were two separate tables — this one,
+    /// and a second keyed by *codec name* — and the codec-keyed one could not
+    /// tell `libx264` and `libopenh264` apart (both answer to codec `"h264"`),
+    /// so a build without `libx264` would have forced x264's CRF 23 onto
+    /// `libopenh264`, which is not an x264-style-CRF encoder at all.
+    ///
+    /// Explicit per-encoder match (not a substring match): x265's own default
+    /// CRF is 28 (x264's is 23 — same RF scale, different calibration curve,
+    /// so reusing x264's value on x265 is ~5 CRF points too low and yields
+    /// oversized HEVC output), and `libopenh264`/`libkvazaar` (which contain
+    /// the substrings `"264"`/`"kvazaar"`) are NOT x264-style-CRF encoders at
+    /// all, so a substring match would wrongly force CRF onto them.
+    /// VP8/VP9/AV1's `Some(30)`/`Some(28)` are rdlp's own quality defaults,
+    /// not each encoder's built-in default (libvpx/libaom/SVT-AV1 default to
+    /// bitrate-based rate control absent an explicit `-crf`).
     fn default_preset_crf(encoder: &VideoEncoderName) -> (Option<String>, Option<u32>) {
-        // Explicit per-encoder match (not substring): x265's default crf is 28,
-        // not x264's 23; and libopenh264/kvazaar (substring "264"/"kvazaar") are
-        // NOT x264-style-CRF encoders, so they must NOT inherit crf 23.
         match encoder.as_str() {
             "libx264" | "libx264rgb" => (Some("medium".to_string()), Some(23)),
             "libx265" => (Some("medium".to_string()), Some(28)),
@@ -582,10 +630,20 @@ impl PipelineStage for RecodeStage {
             .probe(&input_file)
             .await
             .context("recode stage: failed to probe input file")?;
-        let video =
-            SourceVideo::from_probe(media_info.has_video, media_info.video_codec.as_deref());
-        let audio =
-            SourceAudio::from_probe(media_info.has_audio, media_info.audio_codec.as_deref());
+        let video = SourceVideo::from_probe(
+            media_info.has_video,
+            media_info
+                .video_codec
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+        );
+        let audio = SourceAudio::from_probe(
+            media_info.has_audio,
+            media_info
+                .audio_codec
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+        );
 
         // An audio-only source cannot go through the video pipeline at all —
         // `convert_video` opens a video decoder and ends at `NoVideoStream`
@@ -700,7 +758,10 @@ impl PipelineStage for RecodeStage {
 
         // Log recode parameters to the UI
         if let Some(ref cb) = stage_callback {
-            let video_info = opts.video_codec.as_deref().unwrap_or("copy");
+            let video_info = opts
+                .video_codec
+                .as_ref()
+                .map_or("copy", rdlp_types::media_name::MediaName::as_str);
             let preset_info = opts.preset.as_deref().unwrap_or("default");
             let crf_info = opts
                 .crf
@@ -749,9 +810,14 @@ impl PipelineStage for RecodeStage {
         {
             let audio_part = rdlp_ffmpeg::ffmpeg::audio_tag_component(
                 opts.audio_copy,
-                opts.audio_codec.as_deref(),
+                opts.audio_codec
+                    .as_ref()
+                    .map(rdlp_types::media_name::MediaName::as_str),
             );
-            let video_part = opts.video_codec.as_deref().unwrap_or("libx264");
+            let video_part = opts
+                .video_codec
+                .as_ref()
+                .map_or("libx264", rdlp_types::media_name::MediaName::as_str);
             msg.encoding_tool = Some(format!("{video_part} + {audio_part}"));
         }
 
@@ -786,25 +852,41 @@ mod tests {
     #[test]
     fn hevc_default_crf_is_28_not_23() {
         assert_eq!(
-            RecodeStage::default_preset_crf_for_codec("h265"),
-            (Some("medium".into()), Some(28))
-        );
-        assert_eq!(
-            RecodeStage::default_preset_crf_for_codec("hevc"),
-            (Some("medium".into()), Some(28))
-        );
-        assert_eq!(
             RecodeStage::default_preset_crf(&VideoEncoderName::from_static("libx265")),
             (Some("medium".into()), Some(28))
         );
     }
 
+    /// Integrated regression guard for #576's B2 unification: the
+    /// no-override *codec* path (`options_for_codec`) must resolve CRF from
+    /// the same encoder-keyed table as the explicit-override path, not from
+    /// a separate codec-keyed table that cannot distinguish `libx264` from
+    /// `libopenh264` (both answer to codec `"h264"`, but only the former is
+    /// an x264-style-CRF encoder).
+    #[test]
+    fn options_for_codec_h265_resolves_crf_28_via_the_encoder_keyed_table() {
+        rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
+        if !rdlp_ffmpeg::ffmpeg::video_codecs::is_encoder_available("libx265") {
+            return;
+        }
+        let params = RecodeParams {
+            target: ContainerFormat::Mkv,
+            encoder_override: None,
+            audio_copy: true,
+            audio_codec: None,
+            threads: None,
+            preset_override: None,
+            deadline: None,
+            cpu_used: None,
+            speed_level: None,
+        };
+        let opts = RecodeStage::options_for_codec("h265", &params).expect("libx265 available");
+        assert_eq!(opts.preset.as_deref(), Some("medium"));
+        assert_eq!(opts.crf, Some(28));
+    }
+
     #[test]
     fn h264_default_crf_stays_23() {
-        assert_eq!(
-            RecodeStage::default_preset_crf_for_codec("h264"),
-            (Some("medium".into()), Some(23))
-        );
         assert_eq!(
             RecodeStage::default_preset_crf(&VideoEncoderName::from_static("libx264")),
             (Some("medium".into()), Some(23))
@@ -903,7 +985,12 @@ mod tests {
             RecodeStage::resolve_audio_params(&mode, ContainerFormat::Wav, true)
                 .expect("an available encoder must resolve despite a container mismatch warning");
         assert!(!audio_copy);
-        assert_eq!(audio_codec.as_deref(), Some("flac"));
+        assert_eq!(
+            audio_codec
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("flac")
+        );
     }
 
     #[test]
@@ -920,14 +1007,35 @@ mod tests {
             RecodeStage::default_preset_crf(&VideoEncoderName::from_static("libxavs2")),
             (None, None)
         );
-        assert_eq!(
-            RecodeStage::default_preset_crf_for_codec("vvc"),
-            (None, None)
-        );
-        assert_eq!(
-            RecodeStage::default_preset_crf_for_codec("h266"),
-            (None, None)
-        );
+    }
+
+    /// Integrated companion to `new_codecs_get_no_forced_crf`: the no-override
+    /// codec path must also leave VVC/EVC/AVS2 unforced, through the same
+    /// encoder-keyed table `options_for_codec` now shares with the
+    /// explicit-override branch (#576's B2).
+    #[test]
+    fn options_for_codec_new_codecs_get_no_forced_crf() {
+        rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
+        let params = RecodeParams {
+            target: ContainerFormat::Mkv,
+            encoder_override: None,
+            audio_copy: true,
+            audio_codec: None,
+            threads: None,
+            preset_override: None,
+            deadline: None,
+            cpu_used: None,
+            speed_level: None,
+        };
+        for codec in ["vvc", "h266"] {
+            if let Some(opts) = RecodeStage::options_for_codec(codec, &params) {
+                assert_eq!(
+                    (opts.preset, opts.crf),
+                    (None, None),
+                    "{codec} must not get a forced preset/crf"
+                );
+            }
+        }
     }
 
     fn make_msg(files: Vec<PathBuf>, config: PostProcess) -> PipelineMessage {
@@ -1026,6 +1134,20 @@ mod tests {
             ContainerFormat::Mkv.as_ext(),
             ContainerFormat::Mp4,
             SourceVideo::Codec("h264")
+        ));
+    }
+
+    /// #576's B1: the `"avc"` alias for `"h264"` must resolve identically to
+    /// `"h264"` itself through the registry (`video_codecs::canonical_codec_key`),
+    /// not via a hand-repeated literal in this match arm. Mutation-tested:
+    /// removing `"avc"` from the h264 row's `aliases` in `video_codecs.rs`
+    /// makes this test fail.
+    #[test]
+    fn can_remux_avc_alias_resolves_the_same_as_h264() {
+        assert!(RecodeStage::can_remux_video(
+            ContainerFormat::Mkv.as_ext(),
+            ContainerFormat::Mp4,
+            SourceVideo::Codec("avc")
         ));
     }
 
@@ -1296,7 +1418,12 @@ mod tests {
         };
         let opts = RecodeStage::build_convert_options(&params, false).unwrap();
         assert!(!opts.audio_copy);
-        assert_eq!(opts.audio_codec.as_deref(), Some("libopus"));
+        assert_eq!(
+            opts.audio_codec
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("libopus")
+        );
     }
 
     #[test]
@@ -1354,7 +1481,12 @@ mod tests {
         };
         let opts = RecodeStage::build_convert_options(&params, false).unwrap();
         assert!(!opts.audio_copy);
-        assert_eq!(opts.audio_codec.as_deref(), Some("libopus"));
+        assert_eq!(
+            opts.audio_codec
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("libopus")
+        );
     }
 
     #[test]

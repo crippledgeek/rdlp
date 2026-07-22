@@ -247,7 +247,8 @@ pub(crate) fn apply_variant_labels(
         format.acodec = Codec::from(
             variant
                 .audio_codec
-                .as_deref()
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str)
                 .map(str::to_owned)
                 .or_else(|| Some("mp4a".to_string())),
         );
@@ -255,7 +256,8 @@ pub(crate) fn apply_variant_labels(
         format.vcodec = Codec::from(
             variant
                 .video_codec
-                .as_deref()
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str)
                 .map(str::to_owned)
                 .or_else(|| parent_format.vcodec.as_str().map(str::to_owned))
                 .or_else(|| detect_codec_from_id(&parent_format.format_id, true)),
@@ -263,7 +265,8 @@ pub(crate) fn apply_variant_labels(
         format.acodec = Codec::from(
             variant
                 .audio_codec
-                .as_deref()
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str)
                 .map(str::to_owned)
                 .or_else(|| parent_format.acodec.as_str().map(str::to_owned))
                 .or_else(|| detect_codec_from_id(&parent_format.format_id, false)),

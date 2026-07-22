@@ -318,7 +318,9 @@ mod tests {
     fn mp3_container_declares_mp3_not_aac() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert_eq!(
-            declared_codec(ContainerFormat::Mp3, MediaKind::Audio).as_deref(),
+            declared_codec(ContainerFormat::Mp3, MediaKind::Audio)
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
             Some("mp3")
         );
     }
@@ -517,11 +519,15 @@ mod tests {
     fn flac_declares_flac_and_wav_declares_pcm() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert_eq!(
-            declared_codec(ContainerFormat::Flac, MediaKind::Audio).as_deref(),
+            declared_codec(ContainerFormat::Flac, MediaKind::Audio)
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
             Some("flac")
         );
         assert_eq!(
-            declared_codec(ContainerFormat::Wav, MediaKind::Audio).as_deref(),
+            declared_codec(ContainerFormat::Wav, MediaKind::Audio)
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
             Some("pcm_s16le")
         );
     }
@@ -530,7 +536,9 @@ mod tests {
     fn aiff_declares_big_endian_pcm() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert_eq!(
-            declared_codec(ContainerFormat::Aiff, MediaKind::Audio).as_deref(),
+            declared_codec(ContainerFormat::Aiff, MediaKind::Audio)
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
             Some("pcm_s16be"),
             "AIFF is big-endian; pcm_s16le would be wrong"
         );
@@ -556,7 +564,9 @@ mod tests {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert!(
             matches!(
-                declared_codec(ContainerFormat::Mkv, MediaKind::Audio).as_deref(),
+                declared_codec(ContainerFormat::Mkv, MediaKind::Audio)
+                    .as_ref()
+                    .map(rdlp_types::media_name::MediaName::as_str),
                 Some("vorbis" | "ac3")
             ),
             "matroska declares vorbis when CONFIG_LIBVORBIS_ENCODER is on, else ac3"
@@ -597,11 +607,15 @@ mod tests {
     fn video_kind_answers_separately() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert_eq!(
-            declared_codec(ContainerFormat::Dv, MediaKind::Video).as_deref(),
+            declared_codec(ContainerFormat::Dv, MediaKind::Video)
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
             Some("dvvideo")
         );
         assert_eq!(
-            declared_codec(ContainerFormat::Ivf, MediaKind::Video).as_deref(),
+            declared_codec(ContainerFormat::Ivf, MediaKind::Video)
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
             Some("vp8")
         );
     }

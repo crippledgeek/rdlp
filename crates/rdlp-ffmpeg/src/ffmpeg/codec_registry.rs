@@ -28,7 +28,7 @@ pub trait CodecRow {
     type Encoder: NameKind;
 
     /// Canonical codec name, e.g. `"aac"` / `"h264"`.
-    fn codec(&self) -> CodecName;
+    fn codec(&self) -> &CodecName;
     /// Ordered encoder preference list: `(encoder_name, display_name)`.
     fn encoders(&self) -> &'static [(MediaName<Self::Encoder>, &'static str)];
     /// Alternate names that should also resolve to this row, e.g. a
@@ -132,7 +132,7 @@ impl<R: CodecRow + 'static> Registry<R> {
                     );
                 }
 
-                map.insert(row.codec(), selected.clone());
+                map.insert(row.codec().clone(), selected.clone());
 
                 // Aliases resolve through this same map, not just through
                 // `find_row` — otherwise a codec reachable only by its alias
@@ -225,8 +225,8 @@ mod tests {
 
     impl CodecRow for FakeRow {
         type Encoder = AudioEncoder;
-        fn codec(&self) -> CodecName {
-            self.codec.clone()
+        fn codec(&self) -> &CodecName {
+            &self.codec
         }
         fn encoders(&self) -> &'static [(MediaName<AudioEncoder>, &'static str)] {
             self.encoders
@@ -248,8 +248,8 @@ mod tests {
 
     impl CodecRow for AliasedRow {
         type Encoder = AudioEncoder;
-        fn codec(&self) -> CodecName {
-            self.codec.clone()
+        fn codec(&self) -> &CodecName {
+            &self.codec
         }
         fn encoders(&self) -> &'static [(MediaName<AudioEncoder>, &'static str)] {
             self.encoders
@@ -299,7 +299,10 @@ mod tests {
     fn preferred_encoder_resolves_via_alias() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert_eq!(
-            REGISTRY_ALIASED.preferred_encoder("pcm").as_deref(),
+            REGISTRY_ALIASED
+                .preferred_encoder("pcm")
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
             Some("pcm_s16le")
         );
     }
@@ -311,7 +314,10 @@ mod tests {
     fn resolve_resolves_via_alias() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert_eq!(
-            REGISTRY_ALIASED.resolve("pcm").as_deref(),
+            REGISTRY_ALIASED
+                .resolve("pcm")
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
             Some("pcm_s16le")
         );
     }
@@ -369,7 +375,10 @@ mod tests {
     fn preferred_encoder_returns_first_available() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert_eq!(
-            REGISTRY_A.preferred_encoder("shared_name").as_deref(),
+            REGISTRY_A
+                .preferred_encoder("shared_name")
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
             Some("aac")
         );
     }
@@ -389,7 +398,10 @@ mod tests {
     fn preferred_encoder_skips_unavailable_and_respects_order() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert_eq!(
-            REGISTRY_C.preferred_encoder("ordered").as_deref(),
+            REGISTRY_C
+                .preferred_encoder("ordered")
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
             Some("aac")
         );
     }
@@ -417,13 +429,25 @@ mod tests {
     #[test]
     fn resolve_accepts_a_codec_name() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
-        assert_eq!(REGISTRY_A.resolve("shared_name").as_deref(), Some("aac"));
+        assert_eq!(
+            REGISTRY_A
+                .resolve("shared_name")
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("aac")
+        );
     }
 
     #[test]
     fn resolve_accepts_a_direct_encoder_name() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
-        assert_eq!(REGISTRY_A.resolve("aac").as_deref(), Some("aac"));
+        assert_eq!(
+            REGISTRY_A
+                .resolve("aac")
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("aac")
+        );
     }
 
     #[test]
