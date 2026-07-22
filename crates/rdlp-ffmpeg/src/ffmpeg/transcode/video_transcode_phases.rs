@@ -473,7 +473,7 @@ impl FFmpegRunner {
             }
 
             // Build audio filter graph for format/rate conversion + frame size buffering
-            let audio_filter = Self::build_audio_transcode_filter(
+            let audio_filter = Self::build_encoder_adapted_audio_filter(
                 &audio_decoder,
                 &audio_encoder,
                 audio_ist_time_base.unwrap_or(ffmpeg_the_third::Rational(1, 48000)),

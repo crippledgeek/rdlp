@@ -423,8 +423,10 @@ impl FFmpegRunner {
             ost_time_base.denominator(),
         );
 
-        // Build filter graph for sample format/rate conversion
-        let mut filter_graph = Self::build_audio_filter(&decoder, &audio_encoder, ist_time_base)?;
+        // Build filter graph adapting decoded frames to the encoder's sample
+        // format, rate, layout, and frame size (#638).
+        let mut filter_graph =
+            Self::build_encoder_adapted_audio_filter(&decoder, &audio_encoder, ist_time_base)?;
 
         let mut timing = MuxTimingState {
             encoder_frame_size: audio_encoder.frame_size(),
@@ -550,30 +552,5 @@ impl FFmpegRunner {
 
             first.unwrap_or(preferred)
         }
-    }
-
-    /// Build an audio filter graph for sample format/rate/channel conversion.
-    ///
-    /// Uses `abuffer` -> `aformat` -> `abuffersink` to let `FFmpeg` handle any
-    /// necessary sample format, sample rate, or channel layout conversions.
-    /// Delegates to the shared filter graph helper in normalize/helpers.
-    fn build_audio_filter(
-        decoder: &ffmpeg_the_third::decoder::Audio,
-        encoder: &ffmpeg_the_third::encoder::audio::Audio,
-        ist_time_base: ffmpeg_the_third::Rational,
-    ) -> Result<ffmpeg_the_third::filter::Graph> {
-        let enc_ch_layout_desc = encoder.ch_layout().description();
-        let aformat_spec = format!(
-            "aformat=sample_fmts={}:sample_rates={}:channel_layouts={}",
-            encoder.format().name(),
-            encoder.rate(),
-            enc_ch_layout_desc,
-        );
-
-        crate::ffmpeg::normalize::helpers::build_audio_filter_with_spec(
-            decoder,
-            ist_time_base,
-            &aformat_spec,
-        )
     }
 }
