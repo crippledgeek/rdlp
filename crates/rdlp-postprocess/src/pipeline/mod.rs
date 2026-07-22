@@ -31,7 +31,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use thiserror::Error;
-use tokio::sync::{Semaphore, mpsc, oneshot};
+use tokio::sync::{Semaphore, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use rdlp_core::PostProcessCallbackFactory;
@@ -95,8 +95,6 @@ pub struct PipelineMessage {
     pub verbose: bool,
     /// Factory for creating per-stage progress callbacks.
     pub callback_factory: Option<PostProcessCallbackFactory>,
-    /// Error channel — the first fatal stage sends here; subsequent stages see `None`.
-    pub error_tx: Option<oneshot::Sender<PipelineError>>,
     /// Non-fatal warnings accumulated by stages during processing.
     pub warnings: Vec<String>,
     /// Encoding tool tag set by the primary content-creating stage (recode,
@@ -219,7 +217,16 @@ impl Pipeline {
             FileTracker::new(files, Arc::clone(&self.temp_registry))
         };
 
-        let (error_tx, error_rx) = oneshot::channel::<PipelineError>();
+        // The error channel is owned by the stage *runner*, never by the
+        // message. A stage propagating with `?` — which is every stage — has
+        // no way to send on a channel that was moved into the message it just
+        // consumed, so the previous `msg.error_tx` contract was one no stage
+        // could satisfy and none did: every fatal failure reached the user as
+        // "pipeline terminated with no output and no error" (#632). Capacity
+        // 1 with `try_send`: the first fatal error wins and later ones are
+        // dropped, which is the same first-error-wins semantics the oneshot
+        // intended.
+        let (error_tx, mut error_rx) = mpsc::channel::<anyhow::Error>(1);
 
         // `None` callers get a fresh token that nobody else holds — zero-cost.
         // The isolation guarantee is load-bearing: a `None` caller can never
@@ -238,7 +245,6 @@ impl Pipeline {
             is_hls: opts.is_hls,
             verbose: opts.verbose,
             callback_factory,
-            error_tx: Some(error_tx),
             warnings: Vec::new(),
             encoding_tool: None,
             cancel: token.clone(),
@@ -246,7 +252,7 @@ impl Pipeline {
 
         // Build channel chain: one mpsc(1) between consecutive stages.
         // first_tx → stage_0 → stage_1 → ... → stage_N → final_rx
-        let mut final_rx = self.spawn_chain(msg, &token);
+        let mut final_rx = self.spawn_chain(msg, &token, error_tx);
 
         // Await the final message.
         let Some(final_msg) = final_rx.recv().await else {
@@ -256,9 +262,15 @@ impl Pipeline {
             if token.is_cancelled() {
                 return Err(PipelineError::Cancelled.into());
             }
-            // Pipeline was interrupted — recover error from the oneshot.
-            return match error_rx.await.ok() {
-                Some(err) => Err(anyhow::anyhow!("{err}")),
+            // Pipeline was interrupted — recover the fatal stage's error.
+            // Every sender is dropped by now (the cascade that produced the
+            // `None` above is what drops them), so `recv` resolves immediately
+            // rather than waiting. The error is returned as-is, preserving the
+            // `anyhow` chain for `classify_pipeline_err`'s `{e:#}` flatten.
+            return match error_rx.recv().await {
+                Some(err) => Err(err),
+                // Genuinely no error: a stage task died (panicked) without
+                // returning `Err`. Not a stand-in for a lost error any more.
                 None => Err(anyhow::anyhow!(
                     "pipeline terminated with no output and no error"
                 )),
@@ -340,10 +352,23 @@ impl Pipeline {
     /// Each stage task reads from `in_rx`, may process or pass-through,
     /// then sends to `out_tx`. When a fatal stage fails, it drops `out_tx`
     /// which cascades None through all downstream stages.
+    ///
+    /// `error_tx` is taken **by value on purpose** — clippy's
+    /// `needless_pass_by_value` suggestion to borrow it is wrong here, and
+    /// following it would hang the pipeline. The caller awaits
+    /// `error_rx.recv()`, which only resolves to `None` once *every* sender is
+    /// dropped; consuming the sender here means the last non-task handle dies
+    /// with this call, so a run that produced no error terminates instead of
+    /// waiting forever on a handle `run` still owns. Passing `&Sender` would
+    /// leave that handle alive in `run`'s frame and make the no-error path
+    /// block indefinitely. Consuming it makes that structural rather than
+    /// resting on a `drop(error_tx)` line a later edit could delete.
+    #[allow(clippy::needless_pass_by_value)]
     fn spawn_chain(
         &self,
         initial_msg: PipelineMessage,
         token: &CancellationToken,
+        error_tx: mpsc::Sender<anyhow::Error>,
     ) -> mpsc::Receiver<PipelineMessage> {
         if self.stages.is_empty() {
             // No stages — connect directly.
@@ -382,6 +407,7 @@ impl Pipeline {
             let out_tx = txs[i + 1].clone();
             let stage_name = stage.name().to_owned();
             let stage_token = token.clone();
+            let stage_error_tx = error_tx.clone();
 
             tokio::spawn(async move {
                 let mut in_rx = in_rx_i;
@@ -422,18 +448,25 @@ impl Pipeline {
                         let _ = out_tx.send(result).await;
                     }
                     Err(e) if is_fatal => {
-                        // error_tx was moved into the message passed to process().
-                        // The stage is responsible for sending on msg.error_tx before
-                        // returning Err. If it didn't, we have no channel left — the
-                        // pipeline will fall back to "no error" message.
-                        log::error!("Pipeline: fatal stage '{stage_name}' failed: {e}");
+                        // `{e:#}` (not `{e}`): the flatten preserves the whole
+                        // `anyhow` context chain. `{e}` printed only the
+                        // outermost `.context(...)` — "recode stage failed" —
+                        // and dropped the cause that names the actual problem
+                        // ("avi cannot represent hevc video"). See #632, and
+                        // `classify_pipeline_err`, which already flattens.
+                        log::error!("Pipeline: fatal stage '{stage_name}' failed: {e:#}");
+                        // The runner sends, so this cannot be forgotten by a
+                        // stage using `?`. Capacity 1: a full channel means an
+                        // earlier fatal error already won, and that one is the
+                        // one worth reporting.
+                        let _ = stage_error_tx.try_send(e);
                         drop(out_tx); // cascade None downstream
                     }
                     Err(e) => {
                         // Non-fatal: log and cascade (message was moved into process).
                         // Non-fatal stages should return Ok(msg) on failure for passthrough.
                         log::warn!(
-                            "Pipeline: non-fatal stage '{stage_name}' returned Err (message lost): {e}"
+                            "Pipeline: non-fatal stage '{stage_name}' returned Err (message lost): {e:#}"
                         );
                         drop(out_tx);
                     }

@@ -141,12 +141,11 @@ mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::sync::Arc;
-    use tokio::sync::oneshot;
 
     use rdlp_types::PostProcess;
     use rdlp_types::{ContainerFormat, InfoDict};
 
-    use crate::pipeline::{FileTracker, PipelineError, TempRegistry};
+    use crate::pipeline::{FileTracker, TempRegistry};
 
     fn make_msg_with_config(
         files: Vec<PathBuf>,
@@ -154,7 +153,6 @@ mod tests {
         is_hls: bool,
     ) -> PipelineMessage {
         let reg = Arc::new(TempRegistry::new());
-        let (error_tx, _) = oneshot::channel::<PipelineError>();
         PipelineMessage {
             info: InfoDict::new(
                 "id".to_string(),
@@ -168,7 +166,6 @@ mod tests {
             is_hls,
             verbose: false,
             callback_factory: None,
-            error_tx: Some(error_tx),
             warnings: Vec::new(),
             encoding_tool: None,
             cancel: tokio_util::sync::CancellationToken::new(),
@@ -231,7 +228,6 @@ mod tests {
     #[test]
     fn target_container_already_in_target_returns_none() {
         let reg = Arc::new(TempRegistry::new());
-        let (error_tx, _) = oneshot::channel::<PipelineError>();
         let msg = PipelineMessage {
             info: InfoDict::new(
                 "id".to_string(),
@@ -248,7 +244,6 @@ mod tests {
             is_hls: false,
             verbose: false,
             callback_factory: None,
-            error_tx: Some(error_tx),
             warnings: Vec::new(),
             encoding_tool: None,
             cancel: tokio_util::sync::CancellationToken::new(),
@@ -393,7 +388,6 @@ mod tests {
     #[test]
     fn target_container_hls_ts_returns_mp4() {
         let reg = Arc::new(TempRegistry::new());
-        let (error_tx, _) = oneshot::channel::<PipelineError>();
         let msg = PipelineMessage {
             info: InfoDict::new(
                 "id".to_string(),
@@ -407,7 +401,6 @@ mod tests {
             is_hls: true,
             verbose: false,
             callback_factory: None,
-            error_tx: Some(error_tx),
             warnings: Vec::new(),
             encoding_tool: None,
             cancel: tokio_util::sync::CancellationToken::new(),

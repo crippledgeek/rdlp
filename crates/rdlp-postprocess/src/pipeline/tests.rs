@@ -63,15 +63,55 @@ impl PipelineStage for FailStage {
     fn should_run(&self, _: &PipelineMessage) -> bool {
         true
     }
-    async fn process(&self, mut msg: PipelineMessage) -> anyhow::Result<PipelineMessage> {
-        let err = PipelineError::StageFailure {
+    async fn process(&self, _: PipelineMessage) -> anyhow::Result<PipelineMessage> {
+        Err(PipelineError::StageFailure {
             stage: "fail".into(),
             cause: "test error".into(),
-        };
-        if let Some(tx) = msg.error_tx.take() {
-            let _ = tx.send(err);
         }
-        Err(anyhow::anyhow!("test error"))
+        .into())
+    }
+}
+
+/// A fatal stage that fails the way every production stage actually fails:
+/// propagating with `?` and a `.context(...)` wrapper, never touching
+/// `msg.error_tx`.
+///
+/// `FailStage` above sends on `msg.error_tx` by hand, which is the one thing
+/// no production stage does — so it exercised a path only the test double
+/// took, and the real one (#632) went unnoticed: the error was dropped and the
+/// user saw "pipeline terminated with no output and no error".
+struct ContextFailStage;
+#[async_trait]
+impl PipelineStage for ContextFailStage {
+    fn name(&self) -> &str {
+        "contextfail"
+    }
+    fn should_run(&self, _: &PipelineMessage) -> bool {
+        true
+    }
+    async fn process(&self, _: PipelineMessage) -> anyhow::Result<PipelineMessage> {
+        use anyhow::Context;
+        Err(anyhow::anyhow!(
+            "avi cannot represent hevc video; choose a different target container"
+        ))
+        .context("recode stage failed")
+    }
+}
+
+/// A stage whose task dies without ever returning `Err` — the only way the
+/// cascade legitimately ends with no message *and* no error. Keeps the generic
+/// fallback message honest instead of letting it stand in for lost errors.
+struct PanickingStage;
+#[async_trait]
+impl PipelineStage for PanickingStage {
+    fn name(&self) -> &str {
+        "panicking"
+    }
+    fn should_run(&self, _: &PipelineMessage) -> bool {
+        true
+    }
+    async fn process(&self, _: PipelineMessage) -> anyhow::Result<PipelineMessage> {
+        panic!("stage task died");
     }
 }
 
@@ -94,6 +134,17 @@ impl PipelineStage for NonFatalFailStage {
     }
 }
 
+/// Run `stages` over a single-file message — the shape every test below
+/// wanted, spelled out seven arguments at a time before this helper existed.
+async fn run_stages(stages: Vec<Arc<dyn PipelineStage>>) -> anyhow::Result<Vec<PathBuf>> {
+    let pipeline = make_pipeline(stages);
+    let (info, files, config, stem, opts, cb, cancel) =
+        run_args(vec![PathBuf::from("/tmp/video.mp4")]);
+    pipeline
+        .run(info, files, opts, config, stem, cb, cancel)
+        .await
+}
+
 fn run_args(files: Vec<PathBuf>) -> RunArgs {
     (
         make_info(),
@@ -112,51 +163,68 @@ fn run_args(files: Vec<PathBuf>) -> RunArgs {
 
 #[tokio::test]
 async fn test_pipeline_passthrough() {
-    let pipeline = make_pipeline(vec![Arc::new(PassthroughStage)]);
-    let (info, files, config, stem, opts, cb, cancel) =
-        run_args(vec![PathBuf::from("/tmp/video.mp4")]);
-    let result = pipeline
-        .run(info, files, opts, config, stem, cb, cancel)
-        .await;
+    let result = run_stages(vec![Arc::new(PassthroughStage)]).await;
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), vec![PathBuf::from("/tmp/video.mp4")]);
 }
 
 #[tokio::test]
 async fn test_pipeline_skip_stage() {
-    let pipeline = make_pipeline(vec![Arc::new(SkipStage), Arc::new(PassthroughStage)]);
-    let (info, files, config, stem, opts, cb, cancel) =
-        run_args(vec![PathBuf::from("/tmp/video.mp4")]);
-    let result = pipeline
-        .run(info, files, opts, config, stem, cb, cancel)
-        .await;
+    let result = run_stages(vec![Arc::new(SkipStage), Arc::new(PassthroughStage)]).await;
     assert!(result.is_ok());
 }
 
 #[tokio::test]
 async fn test_pipeline_fatal_error_cascades() {
-    let pipeline = make_pipeline(vec![Arc::new(FailStage), Arc::new(PassthroughStage)]);
-    let (info, files, config, stem, opts, cb, cancel) =
-        run_args(vec![PathBuf::from("/tmp/video.mp4")]);
-    let result = pipeline
-        .run(info, files, opts, config, stem, cb, cancel)
-        .await;
+    let result = run_stages(vec![Arc::new(FailStage), Arc::new(PassthroughStage)]).await;
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("test error"), "unexpected error: {err}");
 }
 
+/// A fatal stage that propagates with `?` (i.e. every real stage) must still
+/// surface its cause — both the `.context(...)` layer and the innermost
+/// message — instead of the generic "no output and no error" fallback.
+#[tokio::test]
+async fn fatal_stage_error_reaches_the_caller_with_its_cause_chain() {
+    let result = run_stages(vec![Arc::new(ContextFailStage), Arc::new(PassthroughStage)]).await;
+
+    let err = result.expect_err("a fatal stage must fail the pipeline");
+    let flat = format!("{err:#}");
+    assert!(
+        flat.contains("avi cannot represent hevc video"),
+        "the innermost cause was dropped: {flat}"
+    );
+    assert!(
+        flat.contains("recode stage failed"),
+        "the context layer was dropped: {flat}"
+    );
+    assert!(
+        !flat.contains("no output and no error"),
+        "fell back to the generic message despite having a real error: {flat}"
+    );
+}
+
+/// The generic fallback stays reachable only for its actual meaning: a stage
+/// cascaded `None` without ever producing an error.
+#[tokio::test]
+async fn a_dead_stage_task_still_reports_the_generic_message() {
+    let result = run_stages(vec![Arc::new(PanickingStage), Arc::new(PassthroughStage)]).await;
+
+    let err = result.expect_err("a dropped message must fail the pipeline");
+    assert!(
+        format!("{err:#}").contains("no output and no error"),
+        "unexpected error: {err:#}"
+    );
+}
+
 #[tokio::test]
 async fn test_pipeline_nonfatal_passes_through() {
-    let pipeline = make_pipeline(vec![
+    let result = run_stages(vec![
         Arc::new(NonFatalFailStage),
         Arc::new(PassthroughStage),
-    ]);
-    let (info, files, config, stem, opts, cb, cancel) =
-        run_args(vec![PathBuf::from("/tmp/video.mp4")]);
-    let result = pipeline
-        .run(info, files, opts, config, stem, cb, cancel)
-        .await;
+    ])
+    .await;
     assert!(result.is_ok());
 }
 
