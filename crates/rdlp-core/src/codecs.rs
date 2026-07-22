@@ -47,18 +47,18 @@ pub fn parse_hls_codecs(codecs: &str) -> (Option<CodecName>, Option<CodecName>) 
 
         match prefix {
             // Video codecs
-            "avc1" | "avc3" => video = Some(CodecName::from_static("h264")),
-            "hvc1" | "hev1" => video = Some(CodecName::from_static("hevc")),
-            "vp09" => video = Some(CodecName::from_static("vp9")),
-            "vp8" | "vp08" => video = Some(CodecName::from_static("vp8")),
-            "av01" => video = Some(CodecName::from_static("av1")),
+            "avc1" | "avc3" => video = Some(CodecName::H264),
+            "hvc1" | "hev1" => video = Some(CodecName::HEVC),
+            "vp09" => video = Some(CodecName::VP9),
+            "vp8" | "vp08" => video = Some(CodecName::VP8),
+            "av01" => video = Some(CodecName::AV1),
             // Audio codecs
-            "mp4a" => audio = Some(CodecName::from_static("aac")),
-            "ac-3" => audio = Some(CodecName::from_static("ac3")),
-            "ec-3" => audio = Some(CodecName::from_static("eac3")),
-            "opus" => audio = Some(CodecName::from_static("opus")),
-            "flac" => audio = Some(CodecName::from_static("flac")),
-            "vorbis" => audio = Some(CodecName::from_static("vorbis")),
+            "mp4a" => audio = Some(CodecName::AAC),
+            "ac-3" => audio = Some(CodecName::AC3),
+            "ec-3" => audio = Some(CodecName::EAC3),
+            "opus" => audio = Some(CodecName::OPUS),
+            "flac" => audio = Some(CodecName::FLAC),
+            "vorbis" => audio = Some(CodecName::VORBIS),
             _ => {} // Unknown codec prefix, skip
         }
     }
@@ -208,6 +208,15 @@ mod tests {
         assert_eq!(
             a.as_ref().map(rdlp_types::media_name::MediaName::as_str),
             Some("vorbis")
+        );
+    }
+
+    #[test]
+    fn test_vp08_variant() {
+        let (v, _) = parse_hls_codecs("vp08.00.10.08");
+        assert_eq!(
+            v.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("vp8")
         );
     }
 

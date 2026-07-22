@@ -282,7 +282,7 @@ impl codec_registry::CodecRow for CodecEntry {
 /// are separate entries that share the same encoder list.
 static CODEC_PREFERENCES: &[CodecEntry] = &[
     CodecEntry {
-        codec: CodecName::from_static("h264"),
+        codec: CodecName::H264,
         display_name: "H.264 / AVC",
         encoders: &[
             (VideoEncoderName::from_static("libx264"), "x264 (H.264)"),
@@ -306,10 +306,10 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
                 "Kvazaar (H.265/HEVC)",
             ),
         ],
-        aliases: &[CodecName::from_static("hevc")],
+        aliases: &[CodecName::HEVC],
     },
     CodecEntry {
-        codec: CodecName::from_static("hevc"),
+        codec: CodecName::HEVC,
         display_name: "H.265 / HEVC",
         encoders: &[
             (
@@ -324,7 +324,7 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
         aliases: &[],
     },
     CodecEntry {
-        codec: CodecName::from_static("av1"),
+        codec: CodecName::AV1,
         display_name: "AV1",
         encoders: &[
             (VideoEncoderName::from_static("libsvtav1"), "SVT-AV1"),
@@ -334,13 +334,13 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
         aliases: &[],
     },
     CodecEntry {
-        codec: CodecName::from_static("vp9"),
+        codec: CodecName::VP9,
         display_name: "VP9",
         encoders: &[(VideoEncoderName::from_static("libvpx-vp9"), "libvpx VP9")],
         aliases: &[],
     },
     CodecEntry {
-        codec: CodecName::from_static("vp8"),
+        codec: CodecName::VP8,
         display_name: "VP8",
         encoders: &[(VideoEncoderName::from_static("libvpx"), "libvpx VP8")],
         aliases: &[],

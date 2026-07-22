@@ -482,6 +482,45 @@ mod tests {
         assert_eq!(a.media_playlist_url, "https://cdn.example.com/p/audio.m3u8");
     }
 
+    /// When an `EXT-X-MEDIA TYPE=AUDIO` rendition's paired `EXT-X-STREAM-INF`
+    /// declares CODECS with no audio component at all (video-only CODECS),
+    /// `expand_master_variants`'s `find_map` over paired variants yields
+    /// `None`, so the audio-only entry falls back to the literal `"mp4a"`
+    /// codec name (not "aac" — this pins the exact fallback value the
+    /// `CodecName::from_static("mp4a")` call at variants.rs:119 produces).
+    #[test]
+    fn test_expand_master_variants_audio_group_fallback_when_no_paired_codec() {
+        use super::variants::expand_master_variants;
+
+        let master_m3u8 = "\
+            #EXTM3U\n\
+            #EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID=\"aac\",NAME=\"Stereo\",\
+            DEFAULT=YES,AUTOSELECT=YES,URI=\"audio.m3u8\"\n\
+            #EXT-X-STREAM-INF:BANDWIDTH=5000000,RESOLUTION=1920x1080,\
+            CODECS=\"av01.0.08M.08\",AUDIO=\"aac\"\n\
+            video-1080-av1.m3u8\n";
+
+        let playlist = m3u8_rs::parse_playlist_res(master_m3u8.as_bytes()).unwrap();
+        let master = match playlist {
+            m3u8_rs::Playlist::MasterPlaylist(m) => m,
+            _ => panic!("Expected master playlist"),
+        };
+        let base = url::Url::parse("https://cdn.example.com/p/master.m3u8").unwrap();
+
+        let variants = expand_master_variants(&master, &base);
+        let audio_only: Vec<_> = variants.iter().filter(|v| v.is_audio_only).collect();
+        assert_eq!(audio_only.len(), 1, "expect one audio-only rendition");
+
+        let a = audio_only[0];
+        assert_eq!(
+            a.audio_codec
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("mp4a"),
+            "no paired variant declares an audio codec, so the fallback literal is used"
+        );
+    }
+
     /// Masters without EXT-X-MEDIA (typical XVideos / XNXX / older
     /// XHamster case) must continue to emit only muxed video+audio
     /// entries — the fix is strictly additive and must not break
