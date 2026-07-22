@@ -64,6 +64,16 @@ impl codec_registry::CodecRow for AudioCodecEntry {
     fn encoders(&self) -> &'static [(&'static str, &'static str)] {
         self.encoders
     }
+    fn aliases(&self) -> &'static [&'static str] {
+        // "pcm" predates this row being keyed to its exact codec-ID name
+        // (`pcm_s16le`) and is a CLI vocabulary word a user may still type
+        // from muscle memory; the alias keeps it resolving without
+        // reintroducing the exact-key mismatch the rename fixes.
+        match self.codec {
+            "pcm_s16le" => &["pcm"],
+            _ => &[],
+        }
+    }
 }
 
 /// Static preference table for audio codecs.
@@ -85,6 +95,16 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Mkv,
             ContainerFormat::Avi,
             ContainerFormat::Ts,
+            ContainerFormat::Aac,
+            ContainerFormat::M4a,
+            // ThreeGp: rdlp overrides the muxer's own `amr_nb` default to
+            // aac (see `audio_default_for`); the compatibility matrix must
+            // accept the codec it actually produces. M4v/F4v: their muxers
+            // declare aac as the default (verified against the linked
+            // FFmpeg build).
+            ContainerFormat::ThreeGp,
+            ContainerFormat::M4v,
+            ContainerFormat::F4v,
         ],
     },
     AudioCodecEntry {
@@ -97,6 +117,9 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Mkv,
             ContainerFormat::Avi,
             ContainerFormat::Ts,
+            ContainerFormat::Mp3,
+            // Flv's muxer declares mp3 as its default audio codec.
+            ContainerFormat::Flv,
         ],
     },
     AudioCodecEntry {
@@ -106,8 +129,12 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         supported_containers: &[
             ContainerFormat::Mp4,
             ContainerFormat::Mkv,
+            // Mka: rdlp overrides matroska's own default to opus (see
+            // `audio_default_for`); the matrix must accept it.
+            ContainerFormat::Mka,
             ContainerFormat::WebM,
             ContainerFormat::Ogg,
+            ContainerFormat::Opus,
         ],
     },
     AudioCodecEntry {
@@ -118,13 +145,18 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Mkv,
             ContainerFormat::WebM,
             ContainerFormat::Ogg,
+            ContainerFormat::Nut,
         ],
     },
     AudioCodecEntry {
         codec: "flac",
         display_name: "FLAC",
         encoders: &[("flac", "FLAC (built-in)")],
-        supported_containers: &[ContainerFormat::Mkv, ContainerFormat::Ogg],
+        supported_containers: &[
+            ContainerFormat::Mkv,
+            ContainerFormat::Ogg,
+            ContainerFormat::Flac,
+        ],
     },
     AudioCodecEntry {
         codec: "alac",
@@ -146,6 +178,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Mkv,
             ContainerFormat::Avi,
             ContainerFormat::Ts,
+            ContainerFormat::Ac3,
         ],
     },
     AudioCodecEntry {
@@ -169,19 +202,82 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         codec: "mp2",
         display_name: "MP2",
         encoders: &[("mp2", "MP2 (built-in)")],
-        supported_containers: &[ContainerFormat::Mkv, ContainerFormat::Ts],
+        supported_containers: &[
+            ContainerFormat::Mkv,
+            ContainerFormat::Ts,
+            // Mpg/Vob's muxers both declare mp2 as their default audio codec.
+            ContainerFormat::Mpg,
+            ContainerFormat::Vob,
+        ],
     },
+    // Keyed to the exact FFmpeg codec-ID name (rather than the historical
+    // "pcm" vocabulary word) so it matches `muxer_defaults::declared_codec`
+    // and stays in tier 1 — see `resolve_declared_codec`'s tiers. "pcm"
+    // still resolves via `CodecRow::aliases` below, for the CLI vocabulary a
+    // user may type from muscle memory.
+    //
+    // Aiff/Caf are listed here too, alongside the separate `pcm_s16be` row:
+    // this is a *compatibility* fact ("pcm_s16le can be muxed into AIFF/CAF",
+    // verified against the linked FFmpeg build), not a claim about either
+    // container's *default* (which is `pcm_s16be` — see the row below). The
+    // two facts coexist; neither row should be read as claiming the other.
     AudioCodecEntry {
-        codec: "pcm",
-        display_name: "WAV/PCM",
+        codec: "pcm_s16le",
+        display_name: "PCM 16-bit little-endian",
         encoders: &[("pcm_s16le", "PCM 16-bit (built-in)")],
-        supported_containers: &[ContainerFormat::Mkv, ContainerFormat::Avi],
+        supported_containers: &[
+            ContainerFormat::Mkv,
+            ContainerFormat::Avi,
+            ContainerFormat::Wav,
+            ContainerFormat::Aiff,
+            ContainerFormat::Caf,
+            // Mxf and Dv's muxers both declare pcm_s16le as their default
+            // audio codec (caught by the sweep test, not the review's table).
+            ContainerFormat::Mxf,
+            ContainerFormat::Dv,
+        ],
+    },
+    // Big-endian PCM is a distinct codec-ID from the little-endian
+    // `pcm_s16le` row above (AIFF/CAF declare `pcm_s16be`; WAV/AVI/MKV
+    // declare `pcm_s16le`). Keyed to the exact FFmpeg codec-ID name so it
+    // matches `muxer_defaults::declared_codec` and stays in tier 1 rather
+    // than silently falling through to tier 3's literal-encoder-name
+    // fallback in `resolve_declared_codec`.
+    //
+    // Behavioural neutrality of this row being in tier 1 rather than tier 3
+    // depends on `encoders` staying the singleton `[("pcm_s16be", _)]` where
+    // the encoder name equals the codec key — see `resolve_declared_codec`'s
+    // doc comment for the structural argument. Adding a second encoder here
+    // would need that argument re-checked.
+    AudioCodecEntry {
+        codec: "pcm_s16be",
+        display_name: "PCM 16-bit big-endian",
+        encoders: &[("pcm_s16be", "PCM 16-bit big-endian (built-in)")],
+        supported_containers: &[ContainerFormat::Aiff, ContainerFormat::Caf],
     },
     AudioCodecEntry {
         codec: "wavpack",
         display_name: "WavPack",
         encoders: &[("wavpack", "WavPack (built-in)")],
-        supported_containers: &[ContainerFormat::Mkv],
+        supported_containers: &[ContainerFormat::Mkv, ContainerFormat::Wv],
+    },
+    // WMA had no compatibility-matrix row at all; `.wma`/`.wmv`/`.asf` all
+    // declare `wmav2` as their default audio codec (see `asf_family_gets_wmav2`).
+    // Keyed to the exact FFmpeg codec-ID name for the same reason as
+    // `pcm_s16be` above.
+    //
+    // Same singleton dependency as `pcm_s16be`: `encoders` must stay
+    // `[("wmav2", _)]` (key == encoder name) for tier 1 to be behaviourally
+    // identical to tier 3's fallback — see `resolve_declared_codec`.
+    AudioCodecEntry {
+        codec: "wmav2",
+        display_name: "WMA v2",
+        encoders: &[("wmav2", "Windows Media Audio 2 (built-in)")],
+        supported_containers: &[
+            ContainerFormat::Wma,
+            ContainerFormat::Wmv,
+            ContainerFormat::Asf,
+        ],
     },
     AudioCodecEntry {
         codec: "tta",
@@ -488,6 +584,18 @@ mod tests {
         assert!(enc.is_some(), "should resolve aac codec");
     }
 
+    /// CRITICAL-8 regression guard: `resolve_audio_encoder("pcm")` must
+    /// resolve via the `pcm_s16le` row's alias, not fall through to `None`.
+    /// `pcm_s16le` is a built-in `FFmpeg` encoder present in every build (the
+    /// same assumption `audio_only_containers_get_their_own_codec_not_aac`
+    /// already makes unguarded), so this is safe to assert unconditionally.
+    #[test]
+    fn resolve_encoder_by_alias_pcm() {
+        ensure_init_for_test();
+        assert_eq!(resolve_audio_encoder("pcm"), Some("pcm_s16le"));
+        assert_eq!(preferred_audio_encoder("pcm"), Some("pcm_s16le"));
+    }
+
     #[test]
     fn resolve_encoder_by_encoder_name() {
         // "libmp3lame" is an ENCODER name (the sole encoder under codec key
@@ -544,14 +652,6 @@ mod tests {
     }
 
     #[test]
-    fn container_does_not_support_mp4_vorbis() {
-        assert!(!container_supports_audio_codec(
-            ContainerFormat::Mp4,
-            "vorbis"
-        ));
-    }
-
-    #[test]
     fn container_does_not_support_mov_opus() {
         assert!(!container_supports_audio_codec(
             ContainerFormat::Mov,
@@ -567,14 +667,6 @@ mod tests {
             enc == Some("aac") || enc == Some("libfdk_aac"),
             "expected aac encoder for mp4, got {enc:?}"
         );
-    }
-
-    #[test]
-    fn compatibility_rejects_vorbis_mp4() {
-        assert!(!container_supports_audio_codec(
-            ContainerFormat::Mp4,
-            "vorbis"
-        ));
     }
 
     #[test]
@@ -752,5 +844,189 @@ mod tests {
 
     fn ensure_init_for_test() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
+    }
+
+    /// Each codec whose own container exists as a variant must list it. The
+    /// registry not knowing that FLAC belongs in .flac made
+    /// `--recode-audio=flac` into .flac emit a bogus incompatibility warning.
+    #[test]
+    fn codecs_list_their_own_container() {
+        assert!(container_supports_audio_codec(
+            ContainerFormat::Flac,
+            "flac"
+        ));
+        assert!(container_supports_audio_codec(ContainerFormat::Wav, "pcm"));
+        assert!(container_supports_audio_codec(ContainerFormat::Mp3, "mp3"));
+        assert!(container_supports_audio_codec(
+            ContainerFormat::Opus,
+            "opus"
+        ));
+        assert!(container_supports_audio_codec(ContainerFormat::Ac3, "ac3"));
+        assert!(container_supports_audio_codec(
+            ContainerFormat::Wv,
+            "wavpack"
+        ));
+    }
+
+    /// Negative control: the gap-closing must not make everything true. The
+    /// sole owner of the "mp4 does not accept vorbis" assertion — it used to
+    /// be duplicated verbatim across three tests
+    /// (`container_does_not_support_mp4_vorbis`, `compatibility_rejects_vorbis_mp4`,
+    /// and this one); the other two were removed.
+    #[test]
+    fn unrelated_container_codec_pairs_stay_false() {
+        assert!(!container_supports_audio_codec(
+            ContainerFormat::WebM,
+            "flac"
+        ));
+        assert!(!container_supports_audio_codec(
+            ContainerFormat::Mp4,
+            "vorbis"
+        ));
+    }
+
+    /// Big-endian PCM (AIFF/CAF declare `pcm_s16be`, distinct from the
+    /// little-endian `pcm` row's `pcm_s16le`) had no compatibility-matrix
+    /// row at all — `container_supports_audio_codec` returned `false` for a
+    /// combination `select_audio_encoder_for_container` already produces by
+    /// default via tier 3. Keyed to the exact muxer-declared codec-ID name so
+    /// it doesn't drift from `muxer_defaults::declared_codec`.
+    #[test]
+    fn big_endian_pcm_containers_recognized() {
+        assert!(container_supports_audio_codec(
+            ContainerFormat::Aiff,
+            "pcm_s16be"
+        ));
+        assert!(container_supports_audio_codec(
+            ContainerFormat::Caf,
+            "pcm_s16be"
+        ));
+    }
+
+    /// WMA had no compatibility-matrix row at all, even though `.wma`/`.wmv`/
+    /// `.asf` all declare `wmav2` as their default audio codec.
+    #[test]
+    fn wma_family_containers_recognized() {
+        assert!(container_supports_audio_codec(
+            ContainerFormat::Wma,
+            "wmav2"
+        ));
+        assert!(container_supports_audio_codec(
+            ContainerFormat::Wmv,
+            "wmav2"
+        ));
+        assert!(container_supports_audio_codec(
+            ContainerFormat::Asf,
+            "wmav2"
+        ));
+    }
+
+    /// Negative control for the two new rows: they must not leak into
+    /// unrelated containers.
+    #[test]
+    fn new_rows_do_not_leak_into_unrelated_containers() {
+        assert!(!container_supports_audio_codec(
+            ContainerFormat::Mp4,
+            "pcm_s16be"
+        ));
+        assert!(!container_supports_audio_codec(
+            ContainerFormat::Mp4,
+            "wmav2"
+        ));
+    }
+
+    /// The falsifiable form of "the matrix must not disagree with a
+    /// container's own default audio codec". For every `ContainerFormat`,
+    /// derives the expected codec from `audio_default_for` — the same policy
+    /// `select_audio_encoder_for_container` uses — and cross-checks it
+    /// against `container_supports_audio_codec`, i.e. against the static
+    /// table read by a genuinely independent source
+    /// (`muxer_defaults::declared_codec`, which asks the linked `FFmpeg`
+    /// build's muxers directly) for the `FromMuxer` containers. A key typo,
+    /// or a container missing from a row, fails this test by naming the
+    /// exact container and codec — no hardcoded pair to keep in sync by
+    /// hand.
+    #[test]
+    fn every_containers_own_default_codec_is_accepted_by_the_matrix() {
+        use strum::IntoEnumIterator;
+        ensure_init_for_test();
+
+        for container in ContainerFormat::iter() {
+            let expected = match audio_default_for(container) {
+                AudioDefault::NoAudio => {
+                    // The sweep's one unguarded skip: nothing else pins the
+                    // `NoAudio` *classification* itself (only
+                    // `ivf_carries_no_audio` checks the one known instance).
+                    // A container wrongly classified `NoAudio` here would
+                    // otherwise be skipped by this sweep and caught by
+                    // nothing. Cross-check against an INDEPENDENT oracle —
+                    // FFmpeg's own muxer table via `muxer_defaults` — rather
+                    // than `select_audio_encoder_for_container`, which itself
+                    // returns `None` for `NoAudio` via this same
+                    // `audio_default_for` call: asserting against that would
+                    // be one classification read twice, not a cross-check.
+                    assert!(
+                        muxer_defaults::declared_codec(container, codec_registry::MediaKind::Audio)
+                            .is_none(),
+                        "{container:?} is classified NoAudio but its muxer \
+                         declares an audio codec"
+                    );
+                    continue;
+                }
+                AudioDefault::Override(codec) => codec,
+                AudioDefault::FromMuxer => {
+                    let Some(codec) =
+                        muxer_defaults::declared_codec(container, codec_registry::MediaKind::Audio)
+                    else {
+                        // No muxer claims the extension, or the declared id
+                        // is unrepresentable in this build — nothing to
+                        // cross-check against for this container.
+                        continue;
+                    };
+                    codec
+                }
+            };
+
+            assert!(
+                container_supports_audio_codec(container, expected),
+                "{container:?}'s own default audio codec {expected:?} is not \
+                 accepted by its own compatibility-matrix row"
+            );
+        }
+    }
+
+    /// Falsifiable, generalising form of the CRITICAL-8 regression guard:
+    /// for every row, every declared alias must resolve (via
+    /// `preferred_audio_encoder`) to the exact same encoder as the row's own
+    /// primary codec key. Catches not just today's `pcm` alias but any
+    /// future alias added to any row without per-alias test coverage.
+    #[test]
+    fn every_alias_resolves_to_its_rows_own_encoder() {
+        use codec_registry::CodecRow;
+        ensure_init_for_test();
+
+        for row in AUDIO_CODEC_PREFERENCES {
+            let primary = preferred_audio_encoder(row.codec());
+            for alias in row.aliases() {
+                // `assert_eq!` below passes vacuously when `primary` is
+                // `None` (e.g. a row whose encoders are all absent from this
+                // FFmpeg build) — guard against that so the equality check
+                // is only ever trusted when it had something to compare.
+                assert!(
+                    primary.is_some(),
+                    "alias {alias:?} is declared on codec {:?}, whose own \
+                     encoders are unavailable in this build — the equality \
+                     below would pass vacuously",
+                    row.codec()
+                );
+                assert_eq!(
+                    preferred_audio_encoder(alias),
+                    primary,
+                    "alias {alias:?} of codec {:?} must resolve to the same \
+                     encoder as the primary key",
+                    row.codec()
+                );
+            }
+        }
     }
 }

@@ -22,6 +22,20 @@ pub trait CodecRow {
     fn codec(&self) -> &'static str;
     /// Ordered encoder preference list: `(encoder_name, display_name)`.
     fn encoders(&self) -> &'static [(&'static str, &'static str)];
+    /// Alternate names that should also resolve to this row, e.g. a
+    /// pre-existing CLI vocabulary word that predates the row being keyed to
+    /// its exact codec-ID name. Defaults to none so rows (and the video
+    /// registry, which has no aliases at all) need not opt in.
+    ///
+    /// Must be lowercase — [`Registry::lookup_preferred`]'s memoised map is
+    /// keyed on an already-lowercased needle (see [`Registry::preferred_encoder`]
+    /// / [`Registry::resolve`]) and does an exact-key lookup, so an
+    /// uppercase alias here would silently never match. [`Registry::find_row`]
+    /// case-folds both sides instead and has no such restriction — that
+    /// divergence is deliberate; don't "fix" `find_row` to match this map.
+    fn aliases(&self) -> &'static [&'static str] {
+        &[]
+    }
 }
 
 /// Which media a registry serves. Also supplies the word used in the
@@ -66,12 +80,17 @@ impl<R: CodecRow + 'static> Registry<R> {
         }
     }
 
-    /// Finds the row for a codec name, case-insensitively.
+    /// Finds the row for a codec name, case-insensitively. Matches either the
+    /// row's primary codec name or one of its [`CodecRow::aliases`].
     #[must_use]
     pub fn find_row(&self, codec: &str) -> Option<&'static R> {
-        self.table
-            .iter()
-            .find(|row| row.codec().eq_ignore_ascii_case(codec))
+        self.table.iter().find(|row| {
+            row.codec().eq_ignore_ascii_case(codec)
+                || row
+                    .aliases()
+                    .iter()
+                    .any(|alias| alias.eq_ignore_ascii_case(codec))
+        })
     }
 
     /// Best available encoder for a codec name, memoised in this registry's cache.
@@ -105,6 +124,31 @@ impl<R: CodecRow + 'static> Registry<R> {
                 }
 
                 map.insert(row.codec(), selected);
+
+                // Aliases resolve through this same map, not just through
+                // `find_row` — otherwise a codec reachable only by its alias
+                // (e.g. the CLI vocabulary word "pcm") resolves via
+                // `find_row`-based callers but returns `None` from
+                // `preferred_encoder`/`resolve`. See `CodecRow::aliases`'s
+                // doc comment for why this insert requires a lowercase
+                // alias and why that's a different contract from `find_row`.
+                //
+                // The `debug_assert_eq!` below is compiled out in release, so
+                // it is not what enforces that contract — the real guard is
+                // `audio_encoder_registry`'s
+                // `every_alias_resolves_to_its_rows_own_encoder`, which fails
+                // in any profile because an uppercase alias is inserted
+                // verbatim while the lookup needle arrives lowercased, so the
+                // map misses. Do not delete that test believing this assert
+                // covers release builds.
+                for alias in row.aliases() {
+                    debug_assert_eq!(
+                        *alias,
+                        alias.to_ascii_lowercase(),
+                        "CodecRow::aliases must be declared lowercase: {alias:?}"
+                    );
+                    map.insert(alias, selected);
+                }
             }
             map
         });
@@ -179,6 +223,83 @@ mod tests {
     }];
 
     static REGISTRY_FAKE: Registry<FakeRow> = Registry::new(FAKE_TABLE, MediaKind::Audio);
+
+    struct AliasedRow {
+        codec: &'static str,
+        aliases: &'static [&'static str],
+        encoders: &'static [(&'static str, &'static str)],
+    }
+
+    impl CodecRow for AliasedRow {
+        fn codec(&self) -> &'static str {
+            self.codec
+        }
+        fn encoders(&self) -> &'static [(&'static str, &'static str)] {
+            self.encoders
+        }
+        fn aliases(&self) -> &'static [&'static str] {
+            self.aliases
+        }
+    }
+
+    static ALIASED_TABLE: &[AliasedRow] = &[AliasedRow {
+        codec: "pcm_s16le",
+        aliases: &["pcm"],
+        encoders: &[("pcm_s16le", "PCM")],
+    }];
+
+    static REGISTRY_ALIASED: Registry<AliasedRow> = Registry::new(ALIASED_TABLE, MediaKind::Audio);
+
+    /// `find_row` must match a row by its declared alias, not just its
+    /// primary `codec()` name — the mechanism Important-4 restores.
+    #[test]
+    fn find_row_matches_by_alias() {
+        assert!(REGISTRY_ALIASED.find_row("pcm").is_some());
+        assert!(
+            REGISTRY_ALIASED.find_row("PCM").is_some(),
+            "case-insensitive"
+        );
+        assert_eq!(
+            REGISTRY_ALIASED.find_row("pcm").unwrap().codec(),
+            "pcm_s16le"
+        );
+    }
+
+    /// Negative control: an alias-shaped string that was never declared must
+    /// not accidentally match via the default `&[]` aliases.
+    #[test]
+    fn find_row_does_not_match_undeclared_alias() {
+        assert!(REGISTRY_ALIASED.find_row("pcm_s24le").is_none());
+        assert!(REGISTRY_FAKE.find_row("pcm").is_none());
+    }
+
+    /// `preferred_encoder` must resolve an alias too, not just `find_row` —
+    /// the CRITICAL-8 gap: aliases reached `find_row`-based callers
+    /// (`container_supports_audio_codec`) but not `lookup_preferred`-based
+    /// ones (`preferred_audio_encoder`, `resolve_audio_encoder`), so
+    /// `--recode-audio=pcm` silently fell through to a container default.
+    #[test]
+    fn preferred_encoder_resolves_via_alias() {
+        crate::ffmpeg::ensure_init().expect("ffmpeg init");
+        assert_eq!(REGISTRY_ALIASED.preferred_encoder("pcm"), Some("pcm_s16le"));
+    }
+
+    /// Same gap through the `resolve` entry point (what
+    /// `resolve_audio_encoder` — and therefore the CLI/config `pcm` value —
+    /// actually calls).
+    #[test]
+    fn resolve_resolves_via_alias() {
+        crate::ffmpeg::ensure_init().expect("ffmpeg init");
+        assert_eq!(REGISTRY_ALIASED.resolve("pcm"), Some("pcm_s16le"));
+    }
+
+    /// Negative control: an undeclared alias-shaped string must still miss
+    /// through the memoised-map path, same as it does through `find_row`.
+    #[test]
+    fn preferred_encoder_undeclared_alias_is_none() {
+        crate::ffmpeg::ensure_init().expect("ffmpeg init");
+        assert_eq!(REGISTRY_ALIASED.preferred_encoder("pcm_s24le"), None);
+    }
 
     #[test]
     fn is_encoder_available_false_for_nonsense_name() {
