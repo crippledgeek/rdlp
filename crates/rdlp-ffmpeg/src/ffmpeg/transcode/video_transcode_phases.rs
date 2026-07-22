@@ -491,13 +491,10 @@ impl FFmpegRunner {
 
         // Set format-level encoding_tool metadata
         {
-            let audio_component = if let Some(enc_name) = audio_encode_codec {
-                enc_name
-            } else if opts.audio_copy {
-                "copy"
-            } else {
-                "none"
-            };
+            let audio_component = crate::ffmpeg::encoding_tag::audio_tag_component(
+                opts.audio_copy,
+                audio_encode_codec,
+            );
             let tool_components = format!("{video_codec_name} + {audio_component}");
             crate::ffmpeg::encoding_tag::set_encoding_tool(&mut ctx.octx, &tool_components);
         }

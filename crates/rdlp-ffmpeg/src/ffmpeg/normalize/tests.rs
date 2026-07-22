@@ -5,23 +5,84 @@ use super::helpers::*;
 
 #[test]
 fn test_select_audio_encoder_for_container() {
-    // AAC-compatible containers return the preferred AAC encoder
-    // (libfdk_aac if available, built-in aac otherwise)
-    let aac = crate::ffmpeg::audio_codecs::preferred_aac_encoder();
-    assert_eq!(select_audio_encoder_for_container("mp4"), aac);
-    assert_eq!(select_audio_encoder_for_container("m4a"), aac);
-    assert_eq!(select_audio_encoder_for_container("mov"), aac);
-    assert_eq!(select_audio_encoder_for_container("webm"), "libopus");
-    // MKV supports everything; registry prefers Opus for quality/size efficiency
-    assert_eq!(select_audio_encoder_for_container("mkv"), "libopus");
-    assert_eq!(select_audio_encoder_for_container("avi"), "libmp3lame");
-    assert_eq!(select_audio_encoder_for_container("mp3"), "libmp3lame");
-    assert_eq!(select_audio_encoder_for_container("flac"), "flac");
-    assert_eq!(select_audio_encoder_for_container("wav"), "pcm_s16le");
-    assert_eq!(select_audio_encoder_for_container("ts"), aac);
-    assert_eq!(select_audio_encoder_for_container("ogg"), "libopus");
-    assert_eq!(select_audio_encoder_for_container("flv"), aac);
-    assert_eq!(select_audio_encoder_for_container("xyz"), aac);
+    use crate::ffmpeg::audio_encoder_registry::{
+        is_audio_encoder_available, select_audio_encoder_for_container as sel,
+    };
+    use rdlp_types::ContainerFormat as C;
+
+    crate::ffmpeg::ensure_init().expect("ffmpeg init");
+
+    // AAC-family assertions guarded: `preferred_audio_encoder("aac")` prefers
+    // `libfdk_aac` over the built-in `aac` when both are linked (see
+    // audio_encoder_registry's own `select_encoder_for_mp4_returns_aac`).
+    // Mp4/M4a/Mov declare `aac`; ffmpeg's mpegts muxer instead declares mp2,
+    // and avi/flv both declare mp3 — none of these three are aac-family
+    // (verified against the linked build's `av_guess_codec`, not assumed).
+    for c in [C::Mp4, C::M4a, C::Mov] {
+        let enc = sel(c);
+        assert!(
+            enc == Some("aac") || enc == Some("libfdk_aac"),
+            "expected an aac-family encoder for {c:?}, got {enc:?}"
+        );
+    }
+
+    if is_audio_encoder_available("libopus") {
+        assert_eq!(sel(C::WebM), Some("libopus"));
+        assert_eq!(sel(C::Mkv), Some("libopus"));
+        assert_eq!(sel(C::Ogg), Some("libopus"));
+    }
+    if is_audio_encoder_available("libmp3lame") {
+        // avi/flv/mp3 all declare (or, for .mp3, override to) the mp3 codec.
+        assert_eq!(sel(C::Avi), Some("libmp3lame"));
+        assert_eq!(sel(C::Flv), Some("libmp3lame"));
+        assert_eq!(sel(C::Mp3), Some("libmp3lame"));
+    }
+    if is_audio_encoder_available("mp2") {
+        assert_eq!(sel(C::Ts), Some("mp2"));
+    }
+    assert_eq!(sel(C::Flac), Some("flac"));
+    assert_eq!(sel(C::Wav), Some("pcm_s16le"));
+
+    // Behaviour CHANGES from the old `&str` shim, deliberately: IVF carries
+    // no audio stream at all, so it must be refused rather than defaulted.
+    assert_eq!(sel(C::Ivf), None, "was aac under the catch-all");
+}
+
+/// #618: an output extension that isn't a
+/// `ContainerFormat` at all (`.m2ts`, `.oga`, `.3g2`, ...) must fall back to
+/// AAC exactly like the sibling `audio_only_extension_for_ext` does, not
+/// hard-fail normalization. Regression guard for the deleted
+/// `unknown_extension_falls_back_to_aac` test.
+#[test]
+fn unrecognized_extension_falls_back_to_aac_not_hard_failure() {
+    crate::ffmpeg::ensure_init().expect("ffmpeg init");
+    for ext in ["m2ts", "oga", "3g2", "mts", "divx"] {
+        let enc = resolve_normalize_audio_encoder(ext, "test")
+            .unwrap_or_else(|e| panic!("expected AAC fallback for '.{ext}', got error: {e}"));
+        assert!(
+            enc == "aac" || enc == "libfdk_aac",
+            "expected an aac-family encoder for unparseable ext '.{ext}', got {enc}"
+        );
+    }
+}
+
+/// #618: a *recognised* container that genuinely has
+/// no resolvable audio encoder (e.g. `.ivf`, no audio stream at all) must
+/// report a truthful cause — never "container carries no audio" folded in
+/// with a parse failure, and never a codec name where an extension belongs.
+#[test]
+fn recognized_extension_with_no_encoder_reports_truthful_cause() {
+    crate::ffmpeg::ensure_init().expect("ffmpeg init");
+    let err = resolve_normalize_audio_encoder("ivf", "test").unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("no audio encoder could be determined"),
+        "error should name the real cause, got: {msg}"
+    );
+    assert!(
+        msg.contains("ivf"),
+        "error should name the container extension, got: {msg}"
+    );
 }
 
 #[test]
@@ -32,6 +93,12 @@ fn test_default_bitrate_for_encoder() {
     assert_eq!(default_bitrate_for_encoder("libopus"), 128_000);
     assert_eq!(default_bitrate_for_encoder("flac"), 0);
     assert_eq!(default_bitrate_for_encoder("pcm_s16le"), 0);
+    // Lossless siblings newly reachable via the widened audio-default
+    // registry (#618): `.aiff`/`.caf` -> pcm_s16be, `.wv` -> wavpack.
+    assert_eq!(default_bitrate_for_encoder("pcm_s16be"), 0);
+    assert_eq!(default_bitrate_for_encoder("alac"), 0);
+    assert_eq!(default_bitrate_for_encoder("wavpack"), 0);
+    assert_eq!(default_bitrate_for_encoder("tta"), 0);
 }
 
 #[test]

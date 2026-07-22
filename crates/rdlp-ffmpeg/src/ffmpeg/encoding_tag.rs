@@ -98,6 +98,26 @@ pub unsafe fn set_encoding_tool_ffi_if_missing(
     }
 }
 
+/// Component string for the `encoding_tool` tag's audio segment.
+///
+/// `audio_copy` takes precedence over `audio_codec` — matches the documented
+/// contract on `VideoConvertOptions` (`audio_copy` wins when both are set: a
+/// stream copy happens even if `audio_codec` names an encoder). A resolved
+/// codec name is only consulted when `audio_copy` is `false`; otherwise
+/// `audio_copy` distinguishes a genuine stream copy (`"copy"`) from no audio
+/// stream at all (`"none"`) — a video-only source must resolve here, not
+/// stamp a false `"copy"`.
+#[must_use]
+pub const fn audio_tag_component(audio_copy: bool, audio_codec: Option<&str>) -> &str {
+    if audio_copy {
+        "copy"
+    } else if let Some(codec) = audio_codec {
+        codec
+    } else {
+        "none"
+    }
+}
+
 /// Set the `encoder` per-stream tag on a high-level output stream.
 pub fn set_stream_encoder(
     octx: &mut ffmpeg_the_third::format::context::Output,
@@ -134,5 +154,19 @@ mod tests {
     fn test_encoding_tool_tag_single_component() {
         let tag = encoding_tool_tag("libfdk_aac");
         assert!(tag.contains("(libfdk_aac)"), "tag: {tag}");
+    }
+
+    /// Pins the `encoding_tool` tag's audio component for the four
+    /// `(audio_copy, audio_codec)` combinations, including the video-only
+    /// case that used to stamp a false "copy" and the `(true, Some(_))`
+    /// case where `audio_copy` must win over a resolved codec name (matches
+    /// `VideoConvertOptions`'s documented precedence).
+    #[test]
+    fn audio_tag_component_matrix() {
+        assert_eq!(audio_tag_component(false, None), "none");
+        assert_eq!(audio_tag_component(true, None), "copy");
+        assert_eq!(audio_tag_component(false, Some("libopus")), "libopus");
+        // `audio_copy` wins even when a codec name is also present.
+        assert_eq!(audio_tag_component(true, Some("libopus")), "copy");
     }
 }
