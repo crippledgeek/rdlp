@@ -12,6 +12,7 @@ use log::{debug, info, warn};
 
 use rdlp_ffmpeg::ffmpeg::{audio_encoder_registry, video_codecs};
 use rdlp_ffmpeg::{FFmpegRunner, PostProcessError, VideoConvertOptions};
+use rdlp_types::rule::{Rule, always};
 use rdlp_types::{AudioEncoderName, CodecName, ContainerFormat, RecodeAudioMode, VideoEncoderName};
 
 use crate::pipeline::stages::recode_audio_only::{self, SourceAudio};
@@ -87,7 +88,26 @@ impl<'a> SourceVideo<'a> {
 /// aliases, into every arm that needs them. #576's failure mode was a hand-
 /// repeated alias pair (`"h264"`/`"avc"`) drifting out of sync across arms;
 /// a rule value built from one call site cannot drift from itself.
-type VideoRule = Box<dyn for<'a> Fn(SourceVideo<'a>) -> bool + Send + Sync>;
+///
+/// Boxed because [`rule_for`] returns a different concrete rule per container
+/// arm; the rules themselves compose without allocation.
+type VideoRule = Box<dyn for<'a> Rule<SourceVideo<'a>> + Send + Sync>;
+
+/// Boxes `f` as a [`VideoRule`].
+///
+/// A plain `Box::new(f) as VideoRule` hits a known limitation of the trait
+/// solver: proving a closure satisfies `for<'a> Rule<SourceVideo<'a>>`
+/// through [`Rule`]'s blanket `Fn` impl requires the closure's `Fn` bound to
+/// already be established as higher-ranked *before* unsizing, not inferred
+/// during it. Stating that bound explicitly on this helper's `F` parameter
+/// gives the compiler the higher-ranked signature up front, so the unsize
+/// coercion inside only has to check it, not discover it.
+fn video_rule<F>(f: F) -> VideoRule
+where
+    F: for<'a> Fn(SourceVideo<'a>) -> bool + Send + Sync + 'static,
+{
+    Box::new(f)
+}
 
 /// Matches when the source's video codec canonically identifies as one of
 /// `identities` — alias-resolved via
@@ -96,7 +116,7 @@ type VideoRule = Box<dyn for<'a> Fn(SourceVideo<'a>) -> bool + Send + Sync>;
 /// [`SourceVideo::Unnamed`]/[`SourceVideo::Absent`] never match: neither
 /// proves anything about representability (see [`RecodeStage::can_remux_video`]).
 fn codec_in(identities: &'static [&'static str]) -> VideoRule {
-    Box::new(move |video| match video {
+    video_rule(move |video| match video {
         SourceVideo::Codec(c) => {
             let key = video_codecs::canonical_codec_key(c).unwrap_or(c);
             identities.iter().any(|id| key.eq_ignore_ascii_case(id))
@@ -117,7 +137,7 @@ fn codec_in(identities: &'static [&'static str]) -> VideoRule {
 /// regression once already (#630, #637).
 #[allow(clippy::match_same_arms)]
 fn muxer_decides(container: ContainerFormat) -> VideoRule {
-    Box::new(move |video| match video {
+    video_rule(move |video| match video {
         SourceVideo::Unnamed => false,
         SourceVideo::Absent => false,
         SourceVideo::Codec(c) => {
@@ -132,32 +152,6 @@ fn muxer_decides(container: ContainerFormat) -> VideoRule {
             })
         }
     })
-}
-
-/// A rule that ignores the source entirely and always answers `answer`.
-///
-/// `answer` genuinely captures nothing beyond itself, so this selects between
-/// two zero-capture `fn` items rather than allocating a closure per call.
-fn always(answer: bool) -> VideoRule {
-    const fn yes(_video: SourceVideo<'_>) -> bool {
-        true
-    }
-    const fn no(_video: SourceVideo<'_>) -> bool {
-        false
-    }
-    Box::new(if answer {
-        yes as fn(SourceVideo<'_>) -> bool
-    } else {
-        no
-    })
-}
-
-/// Matches when any of `rules` matches — the general OR-combinator
-/// `VideoRule` composition affords, for a future container whose acceptance
-/// genuinely needs more than one rule combined with logical OR.
-#[allow(dead_code)] // no `rule_for` arm needs it yet; kept as the documented combinator.
-fn any_of(rules: Vec<VideoRule>) -> VideoRule {
-    Box::new(move |video| rules.iter().any(|rule| rule(video)))
 }
 
 /// The remux-compatibility rule for `output`, given the extension `input_ext`
@@ -195,7 +189,7 @@ fn rule_for(input_ext: &str, output: ContainerFormat) -> VideoRule {
         // `.mka`. Whether an audio-only container may carry video is #577's
         // call, not a side effect of this routing fix; today's success is
         // left as-is via an unconditional `true`.
-        ContainerFormat::Mka => always(true),
+        ContainerFormat::Mka => video_rule(move |video| always(true).eval(video)),
         ContainerFormat::WebM | ContainerFormat::Ivf => codec_in(&["vp8", "vp9", "av1"]),
         ContainerFormat::ThreeGp => codec_in(&["h264", "h263", "mpeg4"]),
         // All three ASF-family spellings share one muxer and therefore one
@@ -224,7 +218,10 @@ fn rule_for(input_ext: &str, output: ContainerFormat) -> VideoRule {
         | ContainerFormat::Aiff
         | ContainerFormat::Wv
         | ContainerFormat::Caf
-        | ContainerFormat::Ac3 => always(input_ext.eq_ignore_ascii_case(output.as_ext())),
+        | ContainerFormat::Ac3 => {
+            let matches_ext = input_ext.eq_ignore_ascii_case(output.as_ext());
+            video_rule(move |video| always(matches_ext).eval(video))
+        }
     }
 }
 
@@ -292,7 +289,7 @@ impl RecodeStage {
     /// per-container reasoning and [`codec_in`]/[`muxer_decides`]/[`always`]
     /// for how each rule is built.
     fn can_remux_video(input_ext: &str, output: ContainerFormat, video: SourceVideo<'_>) -> bool {
-        rule_for(input_ext, output)(video)
+        rule_for(input_ext, output).eval(video)
     }
 
     /// The audio mode this run should use, forcing `Copy` when audio
