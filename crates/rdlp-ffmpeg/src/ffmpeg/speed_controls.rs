@@ -37,9 +37,10 @@ fn static_codec_str(codec: CodecName) -> &'static str {
 /// Policy per container. Exhaustive with no `_` arm: a new [`ContainerFormat`]
 /// variant must be classified here or the build fails.
 ///
-/// The 12 containers below are classified `NotAVideoTarget` rather than
-/// `FromMuxer`. That name is deliberately a *policy* statement ("rdlp does
-/// not target video at this container"), not a capability claim — probing
+/// The 12 containers below are classified `Policy::NotATarget` (for the
+/// video stream kind) rather than `FromMuxer`. That classification is
+/// deliberately a *policy* statement ("rdlp does not target video at this
+/// container"), not a capability claim — probing
 /// the linked build directly (`muxer_defaults::declared_codec(_,
 /// MediaKind::Video)`) shows the twelve are not one uniform case; they split
 /// into three materially different reasons:
@@ -47,8 +48,8 @@ fn static_codec_str(codec: CodecName) -> &'static str {
 /// - **No video slot at all** (`Wav`, `Opus`, `Aac`, `Mka`, `Wv`, `Caf`,
 ///   `Ac3`): the muxer genuinely declares no video codec (`None`), which
 ///   `FromMuxer` would resolve to [`DEFAULT_VIDEO_CODEC`] anyway —
-///   `NotAVideoTarget` makes that outcome explicit and independent of what
-///   any particular linked build declares.
+///   `Policy::NotATarget` makes that outcome explicit and independent of
+///   what any particular linked build declares.
 /// - **An image slot, not a video slot** (`Mp3`, `Flac`, `Aiff`): these
 ///   declare `png` — `FFmpeg`'s embedded-cover-art codec for `ID3v2` APIC /
 ///   `METADATA_BLOCK_PICTURE`, not a transcodable video codec. Live-verified:
@@ -238,7 +239,7 @@ const fn video_default_for(container: ContainerFormat) -> ContainerDefault<Video
 ///
 /// Of the 31 [`ContainerFormat`] variants, 10 defer to the linked build's own
 /// muxer declaration (`FromMuxer`), 9 override it (`Override`), and 12 are
-/// declared not a video target (`NotAVideoTarget`) — see [`video_default_for`]
+/// declared not a video target (`Policy::NotATarget`) — see [`video_default_for`]
 /// for the exact classification and per-arm citations (corrected count, Item
 /// 16(b) of PR-3's re-review: the prior prose said "most" defer, which was
 /// true before Part A reclassified nine containers from `FromMuxer` to
@@ -250,7 +251,8 @@ const fn video_default_for(container: ContainerFormat) -> ContainerDefault<Video
 /// carries no video" — see that function's doc comment — an ABI-skew codec id
 /// or no muxer claiming the extension both produce it too); the twelve
 /// audio-only containers always resolve [`DEFAULT_VIDEO_CODEC`] via the
-/// dedicated `NotAVideoTarget` policy regardless of what their muxer declares.
+/// dedicated `Policy::NotATarget` (video kind) regardless of what their
+/// muxer declares.
 ///
 /// Takes a [`ContainerFormat`] rather than a `&str`: every caller already had
 /// one and was calling `.as_ext()` purely to satisfy this signature, so the
@@ -738,14 +740,14 @@ mod tests {
         assert_eq!(default_codec_for_container(ContainerFormat::Ogg), "theora");
     }
 
-    /// Regression guard for the `NotAVideoTarget` policy decision: `Mp3`,
+    /// Regression guard for the "not a video target" policy decision: `Mp3`,
     /// `Flac`, and `Aiff` all declare `png` as their `MediaKind::Video`
     /// default (`FFmpeg`'s embedded-cover-art codec for `ID3v2` APIC /
     /// `METADATA_BLOCK_PICTURE`) and `Wma` declares `msmpeg4v3` (inherited
     /// from sharing the `asf` muxer registration with `Wmv`) — verified by
     /// direct probe against this build. A `FromMuxer` classification would
     /// leak these as the "default video codec" for audio-only containers;
-    /// `NotAVideoTarget` must produce `DEFAULT_VIDEO_CODEC` instead.
+    /// `Policy::NotATarget` must produce `DEFAULT_VIDEO_CODEC` instead.
     #[test]
     fn audio_only_containers_do_not_leak_the_muxers_incidental_video_codec() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
@@ -764,8 +766,9 @@ mod tests {
         }
     }
 
-    /// The "exactly these twelve" half of the `NotAVideoTarget` policy: no
-    /// OTHER container may be classified `NotAVideoTarget`, and `Ogg` — despite
+    /// The "exactly these twelve" half of the "not a video target" policy: no
+    /// OTHER container may be classified `Policy::NotATarget` for video, and
+    /// `Ogg` — despite
     /// living in the same "Audio containers" source section as the twelve —
     /// must NOT be among them, since it is a genuine dual-purpose container
     /// (Ogg Theora video) and must keep resolving `FromMuxer`.
@@ -798,8 +801,8 @@ mod tests {
             assert_eq!(
                 is_no_video_target,
                 known.contains(&container),
-                "{container:?}: NotAVideoTarget classification does not match the known \
-                 set of twelve audio-only containers"
+                "{container:?}: Policy::NotATarget (video) classification does not match \
+                 the known set of twelve audio-only containers"
             );
         }
     }
@@ -814,8 +817,8 @@ mod tests {
     /// misclassification, because `expected` followed the misclassification.
     ///
     /// This is the assertion the old name promised: for every container this
-    /// codebase actually targets for video (all but the twelve
-    /// `NotAVideoTarget`), the resolved default codec must have an AVAILABLE
+    /// codebase actually targets for video (all but the twelve classified
+    /// `Policy::NotATarget`), the resolved default codec must have an AVAILABLE
     /// encoder in this build. This is also the exact check that would have
     /// caught the `dvvideo`/`msmpeg4v3` gap by hand — before those rows
     /// existed in `CODEC_PREFERENCES`, `default_codec_for_container(Dv)`

@@ -549,8 +549,8 @@ pub fn select_audio_encoder_for_container(container: ContainerFormat) -> Option<
             else {
                 // Every other `None` path logs (the ABI-skew warn inside
                 // `declared_codec`, the tier-3 AAC-fallback warn below) or is
-                // a declared policy (`NoAudio`). "No muxer claims this
-                // extension" is the one case that would otherwise pass
+                // a declared policy (`Policy::NotATarget`). "No muxer claims
+                // this extension" is the one case that would otherwise pass
                 // through silently — the case an operator would most want to
                 // see (#618).
                 log::warn!(
