@@ -89,7 +89,7 @@ pub use audio_encoder_registry::{AudioCodecInfo, AudioEncoderInfo};
 pub use codec_registry::MediaKind;
 pub use fixup::FixupIssue;
 pub use log_capture::{FfmpegLogBridge, LogForwarderGuard, bridge_ffmpeg_logs};
-pub use muxer_defaults::{known_undeclared_support, muxer_can_represent};
+pub use muxer_defaults::{known_undeclared_support_named, muxer_can_represent};
 pub use normalize_types::{
     AudioNormMode, LoudnormMeasurements, LoudnormPreset, NormalizeOptions, PeakAnalysis,
 };

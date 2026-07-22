@@ -115,25 +115,45 @@ fn ffmpeg_copies(src: &Path, dst: &Path) -> bool {
 /// opted out.
 #[test]
 fn cases_cover_every_row_of_the_production_table() {
-    let table = rdlp_ffmpeg::known_undeclared_support();
+    rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
+
+    // Compare (container, codec) PAIRS, not just containers. Container-only
+    // matching plus a length check looks sufficient but is not: adding
+    // `(Ts, ac3)` to the table and copy-pasting the existing `Ts` block in
+    // `CASES` without editing its `codec` field keeps both the count and the
+    // container set intact, while the three ground-truth tests below prove
+    // `aac → ts` twice and `ac3 → ts` never. The new row would ship with the
+    // real-mux proof — the table's whole justification — never having run.
+    // Compared as `(extension, codec)` string pairs because `ContainerFormat`
+    // is not `Ord`; the extension identifies the variant uniquely, which is
+    // all the comparison needs.
+    let mut table: Vec<(&str, &str)> = rdlp_ffmpeg::known_undeclared_support_named()
+        .into_iter()
+        .map(|(container, codec)| (container.as_ext(), codec))
+        .collect();
+    let mut proven: Vec<(&str, &str)> = CASES
+        .iter()
+        .map(|c| (c.container.as_ext(), c.codec))
+        .collect();
+
+    table.sort_unstable();
+    proven.sort_unstable();
+
     assert_eq!(
-        CASES.len(),
-        table.len(),
-        "KNOWN_UNDECLARED_SUPPORT has {} row(s) but this suite proves {} — a row was added \
-         without a proof, so it ships unaudited",
-        table.len(),
-        CASES.len()
+        proven, table,
+        "this suite and KNOWN_UNDECLARED_SUPPORT describe different (container, codec) sets — \
+         a row is either unproven here or proven here without being in the table"
     );
-    for case in CASES {
-        assert!(
-            table
-                .iter()
-                .any(|&(container, _)| container == case.container),
-            "{:?} is proven here but absent from KNOWN_UNDECLARED_SUPPORT — the suite and the \
-             table describe different things",
-            case.container
-        );
-    }
+
+    // Duplicates would let two identical CASES entries satisfy a two-row
+    // table while leaving one real row unproven.
+    let mut deduped = proven.clone();
+    deduped.dedup();
+    assert_eq!(
+        deduped.len(),
+        proven.len(),
+        "CASES contains a duplicate (container, codec) pair — one production row is unproven"
+    );
 }
 
 /// Every entry must be something ffmpeg genuinely copies. A wrong entry is
@@ -199,10 +219,18 @@ fn muxer_can_represent_accepts_the_known_undeclared_pairs() {
 /// `remux_sync`, which does exercise `resolve_codec_tag` for both rows, so the
 /// enforcement half is genuinely proven here. It is **not** the production
 /// route the `aac → mpegts` row changes — that one flows through
-/// `can_copy_audio_only` → `recode_audio_only` and is covered end-to-end by
-/// `rdlp-postprocess`'s `recode_audio_only_source_matrix`, where `ts` reports
-/// `aac[copy]`. `audio_copy: true` is inert on the remux branch and is set
-/// only for clarity.
+/// `can_copy_audio_only` → `recode_audio_only`, and the *routing* decision is
+/// pinned by
+/// `recode_audio_only::tests::audio_only_input_copies_when_the_container_carries_its_audio_codec`,
+/// which includes `Ts`.
+///
+/// `recode_audio_only_source_matrix` exercises that route end-to-end but does
+/// **not** pin copy-vs-re-encode — its own `Expected::Produces` doc says which
+/// one happens "is an optimisation, not a contract" — so it is not evidence
+/// for this row and is deliberately not cited as such.
+///
+/// `audio_copy: true` is inert on the remux branch and is set only for
+/// clarity.
 #[tokio::test]
 async fn every_known_accept_entry_survives_rdlps_own_remux() {
     if !ffmpeg_available() {

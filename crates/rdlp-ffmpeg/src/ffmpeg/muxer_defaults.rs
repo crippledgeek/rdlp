@@ -231,7 +231,11 @@ pub fn muxer_can_represent(container: ContainerFormat, codec: &str, kind: MediaK
 /// one muxer (`Wmv`/`Wma`/`Asf` are all ASF), so an entry added for one does
 /// **not** apply to its siblings. Add each variant explicitly, with its own
 /// proof.
-const KNOWN_UNDECLARED_SUPPORT: &[(ContainerFormat, AVCodecID)] = &[
+// `pub`, not `pub(crate)`: the module itself is `pub(crate)`, so this is
+// still crate-internal, and clippy's `redundant_pub_crate` rejects the
+// narrower spelling. Not re-exported at the crate root — the only public
+// view is `known_undeclared_support_named`.
+pub const KNOWN_UNDECLARED_SUPPORT: &[(ContainerFormat, AVCodecID)] = &[
     // `mxfenc.c` carries a full H.264 essence mapping (`mxf_h264_codec_uls`,
     // `mxf_parse_h264_frame`) but registers no `query_codec` callback and a
     // NULL top-level `codec_tag`, so every codec it does not declare as a
@@ -243,7 +247,8 @@ const KNOWN_UNDECLARED_SUPPORT: &[(ContainerFormat, AVCodecID)] = &[
     (ContainerFormat::Ts, AVCodecID::AV_CODEC_ID_AAC),
 ];
 
-/// The [`KNOWN_UNDECLARED_SUPPORT`] rows, for the audit suite.
+/// The [`KNOWN_UNDECLARED_SUPPORT`] rows as `(container, codec name)`, for the
+/// audit suite.
 ///
 /// Exposed **only** so `tests/muxer_known_accepts.rs` can prove every row —
 /// and, critically, fail when a row is added without a proof. The table's
@@ -252,12 +257,39 @@ const KNOWN_UNDECLARED_SUPPORT: &[(ContainerFormat, AVCodecID)] = &[
 /// a private const with no accessor made that guarantee documented but
 /// unenforceable.
 ///
+/// Returns codec **names**, not `AVCodecID`, for two reasons: an integration
+/// test cannot name `AVCodecID` (`ffmpeg-the-third` is a normal dependency,
+/// not a dev-dependency, so it is not in a test crate's extern prelude), and
+/// keeping the FFI type out of the crate's public surface means an
+/// `ffmpeg-the-third` major bump is not a breaking change here. The name is
+/// the same projection `muxer_can_represent` takes as input, so the audit
+/// compares like with like.
+///
 /// Not part of the supported API — do not route production decisions through
-/// it. Ask [`muxer_can_represent`], which applies the media-kind check first.
+/// it. It returns the raw rows with **no media-kind check applied**; ask
+/// [`muxer_can_represent`], which applies that check first.
+///
+/// Requires [`super::ensure_init`] to have been called first.
 #[doc(hidden)]
 #[must_use]
-pub const fn known_undeclared_support() -> &'static [(ContainerFormat, AVCodecID)] {
+pub fn known_undeclared_support_named() -> Vec<(ContainerFormat, &'static str)> {
     KNOWN_UNDECLARED_SUPPORT
+        .iter()
+        .filter_map(|&(container, codec_id)| {
+            // SAFETY: pure lookup over libavcodec's static, compiled-in
+            // descriptor table; the returned pointer is null-checked before
+            // its fields are read, and `name` is a 'static string owned by
+            // that table.
+            let name = unsafe {
+                let desc = ffmpeg_the_third::ffi::avcodec_descriptor_get(codec_id);
+                if desc.is_null() {
+                    return None;
+                }
+                CStr::from_ptr((*desc).name).to_str().ok()?
+            };
+            Some((container, name))
+        })
+        .collect()
 }
 
 /// Whether `container` is known to accept `codec_id` despite declaring

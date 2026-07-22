@@ -298,6 +298,11 @@ mod tests {
             ContainerFormat::Flv,
             ContainerFormat::ThreeGp,
             ContainerFormat::Asf,
+            // #633: mpegts implements AAC but advertises it through neither a
+            // codec-tag table nor `query_codec`, so this answered `false`
+            // until the allow-list landed and an `.m4a → .ts` recode
+            // needlessly re-encoded aac → mp2.
+            ContainerFormat::Ts,
         ] {
             assert!(
                 can_copy_audio_only(target, SourceAudio::Codec("aac")),

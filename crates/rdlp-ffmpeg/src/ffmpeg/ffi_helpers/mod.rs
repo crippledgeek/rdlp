@@ -1105,7 +1105,12 @@ mod tests {
         // the fixed matrix above is video-only and would have missed the
         // `aac → mpegts` row entirely, and any row added later is covered by
         // construction instead of by remembering to extend a list.
-        for &(container, codec_id) in crate::ffmpeg::known_undeclared_support() {
+        let allow_list = crate::ffmpeg::muxer_defaults::KNOWN_UNDECLARED_SUPPORT;
+        assert!(
+            !allow_list.is_empty(),
+            "the allow-list is empty — this loop would pass vacuously"
+        );
+        for &(container, codec_id) in allow_list {
             let oformat = oformat_for_extension(dir.path(), container.as_ext());
 
             // The descriptor gives the row's true medium, so the synthesised

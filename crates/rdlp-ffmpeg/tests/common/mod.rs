@@ -63,9 +63,10 @@ pub fn probe_audio_field(path: &Path, field: &str) -> Option<String> {
 
 /// Count decoded frames by actually decoding the file.
 ///
-/// `select` is an ffprobe stream specifier (`"a:0"`, `"v:0"`); `None` counts
-/// across every stream, which is what a "did this file survive the mux at all"
-/// check wants.
+/// `select` is an ffprobe stream specifier (`"a:0"`, `"v:0"`). With `None`,
+/// ffprobe emits one line per stream and this returns the **largest** count —
+/// not a total — which is what a "did any stream in this file survive the
+/// mux" check wants.
 ///
 /// Decoding rather than stat-ing is deliberate: a failed mux still leaves a
 /// non-empty partial header on disk, so `len() > 0` scores a failure as a
