@@ -12,14 +12,128 @@ use log::info;
 
 /// The minimal view of a preference-table row the shared lookups need.
 ///
-/// Deliberately two methods: everything else about a row (audio's
-/// `supported_containers`, video's speed-control derivation) is media-specific
-/// and stays in the owning module.
+/// The trait carries only what the shared lookups need. `display_name` is
+/// common to both row types too, but is read directly by each module's own
+/// `list_available_*`, which construct different `*Info` shapes and therefore
+/// remain per-media; audio's `supported_containers` and video's speed-control
+/// derivation are genuinely media-specific and stay in the owning module.
 pub trait CodecRow {
     /// Canonical codec name, e.g. `"aac"` / `"h264"`.
     fn codec(&self) -> &'static str;
     /// Ordered encoder preference list: `(encoder_name, display_name)`.
     fn encoders(&self) -> &'static [(&'static str, &'static str)];
+}
+
+/// Which media a registry serves. Also supplies the word used in the
+/// selection log line.
+#[derive(Debug, Clone, Copy)]
+pub enum MediaKind {
+    /// An audio codec/encoder registry.
+    Audio,
+    /// A video codec/encoder registry.
+    Video,
+}
+
+impl std::fmt::Display for MediaKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Audio => "audio",
+            Self::Video => "video",
+        })
+    }
+}
+
+/// A codec preference table with its own memoisation cache.
+///
+/// The cache is owned by the `Registry`, not borrowed from a module-level
+/// `static`: there is no longer a second value that could be mismatched
+/// against the table, so passing one registry's table with another
+/// registry's cache is not a shape the type system can even express.
+pub struct Registry<R: CodecRow + 'static> {
+    table: &'static [R],
+    cache: OnceLock<HashMap<&'static str, Option<&'static str>>>,
+    kind: MediaKind,
+}
+
+impl<R: CodecRow + 'static> Registry<R> {
+    /// Binds a preference table to a fresh cache and declares which media it serves.
+    #[must_use]
+    pub const fn new(table: &'static [R], kind: MediaKind) -> Self {
+        Self {
+            table,
+            cache: OnceLock::new(),
+            kind,
+        }
+    }
+
+    /// Finds the row for a codec name, case-insensitively.
+    #[must_use]
+    pub fn find_row(&self, codec: &str) -> Option<&'static R> {
+        self.table
+            .iter()
+            .find(|row| row.codec().eq_ignore_ascii_case(codec))
+    }
+
+    /// Best available encoder for a codec name, memoised in this registry's cache.
+    ///
+    /// Requires [`super::ensure_init`] to have been called first.
+    #[must_use]
+    pub fn preferred_encoder(&self, codec: &str) -> Option<&'static str> {
+        self.lookup_preferred(&codec.to_ascii_lowercase())
+    }
+
+    /// As [`Self::preferred_encoder`], but `lower` must already be lowercase.
+    ///
+    /// Lets [`Self::resolve`] lowercase its input once and reuse the same
+    /// lookup, instead of lowercasing again on the way in here.
+    fn lookup_preferred(&self, lower: &str) -> Option<&'static str> {
+        let map = self.cache.get_or_init(|| {
+            let mut map = HashMap::new();
+            for row in self.table {
+                let selected = row
+                    .encoders()
+                    .iter()
+                    .find(|(enc, _)| is_encoder_available(enc))
+                    .map(|(enc, _)| *enc);
+
+                if let Some(enc) = selected {
+                    info!(
+                        "Using {enc} as {codec} {kind} encoder",
+                        codec = row.codec(),
+                        kind = self.kind
+                    );
+                }
+
+                map.insert(row.codec(), selected);
+            }
+            map
+        });
+
+        map.get(lower).copied().flatten()
+    }
+
+    /// Resolves either a codec name or a direct encoder name to an available encoder.
+    ///
+    /// Codec names go through [`Self::preferred_encoder`]; anything else is
+    /// matched against the table's encoder names and then gated on availability.
+    ///
+    /// Requires [`super::ensure_init`] to have been called first.
+    #[must_use]
+    pub fn resolve(&self, input: &str) -> Option<&'static str> {
+        let lower = input.to_ascii_lowercase();
+
+        if let Some(enc) = self.lookup_preferred(&lower) {
+            return Some(enc);
+        }
+
+        // Short-circuits on the first name match: duplicate encoder names occur
+        // only across byte-identical codec-alias rows, so the verdict is unchanged.
+        self.table
+            .iter()
+            .flat_map(CodecRow::encoders)
+            .find(|(enc, _)| enc.eq_ignore_ascii_case(input))
+            .and_then(|(enc, _)| is_encoder_available(enc).then_some(*enc))
+    }
 }
 
 /// Returns `true` if the named encoder is present in the linked `FFmpeg` build.
@@ -29,83 +143,6 @@ pub trait CodecRow {
 #[must_use]
 pub fn is_encoder_available(encoder: &str) -> bool {
     ffmpeg_the_third::codec::encoder::find_by_name(encoder).is_some()
-}
-
-/// Finds the row for a codec name, case-insensitively.
-#[must_use]
-pub fn find_row<R: CodecRow>(table: &'static [R], codec: &str) -> Option<&'static R> {
-    table
-        .iter()
-        .find(|row| row.codec().eq_ignore_ascii_case(codec))
-}
-
-/// Best available encoder for a codec name, memoised in `cache`.
-///
-/// `cache` is a parameter, not a `static` inside this function: a static in a
-/// generic scope is NOT monomorphized, so an inner static would be shared by
-/// every registry that calls this. `label` distinguishes the registries in the
-/// log line (e.g. `"audio"` / `"video"`).
-///
-/// Requires [`super::ensure_init`] to have been called first.
-#[must_use]
-pub fn preferred_encoder<R: CodecRow>(
-    table: &'static [R],
-    cache: &'static OnceLock<HashMap<&'static str, Option<&'static str>>>,
-    codec: &str,
-    label: &str,
-) -> Option<&'static str> {
-    let map = cache.get_or_init(|| {
-        let mut map = HashMap::new();
-        for row in table {
-            let selected = row
-                .encoders()
-                .iter()
-                .find(|(enc, _)| is_encoder_available(enc))
-                .map(|(enc, _)| *enc);
-
-            if let Some(enc) = selected {
-                info!(
-                    "Using {enc} as {codec} {label} encoder",
-                    codec = row.codec()
-                );
-            }
-
-            map.insert(row.codec(), selected);
-        }
-        map
-    });
-
-    map.get(codec.to_ascii_lowercase().as_str())
-        .copied()
-        .flatten()
-}
-
-/// Resolves either a codec name or a direct encoder name to an available encoder.
-///
-/// Codec names go through [`preferred_encoder`]; anything else is matched against
-/// the table's encoder names and then gated on availability.
-///
-/// Requires [`super::ensure_init`] to have been called first.
-#[must_use]
-pub fn resolve<R: CodecRow>(
-    table: &'static [R],
-    cache: &'static OnceLock<HashMap<&'static str, Option<&'static str>>>,
-    input: &str,
-    label: &str,
-) -> Option<&'static str> {
-    let lower = input.to_ascii_lowercase();
-
-    if let Some(enc) = preferred_encoder(table, cache, &lower, label) {
-        return Some(enc);
-    }
-
-    // Short-circuits on the first name match: duplicate encoder names occur
-    // only across byte-identical codec-alias rows, so the verdict is unchanged.
-    table
-        .iter()
-        .flat_map(CodecRow::encoders)
-        .find(|(enc, _)| enc.eq_ignore_ascii_case(input))
-        .and_then(|(enc, _)| is_encoder_available(enc).then_some(*enc))
 }
 
 /// The row's encoders that are present in this build, in preference order.
@@ -121,8 +158,6 @@ pub fn available_encoders<R: CodecRow>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-    use std::sync::OnceLock;
 
     struct FakeRow {
         codec: &'static str,
@@ -143,14 +178,7 @@ mod tests {
         encoders: &[("nonexistent_encoder_xyz", "Fake")],
     }];
 
-    #[test]
-    fn codec_row_exposes_codec_and_encoders() {
-        let row = FAKE_TABLE.first().expect("fake table has one row");
-        assert_eq!(row.codec(), "fakecodec");
-        assert_eq!(row.encoders().len(), 1);
-        let encoder = row.encoders().first().expect("encoders has one entry");
-        assert_eq!(encoder.0, "nonexistent_encoder_xyz");
-    }
+    static REGISTRY_FAKE: Registry<FakeRow> = Registry::new(FAKE_TABLE, MediaKind::Audio);
 
     #[test]
     fn is_encoder_available_false_for_nonsense_name() {
@@ -163,80 +191,87 @@ mod tests {
         assert!(is_encoder_available("aac"));
     }
 
-    static FAKE_CACHE_A: OnceLock<HashMap<&'static str, Option<&'static str>>> = OnceLock::new();
-    static FAKE_CACHE_B: OnceLock<HashMap<&'static str, Option<&'static str>>> = OnceLock::new();
+    /// Every encoder listed for `"fakecodec"` is absent from any real build,
+    /// so the registry must resolve to `None`, not silently fall through to
+    /// a permissive default. Guards the `.find(available)` +
+    /// `.copied().flatten()` chain in `lookup_preferred` against a mutation
+    /// that would return the first (unavailable) entry regardless.
+    #[test]
+    fn preferred_encoder_none_when_no_encoder_is_available() {
+        crate::ffmpeg::ensure_init().expect("ffmpeg init");
+        assert_eq!(REGISTRY_FAKE.preferred_encoder("fakecodec"), None);
+    }
 
     static TABLE_A: &[FakeRow] = &[FakeRow {
         codec: "shared_name",
         encoders: &[("aac", "AAC")],
     }];
-    static TABLE_B: &[FakeRow] = &[FakeRow {
-        codec: "shared_name",
-        encoders: &[("pcm_s16le", "PCM")],
+    static TABLE_C: &[FakeRow] = &[FakeRow {
+        codec: "ordered",
+        encoders: &[
+            ("nonexistent_encoder_first", "Missing 1"),
+            ("aac", "AAC"),
+            ("pcm_s16le", "PCM"),
+        ],
     }];
+
+    static REGISTRY_A: Registry<FakeRow> = Registry::new(TABLE_A, MediaKind::Audio);
+    static REGISTRY_C: Registry<FakeRow> = Registry::new(TABLE_C, MediaKind::Audio);
 
     #[test]
     fn preferred_encoder_returns_first_available() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
-        assert_eq!(
-            preferred_encoder(TABLE_A, &FAKE_CACHE_A, "shared_name", "test-a"),
-            Some("aac")
-        );
+        assert_eq!(REGISTRY_A.preferred_encoder("shared_name"), Some("aac"));
     }
 
     #[test]
     fn preferred_encoder_unknown_codec_is_none() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
-        assert_eq!(
-            preferred_encoder(TABLE_A, &FAKE_CACHE_A, "no_such_codec", "test-a"),
-            None
-        );
+        assert_eq!(REGISTRY_A.preferred_encoder("no_such_codec"), None);
     }
 
-    /// REGRESSION GUARD for the generic-static trap. Two tables share a codec
-    /// name but have different encoders. With one shared cache, whichever ran
-    /// first would win for both. Distinct caches must give distinct answers.
+    /// Preference order matters: the first entry is an unavailable encoder,
+    /// so the registry must skip it and land on `aac` — not `pcm_s16le`,
+    /// which is also available but listed later. A one-encoder fixture
+    /// (`TABLE_A`) cannot distinguish `.find(available)` from `.first()` or
+    /// `.last()`; this table can.
     #[test]
-    fn distinct_caches_do_not_share_entries() {
+    fn preferred_encoder_skips_unavailable_and_respects_order() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
-        let a = preferred_encoder(TABLE_A, &FAKE_CACHE_A, "shared_name", "test-a");
-        let b = preferred_encoder(TABLE_B, &FAKE_CACHE_B, "shared_name", "test-b");
-        assert_eq!(a, Some("aac"), "table A must resolve from its own table");
-        assert_eq!(b, Some("pcm_s16le"), "table B must NOT inherit A's cache");
-        assert_ne!(a, b, "caches leaked across registries");
+        assert_eq!(REGISTRY_C.preferred_encoder("ordered"), Some("aac"));
+    }
+
+    /// Pins both the availability filter AND the preservation of preference
+    /// order in `available_encoders`.
+    #[test]
+    fn available_encoders_filters_and_preserves_order() {
+        crate::ffmpeg::ensure_init().expect("ffmpeg init");
+        let got: Vec<_> = available_encoders(TABLE_C.first().expect("row")).collect();
+        assert_eq!(got, vec![("aac", "AAC"), ("pcm_s16le", "PCM")]);
     }
 
     #[test]
     fn find_row_matches_case_insensitively() {
-        assert!(find_row(TABLE_A, "SHARED_NAME").is_some());
-        assert!(find_row(TABLE_A, "nope").is_none());
+        assert!(REGISTRY_A.find_row("SHARED_NAME").is_some());
+        assert!(REGISTRY_A.find_row("nope").is_none());
     }
 
     #[test]
     fn resolve_accepts_a_codec_name() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
-        assert_eq!(
-            resolve(TABLE_A, &FAKE_CACHE_A, "shared_name", "test-a"),
-            Some("aac")
-        );
+        assert_eq!(REGISTRY_A.resolve("shared_name"), Some("aac"));
     }
 
     #[test]
     fn resolve_accepts_a_direct_encoder_name() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
-        assert_eq!(
-            resolve(TABLE_A, &FAKE_CACHE_A, "aac", "test-a"),
-            Some("aac")
-        );
+        assert_eq!(REGISTRY_A.resolve("aac"), Some("aac"));
     }
 
     #[test]
     fn resolve_rejects_an_unknown_name() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
-        assert_eq!(
-            resolve(TABLE_A, &FAKE_CACHE_A, "no_such_thing", "test-a"),
-            None
-        );
+        assert_eq!(REGISTRY_A.resolve("no_such_thing"), None);
     }
 
     #[test]

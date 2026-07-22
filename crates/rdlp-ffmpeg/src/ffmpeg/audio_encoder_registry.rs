@@ -16,9 +16,6 @@
 //! - [`container_supports_audio_codec`] — point query for validation
 //! - [`select_audio_encoder_for_container`] — best default encoder for a container
 
-use std::collections::HashMap;
-use std::sync::OnceLock;
-
 use rdlp_types::ContainerFormat;
 use serde::{Deserialize, Serialize};
 
@@ -68,10 +65,6 @@ impl codec_registry::CodecRow for AudioCodecEntry {
         self.encoders
     }
 }
-
-/// Per-registry cache. Module-level, NOT inside a generic function — see
-/// `codec_registry::preferred_encoder`.
-static AUDIO_CACHE: OnceLock<HashMap<&'static str, Option<&'static str>>> = OnceLock::new();
 
 /// Static preference table for audio codecs.
 ///
@@ -198,6 +191,10 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
     },
 ];
 
+/// The audio codec registry, owning its own cache over [`AUDIO_CODEC_PREFERENCES`].
+static AUDIO_REGISTRY: codec_registry::Registry<AudioCodecEntry> =
+    codec_registry::Registry::new(AUDIO_CODEC_PREFERENCES, codec_registry::MediaKind::Audio);
+
 /// Returns `true` if the named audio encoder is available in the current `FFmpeg` build.
 ///
 /// Requires [`super::ensure_init`] to have been called first.
@@ -214,7 +211,7 @@ pub fn is_audio_encoder_available(encoder: &str) -> bool {
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
 pub fn preferred_audio_encoder(codec: &str) -> Option<&'static str> {
-    codec_registry::preferred_encoder(AUDIO_CODEC_PREFERENCES, &AUDIO_CACHE, codec, "audio")
+    AUDIO_REGISTRY.preferred_encoder(codec)
 }
 
 /// Resolves an audio encoder name.
@@ -229,7 +226,7 @@ pub fn preferred_audio_encoder(codec: &str) -> Option<&'static str> {
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
 pub fn resolve_audio_encoder(input: &str) -> Option<&'static str> {
-    codec_registry::resolve(AUDIO_CODEC_PREFERENCES, &AUDIO_CACHE, input, "audio")
+    AUDIO_REGISTRY.resolve(input)
 }
 
 /// Returns all available encoders for a given audio codec name, in preference order.
@@ -239,7 +236,8 @@ pub fn resolve_audio_encoder(input: &str) -> Option<&'static str> {
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
 pub fn available_audio_encoders_for_codec(codec: &str) -> Vec<AudioEncoderInfo> {
-    codec_registry::find_row(AUDIO_CODEC_PREFERENCES, codec)
+    AUDIO_REGISTRY
+        .find_row(codec)
         .map(|row| {
             codec_registry::available_encoders(row)
                 .map(|(enc, display)| AudioEncoderInfo {
@@ -313,10 +311,8 @@ pub fn audio_codecs_for_container(container: ContainerFormat) -> Vec<AudioCodecI
 /// ```
 #[must_use]
 pub fn container_supports_audio_codec(container: ContainerFormat, codec: &str) -> bool {
-    let lower = codec.to_ascii_lowercase();
-    AUDIO_CODEC_PREFERENCES
-        .iter()
-        .find(|e| e.codec == lower.as_str())
+    AUDIO_REGISTRY
+        .find_row(codec)
         .is_some_and(|entry| entry.supported_containers.contains(&container))
 }
 
@@ -373,9 +369,20 @@ mod tests {
 
     #[test]
     fn resolve_encoder_by_encoder_name() {
-        // Built-in "aac" encoder is always available
-        let enc = resolve_audio_encoder("aac");
-        assert!(enc.is_some());
+        // "libmp3lame" is an ENCODER name (the sole encoder under codec key
+        // "mp3"), not itself a codec key, so this exercises the
+        // direct-encoder-name branch of `resolve` rather than short-circuiting
+        // through `preferred_encoder` the way `resolve_encoder_by_codec_name`
+        // (which passes "aac", a codec key) does. Gated on availability so a
+        // build without libmp3lame still passes — either branch outcome
+        // proves the direct-name path was taken, since "libmp3lame" never
+        // matches a codec key.
+        crate::ffmpeg::ensure_init().expect("ffmpeg init");
+        if is_audio_encoder_available("libmp3lame") {
+            assert_eq!(resolve_audio_encoder("libmp3lame"), Some("libmp3lame"));
+        } else {
+            assert_eq!(resolve_audio_encoder("libmp3lame"), None);
+        }
     }
 
     #[test]
