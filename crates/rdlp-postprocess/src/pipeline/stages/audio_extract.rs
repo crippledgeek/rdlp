@@ -238,6 +238,35 @@ mod tests {
         assert_eq!(opts.quality_scale, None);
     }
 
+    /// The `wav` row carries **no** encoder name — `extract_audio` defers to
+    /// the muxer's PCM default — which is why the shared extract helper takes
+    /// a `fallback_codec`. Without it `audio_tag_component` would see
+    /// `(copy: false, encoder: None)` and tag the file `"none"`, losing the
+    /// codec that the pre-#637 inline code recorded. Pins the shape the
+    /// fallback exists to preserve.
+    #[test]
+    fn wav_row_has_no_encoder_so_the_tag_needs_the_codec_fallback() {
+        let codec_config = get_audio_codec("wav").expect("wav row exists");
+        assert_eq!(
+            codec_config.encoder, None,
+            "wav defers to the muxer's PCM default"
+        );
+
+        let opts = AudioExtractStage::build_extract_options(codec_config, false, None);
+        assert_eq!(opts.encoder_name, None);
+
+        // Without the fallback the tag degrades to "none"...
+        assert_eq!(
+            rdlp_ffmpeg::ffmpeg::audio_tag_component(opts.copy, opts.encoder_name.as_deref()),
+            "none"
+        );
+        // ...and with it, the codec name is recorded, as before #637.
+        assert_eq!(
+            rdlp_ffmpeg::ffmpeg::audio_tag_component(opts.copy, Some("wav")),
+            "wav"
+        );
+    }
+
     #[test]
     fn build_extract_options_bitrate_clamped() {
         let codec_config = get_audio_codec("mp3").unwrap();

@@ -162,9 +162,24 @@ async fn recode_of_an_audio_only_source_never_reports_a_missing_video_stream() {
 
         match (stage.process(msg).await, expected) {
             (Ok(out), Expected::Produces) => {
+                // `encoding_tool` names an ENCODER ("copy", or a codec) and is
+                // propagated verbatim by the metadata/thumbnail/fixup stages.
+                // The audio-only route once fell back to the container
+                // extension here, stamping e.g. `Some("mkv")` — a container in
+                // an encoder slot, contradicting the tag the file itself
+                // carries. Nothing asserted it, so the defect was invisible.
+                let tool = out.encoding_tool.as_deref();
+                if tool == Some(ext) {
+                    failures.push(format!(
+                        "{ext}: encoding_tool is the container name {tool:?}, not an encoder"
+                    ));
+                } else if tool.is_none_or(str::is_empty) {
+                    failures.push(format!("{ext}: encoding_tool was not set ({tool:?})"));
+                }
+
                 let path = out.tracker.primary();
                 match decoded_audio_codec(&path) {
-                    Some(codec) => produced.push(format!("{ext}→{codec}")),
+                    Some(codec) => produced.push(format!("{ext}→{codec}[{}]", tool.unwrap_or("?"))),
                     None => failures.push(format!(
                         "{ext}: stage succeeded but {} is not decodable",
                         path.display()

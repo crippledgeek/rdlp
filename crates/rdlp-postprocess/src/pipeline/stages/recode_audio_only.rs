@@ -192,16 +192,28 @@ pub(super) fn resolve_audio_only_params(
     let (audio_copy, encoder_name) =
         RecodeStage::resolve_audio_params(&effective, target, audio.is_present())?;
 
-    if matches!(recode_audio, RecodeAudioMode::Copy) && !audio_copy {
-        // Deliberately does not name `--recode-audio=copy`: copy mode is
-        // also the default, and `resolve_recode_audio_mode` forces it when
-        // `normalize_audio` is on. Naming the flag would contradict that
-        // function's own "forcing audio copy mode" warning for a user who
-        // never passed it. Stating what the container can't do is true in
-        // all three cases.
+    if matches!(recode_audio, RecodeAudioMode::Copy) && !audio_copy && audio.is_present() {
+        // Two things this message is careful about.
+        //
+        // It does not name `--recode-audio=copy`: copy is also the default,
+        // and `resolve_recode_audio_mode` forces it when `normalize_audio` is
+        // on, so naming the flag would contradict that function's own "forcing
+        // audio copy mode" warning for a user who never passed it.
+        //
+        // And it says rdlp cannot *confirm* the container carries the codec,
+        // not that the container cannot — because for MPEG-TS the latter is
+        // false. mpegts does carry AAC; rdlp declines the copy only because
+        // the muxer advertises it through neither a codec-tag table nor
+        // `query_codec`, so `oformat_can_represent` has no positive evidence
+        // (#633). Claiming a container limitation that does not exist would
+        // undercut the point of promoting this to `warn!`.
+        //
+        // Gated on `is_present` so a source with no audio at all does not warn
+        // about a codec it does not have, immediately before failing with
+        // `NoAudioStream`.
         warn!(
-            "RecodeStage: {target_ext} cannot carry {}, so it cannot be stream-copied; \
-             re-encoding to {} instead (this may be lossy)",
+            "RecodeStage: cannot confirm {target_ext} carries {}, so it cannot be \
+             stream-copied safely; re-encoding to {} instead (this may be lossy)",
             audio.name().unwrap_or("the source audio codec"),
             encoder_name.as_deref().unwrap_or("the container default"),
         );
