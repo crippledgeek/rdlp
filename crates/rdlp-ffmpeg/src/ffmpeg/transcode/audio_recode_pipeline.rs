@@ -4,7 +4,8 @@
 //! `drain_audio_filter_to_encoder`, `drain_audio_encoder_packets`) that
 //! participate in the audio side of `convert_video_transcode_sync` when
 //! `opts.audio_codec` is set. The filter graph these drain from is built by
-//! the shared `build_encoder_adapted_audio_filter` in `audio_filter.rs`.
+//! the shared `build_encoder_adapted_audio_filter` in
+//! `ffi_helpers/filter_graph.rs`.
 //!
 //! Sibling of `video_pipeline.rs` (video-side helpers for the same
 //! recode flow) and `audio_pipeline.rs` (audio helpers for the standalone

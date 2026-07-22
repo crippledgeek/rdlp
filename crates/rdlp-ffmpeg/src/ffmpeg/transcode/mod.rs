@@ -4,7 +4,6 @@
 //! (remux + transcode), and internal filter graph / encode helpers.
 
 mod audio_extract;
-mod audio_filter;
 mod audio_pipeline;
 mod audio_pipeline_direct;
 mod audio_recode_pipeline;

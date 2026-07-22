@@ -13,6 +13,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::error::{FfmpegResultExt as _, PostProcessError, Result};
 
+use super::super::ffi_helpers::filter_graph::{AudioSinkSpec, build_audio_filter_graph};
 use super::super::ffi_helpers::{frame_unref_audio, set_single_thread_codec};
 use super::super::log_capture::LogSuppressGuard;
 use super::super::{FFmpegRunner, NormalizeOptions, PeakAnalysis, ensure_init};
@@ -74,9 +75,17 @@ pub(super) fn run_analysis_decode_loop(
         ist_time_base.denominator(),
     );
 
-    // Build filter graph (reuse shared helper)
-    let mut graph =
-        super::helpers::build_audio_filter_with_spec(&decoder, ist_time_base, filter_spec)?;
+    // Build filter graph (reuse shared helper). Measurement-only: the frames
+    // are read by loudnorm and never handed to an encoder, so there is no
+    // fixed frame size to honour.
+    let mut graph = build_audio_filter_graph(
+        &decoder,
+        ist_time_base,
+        AudioSinkSpec {
+            filter_spec,
+            frame_size: 0,
+        },
+    )?;
 
     // Skip non-audio streams to avoid allocating memory for large video packets
     FFmpegRunner::discard_non_audio_streams(&mut ictx, ist_index);

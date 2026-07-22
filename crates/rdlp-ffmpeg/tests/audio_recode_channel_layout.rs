@@ -16,18 +16,13 @@
 //! fixture and verify the result).
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::disallowed_methods)]
 
+mod common;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use common::{ffmpeg_available, probe_audio_field};
 use rdlp_ffmpeg::{FFmpegRunner, VideoConvertOptions};
-
-fn ffmpeg_available() -> bool {
-    Command::new("ffmpeg")
-        .arg("-version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
 
 /// 5.1 AAC audio alongside a tiny H.264 video, so the recode path takes its
 /// audio-transcode branch.
@@ -63,25 +58,9 @@ fn build_surround_fixture(dir: &Path) -> Result<PathBuf, ()> {
     if ok { Ok(src) } else { Err(()) }
 }
 
+/// Channel count of the first audio stream.
 fn probe_channels(path: &Path) -> Option<u32> {
-    let out = Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-select_streams",
-            "a:0",
-            "-show_entries",
-            "stream=channels",
-            "-of",
-            "default=nw=1:nk=1",
-        ])
-        .arg(path)
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    String::from_utf8_lossy(&out.stdout).trim().parse().ok()
+    probe_audio_field(path, "channels").and_then(|c| c.parse().ok())
 }
 
 #[tokio::test]

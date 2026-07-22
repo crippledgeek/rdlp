@@ -30,7 +30,7 @@ use crate::error::{PostProcessError, Result};
 
 use super::super::log_capture::LogCaptureGuard;
 use super::super::salvage::salvage_remux_sync;
-use super::super::{FFmpegRunner, LoudnormMeasurements, NormalizeOptions};
+use super::super::{LoudnormMeasurements, NormalizeOptions};
 
 /// Extra headroom (dB) subtracted from the alimiter ceiling to account for
 /// inter-sample true peak overshoot and lossy encoder artifacts.
@@ -130,38 +130,6 @@ pub(super) fn build_loudnorm_pass2_filter(
     } else {
         loudnorm
     }
-}
-
-/// Build an audio filter graph with a custom filter spec string.
-///
-/// Creates: `abuffer → {filter_spec} → abuffersink`
-pub fn build_audio_filter_with_spec(
-    decoder: &ffmpeg_the_third::decoder::Audio,
-    ist_time_base: ffmpeg_the_third::Rational,
-    filter_spec: &str,
-) -> Result<ffmpeg_the_third::filter::Graph> {
-    let mut graph = ffmpeg_the_third::filter::Graph::new();
-
-    let abuffersink = ffmpeg_the_third::filter::find("abuffersink")
-        .ok_or_else(|| PostProcessError::ffmpeg_failed("abuffersink filter not found"))?;
-
-    FFmpegRunner::add_abuffer_to_graph(
-        &mut graph,
-        "in",
-        ist_time_base,
-        decoder.rate(),
-        decoder.format().name(),
-        &decoder.ch_layout().description(),
-    )?;
-    graph
-        .add(&abuffersink, "out", "")
-        .map_err(|e| PostProcessError::FFmpegLibraryError {
-            message: format!("failed to add abuffersink filter: {e}"),
-        })?;
-
-    FFmpegRunner::parse_and_validate_filter_graph(&mut graph, "in", "out", filter_spec)?;
-
-    Ok(graph)
 }
 
 /// Parse loudnorm JSON output from captured `FFmpeg` log lines.

@@ -19,7 +19,7 @@
     clippy::similar_names,  // FFI convention: ctx_ptr / dec_ctx / enc_ctx are standard names
 )]
 
-mod filter_graph;
+pub(crate) mod filter_graph;
 
 use std::path::Path;
 
@@ -698,9 +698,15 @@ impl FFmpegRunner {
     ///
     /// Tells the buffersink to output exactly `frame_size` samples per frame.
     /// The last frame at EOF is automatically zero-padded. This is the proper
-    /// way to feed fixed-frame-size encoders (AAC=1024, MP3=1152, Opus=960).
+    /// way to feed fixed-frame-size encoders (AAC=1024, MP3=1152, Opus=960,
+    /// FLAC=4608 — `flacenc` sets `frame_size` from its `max_blocksize`).
     ///
-    /// No-op if `frame_size` is 0 (variable-frame-size codecs like FLAC/PCM).
+    /// No-op if `frame_size` is 0. That means either the encoder accepts
+    /// variable-length frames (`AV_CODEC_CAP_VARIABLE_FRAME_SIZE` — the
+    /// `pcm_*` family) or there is no encoder at all, as in a
+    /// measurement-only analysis graph. FLAC is **not** in that group: it
+    /// reports 4608 and rejects anything else, which is why
+    /// `--audio-format=flac` was broken until #638.
     pub(crate) fn set_buffersink_frame_size(
         graph: &mut ffmpeg_the_third::filter::Graph,
         sink_name: &str,

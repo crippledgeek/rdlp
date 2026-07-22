@@ -35,6 +35,27 @@ use rdlp_types::AudioFormat;
 /// lands; the assertion below still guarantees the rest of the matrix passes.
 const EXPERIMENTAL_ENCODER_GATED: &[AudioFormat] = &[AudioFormat::Dts];
 
+/// The format whose codec ffprobe must report for `format`, where it is
+/// pinnable.
+///
+/// Most variants are their own answer, but two deliberately are not: `M4a` is
+/// a *container* carrying AAC, and `Wav` defers to the muxer's PCM default,
+/// whose exact variant (`pcm_s16le`, `pcm_f32le`, …) is a build/muxer decision
+/// this test has no business pinning. `None` means "any decodable codec is
+/// acceptable".
+///
+/// Returns the `AudioFormat` rather than a codec-name string so the mapping
+/// stays inside the enum vocabulary — per `CLAUDE.md`, audio formats are never
+/// raw strings. The caller lowers it via `codec_name()` at the single point
+/// where it must compare against ffprobe's text output.
+fn expected_codec_for(format: AudioFormat) -> Option<AudioFormat> {
+    match format {
+        AudioFormat::M4a => Some(AudioFormat::Aac),
+        AudioFormat::Wav => None,
+        other => Some(other),
+    }
+}
+
 /// Decode the file for real and return its audio codec name.
 ///
 /// Deliberately not a size or existence check: a failed mux still leaves a
@@ -134,7 +155,21 @@ async fn every_supported_audio_format_extracts_to_a_decodable_file() {
             Ok(out) => {
                 let produced = out.tracker.primary();
                 match decoded_audio_codec(&produced) {
-                    Some(codec) => covered.push(format!("{format}→{codec}")),
+                    Some(codec) => {
+                        // Assert the output is the codec that was ASKED for.
+                        // Without this the matrix would stay green if every
+                        // format silently fell back to the muxer's default
+                        // (i.e. everything quietly becoming AAC).
+                        match expected_codec_for(format) {
+                            Some(expected) if codec != expected.codec_name() => {
+                                failures.push(format!(
+                                    "{format}: expected codec {}, got {codec}",
+                                    expected.codec_name()
+                                ));
+                            }
+                            _ => covered.push(format!("{format}→{codec}")),
+                        }
+                    }
                     None => failures.push(format!(
                         "{format}: stage reported success but {} is not decodable",
                         produced.display()
@@ -159,10 +194,14 @@ async fn every_supported_audio_format_extracts_to_a_decodable_file() {
         failures.len(),
         failures.join("\n  ")
     );
+    // `> 1` would be satisfied by aac + m4a alone — the two that already
+    // worked before #638 — so it could not detect the whole fix regressing.
+    // Four forces at least two encoders the fix is actually responsible for.
+    const MIN_FORMATS_EXERCISED: usize = 4;
     assert!(
-        covered.len() > 1,
-        "only {} format(s) were exercised — the build supports too few \
-         encoders for this matrix to prove anything",
+        covered.len() >= MIN_FORMATS_EXERCISED,
+        "only {} format(s) were exercised (need {MIN_FORMATS_EXERCISED}) — \
+         the build supports too few encoders for this matrix to prove anything",
         covered.len()
     );
 }

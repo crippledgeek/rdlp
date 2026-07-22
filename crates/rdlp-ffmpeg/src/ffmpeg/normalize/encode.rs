@@ -36,8 +36,9 @@ use super::super::ffi_helpers::set_single_thread_codec;
 use super::super::log_capture::LogSuppressGuard;
 use super::super::salvage::open_input_resilient;
 use super::super::transcode::MuxTimingState;
-use super::helpers::{build_audio_filter_with_spec, default_bitrate_for_encoder};
+use super::helpers::default_bitrate_for_encoder;
 use super::io_diag::validate_mux_header_state;
+use crate::ffmpeg::ffi_helpers::filter_graph::{AudioSinkSpec, build_audio_filter_graph};
 
 /// Recurring plumbing passed through the normalize encode helpers.
 ///
@@ -267,10 +268,14 @@ impl FFmpegRunner {
             enc_ch_layout_desc,
         );
 
-        let mut filter_graph =
-            build_audio_filter_with_spec(&audio_decoder, audio_ist_time_base, &filter_spec)?;
-
-        Self::set_buffersink_frame_size(&mut filter_graph, "out", audio_encoder.frame_size());
+        let mut filter_graph = build_audio_filter_graph(
+            &audio_decoder,
+            audio_ist_time_base,
+            AudioSinkSpec {
+                filter_spec: &filter_spec,
+                frame_size: audio_encoder.frame_size(),
+            },
+        )?;
 
         Self::discard_non_audio_streams(&mut ictx, audio_ist_index);
 

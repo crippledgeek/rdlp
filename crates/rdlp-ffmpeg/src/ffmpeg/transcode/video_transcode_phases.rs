@@ -24,6 +24,7 @@ use tokio_util::sync::CancellationToken;
 use crate::error::PostProcessError;
 
 use super::super::ffi_helpers::cleanup_partial_output;
+use super::super::ffi_helpers::filter_graph::build_encoder_adapted_audio_filter;
 use super::super::{FFmpegRunner, VideoConvertOptions};
 use super::mux_timing::flush_interleave_queue;
 use super::video_transcode_context::{AudioTranscodeState, Phase1Outputs, VideoTranscodeContext};
@@ -473,7 +474,7 @@ impl FFmpegRunner {
             }
 
             // Build audio filter graph for format/rate conversion + frame size buffering
-            let audio_filter = Self::build_encoder_adapted_audio_filter(
+            let audio_filter = build_encoder_adapted_audio_filter(
                 &audio_decoder,
                 &audio_encoder,
                 audio_ist_time_base.unwrap_or(ffmpeg_the_third::Rational(1, 48000)),
