@@ -36,7 +36,9 @@ impl AudioExtractStage {
         quality: Option<&str>,
     ) -> AudioExtractOptions {
         let mut opts = AudioExtractOptions {
-            encoder_name: codec_config.encoder.map(String::from),
+            encoder_name: codec_config
+                .encoder
+                .map(rdlp_types::media_name::AudioEncoderName::from_static),
             copy: can_copy,
             ..Default::default()
         };

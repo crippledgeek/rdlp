@@ -100,7 +100,9 @@ async fn recode_buffersrc_has_no_frame_property_mismatch() {
 
     let opts = VideoConvertOptions {
         remux_only: false,
-        video_codec: Some("libx264".into()),
+        video_codec: Some(rdlp_types::media_name::VideoEncoderName::from_static(
+            "libx264",
+        )),
         verbose: true,
         ..Default::default()
     };

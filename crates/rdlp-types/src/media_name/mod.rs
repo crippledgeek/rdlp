@@ -111,9 +111,11 @@
 //! ```
 
 use std::borrow::Cow;
+use std::ffi::CString;
 use std::fmt;
 use std::hash::Hash;
 use std::marker::PhantomData;
+use std::ops::Deref;
 
 mod kind;
 
@@ -288,6 +290,33 @@ impl<K: NameKind> MediaName<K> {
         }
     }
 
+    /// Validates a runtime name that is *known to be* `'static` — e.g. a name
+    /// returned by an FFI call into a library's own static table (`FFmpeg`'s
+    /// codec descriptor table, in this crate's motivating case) — without
+    /// paying `from_static`'s "invalid input is a build error" contract.
+    ///
+    /// Unlike [`from_static`](Self::from_static), which is only sound to call
+    /// on a literal known-good at compile time, this is for a `&'static str`
+    /// that is only known-good at *runtime* (a library's documentation
+    /// promises the value but the type system can't prove it), so a bad value
+    /// returns [`InvalidMediaName`] instead of panicking.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidMediaName`] under the same conditions as
+    /// [`new`](Self::new).
+    // `Option::map_or` is not yet const-stable at this crate's MSRV, so the
+    // `match` clippy's `option_if_let_else` would rather see as a
+    // `map_or` call stays as a `match` here — the only way to keep this
+    // constructor `const fn`.
+    #[allow(clippy::option_if_let_else)]
+    pub const fn new_static(name: &'static str) -> Result<Self, InvalidMediaName> {
+        match validate(name.as_bytes()) {
+            None => Ok(Self(Cow::Borrowed(name), PhantomData)),
+            Some(reason) => Err(reason),
+        }
+    }
+
     /// Borrows the underlying name.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -295,11 +324,107 @@ impl<K: NameKind> MediaName<K> {
     }
 
     /// `true` when this value borrows a `'static` name rather than owning one —
-    /// i.e. it came from [`from_static`](Self::from_static) and cost no
-    /// allocation.
+    /// i.e. it came from [`from_static`](Self::from_static) or
+    /// [`new_static`](Self::new_static) and cost no allocation.
     #[must_use]
     pub const fn is_borrowed(&self) -> bool {
         matches!(self.0, Cow::Borrowed(_))
+    }
+
+    /// Recovers the `&'static str` when this value was constructed via
+    /// [`from_static`](Self::from_static) or [`new_static`](Self::new_static)
+    /// — `None` for a [`new`](Self::new)-constructed, owned value.
+    ///
+    /// The escape hatch that lets a function whose *entire* input table is
+    /// `'static` (a codec/encoder preference table, `FFmpeg`'s own static
+    /// descriptor table) keep returning `&'static str` through a `MediaName`
+    /// round-trip, so converting an existing `&'static str`-returning
+    /// signature to validate through `MediaName` needs no further ripple at
+    /// its call sites.
+    #[must_use]
+    pub fn into_static(self) -> Option<&'static str> {
+        match self.0 {
+            Cow::Borrowed(s) => Some(s),
+            Cow::Owned(_) => None,
+        }
+    }
+
+    /// Converts to a [`CString`] for an FFI call.
+    ///
+    /// Infallible in practice: [`validate`] already rejects any control
+    /// character — including an interior NUL, the one input
+    /// [`CString::new`] can fail on — so a `MediaName` can never fail this
+    /// conversion. This is the intended replacement for a scattered
+    /// `CString::new(name).ok()?` guard at an FFI boundary that already
+    /// receives a validated `MediaName`: the fallibility was real only
+    /// because the name hadn't been validated yet.
+    ///
+    /// # Panics
+    ///
+    /// Panics only if the `validate`/`CString::new` invariant above is ever
+    /// violated, which would itself be a bug in this module.
+    #[must_use]
+    #[allow(clippy::expect_used)]
+    pub fn to_cstring(&self) -> CString {
+        CString::new(self.0.as_bytes())
+            .expect("MediaName invariant: validate() rejects interior NUL bytes")
+    }
+}
+
+/// Borrows the underlying name as a plain `&str`, so a `MediaName` can be
+/// used as the needle in a lookup keyed by `&str` (e.g.
+/// `HashMap<MediaName<K>, _>::get(some_str)`).
+///
+/// Consistent with the derived [`Hash`] and [`Ord`] impls, which both
+/// delegate to the wrapped `Cow<str>` and therefore agree with `str`'s own —
+/// the contract [`std::borrow::Borrow`] requires.
+impl<K: NameKind> std::borrow::Borrow<str> for MediaName<K> {
+    fn borrow(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Derefs to the underlying `str`, so `Option<MediaName<K>>::as_deref()`
+/// yields an `Option<&str>` comparable against a string-literal expectation
+/// in a test, and so borrowing APIs that accept `&str` keep working through
+/// an `&MediaName`.
+impl<K: NameKind> Deref for MediaName<K> {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        &self.0
+    }
+}
+
+/// Compares the name against a plain `&str`, so a resolved `MediaName` can
+/// be asserted against a literal without spelling out the kind at the call
+/// site (`resolved_encoder == "libx264"`).
+impl<K: NameKind> PartialEq<&str> for MediaName<K> {
+    fn eq(&self, other: &&str) -> bool {
+        self.0 == **other
+    }
+}
+
+impl<K: NameKind> PartialEq<MediaName<K>> for &str {
+    fn eq(&self, other: &MediaName<K>) -> bool {
+        *self == other.0
+    }
+}
+
+/// As [`PartialEq<&str>`], but against an unsized `str` — needed for the
+/// standard library's blanket `impl<A, B> PartialEq<&B> for &A where A:
+/// PartialEq<B>`, which is what lets `&MediaName<K> == &str` compile (e.g.
+/// comparing an `Option<&MediaName<K>>::is_some_and` closure's borrowed
+/// parameter against a `&str`, rather than an owned `MediaName<K>`).
+impl<K: NameKind> PartialEq<str> for MediaName<K> {
+    fn eq(&self, other: &str) -> bool {
+        self.0 == *other
+    }
+}
+
+impl<K: NameKind> PartialEq<MediaName<K>> for str {
+    fn eq(&self, other: &MediaName<K>) -> bool {
+        *self == *other.0
     }
 }
 

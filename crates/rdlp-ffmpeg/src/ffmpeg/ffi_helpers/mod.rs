@@ -1078,7 +1078,11 @@ mod tests {
         for (container, ext) in containers {
             let oformat = oformat_for_extension(dir.path(), ext);
             for (name, id) in codecs {
-                if !muxer_can_represent(container, name, MediaKind::Video) {
+                if !muxer_can_represent(
+                    container,
+                    &rdlp_types::media_name::CodecName::from_static(name),
+                    MediaKind::Video,
+                ) {
                     continue;
                 }
                 routed_copies += 1;

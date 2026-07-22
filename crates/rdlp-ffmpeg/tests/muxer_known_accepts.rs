@@ -31,6 +31,7 @@ use std::process::Command;
 use common::{decoded_frames, ffmpeg_available};
 use rdlp_ffmpeg::{MediaKind, muxer_can_represent};
 use rdlp_types::ContainerFormat;
+use rdlp_types::media_name::CodecName;
 
 /// One allow-list entry, paired with how to build a source carrying that codec.
 struct KnownAccept {
@@ -196,7 +197,11 @@ fn muxer_can_represent_accepts_the_known_undeclared_pairs() {
     rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
     for case in CASES {
         assert!(
-            muxer_can_represent(case.container, case.codec, case.kind),
+            muxer_can_represent(
+                case.container,
+                &CodecName::from_static(case.codec),
+                case.kind
+            ),
             "{:?} + {} ({:?}) must be accepted — ffmpeg copies it, and the allow-list exists \
              precisely because the muxer declares it through neither evidence channel",
             case.container,
@@ -297,29 +302,41 @@ fn the_allow_list_does_not_loosen_refusals_or_cross_media_kinds() {
 
     // WebM genuinely cannot carry AAC — unchanged by the allow-list.
     assert!(
-        !muxer_can_represent(ContainerFormat::WebM, "aac", MediaKind::Audio),
+        !muxer_can_represent(
+            ContainerFormat::WebM,
+            &CodecName::from_static("aac"),
+            MediaKind::Audio
+        ),
         "webm rejects aac; the allow-list must not have loosened that"
     );
 
     // The allow-listed pairs must not leak across media kinds.
     assert!(
-        !muxer_can_represent(ContainerFormat::Mxf, "h264", MediaKind::Audio),
+        !muxer_can_represent(
+            ContainerFormat::Mxf,
+            &CodecName::from_static("h264"),
+            MediaKind::Audio
+        ),
         "h264 is video; asking the audio question must still answer no"
     );
     assert!(
-        !muxer_can_represent(ContainerFormat::Ts, "aac", MediaKind::Video),
+        !muxer_can_represent(
+            ContainerFormat::Ts,
+            &CodecName::from_static("aac"),
+            MediaKind::Video
+        ),
         "aac is audio; asking the video question must still answer no"
     );
 
     // Pairings that were already true must stay true.
     assert!(muxer_can_represent(
         ContainerFormat::Mp4,
-        "h264",
+        &CodecName::from_static("h264"),
         MediaKind::Video
     ));
     assert!(muxer_can_represent(
         ContainerFormat::Mkv,
-        "aac",
+        &CodecName::from_static("aac"),
         MediaKind::Audio
     ));
 }

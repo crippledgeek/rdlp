@@ -94,7 +94,10 @@ async fn assert_extracts(case: Extraction) -> Option<u32> {
 
     let runner = FFmpegRunner::new().expect("FFmpegRunner");
     let opts = AudioExtractOptions {
-        encoder_name: Some(case.encoder.to_string()),
+        encoder_name: Some(
+            rdlp_types::media_name::AudioEncoderName::new(case.encoder)
+                .expect("valid encoder name"),
+        ),
         copy: false,
         bitrate_kbps: Some(128),
         quality_scale: None,

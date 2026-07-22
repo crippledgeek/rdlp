@@ -8,6 +8,7 @@
 //! given codec name. Use [`list_available_codecs()`] to enumerate all codecs with
 //! at least one available encoder (for UI population).
 
+use rdlp_types::media_name::{CodecName, VideoEncoder, VideoEncoderName};
 use serde::{Deserialize, Serialize};
 
 use crate::ffmpeg::codec_registry;
@@ -241,18 +242,19 @@ pub(crate) fn speed_controls_def(encoder: &str) -> &'static [SpeedKnobDef] {
 /// Entry in the codec preferences table.
 struct CodecEntry {
     /// Canonical codec name
-    codec: &'static str,
+    codec: CodecName,
     /// Human-readable display name for the codec
     display_name: &'static str,
     /// Ordered encoder preference list: (`encoder_name`, `display_name`)
-    encoders: &'static [(&'static str, &'static str)],
+    encoders: &'static [(VideoEncoderName, &'static str)],
 }
 
 impl codec_registry::CodecRow for CodecEntry {
-    fn codec(&self) -> &'static str {
-        self.codec
+    type Encoder = VideoEncoder;
+    fn codec(&self) -> CodecName {
+        self.codec.clone()
     }
-    fn encoders(&self) -> &'static [(&'static str, &'static str)] {
+    fn encoders(&self) -> &'static [(VideoEncoderName, &'static str)] {
         self.encoders
     }
 }
@@ -264,115 +266,145 @@ impl codec_registry::CodecRow for CodecEntry {
 /// are separate entries that share the same encoder list.
 static CODEC_PREFERENCES: &[CodecEntry] = &[
     CodecEntry {
-        codec: "h264",
+        codec: CodecName::from_static("h264"),
         display_name: "H.264 / AVC",
         encoders: &[
-            ("libx264", "x264 (H.264)"),
-            ("libopenh264", "OpenH264 (H.264)"),
+            (VideoEncoderName::from_static("libx264"), "x264 (H.264)"),
+            (
+                VideoEncoderName::from_static("libopenh264"),
+                "OpenH264 (H.264)",
+            ),
         ],
     },
     CodecEntry {
-        codec: "h265",
+        codec: CodecName::from_static("h265"),
         display_name: "H.265 / HEVC",
         encoders: &[
-            ("libx265", "x265 (H.265/HEVC)"),
-            ("libkvazaar", "Kvazaar (H.265/HEVC)"),
+            (
+                VideoEncoderName::from_static("libx265"),
+                "x265 (H.265/HEVC)",
+            ),
+            (
+                VideoEncoderName::from_static("libkvazaar"),
+                "Kvazaar (H.265/HEVC)",
+            ),
         ],
     },
     CodecEntry {
-        codec: "hevc",
+        codec: CodecName::from_static("hevc"),
         display_name: "H.265 / HEVC",
         encoders: &[
-            ("libx265", "x265 (H.265/HEVC)"),
-            ("libkvazaar", "Kvazaar (H.265/HEVC)"),
+            (
+                VideoEncoderName::from_static("libx265"),
+                "x265 (H.265/HEVC)",
+            ),
+            (
+                VideoEncoderName::from_static("libkvazaar"),
+                "Kvazaar (H.265/HEVC)",
+            ),
         ],
     },
     CodecEntry {
-        codec: "av1",
+        codec: CodecName::from_static("av1"),
         display_name: "AV1",
         encoders: &[
-            ("libsvtav1", "SVT-AV1"),
-            ("libaom-av1", "libaom AV1"),
-            ("librav1e", "rav1e AV1"),
+            (VideoEncoderName::from_static("libsvtav1"), "SVT-AV1"),
+            (VideoEncoderName::from_static("libaom-av1"), "libaom AV1"),
+            (VideoEncoderName::from_static("librav1e"), "rav1e AV1"),
         ],
     },
     CodecEntry {
-        codec: "vp9",
+        codec: CodecName::from_static("vp9"),
         display_name: "VP9",
-        encoders: &[("libvpx-vp9", "libvpx VP9")],
+        encoders: &[(VideoEncoderName::from_static("libvpx-vp9"), "libvpx VP9")],
     },
     CodecEntry {
-        codec: "vp8",
+        codec: CodecName::from_static("vp8"),
         display_name: "VP8",
-        encoders: &[("libvpx", "libvpx VP8")],
+        encoders: &[(VideoEncoderName::from_static("libvpx"), "libvpx VP8")],
     },
     CodecEntry {
-        codec: "vvc",
+        codec: CodecName::from_static("vvc"),
         display_name: "VVC / H.266",
-        encoders: &[("libvvenc", "VVenC (VVC/H.266)")],
+        encoders: &[(
+            VideoEncoderName::from_static("libvvenc"),
+            "VVenC (VVC/H.266)",
+        )],
     },
     CodecEntry {
-        codec: "h266",
+        codec: CodecName::from_static("h266"),
         display_name: "VVC / H.266",
-        encoders: &[("libvvenc", "VVenC (VVC/H.266)")],
+        encoders: &[(
+            VideoEncoderName::from_static("libvvenc"),
+            "VVenC (VVC/H.266)",
+        )],
     },
     CodecEntry {
-        codec: "evc",
+        codec: CodecName::from_static("evc"),
         display_name: "EVC / MPEG-5",
-        encoders: &[("libxeve", "xeve (MPEG-5 EVC)")],
+        encoders: &[(
+            VideoEncoderName::from_static("libxeve"),
+            "xeve (MPEG-5 EVC)",
+        )],
     },
     CodecEntry {
-        codec: "avs2",
+        codec: CodecName::from_static("avs2"),
         display_name: "AVS2 / IEEE 1857.4",
-        encoders: &[("libxavs2", "xavs2 (AVS2)")],
+        encoders: &[(VideoEncoderName::from_static("libxavs2"), "xavs2 (AVS2)")],
     },
     // NOTE: APV (liboapv) intentionally NOT registered — it rejects standard
     // 8-bit yuv420p web video (pro 4:2:2/10-bit intra codec), so it is not a
     // viable recode target for downloaded content.
     CodecEntry {
-        codec: "theora",
+        codec: CodecName::from_static("theora"),
         display_name: "Theora",
-        encoders: &[("libtheora", "libtheora")],
+        encoders: &[(VideoEncoderName::from_static("libtheora"), "libtheora")],
     },
     CodecEntry {
-        codec: "mpeg4",
+        codec: CodecName::from_static("mpeg4"),
         display_name: "MPEG-4 Part 2",
-        encoders: &[("mpeg4", "MPEG-4 (built-in)")],
+        encoders: &[(VideoEncoderName::from_static("mpeg4"), "MPEG-4 (built-in)")],
     },
     CodecEntry {
-        codec: "mpeg2",
+        codec: CodecName::from_static("mpeg2"),
         display_name: "MPEG-2 Video",
-        encoders: &[("mpeg2video", "MPEG-2 Video (built-in)")],
+        encoders: &[(
+            VideoEncoderName::from_static("mpeg2video"),
+            "MPEG-2 Video (built-in)",
+        )],
     },
     CodecEntry {
-        codec: "mpeg1",
+        codec: CodecName::from_static("mpeg1"),
         display_name: "MPEG-1 Video",
-        encoders: &[("mpeg1video", "MPEG-1 Video (built-in)")],
+        encoders: &[(
+            VideoEncoderName::from_static("mpeg1video"),
+            "MPEG-1 Video (built-in)",
+        )],
     },
     CodecEntry {
-        codec: "xvid",
+        codec: CodecName::from_static("xvid"),
         display_name: "XviD (MPEG-4)",
-        encoders: &[("libxvid", "libxvid (XviD)")],
+        encoders: &[(VideoEncoderName::from_static("libxvid"), "libxvid (XviD)")],
     },
     CodecEntry {
-        codec: "prores",
+        codec: CodecName::from_static("prores"),
         display_name: "Apple ProRes",
-        encoders: &[("prores_ks", "ProRes KS")],
+        encoders: &[(VideoEncoderName::from_static("prores_ks"), "ProRes KS")],
     },
     CodecEntry {
-        codec: "dnxhd",
+        codec: CodecName::from_static("dnxhd"),
         display_name: "DNxHD / DNxHR",
-        encoders: &[("dnxhd", "DNxHD (built-in)")],
+        encoders: &[(VideoEncoderName::from_static("dnxhd"), "DNxHD (built-in)")],
     },
     CodecEntry {
-        codec: "wmv2",
+        codec: CodecName::from_static("wmv2"),
         display_name: "WMV2",
-        encoders: &[("wmv2", "WMV2 (built-in)")],
+        encoders: &[(VideoEncoderName::from_static("wmv2"), "WMV2 (built-in)")],
     },
     CodecEntry {
-        codec: "ffv1",
+        codec: CodecName::from_static("ffv1"),
         display_name: "FFV1 (Lossless)",
-        encoders: &[("ffv1", "FFV1 (built-in)")],
+        encoders: &[(VideoEncoderName::from_static("ffv1"), "FFV1 (built-in)")],
     },
     // Keyed to the exact FFmpeg codec-ID name (matching
     // `muxer_defaults::declared_codec`'s output, same discipline as the
@@ -386,9 +418,12 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
     // and no error" — a different failure than the original #618 bug
     // (`h264` rejected by the dv muxer), but still failing end-to-end.
     CodecEntry {
-        codec: "dvvideo",
+        codec: CodecName::from_static("dvvideo"),
         display_name: "DV (Digital Video)",
-        encoders: &[("dvvideo", "DV Video (built-in)")],
+        encoders: &[(
+            VideoEncoderName::from_static("dvvideo"),
+            "DV Video (built-in)",
+        )],
     },
     // Same discipline and same #618 discovery as `dvvideo` above: the
     // Wmv/Asf muxers declare codec-ID `msmpeg4v3`, but FFmpeg's *encoder*
@@ -397,9 +432,12 @@ static CODEC_PREFERENCES: &[CodecEntry] = &[
     // differently-named encoder, the same shape as the `mpeg2`/`mpeg2video`
     // and `mpeg1`/`mpeg1video` rows above.
     CodecEntry {
-        codec: "msmpeg4v3",
+        codec: CodecName::from_static("msmpeg4v3"),
         display_name: "MS MPEG-4 v3 (WMV1-era)",
-        encoders: &[("msmpeg4", "MS MPEG-4 v3 (built-in)")],
+        encoders: &[(
+            VideoEncoderName::from_static("msmpeg4"),
+            "MS MPEG-4 v3 (built-in)",
+        )],
     },
 ];
 
@@ -426,7 +464,7 @@ pub fn is_encoder_available(encoder: &str) -> bool {
 ///
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
-pub fn preferred_video_encoder(codec: &str) -> Option<&'static str> {
+pub fn preferred_video_encoder(codec: &str) -> Option<VideoEncoderName> {
     VIDEO_REGISTRY.preferred_encoder(codec)
 }
 
@@ -441,7 +479,7 @@ pub fn preferred_video_encoder(codec: &str) -> Option<&'static str> {
 ///
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
-pub fn resolve_encoder(input: &str) -> Option<&'static str> {
+pub fn resolve_encoder(input: &str) -> Option<VideoEncoderName> {
     VIDEO_REGISTRY.resolve(input)
 }
 
@@ -457,9 +495,9 @@ pub fn available_encoders_for_codec(codec: &str) -> Vec<VideoEncoderInfo> {
         .map(|row| {
             codec_registry::available_encoders(row)
                 .map(|(enc, display)| VideoEncoderInfo {
-                    encoder_name: enc.to_string(),
+                    encoder_name: enc.as_str().to_string(),
                     display_name: display.to_string(),
-                    speed_controls: speed_controls_def(enc)
+                    speed_controls: speed_controls_def(enc.as_str())
                         .iter()
                         .map(SpeedKnob::from_def)
                         .collect(),
@@ -484,9 +522,9 @@ pub fn list_available_codecs() -> Vec<VideoCodecInfo> {
         .filter_map(|entry| {
             let encoders: Vec<VideoEncoderInfo> = codec_registry::available_encoders(entry)
                 .map(|(enc, display)| VideoEncoderInfo {
-                    encoder_name: enc.to_string(),
+                    encoder_name: enc.as_str().to_string(),
                     display_name: display.to_string(),
-                    speed_controls: speed_controls_def(enc)
+                    speed_controls: speed_controls_def(enc.as_str())
                         .iter()
                         .map(SpeedKnob::from_def)
                         .collect(),
@@ -497,7 +535,7 @@ pub fn list_available_codecs() -> Vec<VideoCodecInfo> {
                 None
             } else {
                 Some(VideoCodecInfo {
-                    codec: entry.codec.to_string(),
+                    codec: entry.codec.as_str().to_string(),
                     display_name: entry.display_name.to_string(),
                     encoders,
                 })
@@ -533,7 +571,7 @@ mod tests {
     fn test_resolve_encoder_encoder_name() {
         // Built-in encoders are always available
         let enc = resolve_encoder("mpeg4");
-        assert_eq!(enc, Some("mpeg4"));
+        assert_eq!(enc.as_deref(), Some("mpeg4"));
     }
 
     #[test]
@@ -542,8 +580,8 @@ mod tests {
         // only when their encoders are built into this ffmpeg; gate on
         // availability so a build without the codecs still passes.
         if is_encoder_available("libxeve") {
-            assert_eq!(resolve_encoder("evc"), Some("libxeve"));
-            assert_eq!(resolve_encoder("libxeve"), Some("libxeve"));
+            assert_eq!(resolve_encoder("evc").as_deref(), Some("libxeve"));
+            assert_eq!(resolve_encoder("libxeve").as_deref(), Some("libxeve"));
         } else {
             // Registered in the table but not built into this ffmpeg: the
             // name matches yet the availability gate rejects it → None. Pins
@@ -551,7 +589,7 @@ mod tests {
             assert_eq!(resolve_encoder("libxeve"), None);
         }
         if is_encoder_available("libxavs2") {
-            assert_eq!(resolve_encoder("avs2"), Some("libxavs2"));
+            assert_eq!(resolve_encoder("avs2").as_deref(), Some("libxavs2"));
         } else {
             assert_eq!(resolve_encoder("libxavs2"), None);
         }

@@ -5,6 +5,8 @@
 
 use std::path::Path;
 
+use rdlp_types::media_name::{AudioEncoderName, VideoEncoderName};
+
 /// Whether output written to `path` should enable faststart.
 ///
 /// This is the **boundary** form of the question: these callers receive only a
@@ -99,7 +101,7 @@ pub struct RemuxOptions {
 pub struct AudioExtractOptions {
     /// Encoder name (e.g., "libmp3lame", "aac", "libopus").
     /// If None, uses the default encoder for the output format.
-    pub encoder_name: Option<String>,
+    pub encoder_name: Option<AudioEncoderName>,
     /// If true, copy audio stream without re-encoding.
     pub copy: bool,
     /// Target bitrate in kbps (e.g., 192 for 192kbps).
@@ -116,7 +118,7 @@ pub struct VideoConvertOptions {
     /// If true, remux only (stream copy, no re-encoding).
     pub remux_only: bool,
     /// Video encoder name (e.g., "libx264", "libx265", "libvpx-vp9").
-    pub video_codec: Option<String>,
+    pub video_codec: Option<VideoEncoderName>,
     /// Encoder preset (e.g., "medium", "fast", "slow").
     pub preset: Option<String>,
     /// Constant Rate Factor for quality-based encoding.
@@ -141,7 +143,7 @@ pub struct VideoConvertOptions {
     ///
     /// Only used when `audio_copy` is false. When `None` and `audio_copy` is false,
     /// the existing behavior is preserved (implementation decides the encoder).
-    pub audio_codec: Option<String>,
+    pub audio_codec: Option<AudioEncoderName>,
     /// When true, capture `FFmpeg` C-level log messages and forward them via
     /// the log callback. Enables verbose encoder output in the UI log viewer.
     pub verbose: bool,

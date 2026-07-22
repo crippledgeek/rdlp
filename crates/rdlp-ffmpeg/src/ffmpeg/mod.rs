@@ -94,7 +94,7 @@ pub use normalize_types::{
     AudioNormMode, LoudnormMeasurements, LoudnormPreset, NormalizeOptions, PeakAnalysis,
 };
 pub use options::{AudioExtractOptions, ChapterEntry, RemuxOptions, VideoConvertOptions};
-pub use probe::{MediaInfo, StreamInfo};
+pub use probe::{MediaInfo, StreamInfo, StreamKind};
 pub use video_codecs::{
     VideoCodecInfo, VideoEncoderInfo, available_encoders_for_codec, is_encoder_available,
     list_available_codecs, preferred_video_encoder, resolve_encoder,

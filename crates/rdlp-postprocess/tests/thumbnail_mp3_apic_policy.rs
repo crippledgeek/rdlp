@@ -134,9 +134,9 @@ async fn thumbnail_codec_in_mp3(format: &str) -> Option<String> {
     let thumb_stream = info
         .streams
         .iter()
-        .find(|s| s.codec_type == "video")
+        .find(|s| s.codec_type == rdlp_ffmpeg::StreamKind::Video)
         .expect("attached-pic video stream must be present");
-    thumb_stream.codec_name.clone()
+    thumb_stream.codec_name.as_ref().map(ToString::to_string)
 }
 
 /// #530-mirrored regression guard: bmp must NOT pass through natively into

@@ -17,11 +17,77 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
+use rdlp_types::media_name::CodecName;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{PostProcessError, Result};
+use crate::ffmpeg::codec_registry::MediaKind;
 
 use super::{FFmpegRunner, ensure_init};
+
+/// Broad category of a probed stream, as `FFmpeg`'s `AVMediaType` classifies
+/// it.
+///
+/// Replaces a bare `codec_type: String` holding one of `"video"` / `"audio"` /
+/// `"subtitle"` / `"data"` / `"unknown"` — every comparison against that
+/// string was a stringly-typed re-implementation of this same five-way
+/// classification (`fixup.rs`'s issue detection, `probe.rs`'s own
+/// `video_stream`/`audio_stream` lookups), and a typo in any one of them would
+/// have compiled and silently never matched.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StreamKind {
+    /// A video elementary stream.
+    Video,
+    /// An audio elementary stream.
+    Audio,
+    /// A subtitle stream.
+    Subtitle,
+    /// A data (non-media) stream.
+    Data,
+    /// A stream `FFmpeg` itself could not classify.
+    #[default]
+    Unknown,
+}
+
+impl StreamKind {
+    /// Classifies an `FFmpeg` `media::Type`.
+    const fn from_medium(medium: ffmpeg_the_third::media::Type) -> Self {
+        match medium {
+            ffmpeg_the_third::media::Type::Video => Self::Video,
+            ffmpeg_the_third::media::Type::Audio => Self::Audio,
+            ffmpeg_the_third::media::Type::Subtitle => Self::Subtitle,
+            ffmpeg_the_third::media::Type::Data => Self::Data,
+            _ => Self::Unknown,
+        }
+    }
+
+    /// Projects to the audio/video routing kind [`muxer_can_represent`]
+    /// (`crate::ffmpeg::muxer_defaults`) and `Registry` ask about. `None` for
+    /// [`Subtitle`](Self::Subtitle) / [`Data`](Self::Data) /
+    /// [`Unknown`](Self::Unknown), which have no muxer-representability
+    /// question to answer.
+    #[must_use]
+    pub const fn as_media_kind(self) -> Option<MediaKind> {
+        match self {
+            Self::Video => Some(MediaKind::Video),
+            Self::Audio => Some(MediaKind::Audio),
+            Self::Subtitle | Self::Data | Self::Unknown => None,
+        }
+    }
+}
+
+impl std::fmt::Display for StreamKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Video => "video",
+            Self::Audio => "audio",
+            Self::Subtitle => "subtitle",
+            Self::Data => "data",
+            Self::Unknown => "unknown",
+        })
+    }
+}
 
 /// Media file information from `FFprobe`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -33,9 +99,9 @@ pub struct MediaInfo {
     /// Container format (e.g., "mp4", "mkv")
     pub format: Option<String>,
     /// Video codec (e.g., "h264", "vp9")
-    pub video_codec: Option<String>,
+    pub video_codec: Option<CodecName>,
     /// Audio codec (e.g., "aac", "mp3")
-    pub audio_codec: Option<String>,
+    pub audio_codec: Option<CodecName>,
     /// Video width in pixels
     pub width: Option<u32>,
     /// Video height in pixels
@@ -71,10 +137,10 @@ pub struct MediaInfo {
 pub struct StreamInfo {
     /// Stream index
     pub index: usize,
-    /// Codec type ("video", "audio", "subtitle", "data")
-    pub codec_type: String,
+    /// Broad category of this stream.
+    pub codec_type: StreamKind,
     /// Codec name
-    pub codec_name: Option<String>,
+    pub codec_name: Option<CodecName>,
     /// Stream-specific metadata
     pub metadata: HashMap<String, String>,
     /// Stream duration in seconds
@@ -162,14 +228,16 @@ impl FFmpegRunner {
             let params = stream.parameters();
             let medium = params.medium();
 
-            let codec_name = params.id().name().to_string();
-            let codec_type_str = match medium {
-                ffmpeg_the_third::media::Type::Video => "video",
-                ffmpeg_the_third::media::Type::Audio => "audio",
-                ffmpeg_the_third::media::Type::Subtitle => "subtitle",
-                ffmpeg_the_third::media::Type::Data => "data",
-                _ => "unknown",
-            };
+            // `avcodec_get_name`'s name is documented static, but it is only
+            // read once per stream here (not memoised in a static table like
+            // the codec registries), so the simpler allocating `new` is used
+            // rather than `new_static`. A name this floor would reject (a
+            // future libavcodec descriptor with a NUL/control character) is
+            // not something this probe should hard-fail on, so an
+            // unrepresentable name degrades to `None` rather than aborting
+            // the whole probe.
+            let codec_name = CodecName::new(params.id().name()).ok();
+            let codec_type = StreamKind::from_medium(medium);
 
             // Stream-level metadata, built directly into the struct below.
             let stream_metadata = stream
@@ -180,8 +248,8 @@ impl FFmpegRunner {
 
             let mut stream_info = StreamInfo {
                 index: stream.index(),
-                codec_type: codec_type_str.to_string(),
-                codec_name: Some(codec_name),
+                codec_type,
+                codec_name,
                 metadata: stream_metadata,
                 duration: None,
                 sar_num: None,
@@ -294,13 +362,17 @@ impl MediaInfo {
     /// Get the video stream info.
     #[must_use]
     pub fn video_stream(&self) -> Option<&StreamInfo> {
-        self.streams.iter().find(|s| s.codec_type == "video")
+        self.streams
+            .iter()
+            .find(|s| s.codec_type == StreamKind::Video)
     }
 
     /// Get the audio stream info.
     #[must_use]
     pub fn audio_stream(&self) -> Option<&StreamInfo> {
-        self.streams.iter().find(|s| s.codec_type == "audio")
+        self.streams
+            .iter()
+            .find(|s| s.codec_type == StreamKind::Audio)
     }
 }
 

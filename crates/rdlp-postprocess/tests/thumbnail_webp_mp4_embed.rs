@@ -149,7 +149,7 @@ async fn process_embeds_webp_thumbnail_into_mp4_as_mjpeg() {
         .iter()
         .find(|s| s.index == 1)
         .expect("second stream (thumbnail) must be present");
-    assert_eq!(thumb_stream.codec_type, "video");
+    assert_eq!(thumb_stream.codec_type, rdlp_ffmpeg::StreamKind::Video);
     assert_eq!(
         thumb_stream.codec_name.as_deref(),
         Some("mjpeg"),
@@ -263,7 +263,8 @@ async fn process_normalizes_webp_thumbnail_into_mkv_as_mjpeg() {
         .find(|s| s.index == 1)
         .expect("second stream (thumbnail attachment) must be present");
     assert_eq!(
-        thumb_stream.codec_type, "video",
+        thumb_stream.codec_type,
+        rdlp_ffmpeg::StreamKind::Video,
         "the normalized cover must promote to a real, player-visible video \
          (attached_pic) stream, not a generic attachment"
     );

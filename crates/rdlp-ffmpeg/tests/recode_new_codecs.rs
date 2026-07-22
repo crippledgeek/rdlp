@@ -118,7 +118,7 @@ async fn new_codecs_recode_and_mux() {
         let out = dir.path().join(format!("out_{enc}.{cont}"));
         let opts = VideoConvertOptions {
             remux_only: false,
-            video_codec: Some(enc.to_string()),
+            video_codec: Some(rdlp_types::media_name::VideoEncoderName::from_static(enc)),
             audio_copy: false,
             ..Default::default()
         };

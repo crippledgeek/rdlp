@@ -12,6 +12,7 @@ use ffmpeg_the_third::ffi::{
     avcodec_get_name,
 };
 use rdlp_types::ContainerFormat;
+use rdlp_types::media_name::CodecName;
 
 use super::codec_registry::MediaKind;
 
@@ -79,7 +80,7 @@ fn guess_muxer(
 ///
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
-pub fn declared_codec(container: ContainerFormat, kind: MediaKind) -> Option<&'static str> {
+pub fn declared_codec(container: ContainerFormat, kind: MediaKind) -> Option<CodecName> {
     let (ofmt, probe) = guess_muxer(container)?;
 
     // SAFETY: `av_guess_codec` is a pure lookup over FFmpeg's static muxer
@@ -121,7 +122,14 @@ pub fn declared_codec(container: ContainerFormat, kind: MediaKind) -> Option<&'s
             );
             return None;
         }
-        Some(name)
+        // `name` is documented by `avcodec_get_name` to be a static string
+        // literal owned by FFmpeg's own table, so `new_static` (not `new`)
+        // keeps this function's `&'static str`-returning callers
+        // (`speed_controls::default_codec_for_container`) working with no
+        // further ripple. A defensive `?` rather than an `expect`, in case a
+        // future libavcodec ever ships a name outside the ASCII/no-control-
+        // character floor `validate` enforces.
+        CodecName::new_static(name).ok()
     }
 }
 
@@ -154,13 +162,15 @@ pub fn declared_codec(container: ContainerFormat, kind: MediaKind) -> Option<&'s
 ///
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
-pub fn muxer_can_represent(container: ContainerFormat, codec: &str, kind: MediaKind) -> bool {
+pub fn muxer_can_represent(container: ContainerFormat, codec: &CodecName, kind: MediaKind) -> bool {
     let Some((ofmt, _probe)) = guess_muxer(container) else {
         return false;
     };
-    let Ok(codec_name) = CString::new(codec) else {
-        return false;
-    };
+    // Infallible: `codec` is already a validated `MediaName`, which can never
+    // contain the interior NUL that is the one input `CString::new` rejects —
+    // collapses the `CString::new(codec).ok()?` guard this callsite used to
+    // need before `codec` was a validated type.
+    let codec_name = codec.to_cstring();
 
     // SAFETY: `avcodec_descriptor_get_by_name` is a pure lookup over FFmpeg's
     // static descriptor table and `codec_name` outlives the call; the returned
@@ -308,7 +318,7 @@ mod tests {
     fn mp3_container_declares_mp3_not_aac() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert_eq!(
-            declared_codec(ContainerFormat::Mp3, MediaKind::Audio),
+            declared_codec(ContainerFormat::Mp3, MediaKind::Audio).as_deref(),
             Some("mp3")
         );
     }
@@ -319,12 +329,12 @@ mod tests {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert!(muxer_can_represent(
             ContainerFormat::Avi,
-            "h264",
+            &CodecName::from_static("h264"),
             MediaKind::Video
         ));
         assert!(muxer_can_represent(
             ContainerFormat::Nut,
-            "hevc",
+            &CodecName::from_static("hevc"),
             MediaKind::Video
         ));
     }
@@ -339,12 +349,12 @@ mod tests {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert!(muxer_can_represent(
             ContainerFormat::Mkv,
-            "hevc",
+            &CodecName::from_static("hevc"),
             MediaKind::Video
         ));
         assert!(muxer_can_represent(
             ContainerFormat::WebM,
-            "vp9",
+            &CodecName::from_static("vp9"),
             MediaKind::Video
         ));
     }
@@ -356,12 +366,12 @@ mod tests {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert!(!muxer_can_represent(
             ContainerFormat::Avi,
-            "hevc",
+            &CodecName::from_static("hevc"),
             MediaKind::Video
         ));
         assert!(!muxer_can_represent(
             ContainerFormat::WebM,
-            "h264",
+            &CodecName::from_static("h264"),
             MediaKind::Video
         ));
     }
@@ -379,12 +389,12 @@ mod tests {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert!(muxer_can_represent(
             ContainerFormat::Mxf,
-            "mpeg2video",
+            &CodecName::from_static("mpeg2video"),
             MediaKind::Video
         ));
         assert!(muxer_can_represent(
             ContainerFormat::Mxf,
-            "pcm_s16le",
+            &CodecName::from_static("pcm_s16le"),
             MediaKind::Audio
         ));
     }
@@ -404,12 +414,12 @@ mod tests {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert!(!muxer_can_represent(
             ContainerFormat::Mxf,
-            "hevc",
+            &CodecName::from_static("hevc"),
             MediaKind::Video
         ));
         assert!(!muxer_can_represent(
             ContainerFormat::Mxf,
-            "vp9",
+            &CodecName::from_static("vp9"),
             MediaKind::Video
         ));
     }
@@ -423,44 +433,43 @@ mod tests {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert!(muxer_can_represent(
             ContainerFormat::Mxf,
-            "h264",
+            &CodecName::from_static("h264"),
             MediaKind::Video
         ));
         assert!(!muxer_can_represent(
             ContainerFormat::Mxf,
-            "h264",
+            &CodecName::from_static("h264"),
             MediaKind::Audio
         ));
         assert!(muxer_can_represent(
             ContainerFormat::Ts,
-            "aac",
+            &CodecName::from_static("aac"),
             MediaKind::Audio
         ));
         assert!(!muxer_can_represent(
             ContainerFormat::Ts,
-            "aac",
+            &CodecName::from_static("aac"),
             MediaKind::Video
         ));
     }
 
-    /// A name no descriptor claims proves nothing.
+    /// A name no descriptor claims proves nothing. The empty-string case the
+    /// old `&str`-based signature had to guard against is no longer
+    /// reachable at all: `CodecName` cannot be constructed from an empty
+    /// string (`InvalidMediaName::Empty`), so that failure mode moved from a
+    /// runtime `false` to a compile-time-unrepresentable state.
     #[test]
     fn refuses_a_codec_name_no_descriptor_claims() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert!(!muxer_can_represent(
             ContainerFormat::Mkv,
-            "",
-            MediaKind::Video
-        ));
-        assert!(!muxer_can_represent(
-            ContainerFormat::Mkv,
-            "not_a_codec",
+            &CodecName::from_static("not_a_codec"),
             MediaKind::Video
         ));
         // Exact, case-sensitive lookup: FFmpeg's descriptor names are lowercase.
         assert!(!muxer_can_represent(
             ContainerFormat::Mkv,
-            "H264",
+            &CodecName::from_static("H264"),
             MediaKind::Video
         ));
     }
@@ -475,12 +484,12 @@ mod tests {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert!(!muxer_can_represent(
             ContainerFormat::Mkv,
-            "avc",
+            &CodecName::from_static("avc"),
             MediaKind::Video
         ));
         assert!(muxer_can_represent(
             ContainerFormat::Mkv,
-            "avc",
+            &CodecName::from_static("avc"),
             MediaKind::Audio
         ));
     }
@@ -494,12 +503,12 @@ mod tests {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert!(!muxer_can_represent(
             ContainerFormat::Mka,
-            "h264",
+            &CodecName::from_static("h264"),
             MediaKind::Video
         ));
         assert!(muxer_can_represent(
             ContainerFormat::Mkv,
-            "h264",
+            &CodecName::from_static("h264"),
             MediaKind::Video
         ));
     }
@@ -508,11 +517,11 @@ mod tests {
     fn flac_declares_flac_and_wav_declares_pcm() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert_eq!(
-            declared_codec(ContainerFormat::Flac, MediaKind::Audio),
+            declared_codec(ContainerFormat::Flac, MediaKind::Audio).as_deref(),
             Some("flac")
         );
         assert_eq!(
-            declared_codec(ContainerFormat::Wav, MediaKind::Audio),
+            declared_codec(ContainerFormat::Wav, MediaKind::Audio).as_deref(),
             Some("pcm_s16le")
         );
     }
@@ -521,7 +530,7 @@ mod tests {
     fn aiff_declares_big_endian_pcm() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert_eq!(
-            declared_codec(ContainerFormat::Aiff, MediaKind::Audio),
+            declared_codec(ContainerFormat::Aiff, MediaKind::Audio).as_deref(),
             Some("pcm_s16be"),
             "AIFF is big-endian; pcm_s16le would be wrong"
         );
@@ -547,7 +556,7 @@ mod tests {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert!(
             matches!(
-                declared_codec(ContainerFormat::Mkv, MediaKind::Audio),
+                declared_codec(ContainerFormat::Mkv, MediaKind::Audio).as_deref(),
                 Some("vorbis" | "ac3")
             ),
             "matroska declares vorbis when CONFIG_LIBVORBIS_ENCODER is on, else ac3"
@@ -588,11 +597,11 @@ mod tests {
     fn video_kind_answers_separately() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert_eq!(
-            declared_codec(ContainerFormat::Dv, MediaKind::Video),
+            declared_codec(ContainerFormat::Dv, MediaKind::Video).as_deref(),
             Some("dvvideo")
         );
         assert_eq!(
-            declared_codec(ContainerFormat::Ivf, MediaKind::Video),
+            declared_codec(ContainerFormat::Ivf, MediaKind::Video).as_deref(),
             Some("vp8")
         );
     }

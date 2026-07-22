@@ -164,7 +164,19 @@ impl RecodeStage {
                 // match would have nothing stopping it.
                 SourceVideo::Absent => false,
                 SourceVideo::Codec(c) => {
-                    rdlp_ffmpeg::muxer_can_represent(output, c, rdlp_ffmpeg::MediaKind::Video)
+                    // `c` is `FFmpeg`'s own descriptor name (it came from
+                    // `MediaInfo::video_codec`, which is already a validated
+                    // `CodecName` degraded to `&str` at `SourceVideo::from_probe`),
+                    // so re-validating it here can never plausibly fail —
+                    // `is_ok_and` degrades to `false` rather than panicking in
+                    // the theoretical case it somehow does.
+                    rdlp_types::media_name::CodecName::new(c).is_ok_and(|codec| {
+                        rdlp_ffmpeg::muxer_can_represent(
+                            output,
+                            &codec,
+                            rdlp_ffmpeg::MediaKind::Video,
+                        )
+                    })
                 }
             },
             ContainerFormat::Mka => true,
@@ -288,11 +300,11 @@ impl RecodeStage {
 
         if let Some(requested) = params.encoder_override.as_deref().filter(|s| !s.is_empty()) {
             let encoder_name = video_codecs::resolve_encoder(requested)?;
-            let (default_preset, crf) = Self::default_preset_crf(encoder_name);
+            let (default_preset, crf) = Self::default_preset_crf(encoder_name.as_str());
             let preset = params.preset_override.clone().or(default_preset);
             return Some(VideoConvertOptions {
                 remux_only: false,
-                video_codec: Some(encoder_name.to_string()),
+                video_codec: Some(encoder_name),
                 preset,
                 crf,
                 threads: params.threads,
@@ -300,7 +312,7 @@ impl RecodeStage {
                 cpu_used: params.cpu_used,
                 speed_level: params.speed_level,
                 audio_copy: params.audio_copy,
-                audio_codec: params.audio_codec.clone(),
+                audio_codec: Self::audio_codec_option(params),
                 ..Default::default()
             });
         }
@@ -334,7 +346,7 @@ impl RecodeStage {
 
         Some(VideoConvertOptions {
             remux_only: false,
-            video_codec: Some(encoder.to_string()),
+            video_codec: Some(encoder),
             preset,
             crf,
             threads: params.threads,
@@ -342,8 +354,27 @@ impl RecodeStage {
             cpu_used: params.cpu_used,
             speed_level: params.speed_level,
             audio_copy: params.audio_copy,
-            audio_codec: params.audio_codec.clone(),
+            audio_codec: Self::audio_codec_option(params),
             ..Default::default()
+        })
+    }
+
+    /// Converts `params.audio_codec` (a plain, already-resolved encoder name
+    /// string — see `RecodeParams::audio_codec`) into the typed
+    /// [`VideoConvertOptions::audio_codec`] field.
+    ///
+    /// `params.audio_codec` is populated exclusively by
+    /// [`Self::resolve_audio_params`] / `resolve_audio_only_params`, both of
+    /// which resolve through `audio_encoder_registry` before stringifying —
+    /// so a value that fails this parse would itself be an upstream bug, not
+    /// a legitimate "unresolvable name" the caller should degrade to `None`
+    /// for.
+    fn audio_codec_option(
+        params: &RecodeParams,
+    ) -> Option<rdlp_types::media_name::AudioEncoderName> {
+        params.audio_codec.as_deref().map(|s| {
+            rdlp_types::media_name::AudioEncoderName::new(s)
+                .expect("RecodeParams.audio_codec was already resolved via the audio registry")
         })
     }
 
@@ -569,7 +600,7 @@ impl PipelineStage for RecodeStage {
         if !can_remux
             && let Some(req) = video_encoder
             && let Some(enc) = video_codecs::resolve_encoder(req)
-            && !Self::encoder_container_compatible(enc, target)
+            && !Self::encoder_container_compatible(enc.as_str(), target)
         {
             return Err(PostProcessError::UnsupportedFormat {
                 format: enc.to_string(),
@@ -1213,7 +1244,7 @@ mod tests {
         };
         let opts = RecodeStage::build_convert_options(&params, false).unwrap();
         assert!(!opts.audio_copy);
-        assert_eq!(opts.audio_codec, Some("libopus".to_string()));
+        assert_eq!(opts.audio_codec.as_deref(), Some("libopus"));
     }
 
     #[test]
@@ -1271,7 +1302,7 @@ mod tests {
         };
         let opts = RecodeStage::build_convert_options(&params, false).unwrap();
         assert!(!opts.audio_copy);
-        assert_eq!(opts.audio_codec, Some("libopus".to_string()));
+        assert_eq!(opts.audio_codec.as_deref(), Some("libopus"));
     }
 
     #[test]

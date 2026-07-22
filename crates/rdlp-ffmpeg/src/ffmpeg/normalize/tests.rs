@@ -20,6 +20,7 @@ fn test_select_audio_encoder_for_container() {
     // (verified against the linked build's `av_guess_codec`, not assumed).
     for c in [C::Mp4, C::M4a, C::Mov] {
         let enc = sel(c);
+        let enc = enc.as_deref();
         assert!(
             enc == Some("aac") || enc == Some("libfdk_aac"),
             "expected an aac-family encoder for {c:?}, got {enc:?}"
@@ -27,21 +28,21 @@ fn test_select_audio_encoder_for_container() {
     }
 
     if is_audio_encoder_available("libopus") {
-        assert_eq!(sel(C::WebM), Some("libopus"));
-        assert_eq!(sel(C::Mkv), Some("libopus"));
-        assert_eq!(sel(C::Ogg), Some("libopus"));
+        assert_eq!(sel(C::WebM).as_deref(), Some("libopus"));
+        assert_eq!(sel(C::Mkv).as_deref(), Some("libopus"));
+        assert_eq!(sel(C::Ogg).as_deref(), Some("libopus"));
     }
     if is_audio_encoder_available("libmp3lame") {
         // avi/flv/mp3 all declare (or, for .mp3, override to) the mp3 codec.
-        assert_eq!(sel(C::Avi), Some("libmp3lame"));
-        assert_eq!(sel(C::Flv), Some("libmp3lame"));
-        assert_eq!(sel(C::Mp3), Some("libmp3lame"));
+        assert_eq!(sel(C::Avi).as_deref(), Some("libmp3lame"));
+        assert_eq!(sel(C::Flv).as_deref(), Some("libmp3lame"));
+        assert_eq!(sel(C::Mp3).as_deref(), Some("libmp3lame"));
     }
     if is_audio_encoder_available("mp2") {
-        assert_eq!(sel(C::Ts), Some("mp2"));
+        assert_eq!(sel(C::Ts).as_deref(), Some("mp2"));
     }
-    assert_eq!(sel(C::Flac), Some("flac"));
-    assert_eq!(sel(C::Wav), Some("pcm_s16le"));
+    assert_eq!(sel(C::Flac).as_deref(), Some("flac"));
+    assert_eq!(sel(C::Wav).as_deref(), Some("pcm_s16le"));
 
     // Behaviour CHANGES from the old `&str` shim, deliberately: IVF carries
     // no audio stream at all, so it must be refused rather than defaulted.
@@ -87,18 +88,38 @@ fn recognized_extension_with_no_encoder_reports_truthful_cause() {
 
 #[test]
 fn test_default_bitrate_for_encoder() {
-    assert_eq!(default_bitrate_for_encoder("aac"), 128_000);
-    assert_eq!(default_bitrate_for_encoder("libfdk_aac"), 128_000);
-    assert_eq!(default_bitrate_for_encoder("libmp3lame"), 192_000);
-    assert_eq!(default_bitrate_for_encoder("libopus"), 128_000);
-    assert_eq!(default_bitrate_for_encoder("flac"), 0);
-    assert_eq!(default_bitrate_for_encoder("pcm_s16le"), 0);
+    use rdlp_types::media_name::AudioEncoderName as Enc;
+
+    assert_eq!(
+        default_bitrate_for_encoder(&Enc::from_static("aac")),
+        128_000
+    );
+    assert_eq!(
+        default_bitrate_for_encoder(&Enc::from_static("libfdk_aac")),
+        128_000
+    );
+    assert_eq!(
+        default_bitrate_for_encoder(&Enc::from_static("libmp3lame")),
+        192_000
+    );
+    assert_eq!(
+        default_bitrate_for_encoder(&Enc::from_static("libopus")),
+        128_000
+    );
+    assert_eq!(default_bitrate_for_encoder(&Enc::from_static("flac")), 0);
+    assert_eq!(
+        default_bitrate_for_encoder(&Enc::from_static("pcm_s16le")),
+        0
+    );
     // Lossless siblings newly reachable via the widened audio-default
     // registry (#618): `.aiff`/`.caf` -> pcm_s16be, `.wv` -> wavpack.
-    assert_eq!(default_bitrate_for_encoder("pcm_s16be"), 0);
-    assert_eq!(default_bitrate_for_encoder("alac"), 0);
-    assert_eq!(default_bitrate_for_encoder("wavpack"), 0);
-    assert_eq!(default_bitrate_for_encoder("tta"), 0);
+    assert_eq!(
+        default_bitrate_for_encoder(&Enc::from_static("pcm_s16be")),
+        0
+    );
+    assert_eq!(default_bitrate_for_encoder(&Enc::from_static("alac")), 0);
+    assert_eq!(default_bitrate_for_encoder(&Enc::from_static("wavpack")), 0);
+    assert_eq!(default_bitrate_for_encoder(&Enc::from_static("tta")), 0);
 }
 
 #[test]

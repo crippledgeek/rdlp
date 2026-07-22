@@ -54,8 +54,8 @@ pub use ffmpeg::{
     AudioCodecInfo, AudioEncoderInfo, AudioExtractOptions, AudioNormMode, ChapterEntry,
     FFmpegRunner, FfmpegLogBridge, LogForwarderGuard, LoudnormMeasurements, LoudnormPreset,
     MediaInfo, MediaKind, NormalizeOptions, PeakAnalysis, RemuxOptions, SpeedControlError,
-    StreamInfo, VideoCodecInfo, VideoConvertOptions, VideoEncoderInfo, bridge_ffmpeg_logs,
-    default_codec_for_container, encoding_tool_tag, known_undeclared_support_named,
-    muxer_can_represent, resolve_recode_encoder, set_verbose, supports_thumbnail_embed,
-    uses_native_attachment, validate_speed_controls,
+    StreamInfo, StreamKind, VideoCodecInfo, VideoConvertOptions, VideoEncoderInfo,
+    bridge_ffmpeg_logs, default_codec_for_container, encoding_tool_tag,
+    known_undeclared_support_named, muxer_can_represent, resolve_recode_encoder, set_verbose,
+    supports_thumbnail_embed, uses_native_attachment, validate_speed_controls,
 };

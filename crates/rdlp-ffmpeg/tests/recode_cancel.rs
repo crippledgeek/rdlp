@@ -64,7 +64,9 @@ async fn precancelled_token_aborts_recode() {
     let out = dir.path().join("out.mp4");
     let opts = VideoConvertOptions {
         remux_only: false,
-        video_codec: Some("libx264".to_string()),
+        video_codec: Some(rdlp_types::media_name::VideoEncoderName::from_static(
+            "libx264",
+        )),
         audio_copy: false,
         ..Default::default()
     };

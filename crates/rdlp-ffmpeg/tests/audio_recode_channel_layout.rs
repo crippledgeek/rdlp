@@ -82,8 +82,10 @@ async fn recode_audio_reencode_preserves_surround_layout() {
 
     let out = dir.path().join("out.mkv");
     let opts = VideoConvertOptions {
-        video_codec: Some("libx264".into()),
-        audio_codec: Some("aac".into()),
+        video_codec: Some(rdlp_types::media_name::VideoEncoderName::from_static(
+            "libx264",
+        )),
+        audio_codec: Some(rdlp_types::media_name::AudioEncoderName::from_static("aac")),
         ..Default::default()
     };
 

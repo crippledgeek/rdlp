@@ -24,7 +24,7 @@ use std::path::Path;
 use anyhow::Context as _;
 use log::info;
 
-use super::probe::MediaInfo;
+use super::probe::{MediaInfo, StreamKind};
 use super::{FFmpegRunner, RemuxOptions};
 use crate::error::Result;
 
@@ -46,8 +46,8 @@ pub enum FixupIssue {
     ZeroDurationStream {
         /// Index of the affected stream.
         stream_index: usize,
-        /// Codec type of the affected stream ("video" or "audio").
-        codec_type: String,
+        /// Codec type of the affected stream (video or audio).
+        codec_type: StreamKind,
     },
     /// The file is shorter than the expected duration by more than 10%.
     TruncatedFile {
@@ -122,7 +122,7 @@ pub fn detect_issues(info: &MediaInfo, expected_duration: Option<f64>) -> Vec<Fi
     for stream in &info.streams {
         // Stretched SAR: only flag clearly wrong values
         // Conservative: 0:x, x:0, or extreme ratios (>10:1)
-        if stream.codec_type == "video"
+        if stream.codec_type == StreamKind::Video
             && let (Some(num), Some(den)) = (stream.sar_num, stream.sar_den)
         {
             let is_broken = num == 0
@@ -142,15 +142,15 @@ pub fn detect_issues(info: &MediaInfo, expected_duration: Option<f64>) -> Vec<Fi
         }
 
         // Zero-duration stream (video or audio)
-        if matches!(stream.codec_type.as_str(), "video" | "audio") {
+        if matches!(stream.codec_type, StreamKind::Video | StreamKind::Audio) {
             let zero_dur = stream.duration.is_some_and(|d| d <= 0.0);
             let zero_frames =
-                stream.codec_type == "video" && stream.nb_frames.is_some_and(|n| n == 0);
+                stream.codec_type == StreamKind::Video && stream.nb_frames.is_some_and(|n| n == 0);
 
             if zero_dur || zero_frames {
                 issues.push(FixupIssue::ZeroDurationStream {
                     stream_index: stream.index,
-                    codec_type: stream.codec_type.clone(),
+                    codec_type: stream.codec_type,
                 });
             }
         }
@@ -333,6 +333,8 @@ impl FFmpegRunner {
 
 #[cfg(test)]
 mod tests {
+    use rdlp_types::media_name::CodecName;
+
     use super::*;
     use crate::ffmpeg::probe::{MediaInfo, StreamInfo};
 
@@ -345,8 +347,8 @@ mod tests {
             streams: vec![
                 StreamInfo {
                     index: 0,
-                    codec_type: "video".to_string(),
-                    codec_name: Some("h264".to_string()),
+                    codec_type: StreamKind::Video,
+                    codec_name: Some(CodecName::from_static("h264")),
                     duration: Some(120.0),
                     sar_num: Some(1),
                     sar_den: Some(1),
@@ -355,8 +357,8 @@ mod tests {
                 },
                 StreamInfo {
                     index: 1,
-                    codec_type: "audio".to_string(),
-                    codec_name: Some("aac".to_string()),
+                    codec_type: StreamKind::Audio,
+                    codec_name: Some(CodecName::from_static("aac")),
                     duration: Some(120.0),
                     ..Default::default()
                 },
@@ -523,7 +525,7 @@ mod tests {
         assert!(
             FixupIssue::ZeroDurationStream {
                 stream_index: 0,
-                codec_type: "video".into()
+                codec_type: StreamKind::Video
             }
             .is_repairable()
         );

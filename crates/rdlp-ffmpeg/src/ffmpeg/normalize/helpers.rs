@@ -201,8 +201,10 @@ pub(super) fn extract_json_value(text: &str, key: &str) -> Option<f64> {
 /// registry (#618) to cover every lossless encoder now reachable through
 /// `select_audio_encoder_for_container` (`.aiff`/`.caf` → `pcm_s16be`, `.wv`
 /// → `wavpack`), not just the two that were reachable before.
-pub(super) fn default_bitrate_for_encoder(encoder: &str) -> usize {
-    match encoder {
+pub(super) fn default_bitrate_for_encoder(
+    encoder: &rdlp_types::media_name::AudioEncoderName,
+) -> usize {
+    match encoder.as_str() {
         "aac" | "libfdk_aac" => 128_000,
         "libmp3lame" => 192_000,
         "libopus" => 128_000,
@@ -298,7 +300,7 @@ pub(super) fn audio_only_extension_for_ext(ext: &str) -> &'static str {
 pub(super) fn resolve_normalize_audio_encoder(
     final_output_ext: &str,
     label: &str,
-) -> Result<&'static str> {
+) -> Result<rdlp_types::media_name::AudioEncoderName> {
     if let Ok(container) = final_output_ext.parse::<ContainerFormat>() {
         super::super::audio_encoder_registry::select_audio_encoder_for_container(container)
             .ok_or_else(|| PostProcessError::UnsupportedFormat {

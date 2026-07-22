@@ -265,6 +265,10 @@ pub fn default_codec_for_container(container: ContainerFormat) -> &'static str {
         VideoDefault::NotAVideoTarget => DEFAULT_VIDEO_CODEC,
         VideoDefault::FromMuxer => {
             muxer_defaults::declared_codec(container, codec_registry::MediaKind::Video)
+                // `declared_codec` validates FFmpeg's own static descriptor-table
+                // name via `CodecName::new_static`, so it is always recoverable
+                // as `&'static str` here — see `MediaName::into_static`.
+                .and_then(rdlp_types::media_name::CodecName::into_static)
                 .unwrap_or(DEFAULT_VIDEO_CODEC)
         }
     }
@@ -281,8 +285,13 @@ pub fn resolve_recode_encoder(
     recode_container: Option<&str>,
 ) -> Option<&'static str> {
     super::ensure_init().ok();
+    // `resolve_encoder` resolves only ever through `VIDEO_REGISTRY`'s
+    // `from_static` table entries, so its result always recovers as
+    // `&'static str` — see `MediaName::into_static`. Keeps this function's
+    // own `&'static str` return type, so its CLI/desktop pre-flight callers
+    // need no change.
     if let Some(ve) = video_encoder.filter(|s| !s.is_empty()) {
-        return resolve_encoder(ve);
+        return resolve_encoder(ve).and_then(rdlp_types::media_name::VideoEncoderName::into_static);
     }
     let target = recode_container.or(recode_video)?;
     // These arrive as raw config strings, so the parse is the boundary where
@@ -303,7 +312,7 @@ pub fn resolve_recode_encoder(
     let codec = target
         .parse::<ContainerFormat>()
         .map_or(DEFAULT_VIDEO_CODEC, default_codec_for_container);
-    resolve_encoder(codec)
+    resolve_encoder(codec).and_then(rdlp_types::media_name::VideoEncoderName::into_static)
 }
 
 /// Strict per-encoder speed-control validation error.
@@ -572,7 +581,7 @@ mod tests {
         for alias in ["3gpp", "mpegts"] {
             assert_eq!(
                 resolve_recode_encoder(None, Some(alias), None),
-                resolve_encoder(DEFAULT_VIDEO_CODEC),
+                resolve_encoder(DEFAULT_VIDEO_CODEC).as_deref(),
                 "{alias} must resolve exactly as the unconditional h264 default does"
             );
         }
@@ -607,7 +616,7 @@ mod tests {
     fn unparseable_container_string_still_falls_back_to_h264() {
         assert_eq!(
             resolve_recode_encoder(None, Some("not-a-container"), None),
-            resolve_encoder(DEFAULT_VIDEO_CODEC),
+            resolve_encoder(DEFAULT_VIDEO_CODEC).as_deref(),
             "an unknown container string must resolve exactly as the h264 default did"
         );
     }

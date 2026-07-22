@@ -17,6 +17,7 @@
 //! - [`select_audio_encoder_for_container`] — best default encoder for a container
 
 use rdlp_types::ContainerFormat;
+use rdlp_types::media_name::{AudioEncoder, AudioEncoderName, CodecName};
 use serde::{Deserialize, Serialize};
 
 use crate::ffmpeg::{codec_registry, muxer_defaults};
@@ -48,11 +49,11 @@ pub struct AudioCodecInfo {
 /// Entry in the audio codec preference table.
 struct AudioCodecEntry {
     /// Canonical codec name.
-    codec: &'static str,
+    codec: CodecName,
     /// Human-readable display name.
     display_name: &'static str,
     /// Ordered encoder preference list: (`encoder_name`, `display_name`).
-    encoders: &'static [(&'static str, &'static str)],
+    encoders: &'static [(AudioEncoderName, &'static str)],
     /// Container formats this codec is compatible with.
     supported_containers: &'static [ContainerFormat],
     /// Alternate names that should also resolve to this row. Declared next
@@ -60,17 +61,18 @@ struct AudioCodecEntry {
     /// keyed by string — that indirection let a rename of `codec` silently
     /// drop the alias through the `CodecRow::aliases` trait default. Empty
     /// for every row but `pcm_s16le`.
-    aliases: &'static [&'static str],
+    aliases: &'static [CodecName],
 }
 
 impl codec_registry::CodecRow for AudioCodecEntry {
-    fn codec(&self) -> &'static str {
-        self.codec
+    type Encoder = AudioEncoder;
+    fn codec(&self) -> CodecName {
+        self.codec.clone()
     }
-    fn encoders(&self) -> &'static [(&'static str, &'static str)] {
+    fn encoders(&self) -> &'static [(AudioEncoderName, &'static str)] {
         self.encoders
     }
-    fn aliases(&self) -> &'static [&'static str] {
+    fn aliases(&self) -> &'static [CodecName] {
         self.aliases
     }
 }
@@ -82,11 +84,14 @@ impl codec_registry::CodecRow for AudioCodecEntry {
 /// the `container_supports_audio_codec` gate and the frontend greying logic.
 static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
     AudioCodecEntry {
-        codec: "aac",
+        codec: CodecName::from_static("aac"),
         display_name: "AAC",
         encoders: &[
-            ("libfdk_aac", "FDK AAC (libfdk_aac)"),
-            ("aac", "AAC (built-in)"),
+            (
+                AudioEncoderName::from_static("libfdk_aac"),
+                "FDK AAC (libfdk_aac)",
+            ),
+            (AudioEncoderName::from_static("aac"), "AAC (built-in)"),
         ],
         supported_containers: &[
             ContainerFormat::Mp4,
@@ -108,9 +113,12 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         aliases: &[],
     },
     AudioCodecEntry {
-        codec: "mp3",
+        codec: CodecName::from_static("mp3"),
         display_name: "MP3",
-        encoders: &[("libmp3lame", "MP3 (libmp3lame)")],
+        encoders: &[(
+            AudioEncoderName::from_static("libmp3lame"),
+            "MP3 (libmp3lame)",
+        )],
         supported_containers: &[
             ContainerFormat::Mp4,
             ContainerFormat::Mov,
@@ -124,9 +132,9 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         aliases: &[],
     },
     AudioCodecEntry {
-        codec: "opus",
+        codec: CodecName::from_static("opus"),
         display_name: "Opus",
-        encoders: &[("libopus", "Opus (libopus)")],
+        encoders: &[(AudioEncoderName::from_static("libopus"), "Opus (libopus)")],
         supported_containers: &[
             ContainerFormat::Mp4,
             ContainerFormat::Mkv,
@@ -140,9 +148,12 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         aliases: &[],
     },
     AudioCodecEntry {
-        codec: "vorbis",
+        codec: CodecName::from_static("vorbis"),
         display_name: "Vorbis",
-        encoders: &[("libvorbis", "Vorbis (libvorbis)")],
+        encoders: &[(
+            AudioEncoderName::from_static("libvorbis"),
+            "Vorbis (libvorbis)",
+        )],
         supported_containers: &[
             ContainerFormat::Mkv,
             ContainerFormat::WebM,
@@ -152,9 +163,9 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         aliases: &[],
     },
     AudioCodecEntry {
-        codec: "flac",
+        codec: CodecName::from_static("flac"),
         display_name: "FLAC",
-        encoders: &[("flac", "FLAC (built-in)")],
+        encoders: &[(AudioEncoderName::from_static("flac"), "FLAC (built-in)")],
         supported_containers: &[
             ContainerFormat::Mkv,
             ContainerFormat::Ogg,
@@ -163,9 +174,9 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         aliases: &[],
     },
     AudioCodecEntry {
-        codec: "alac",
+        codec: CodecName::from_static("alac"),
         display_name: "ALAC",
-        encoders: &[("alac", "ALAC (built-in)")],
+        encoders: &[(AudioEncoderName::from_static("alac"), "ALAC (built-in)")],
         supported_containers: &[
             ContainerFormat::Mp4,
             ContainerFormat::Mov,
@@ -174,9 +185,9 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         aliases: &[],
     },
     AudioCodecEntry {
-        codec: "ac3",
+        codec: CodecName::from_static("ac3"),
         display_name: "AC-3 (Dolby Digital)",
-        encoders: &[("ac3", "AC-3 (built-in)")],
+        encoders: &[(AudioEncoderName::from_static("ac3"), "AC-3 (built-in)")],
         supported_containers: &[
             ContainerFormat::Mp4,
             ContainerFormat::Mov,
@@ -188,9 +199,9 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         aliases: &[],
     },
     AudioCodecEntry {
-        codec: "eac3",
+        codec: CodecName::from_static("eac3"),
         display_name: "E-AC-3 (Dolby Digital Plus)",
-        encoders: &[("eac3", "E-AC-3 (built-in)")],
+        encoders: &[(AudioEncoderName::from_static("eac3"), "E-AC-3 (built-in)")],
         supported_containers: &[
             ContainerFormat::Mp4,
             ContainerFormat::Mov,
@@ -200,16 +211,16 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         aliases: &[],
     },
     AudioCodecEntry {
-        codec: "dts",
+        codec: CodecName::from_static("dts"),
         display_name: "DTS",
-        encoders: &[("dca", "DTS (built-in)")],
+        encoders: &[(AudioEncoderName::from_static("dca"), "DTS (built-in)")],
         supported_containers: &[ContainerFormat::Mkv],
         aliases: &[],
     },
     AudioCodecEntry {
-        codec: "mp2",
+        codec: CodecName::from_static("mp2"),
         display_name: "MP2",
-        encoders: &[("mp2", "MP2 (built-in)")],
+        encoders: &[(AudioEncoderName::from_static("mp2"), "MP2 (built-in)")],
         supported_containers: &[
             ContainerFormat::Mkv,
             ContainerFormat::Ts,
@@ -231,9 +242,12 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
     // container's *default* (which is `pcm_s16be` — see the row below). The
     // two facts coexist; neither row should be read as claiming the other.
     AudioCodecEntry {
-        codec: "pcm_s16le",
+        codec: CodecName::from_static("pcm_s16le"),
         display_name: "PCM 16-bit little-endian",
-        encoders: &[("pcm_s16le", "PCM 16-bit (built-in)")],
+        encoders: &[(
+            AudioEncoderName::from_static("pcm_s16le"),
+            "PCM 16-bit (built-in)",
+        )],
         supported_containers: &[
             ContainerFormat::Mkv,
             ContainerFormat::Avi,
@@ -245,7 +259,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Mxf,
             ContainerFormat::Dv,
         ],
-        aliases: &["pcm"],
+        aliases: &[CodecName::from_static("pcm")],
     },
     // Big-endian PCM is a distinct codec-ID from the little-endian
     // `pcm_s16le` row above (AIFF/CAF declare `pcm_s16be`; WAV/AVI/MKV
@@ -260,16 +274,22 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
     // doc comment for the structural argument. Adding a second encoder here
     // would need that argument re-checked.
     AudioCodecEntry {
-        codec: "pcm_s16be",
+        codec: CodecName::from_static("pcm_s16be"),
         display_name: "PCM 16-bit big-endian",
-        encoders: &[("pcm_s16be", "PCM 16-bit big-endian (built-in)")],
+        encoders: &[(
+            AudioEncoderName::from_static("pcm_s16be"),
+            "PCM 16-bit big-endian (built-in)",
+        )],
         supported_containers: &[ContainerFormat::Aiff, ContainerFormat::Caf],
         aliases: &[],
     },
     AudioCodecEntry {
-        codec: "wavpack",
+        codec: CodecName::from_static("wavpack"),
         display_name: "WavPack",
-        encoders: &[("wavpack", "WavPack (built-in)")],
+        encoders: &[(
+            AudioEncoderName::from_static("wavpack"),
+            "WavPack (built-in)",
+        )],
         supported_containers: &[ContainerFormat::Mkv, ContainerFormat::Wv],
         aliases: &[],
     },
@@ -282,9 +302,12 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
     // `[("wmav2", _)]` (key == encoder name) for tier 1 to be behaviourally
     // identical to tier 2's fallback — see `resolve_declared_codec`.
     AudioCodecEntry {
-        codec: "wmav2",
+        codec: CodecName::from_static("wmav2"),
         display_name: "WMA v2",
-        encoders: &[("wmav2", "Windows Media Audio 2 (built-in)")],
+        encoders: &[(
+            AudioEncoderName::from_static("wmav2"),
+            "Windows Media Audio 2 (built-in)",
+        )],
         supported_containers: &[
             ContainerFormat::Wma,
             ContainerFormat::Wmv,
@@ -293,9 +316,9 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         aliases: &[],
     },
     AudioCodecEntry {
-        codec: "tta",
+        codec: CodecName::from_static("tta"),
         display_name: "TTA",
-        encoders: &[("tta", "TTA (built-in)")],
+        encoders: &[(AudioEncoderName::from_static("tta"), "TTA (built-in)")],
         supported_containers: &[ContainerFormat::Mkv],
         aliases: &[],
     },
@@ -320,7 +343,7 @@ pub fn is_audio_encoder_available(encoder: &str) -> bool {
 ///
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
-pub fn preferred_audio_encoder(codec: &str) -> Option<&'static str> {
+pub fn preferred_audio_encoder(codec: &str) -> Option<AudioEncoderName> {
     AUDIO_REGISTRY.preferred_encoder(codec)
 }
 
@@ -335,7 +358,7 @@ pub fn preferred_audio_encoder(codec: &str) -> Option<&'static str> {
 ///
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
-pub fn resolve_audio_encoder(input: &str) -> Option<&'static str> {
+pub fn resolve_audio_encoder(input: &str) -> Option<AudioEncoderName> {
     AUDIO_REGISTRY.resolve(input)
 }
 
@@ -351,7 +374,7 @@ pub fn available_audio_encoders_for_codec(codec: &str) -> Vec<AudioEncoderInfo> 
         .map(|row| {
             codec_registry::available_encoders(row)
                 .map(|(enc, display)| AudioEncoderInfo {
-                    encoder_name: enc.to_string(),
+                    encoder_name: enc.as_str().to_string(),
                     display_name: display.to_string(),
                 })
                 .collect()
@@ -370,7 +393,7 @@ pub fn list_available_audio_codecs() -> Vec<AudioCodecInfo> {
         .filter_map(|entry| {
             let encoders: Vec<AudioEncoderInfo> = codec_registry::available_encoders(entry)
                 .map(|(enc, display)| AudioEncoderInfo {
-                    encoder_name: enc.to_string(),
+                    encoder_name: enc.as_str().to_string(),
                     display_name: display.to_string(),
                 })
                 .collect();
@@ -379,7 +402,7 @@ pub fn list_available_audio_codecs() -> Vec<AudioCodecInfo> {
                 None
             } else {
                 Some(AudioCodecInfo {
-                    codec: entry.codec.to_string(),
+                    codec: entry.codec.as_str().to_string(),
                     display_name: entry.display_name.to_string(),
                     encoders,
                     supported_containers: entry.supported_containers.to_vec(),
@@ -431,7 +454,7 @@ enum AudioDefault {
     /// Defer to whatever the linked `FFmpeg` muxer declares.
     FromMuxer,
     /// rdlp overrides the muxer's declaration; the reason is on the arm.
-    Override(&'static str),
+    Override(CodecName),
     /// The container carries no audio stream at all.
     NoAudio,
 }
@@ -449,13 +472,13 @@ const fn audio_default_for(container: ContainerFormat) -> AudioDefault {
         // override is probably wrong for Ogg specifically — but changing it
         // is a separate user-visible change.
         ContainerFormat::Mkv | ContainerFormat::Mka | ContainerFormat::Ogg => {
-            AudioDefault::Override("opus")
+            AudioDefault::Override(CodecName::from_static("opus"))
         }
 
         // FFmpeg declares `amr_nb`: 8 kHz speech-only, and the native encoder
         // is absent from most builds. 3GPP TS 26.244 permits AMR, AMR-WB and
         // AAC, so AAC is spec-correct rather than a workaround.
-        ContainerFormat::ThreeGp => AudioDefault::Override("aac"),
+        ContainerFormat::ThreeGp => AudioDefault::Override(CodecName::from_static("aac")),
 
         // Raw VP8/VP9/AV1 elementary stream; the muxer declares no audio codec
         // and refuses any audio stream outright.
@@ -503,7 +526,7 @@ const fn audio_default_for(container: ContainerFormat) -> AudioDefault {
 ///
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
-pub fn select_audio_encoder_for_container(container: ContainerFormat) -> Option<&'static str> {
+pub fn select_audio_encoder_for_container(container: ContainerFormat) -> Option<AudioEncoderName> {
     let codec = match audio_default_for(container) {
         AudioDefault::NoAudio => return None,
         AudioDefault::Override(codec) => codec,
@@ -528,7 +551,7 @@ pub fn select_audio_encoder_for_container(container: ContainerFormat) -> Option<
         }
     };
 
-    resolve_declared_codec(codec, container)
+    resolve_declared_codec(&codec, container)
 }
 
 /// Resolves a declared codec-ID name to an available encoder, in three tiers:
@@ -565,9 +588,36 @@ pub fn select_audio_encoder_for_container(container: ContainerFormat) -> Option<
 /// mode this leaves in place is a loud encoder-open error at transcode time,
 /// not a silent wrong-codec substitution (the #618 bug class). Tracked as
 /// #625.
-fn resolve_declared_codec(codec: &'static str, container: ContainerFormat) -> Option<&'static str> {
-    preferred_audio_encoder(codec)
-        .or_else(|| is_audio_encoder_available(codec).then_some(codec))
+// `expect`s below are infallible by construction: `CodecName` and
+// `AudioEncoderName` share the exact same `validate()` floor (see
+// `rdlp_types::media_name`), so a byte sequence that is already a valid
+// `CodecName` can never fail to become an `AudioEncoderName`.
+#[allow(clippy::expect_used)]
+fn resolve_declared_codec(
+    codec: &CodecName,
+    container: ContainerFormat,
+) -> Option<AudioEncoderName> {
+    preferred_audio_encoder(codec.as_str())
+        .or_else(|| {
+            is_audio_encoder_available(codec.as_str()).then(|| {
+                // `codec` is always table- or FFI-static-backed in practice
+                // (either `AudioDefault::Override`'s `from_static` or
+                // `muxer_defaults::declared_codec`'s `new_static`), so prefer
+                // the allocation-free `new_static` round-trip; fall back to
+                // an owned `new` only if that assumption is ever wrong, so
+                // this never panics on a genuinely-owned `codec`.
+                codec.clone().into_static().map_or_else(
+                    || {
+                        AudioEncoderName::new(codec.as_str())
+                            .expect("codec and encoder share the same validation floor")
+                    },
+                    |name| {
+                        AudioEncoderName::new_static(name)
+                            .expect("codec and encoder share the same validation floor")
+                    },
+                )
+            })
+        })
         .or_else(|| {
             // Neither the preference table nor a direct name match resolved
             // an available encoder. AAC is only a sane fallback when the
@@ -624,8 +674,8 @@ mod tests {
     #[test]
     fn resolve_encoder_by_alias_pcm() {
         ensure_init_for_test();
-        assert_eq!(resolve_audio_encoder("pcm"), Some("pcm_s16le"));
-        assert_eq!(preferred_audio_encoder("pcm"), Some("pcm_s16le"));
+        assert_eq!(resolve_audio_encoder("pcm").as_deref(), Some("pcm_s16le"));
+        assert_eq!(preferred_audio_encoder("pcm").as_deref(), Some("pcm_s16le"));
     }
 
     #[test]
@@ -640,7 +690,10 @@ mod tests {
         // matches a codec key.
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         if is_audio_encoder_available("libmp3lame") {
-            assert_eq!(resolve_audio_encoder("libmp3lame"), Some("libmp3lame"));
+            assert_eq!(
+                resolve_audio_encoder("libmp3lame").as_deref(),
+                Some("libmp3lame")
+            );
         } else {
             assert_eq!(resolve_audio_encoder("libmp3lame"), None);
         }
@@ -695,6 +748,7 @@ mod tests {
     fn select_encoder_for_mp4_returns_aac() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         let enc = select_audio_encoder_for_container(ContainerFormat::Mp4);
+        let enc = enc.as_deref();
         assert!(
             enc == Some("aac") || enc == Some("libfdk_aac"),
             "expected aac encoder for mp4, got {enc:?}"
@@ -727,7 +781,10 @@ mod tests {
         // gate rejects it → None. Pins the `.and_then(is_available.then_some(..))`
         // unavailable branch of the iterator chain.
         if is_audio_encoder_available("libfdk_aac") {
-            assert_eq!(resolve_audio_encoder("libfdk_aac"), Some("libfdk_aac"));
+            assert_eq!(
+                resolve_audio_encoder("libfdk_aac").as_deref(),
+                Some("libfdk_aac")
+            );
         } else {
             assert_eq!(resolve_audio_encoder("libfdk_aac"), None);
         }
@@ -743,16 +800,17 @@ mod tests {
     fn audio_only_containers_get_their_own_codec_not_aac() {
         ensure_init_for_test();
         let mp3 = select_audio_encoder_for_container(ContainerFormat::Mp3);
+        let mp3 = mp3.as_deref();
         assert!(
             mp3 == Some("libmp3lame") || !is_audio_encoder_available("libmp3lame"),
             "expected libmp3lame for .mp3 when available, got {mp3:?}"
         );
         assert_eq!(
-            select_audio_encoder_for_container(ContainerFormat::Flac),
+            select_audio_encoder_for_container(ContainerFormat::Flac).as_deref(),
             Some("flac")
         );
         assert_eq!(
-            select_audio_encoder_for_container(ContainerFormat::Wav),
+            select_audio_encoder_for_container(ContainerFormat::Wav).as_deref(),
             Some("pcm_s16le")
         );
     }
@@ -766,6 +824,7 @@ mod tests {
             ContainerFormat::Asf,
         ] {
             let enc = select_audio_encoder_for_container(c);
+            let enc = enc.as_deref();
             assert!(
                 enc == Some("wmav2") || !is_audio_encoder_available("wmav2"),
                 "{c:?}: expected wmav2 when available, got {enc:?}"
@@ -799,6 +858,7 @@ mod tests {
             ContainerFormat::Ogg,
         ] {
             let enc = select_audio_encoder_for_container(c);
+            let enc = enc.as_deref();
             assert!(
                 enc == Some("libopus") || !is_audio_encoder_available("libopus"),
                 "{c:?}: expected libopus when available, got {enc:?}"
@@ -806,6 +866,7 @@ mod tests {
         }
 
         let threegp = select_audio_encoder_for_container(ContainerFormat::ThreeGp);
+        let threegp = threegp.as_deref();
         assert!(
             threegp == Some("aac") || threegp == Some("libfdk_aac"),
             "expected an aac-family encoder for 3gp, got {threegp:?}"
@@ -842,23 +903,25 @@ mod tests {
         ensure_init_for_test();
 
         let ts = select_audio_encoder_for_container(ContainerFormat::Ts);
+        let ts = ts.as_deref();
         assert!(
             ts == Some("mp2") || !is_audio_encoder_available("mp2"),
             "expected mp2 for .ts when available, got {ts:?}"
         );
 
         let nut = select_audio_encoder_for_container(ContainerFormat::Nut);
+        let nut = nut.as_deref();
         assert!(
             nut == Some("libvorbis") || !is_audio_encoder_available("libvorbis"),
             "expected libvorbis for .nut when available, got {nut:?}"
         );
 
         assert_eq!(
-            select_audio_encoder_for_container(ContainerFormat::Ac3),
+            select_audio_encoder_for_container(ContainerFormat::Ac3).as_deref(),
             Some("ac3")
         );
         assert_eq!(
-            select_audio_encoder_for_container(ContainerFormat::Aiff),
+            select_audio_encoder_for_container(ContainerFormat::Aiff).as_deref(),
             Some("pcm_s16be")
         );
     }
@@ -874,6 +937,7 @@ mod tests {
             ContainerFormat::F4v,
         ] {
             let enc = select_audio_encoder_for_container(c);
+            let enc = enc.as_deref();
             assert!(
                 enc == Some("aac") || enc == Some("libfdk_aac"),
                 "expected an aac-family encoder for {c:?}, got {enc:?}"
@@ -889,7 +953,9 @@ mod tests {
     #[test]
     fn tier_three_falls_back_to_aac_for_an_unresolvable_codec() {
         ensure_init_for_test();
-        let enc = resolve_declared_codec("definitely_not_a_real_codec_xyz", ContainerFormat::Mp4);
+        let bogus = CodecName::new("definitely_not_a_real_codec_xyz").expect("valid name");
+        let enc = resolve_declared_codec(&bogus, ContainerFormat::Mp4);
+        let enc = enc.as_deref();
         assert!(
             enc == Some("aac") || enc == Some("libfdk_aac"),
             "expected tier 3 to fall back to an aac-family encoder, got {enc:?}"
@@ -909,7 +975,8 @@ mod tests {
             !container_supports_audio_codec(ContainerFormat::Wav, "aac"),
             "test premise: wav must not accept aac"
         );
-        let enc = resolve_declared_codec("definitely_not_a_real_codec_xyz", ContainerFormat::Wav);
+        let bogus = CodecName::new("definitely_not_a_real_codec_xyz").expect("valid name");
+        let enc = resolve_declared_codec(&bogus, ContainerFormat::Wav);
         assert_eq!(
             enc, None,
             "wav cannot carry aac; tier 3 must refuse rather than substitute it"
@@ -1067,7 +1134,7 @@ mod tests {
             };
 
             assert!(
-                container_supports_audio_codec(container, expected),
+                container_supports_audio_codec(container, expected.as_str()),
                 "{container:?}'s own default audio codec {expected:?} is not \
                  accepted by its own compatibility-matrix row"
             );
@@ -1085,7 +1152,7 @@ mod tests {
         ensure_init_for_test();
 
         for row in AUDIO_CODEC_PREFERENCES {
-            let primary = preferred_audio_encoder(row.codec());
+            let primary = preferred_audio_encoder(row.codec().as_str());
             for alias in row.aliases() {
                 // `assert_eq!` below passes vacuously when `primary` is
                 // `None` (e.g. a row whose encoders are all absent from this
@@ -1099,7 +1166,7 @@ mod tests {
                     row.codec()
                 );
                 assert_eq!(
-                    preferred_audio_encoder(alias),
+                    preferred_audio_encoder(alias.as_str()),
                     primary,
                     "alias {alias:?} of codec {:?} must resolve to the same \
                      encoder as the primary key",

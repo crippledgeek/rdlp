@@ -87,7 +87,14 @@ const STAGE_NAME: &str = "RecodeStage";
 /// absent codec is no positive evidence a copy works, so it re-encodes.
 pub(super) fn can_copy_audio_only(output: ContainerFormat, audio: SourceAudio<'_>) -> bool {
     audio.name().is_some_and(|codec| {
-        rdlp_ffmpeg::muxer_can_represent(output, codec, rdlp_ffmpeg::MediaKind::Audio)
+        // `codec` is `FFmpeg`'s own descriptor name (it came from
+        // `MediaInfo::audio_codec`, already a validated `CodecName` degraded
+        // to `&str` at `SourceAudio::from_probe`), so re-validating it here
+        // can never plausibly fail — `is_ok_and` degrades to `false` rather
+        // than panicking in the theoretical case it somehow does.
+        rdlp_types::media_name::CodecName::new(codec).is_ok_and(|codec| {
+            rdlp_ffmpeg::muxer_can_represent(output, &codec, rdlp_ffmpeg::MediaKind::Audio)
+        })
     })
 }
 
@@ -123,7 +130,13 @@ pub(super) async fn recode_audio_only(
 
     let output_path = msg.tracker.temp_path(&input_file, target_ext);
     let opts = AudioExtractOptions {
-        encoder_name,
+        // `encoder_name` is already a resolved encoder name from the audio
+        // registry (see `RecodeStage::resolve_audio_params`), so this parse
+        // is infallible in practice.
+        encoder_name: encoder_name.as_deref().map(|s| {
+            rdlp_types::media_name::AudioEncoderName::new(s)
+                .expect("resolve_audio_params returns an already-validated encoder name")
+        }),
         copy: audio_copy,
         bitrate_kbps: None,
         quality_scale: None,
