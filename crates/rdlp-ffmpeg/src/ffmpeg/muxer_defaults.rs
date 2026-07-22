@@ -223,7 +223,14 @@ pub fn muxer_can_represent(container: ContainerFormat, codec: &str, kind: MediaK
 ///
 /// **Every entry cites the upstream implementation and is proven by a real
 /// mux** in `tests/muxer_known_accepts.rs`, which fails if `ffmpeg -c copy`
-/// disagrees with any row.
+/// disagrees with any row — and, because that suite asserts it covers the
+/// whole table via [`known_undeclared_support`], also fails if a row is added
+/// without a proof.
+///
+/// **Keyed on `ContainerFormat`, not on the muxer.** Several variants share
+/// one muxer (`Wmv`/`Wma`/`Asf` are all ASF), so an entry added for one does
+/// **not** apply to its siblings. Add each variant explicitly, with its own
+/// proof.
 const KNOWN_UNDECLARED_SUPPORT: &[(ContainerFormat, AVCodecID)] = &[
     // `mxfenc.c` carries a full H.264 essence mapping (`mxf_h264_codec_uls`,
     // `mxf_parse_h264_frame`) but registers no `query_codec` callback and a
@@ -235,6 +242,23 @@ const KNOWN_UNDECLARED_SUPPORT: &[(ContainerFormat, AVCodecID)] = &[
     // table nor `query_codec`.
     (ContainerFormat::Ts, AVCodecID::AV_CODEC_ID_AAC),
 ];
+
+/// The [`KNOWN_UNDECLARED_SUPPORT`] rows, for the audit suite.
+///
+/// Exposed **only** so `tests/muxer_known_accepts.rs` can prove every row —
+/// and, critically, fail when a row is added without a proof. The table's
+/// entire justification is that it asserts something `FFmpeg`'s own metadata
+/// does not, so an unproven row is the #630 failure class waiting to happen;
+/// a private const with no accessor made that guarantee documented but
+/// unenforceable.
+///
+/// Not part of the supported API — do not route production decisions through
+/// it. Ask [`muxer_can_represent`], which applies the media-kind check first.
+#[doc(hidden)]
+#[must_use]
+pub const fn known_undeclared_support() -> &'static [(ContainerFormat, AVCodecID)] {
+    KNOWN_UNDECLARED_SUPPORT
+}
 
 /// Whether `container` is known to accept `codec_id` despite declaring
 /// nothing. See [`KNOWN_UNDECLARED_SUPPORT`].

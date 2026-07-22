@@ -1098,6 +1098,34 @@ mod tests {
             routed_copies >= 10,
             "expected the matrix to exercise real copies, got {routed_copies}"
         );
+
+        // The #633 allow-list is the one place routing says yes on evidence
+        // FFmpeg does not publish, so it is the most likely source of a future
+        // drift. Iterate the table itself rather than restating its rows here:
+        // the fixed matrix above is video-only and would have missed the
+        // `aac → mpegts` row entirely, and any row added later is covered by
+        // construction instead of by remembering to extend a list.
+        for &(container, codec_id) in crate::ffmpeg::known_undeclared_support() {
+            let oformat = oformat_for_extension(dir.path(), container.as_ext());
+
+            // The descriptor gives the row's true medium, so the synthesised
+            // params match what a real stream of this codec would carry.
+            // SAFETY: pure lookup over FFmpeg's static descriptor table; the
+            // returned pointer is null-checked before its fields are read.
+            let media_type = unsafe {
+                let desc = ffmpeg_the_third::ffi::avcodec_descriptor_get(codec_id);
+                assert!(!desc.is_null(), "allow-listed codec has no descriptor");
+                (*desc).type_
+            };
+
+            let params = fake_params(codec_id, media_type);
+            assert!(
+                FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params)).is_ok(),
+                "KNOWN_UNDECLARED_SUPPORT routes a stream copy into {} that enforcement \
+                 refuses — the allow-list has outrun resolve_codec_tag",
+                container.as_ext()
+            );
+        }
     }
 
     #[test]

@@ -28,7 +28,7 @@ mod common;
 use std::path::Path;
 use std::process::Command;
 
-use common::ffmpeg_available;
+use common::{decoded_frames, ffmpeg_available};
 use rdlp_ffmpeg::{MediaKind, muxer_can_represent};
 use rdlp_types::ContainerFormat;
 
@@ -103,6 +103,39 @@ fn ffmpeg_copies(src: &Path, dst: &Path) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// `CASES` must cover the whole production table.
+///
+/// The three table-driven tests below iterate `CASES`, which is deliberately
+/// an independent list — reading the production table would make the predicate
+/// assertion a tautology, and `CASES` additionally carries the `ffmpeg` args
+/// needed to synthesise a source. But independence cuts both ways: without
+/// this check, adding a row to `KNOWN_UNDECLARED_SUPPORT` and forgetting
+/// `CASES` ships an entirely unproven entry and **no test fails** — the exact
+/// #630 hazard the table's own rules warn about, with the audit silently
+/// opted out.
+#[test]
+fn cases_cover_every_row_of_the_production_table() {
+    let table = rdlp_ffmpeg::known_undeclared_support();
+    assert_eq!(
+        CASES.len(),
+        table.len(),
+        "KNOWN_UNDECLARED_SUPPORT has {} row(s) but this suite proves {} — a row was added \
+         without a proof, so it ships unaudited",
+        table.len(),
+        CASES.len()
+    );
+    for case in CASES {
+        assert!(
+            table
+                .iter()
+                .any(|&(container, _)| container == case.container),
+            "{:?} is proven here but absent from KNOWN_UNDECLARED_SUPPORT — the suite and the \
+             table describe different things",
+            case.container
+        );
+    }
+}
+
 /// Every entry must be something ffmpeg genuinely copies. A wrong entry is
 /// worse than a missing one: it routes to a copy the muxer refuses mid-mux.
 #[test]
@@ -153,14 +186,23 @@ fn muxer_can_represent_accepts_the_known_undeclared_pairs() {
     }
 }
 
-/// The load-bearing proof: rdlp's OWN mux path must complete the copy.
+/// rdlp's own mux path must complete the copy — specifically, enforcement
+/// must not refuse what routing chose.
 ///
-/// `ffmpeg -c copy` agreeing is necessary but not sufficient — rdlp routes
+/// `ffmpeg -c copy` agreeing is necessary but not sufficient: rdlp routes
 /// through `resolve_codec_tag`, which can refuse a pairing mid-mux
-/// independently of what routing decided. A wrong allow-list entry produces
-/// exactly that: routing chooses a copy, enforcement then refuses, and the
-/// user gets a fatal error where a transcode was available. That is the #630
-/// failure class, and this test is what makes the table safe to extend.
+/// independently of routing. A wrong allow-list entry produces exactly that —
+/// routing picks a copy, enforcement refuses, and the user gets a fatal error
+/// where a transcode was available (#630 class).
+///
+/// Scope, stated precisely: `convert_video` with `remux_only` dispatches to
+/// `remux_sync`, which does exercise `resolve_codec_tag` for both rows, so the
+/// enforcement half is genuinely proven here. It is **not** the production
+/// route the `aac → mpegts` row changes — that one flows through
+/// `can_copy_audio_only` → `recode_audio_only` and is covered end-to-end by
+/// `rdlp-postprocess`'s `recode_audio_only_source_matrix`, where `ts` reports
+/// `aac[copy]`. `audio_copy: true` is inert on the remux branch and is set
+/// only for clarity.
 #[tokio::test]
 async fn every_known_accept_entry_survives_rdlps_own_remux() {
     if !ffmpeg_available() {
@@ -203,7 +245,7 @@ async fn every_known_accept_entry_survives_rdlps_own_remux() {
             });
 
         assert!(
-            decodes(&out),
+            decoded_frames(&out, None).is_some_and(|n| n > 0),
             "{:?} + {}: rdlp reported success but the output does not decode",
             case.container,
             case.codec
@@ -211,37 +253,18 @@ async fn every_known_accept_entry_survives_rdlps_own_remux() {
     }
 }
 
-/// Decode the file for real. Never a size check — a refused mux leaves a
-/// partial header, so `len() > 0` scores failure as success.
-fn decodes(path: &Path) -> bool {
-    Command::new("ffprobe")
-        .args([
-            "-v",
-            "error",
-            "-count_frames",
-            "-show_entries",
-            "stream=nb_read_frames",
-            "-of",
-            "default=nw=1:nk=1",
-        ])
-        .arg(path)
-        .output()
-        .is_ok_and(|o| {
-            o.status.success()
-                && String::from_utf8_lossy(&o.stdout)
-                    .lines()
-                    .any(|l| l.trim().parse::<u64>().is_ok_and(|n| n > 0))
-        })
-}
-
-/// The table is **asymmetric**: it may only turn a `false` into a `true`.
+/// The table must not have loosened anything beyond its own rows.
 ///
-/// A codec the muxer genuinely rejects must still be refused, and the media
-/// kind must still be honoured — `muxer_can_represent`'s `kind` check is what
+/// Asymmetry itself is guaranteed by the code shape — `muxer_can_represent`
+/// is `oformat_can_represent(..) || is_known_undeclared_support(..)`, and the
+/// latter is a positive `.any()` with no other caller, so it is structurally
+/// incapable of refusing. What this pins is the blast radius: a codec the
+/// muxer genuinely rejects is still refused, and the media kind is still
+/// honoured — `muxer_can_represent`'s `kind` check is what
 /// stops the `"avc"`/ON2AVC audio-vs-video alias collision, and an allow-list
 /// that bypassed it would reintroduce exactly that.
 #[test]
-fn the_allow_list_never_turns_a_yes_into_a_no_or_crosses_media_kinds() {
+fn the_allow_list_does_not_loosen_refusals_or_cross_media_kinds() {
     rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
 
     // WebM genuinely cannot carry AAC — unchanged by the allow-list.
