@@ -49,7 +49,7 @@ pub trait CodecRow {
 
 /// Which media a registry serves. Also supplies the word used in the
 /// selection log line.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaKind {
     /// An audio codec/encoder registry.
     Audio,

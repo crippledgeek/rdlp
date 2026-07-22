@@ -41,6 +41,7 @@ pub mod postprocess;
 pub mod progress;
 pub mod protocol;
 pub mod recode_audio_mode;
+pub mod rule;
 pub mod search;
 pub mod subtitle_format;
 pub mod subtitle_kind;

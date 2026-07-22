@@ -20,7 +20,24 @@ use rdlp_types::ContainerFormat;
 use rdlp_types::media_name::{AudioEncoder, AudioEncoderName, CodecName};
 use serde::{Deserialize, Serialize};
 
+use crate::ffmpeg::container_default::{ContainerDefault, Policy};
+use crate::ffmpeg::source::Audio;
 use crate::ffmpeg::{codec_registry, muxer_defaults};
+
+/// The codec tier 3 substitutes when neither the preference table nor a
+/// literal encoder-name match resolved anything.
+///
+/// AAC because it is the one audio codec essentially every general-purpose
+/// delivery container carries and every build can encode. Named rather than
+/// repeated as a literal at each of its two sites: it encodes a *policy*
+/// ("when all else fails, this"), and two spellings can drift — including
+/// out of sync with the `container_supports_audio_codec` gate that decides
+/// whether the substitution is legal at all.
+///
+/// A `const` item, so `from_static`'s "invalid input is a build error"
+/// contract genuinely applies; called in a function body it is an ordinary
+/// runtime call that would panic instead.
+const FALLBACK_AUDIO_CODEC: CodecName = CodecName::from_static("aac");
 
 /// Information about a specific audio encoder.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,6 +101,9 @@ impl codec_registry::CodecRow for AudioCodecEntry {
 /// the `container_supports_audio_codec` gate and the frontend greying logic.
 static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
     AudioCodecEntry {
+        // Keeps its own literal rather than `FALLBACK_AUDIO_CODEC`: this row
+        // IS the table `FALLBACK_AUDIO_CODEC` is defined independently of —
+        // referencing it here would make the const define itself.
         codec: CodecName::from_static("aac"),
         display_name: "AAC",
         encoders: &[
@@ -467,19 +487,9 @@ pub fn container_supports_audio_codec(container: ContainerFormat, codec: &CodecN
         .is_some_and(|entry| entry.supported_containers.contains(&container))
 }
 
-/// What decides a container's default audio encoder.
-enum AudioDefault {
-    /// Defer to whatever the linked `FFmpeg` muxer declares.
-    FromMuxer,
-    /// rdlp overrides the muxer's declaration; the reason is on the arm.
-    Override(CodecName),
-    /// The container carries no audio stream at all.
-    NoAudio,
-}
-
 /// Policy for each container. Exhaustive with no `_` arm: a new
 /// [`ContainerFormat`] variant must be classified here or the build fails.
-const fn audio_default_for(container: ContainerFormat) -> AudioDefault {
+const fn audio_default_for(container: ContainerFormat) -> ContainerDefault<Audio> {
     match container {
         // Mkv/Mka: Opus over the matroska muxer's historical `vorbis`
         // declaration — better quality per bit, and Matroska carries Opus
@@ -490,17 +500,19 @@ const fn audio_default_for(container: ContainerFormat) -> AudioDefault {
         // override is probably wrong for Ogg specifically — but changing it
         // is a separate user-visible change.
         ContainerFormat::Mkv | ContainerFormat::Mka | ContainerFormat::Ogg => {
-            AudioDefault::Override(CodecName::from_static("opus"))
+            ContainerDefault::new(Policy::Override(CodecName::from_static("opus")))
         }
 
         // FFmpeg declares `amr_nb`: 8 kHz speech-only, and the native encoder
         // is absent from most builds. 3GPP TS 26.244 permits AMR, AMR-WB and
         // AAC, so AAC is spec-correct rather than a workaround.
-        ContainerFormat::ThreeGp => AudioDefault::Override(CodecName::from_static("aac")),
+        ContainerFormat::ThreeGp => {
+            ContainerDefault::new(Policy::Override(CodecName::from_static("aac")))
+        }
 
         // Raw VP8/VP9/AV1 elementary stream; the muxer declares no audio codec
         // and refuses any audio stream outright.
-        ContainerFormat::Ivf => AudioDefault::NoAudio,
+        ContainerFormat::Ivf => ContainerDefault::new(Policy::NotATarget),
 
         ContainerFormat::Mp4
         | ContainerFormat::WebM
@@ -527,7 +539,7 @@ const fn audio_default_for(container: ContainerFormat) -> AudioDefault {
         | ContainerFormat::Aiff
         | ContainerFormat::Wv
         | ContainerFormat::Caf
-        | ContainerFormat::Ac3 => AudioDefault::FromMuxer,
+        | ContainerFormat::Ac3 => ContainerDefault::new(Policy::FromMuxer),
     }
 }
 
@@ -545,17 +557,18 @@ const fn audio_default_for(container: ContainerFormat) -> AudioDefault {
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
 pub fn select_audio_encoder_for_container(container: ContainerFormat) -> Option<AudioEncoderName> {
-    let codec = match audio_default_for(container) {
-        AudioDefault::NoAudio => return None,
-        AudioDefault::Override(codec) => codec,
-        AudioDefault::FromMuxer => {
+    let default = audio_default_for(container);
+    let codec = match default.policy() {
+        Policy::NotATarget => return None,
+        Policy::Override(codec) => codec.clone(),
+        Policy::FromMuxer => {
             let Some(codec) =
                 muxer_defaults::declared_codec(container, codec_registry::MediaKind::Audio)
             else {
                 // Every other `None` path logs (the ABI-skew warn inside
                 // `declared_codec`, the tier-3 AAC-fallback warn below) or is
-                // a declared policy (`NoAudio`). "No muxer claims this
-                // extension" is the one case that would otherwise pass
+                // a declared policy (`Policy::NotATarget`). "No muxer claims
+                // this extension" is the one case that would otherwise pass
                 // through silently — the case an operator would most want to
                 // see (#618).
                 log::warn!(
@@ -630,7 +643,7 @@ fn resolve_declared_codec(
             // libmp3lame) would recreate the #618 failure class in reduced
             // form. Refuse truthfully instead; the caller already turns a
             // `None` here into `RecodeStage`'s/normalize's honest refusal.
-            if !container_supports_audio_codec(container, &CodecName::from_static("aac")) {
+            if !container_supports_audio_codec(container, &FALLBACK_AUDIO_CODEC) {
                 log::warn!(
                     "no encoder available for {codec} (default for {}), and that \
                      container cannot carry AAC either; refusing rather than \
@@ -645,7 +658,7 @@ fn resolve_declared_codec(
                 "no encoder available for {codec} (default for {}); falling back to AAC",
                 container.as_ext()
             );
-            preferred_audio_encoder("aac")
+            preferred_audio_encoder(FALLBACK_AUDIO_CODEC.as_str())
         })
 }
 
@@ -668,6 +681,19 @@ mod tests {
     fn resolve_encoder_by_codec_name() {
         let enc = resolve_audio_encoder("aac");
         assert!(enc.is_some(), "should resolve aac codec");
+    }
+
+    /// The tier-3 fallback is one named constant, not three literals. Guards the
+    /// #618 failure class: three independent spellings can drift, and the tier-3
+    /// gate (`container_supports_audio_codec`) must ask about the same codec the
+    /// fallback actually resolves.
+    #[test]
+    fn the_fallback_codec_is_the_one_tier_three_resolves() {
+        ensure_init_for_test();
+        assert!(
+            preferred_audio_encoder(FALLBACK_AUDIO_CODEC.as_str()).is_some(),
+            "the named fallback must actually resolve an encoder"
+        );
     }
 
     /// CRITICAL-8 regression guard: `resolve_audio_encoder("pcm")` must
@@ -906,7 +932,7 @@ mod tests {
         );
 
         // The "exactly" half: no OTHER container may be classified
-        // `AudioDefault::Override`. Without this, adding e.g.
+        // `Policy::Override`. Without this, adding e.g.
         // `Avi => Override("opus")` to `audio_default_for` would leave the
         // assertions above green.
         let known_overrides = [
@@ -916,11 +942,11 @@ mod tests {
             ContainerFormat::ThreeGp,
         ];
         for container in ContainerFormat::iter() {
-            let is_override = matches!(audio_default_for(container), AudioDefault::Override(_));
+            let is_override = matches!(audio_default_for(container).policy(), Policy::Override(_));
             assert_eq!(
                 is_override,
                 known_overrides.contains(&container),
-                "{container:?}: AudioDefault::Override classification does not \
+                "{container:?}: Policy::Override classification does not \
                  match the known set of four overrides"
             );
         }
@@ -1140,34 +1166,50 @@ mod tests {
         ensure_init_for_test();
 
         for container in ContainerFormat::iter() {
-            let expected = match audio_default_for(container) {
-                AudioDefault::NoAudio => {
+            let default = audio_default_for(container);
+            let expected = match default.policy() {
+                Policy::NotATarget => {
                     // The sweep's one unguarded skip: nothing else pins the
-                    // `NoAudio` *classification* itself (only
+                    // `NotATarget` *classification* itself (only
                     // `ivf_carries_no_audio` checks the one known instance).
-                    // A container wrongly classified `NoAudio` here would
+                    // A container wrongly classified `NotATarget` here would
                     // otherwise be skipped by this sweep and caught by
                     // nothing. Cross-check against an INDEPENDENT oracle —
                     // FFmpeg's own muxer table via `muxer_defaults` — rather
                     // than `select_audio_encoder_for_container`, which itself
-                    // returns `None` for `NoAudio` via this same
+                    // returns `None` for `NotATarget` via this same
                     // `audio_default_for` call: asserting against that would
                     // be one classification read twice, not a cross-check.
                     // Residual gap: `declared_codec`'s own doc warns `None`
                     // has three causes, only one of which is "no audio slot
                     // at all" — an ABI-skew `None` (muxer declares a codec id
                     // this build's libavcodec can't name) would let a
-                    // misclassified `NoAudio` through this cross-check too.
+                    // misclassified `NotATarget` through this cross-check too.
+                    //
+                    // Why this cross-check is still meaningful rather than
+                    // circular: for the audio kind, `NotATarget` is currently
+                    // capability-backed (`Ivf` is the only member, and it
+                    // genuinely has no audio slot), so `declared_codec`
+                    // returning `None` here is an independent fact about the
+                    // linked build, not a restatement of `audio_default_for`'s
+                    // own policy choice. If a future container is classified
+                    // `NotATarget` purely as a policy decision (the muxer
+                    // *does* declare an audio codec, rdlp just declines to
+                    // target it — mirroring the video side's `M4a`/`Wma`
+                    // policy-not-capability arms), this assertion would fail
+                    // for that container even though the classification is
+                    // correct, because "the variant's documented meaning is
+                    // policy" is then weaker than what this assertion checks.
                     assert!(
                         muxer_defaults::declared_codec(container, codec_registry::MediaKind::Audio)
                             .is_none(),
-                        "{container:?} is classified NoAudio but its muxer \
+                        "{container:?} is classified NotATarget but its muxer \
                          declares an audio codec"
                     );
                     continue;
                 }
-                AudioDefault::Override(codec) => codec,
-                AudioDefault::FromMuxer => {
+                Policy::Override(codec) => codec.clone(),
+                Policy::FromMuxer => {
                     let Some(codec) =
                         muxer_defaults::declared_codec(container, codec_registry::MediaKind::Audio)
                     else {

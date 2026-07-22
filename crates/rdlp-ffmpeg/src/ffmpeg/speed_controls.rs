@@ -4,8 +4,11 @@
 //! both go through [`resolve_recode_encoder`] so they cannot drift.
 
 use rdlp_types::ContainerFormat;
+use rdlp_types::media_name::CodecName;
 use thiserror::Error;
 
+use super::container_default::{ContainerDefault, Policy};
+use super::source::Video;
 use super::video_codecs::{
     KnobField, KnobKindDef, SpeedKnobDef, resolve_encoder, speed_controls_def,
 };
@@ -13,38 +16,43 @@ use super::{codec_registry, muxer_defaults};
 
 /// The codec every container falls back to when the linked build's muxer
 /// declares nothing for it, and the answer for a container string that
-/// doesn't parse at all. Named because it is now referenced from two places.
-const DEFAULT_VIDEO_CODEC: &str = "h264";
+/// doesn't parse at all. Named because it is now referenced from several
+/// places.
+///
+/// [`Policy::Override`] is public and its `CodecName` may hold a
+/// `Cow::Owned` (constructed from a runtime string), so `into_static()` on an
+/// arbitrary `Policy::Override(codec)` is not guaranteed to succeed — only
+/// the literal built here is. Every non-test call site that needs the
+/// fallback as a plain string uses this constant directly instead of
+/// round-tripping through a `CodecName` and its fallible `into_static()`.
+const DEFAULT_VIDEO_CODEC_STR: &str = "h264";
 
-/// What decides a container's default video codec.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum VideoDefault {
-    /// Defer to whatever the linked `FFmpeg` muxer declares.
-    FromMuxer,
-    /// rdlp overrides the muxer's declaration; the reason is on the arm.
-    Override(&'static str),
-    /// rdlp's policy is that nothing in this codebase ever recodes a *video*
-    /// stream into this container — regardless of what the muxer itself is
-    /// technically capable of carrying. Resolves to [`DEFAULT_VIDEO_CODEC`] —
-    /// a fixed, predictable placeholder — rather than `FromMuxer`.
-    NotAVideoTarget,
-}
+/// The [`CodecName`] spelling of [`DEFAULT_VIDEO_CODEC_STR`], built from it
+/// so the two representations cannot drift apart.
+///
+/// `#[cfg(test)]`-only: production code never needs the `CodecName` form of
+/// the fallback, only the `&'static str` (see `DEFAULT_VIDEO_CODEC_STR`'s doc
+/// comment); the tests below use this form to compare against values that
+/// already arrive as `CodecName` (e.g. `resolve_encoder`'s return type).
+#[cfg(test)]
+const DEFAULT_VIDEO_CODEC: CodecName = CodecName::from_static(DEFAULT_VIDEO_CODEC_STR);
 
 /// Policy per container. Exhaustive with no `_` arm: a new [`ContainerFormat`]
 /// variant must be classified here or the build fails.
 ///
-/// The 12 containers below are classified `NotAVideoTarget` rather than
-/// `FromMuxer`. That name is deliberately a *policy* statement ("rdlp does
-/// not target video at this container"), not a capability claim — probing
+/// The 12 containers below are classified `Policy::NotATarget` (for the
+/// video stream kind) rather than `FromMuxer`. That classification is
+/// deliberately a *policy* statement ("rdlp does not target video at this
+/// container"), not a capability claim — probing
 /// the linked build directly (`muxer_defaults::declared_codec(_,
 /// MediaKind::Video)`) shows the twelve are not one uniform case; they split
 /// into three materially different reasons:
 ///
 /// - **No video slot at all** (`Wav`, `Opus`, `Aac`, `Mka`, `Wv`, `Caf`,
 ///   `Ac3`): the muxer genuinely declares no video codec (`None`), which
-///   `FromMuxer` would resolve to [`DEFAULT_VIDEO_CODEC`] anyway —
-///   `NotAVideoTarget` makes that outcome explicit and independent of what
-///   any particular linked build declares.
+///   `FromMuxer` would resolve to [`DEFAULT_VIDEO_CODEC_STR`] anyway —
+///   `Policy::NotATarget` makes that outcome explicit and independent of
+///   what any particular linked build declares.
 /// - **An image slot, not a video slot** (`Mp3`, `Flac`, `Aiff`): these
 ///   declare `png` — `FFmpeg`'s embedded-cover-art codec for `ID3v2` APIC /
 ///   `METADATA_BLOCK_PICTURE`, not a transcodable video codec. Live-verified:
@@ -68,10 +76,11 @@ enum VideoDefault {
 /// is a genuine dual-purpose container (Ogg Vorbis audio, Ogg Theora video),
 /// and correctly resolves `FromMuxer` to `"theora"`.
 ///
-/// The infallible `&'static str` contract (unlike `AudioDefault::NoAudio` on
-/// the audio side, which changes the return type to `None`) means
-/// `NotAVideoTarget` still has to produce *a* value — it resolves to
-/// [`DEFAULT_VIDEO_CODEC`], which is never actually muxed since nothing in
+/// Unlike the audio side's `Policy::NotATarget` (which changes
+/// `select_audio_encoder_for_container`'s return type to `None`), the video
+/// side's [`default_codec_for_container`] keeps an infallible `&'static str`
+/// contract, so this arm still has to produce *a* value — it resolves to
+/// [`DEFAULT_VIDEO_CODEC_STR`], which is never actually muxed since nothing in
 /// this codebase recodes a video stream into these twelve containers.
 //
 // Mutation-verified exhaustiveness guard: this match MUST have no `_` arm.
@@ -82,7 +91,7 @@ enum VideoDefault {
 // within a passing test binary, so this is a comment, not a test (Minor-7 of
 // PR-3's review: the prior anchor test's name promised an exhaustiveness
 // check its body could not perform).
-const fn video_default_for(container: ContainerFormat) -> VideoDefault {
+const fn video_default_for(container: ContainerFormat) -> ContainerDefault<Video> {
     match container {
         // `AVOutputFormat.video_codec` is a legacy lowest-common-denominator
         // default, not a recommendation. Citations below name the FFmpeg
@@ -102,17 +111,17 @@ const fn video_default_for(container: ContainerFormat) -> VideoDefault {
             // MPEG-TS payload. ITU-T H.222.0 stream_type 0x1B = AVC, and
             // every real-world HLS ladder is h264 — the muxer's own default
             // is the historical outlier here.
-            VideoDefault::Override("h264")
+            ContainerDefault::new(Policy::Override(CodecName::from_static("h264")))
         }
         ContainerFormat::Flv => {
             // Adobe FLV spec CodecID 7 = AVC; the muxer declares flv1
             // (Sorenson H.263), a codec no encoder ships for in 2026.
-            VideoDefault::Override("h264")
+            ContainerDefault::new(Policy::Override(CodecName::from_static("h264")))
         }
         ContainerFormat::F4v => {
             // ISOBMFF-derived via movenc; h264 is F4V's actual install base
             // (Flash Video's MP4-compatible successor format).
-            VideoDefault::Override("h264")
+            ContainerDefault::new(Policy::Override(CodecName::from_static("h264")))
         }
         ContainerFormat::Avi => {
             // avienc.c declares mpeg4 part 2. AVI is FOURCC-dispatched with
@@ -133,7 +142,7 @@ const fn video_default_for(container: ContainerFormat) -> VideoDefault {
             // benign for the CFR output rdlp produces, but would drift on a
             // VFR source, and B-frame seeking in legacy AVI parsers stays
             // imprecise.
-            VideoDefault::Override("h264")
+            ContainerDefault::new(Policy::Override(CodecName::from_static("h264")))
         }
         ContainerFormat::Asf | ContainerFormat::Wmv => {
             // asfenc.c declares msmpeg4v3. Like AVI, ASF/WMV are
@@ -141,12 +150,12 @@ const fn video_default_for(container: ContainerFormat) -> VideoDefault {
             // reasoning applies — including the PSNR-measurement-artifact
             // retraction on the `Avi` arm above (`-lavfi psnr` desyncs on
             // ASF/WMV's missing PTS the same way it does on AVI's).
-            VideoDefault::Override("h264")
+            ContainerDefault::new(Policy::Override(CodecName::from_static("h264")))
         }
         ContainerFormat::Nut => {
             // nutenc.c declares mpeg4. NUT is codec-agnostic by
             // construction — it has no legacy install base to defer to.
-            VideoDefault::Override("h264")
+            ContainerDefault::new(Policy::Override(CodecName::from_static("h264")))
         }
         ContainerFormat::Mxf => {
             // mxfenc.c declares mpeg2video, but AVC-in-MXF is standardized
@@ -158,13 +167,13 @@ const fn video_default_for(container: ContainerFormat) -> VideoDefault {
             // frame rate is never set and `mxfenc` demands a non-zero one.
             // That failure sits upstream of codec choice — do not "fix" this
             // arm in response to it.
-            VideoDefault::Override("h264")
+            ContainerDefault::new(Policy::Override(CodecName::from_static("h264")))
         }
         ContainerFormat::ThreeGp => {
             // 3GPP TS 26.244 §5 lists AVC (H.264) among 3GP's permitted
             // video codecs; the muxer's own declared default predates that
             // profile and is not what modern 3GP consumers expect.
-            VideoDefault::Override("h264")
+            ContainerDefault::new(Policy::Override(CodecName::from_static("h264")))
         }
         ContainerFormat::M4a
         | ContainerFormat::Mp3
@@ -177,7 +186,7 @@ const fn video_default_for(container: ContainerFormat) -> VideoDefault {
         | ContainerFormat::Wv
         | ContainerFormat::Caf
         | ContainerFormat::Ac3
-        | ContainerFormat::Wma => VideoDefault::NotAVideoTarget,
+        | ContainerFormat::Wma => ContainerDefault::new(Policy::NotATarget),
         // Why these stay `FromMuxer` while the nine above are `Override`
         // (Item 16(a) of PR-3's re-review, correcting the review's own first
         // draft of this reasoning): it is NOT that these are merely
@@ -214,7 +223,7 @@ const fn video_default_for(container: ContainerFormat) -> VideoDefault {
         | ContainerFormat::Vob
         | ContainerFormat::Dv
         | ContainerFormat::Ivf
-        | ContainerFormat::Ogg => VideoDefault::FromMuxer,
+        | ContainerFormat::Ogg => ContainerDefault::new(Policy::FromMuxer),
     }
 }
 
@@ -233,19 +242,20 @@ const fn video_default_for(container: ContainerFormat) -> VideoDefault {
 ///
 /// Of the 31 [`ContainerFormat`] variants, 10 defer to the linked build's own
 /// muxer declaration (`FromMuxer`), 9 override it (`Override`), and 12 are
-/// declared not a video target (`NotAVideoTarget`) — see [`video_default_for`]
+/// declared not a video target (`Policy::NotATarget`) — see [`video_default_for`]
 /// for the exact classification and per-arm citations (corrected count, Item
 /// 16(b) of PR-3's re-review: the prior prose said "most" defer, which was
 /// true before Part A reclassified nine containers from `FromMuxer` to
 /// `Override`). rdlp keeps no second copy of `FFmpeg`'s table for the ten
 /// that do defer. Deviations are named in [`video_default_for`] with their
 /// reasons: the
-/// `FromMuxer` arm falls back to [`DEFAULT_VIDEO_CODEC`] only when
+/// `FromMuxer` arm falls back to [`DEFAULT_VIDEO_CODEC_STR`] only when
 /// `declared_codec` returns `None` (which does NOT mean "this container
 /// carries no video" — see that function's doc comment — an ABI-skew codec id
 /// or no muxer claiming the extension both produce it too); the twelve
-/// audio-only containers always resolve [`DEFAULT_VIDEO_CODEC`] via the
-/// dedicated `NotAVideoTarget` policy regardless of what their muxer declares.
+/// audio-only containers always resolve [`DEFAULT_VIDEO_CODEC_STR`] via the
+/// dedicated `Policy::NotATarget` (video kind) regardless of what their
+/// muxer declares.
 ///
 /// Takes a [`ContainerFormat`] rather than a `&str`: every caller already had
 /// one and was calling `.as_ext()` purely to satisfy this signature, so the
@@ -262,16 +272,24 @@ const fn video_default_for(container: ContainerFormat) -> VideoDefault {
 #[must_use]
 pub fn default_codec_for_container(container: ContainerFormat) -> &'static str {
     super::ensure_init().ok();
-    match video_default_for(container) {
-        VideoDefault::Override(codec) => codec,
-        VideoDefault::NotAVideoTarget => DEFAULT_VIDEO_CODEC,
-        VideoDefault::FromMuxer => {
+    let default = video_default_for(container);
+    match default.policy() {
+        // `codec` may hold a `Cow::Owned` in the general case (`Policy::Override`
+        // is a public constructor), so this is the one arm that cannot use
+        // `DEFAULT_VIDEO_CODEC_STR` directly; it degrades to the same fallback
+        // an unclassifiable container already resolves to.
+        Policy::Override(codec) => codec
+            .clone()
+            .into_static()
+            .unwrap_or(DEFAULT_VIDEO_CODEC_STR),
+        Policy::NotATarget => DEFAULT_VIDEO_CODEC_STR,
+        Policy::FromMuxer => {
             muxer_defaults::declared_codec(container, codec_registry::MediaKind::Video)
                 // `declared_codec` validates FFmpeg's own static descriptor-table
                 // name via `CodecName::new_static`, so it is always recoverable
                 // as `&'static str` here — see `MediaName::into_static`.
                 .and_then(rdlp_types::media_name::CodecName::into_static)
-                .unwrap_or(DEFAULT_VIDEO_CODEC)
+                .unwrap_or(DEFAULT_VIDEO_CODEC_STR)
         }
     }
 }
@@ -313,7 +331,7 @@ pub fn resolve_recode_encoder(
     // `other_aliases_still_resolve_to_the_default_codec`).
     let codec = target
         .parse::<ContainerFormat>()
-        .map_or(DEFAULT_VIDEO_CODEC, default_codec_for_container);
+        .map_or(DEFAULT_VIDEO_CODEC_STR, default_codec_for_container);
     resolve_encoder(codec).and_then(rdlp_types::media_name::VideoEncoderName::into_static)
 }
 
@@ -581,7 +599,7 @@ mod tests {
     /// review reclassified `Ts` from `FromMuxer` to `Override("h264")`) both
     /// resolve to containers with an UNCONDITIONAL `Override("h264")`
     /// classification — no `FFmpeg` build flag changes the answer. The oracle
-    /// here MUST be `resolve_encoder(DEFAULT_VIDEO_CODEC)` directly
+    /// here MUST be `resolve_encoder(DEFAULT_VIDEO_CODEC.as_str())` directly
     /// (Important-5 of PR-3's review), not `resolve_recode_encoder(None,
     /// Some("mp4"), None)`: `Mp4` is `FromMuxer` and build-conditional (see
     /// `resolver_matches_recode_stage_defaults`), so on a build lacking both
@@ -593,7 +611,7 @@ mod tests {
         for alias in ["3gpp", "mpegts"] {
             assert_eq!(
                 resolve_recode_encoder(None, Some(alias), None),
-                resolve_encoder(DEFAULT_VIDEO_CODEC)
+                resolve_encoder(DEFAULT_VIDEO_CODEC.as_str())
                     .as_ref()
                     .map(rdlp_types::media_name::MediaName::as_str),
                 "{alias} must resolve exactly as the unconditional h264 default does"
@@ -622,7 +640,7 @@ mod tests {
     /// `resolve_recode_encoder` still takes strings (config-supplied), so its
     /// unparseable-input path must keep the old `_ => "h264"` behaviour rather
     /// than silently resolving to nothing. Oracle fixed to
-    /// `resolve_encoder(DEFAULT_VIDEO_CODEC)` for the same reason as
+    /// `resolve_encoder(DEFAULT_VIDEO_CODEC.as_str())` for the same reason as
     /// `override_aliases_resolve_to_the_h264_default` above (Important-5):
     /// the unparseable-string fallback resolves `DEFAULT_VIDEO_CODEC`
     /// directly, so `Mp4`'s build-conditional resolution is the wrong oracle.
@@ -630,7 +648,7 @@ mod tests {
     fn unparseable_container_string_still_falls_back_to_h264() {
         assert_eq!(
             resolve_recode_encoder(None, Some("not-a-container"), None),
-            resolve_encoder(DEFAULT_VIDEO_CODEC)
+            resolve_encoder(DEFAULT_VIDEO_CODEC.as_str())
                 .as_ref()
                 .map(rdlp_types::media_name::MediaName::as_str),
             "an unknown container string must resolve exactly as the h264 default did"
@@ -700,7 +718,7 @@ mod tests {
             ContainerFormat::ThreeGp,
         ];
         for container in ContainerFormat::iter() {
-            let is_override = matches!(video_default_for(container), VideoDefault::Override(_));
+            let is_override = matches!(video_default_for(container).policy(), Policy::Override(_));
             assert_eq!(
                 is_override,
                 known.contains(&container),
@@ -731,14 +749,14 @@ mod tests {
         assert_eq!(default_codec_for_container(ContainerFormat::Ogg), "theora");
     }
 
-    /// Regression guard for the `NotAVideoTarget` policy decision: `Mp3`,
+    /// Regression guard for the "not a video target" policy decision: `Mp3`,
     /// `Flac`, and `Aiff` all declare `png` as their `MediaKind::Video`
     /// default (`FFmpeg`'s embedded-cover-art codec for `ID3v2` APIC /
     /// `METADATA_BLOCK_PICTURE`) and `Wma` declares `msmpeg4v3` (inherited
     /// from sharing the `asf` muxer registration with `Wmv`) — verified by
     /// direct probe against this build. A `FromMuxer` classification would
     /// leak these as the "default video codec" for audio-only containers;
-    /// `NotAVideoTarget` must produce `DEFAULT_VIDEO_CODEC` instead.
+    /// `Policy::NotATarget` must produce `DEFAULT_VIDEO_CODEC` instead.
     #[test]
     fn audio_only_containers_do_not_leak_the_muxers_incidental_video_codec() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
@@ -757,8 +775,9 @@ mod tests {
         }
     }
 
-    /// The "exactly these twelve" half of the `NotAVideoTarget` policy: no
-    /// OTHER container may be classified `NotAVideoTarget`, and `Ogg` — despite
+    /// The "exactly these twelve" half of the "not a video target" policy: no
+    /// OTHER container may be classified `Policy::NotATarget` for video, and
+    /// `Ogg` — despite
     /// living in the same "Audio containers" source section as the twelve —
     /// must NOT be among them, since it is a genuine dual-purpose container
     /// (Ogg Theora video) and must keep resolving `FromMuxer`.
@@ -787,12 +806,12 @@ mod tests {
 
         for container in ContainerFormat::iter() {
             let is_no_video_target =
-                matches!(video_default_for(container), VideoDefault::NotAVideoTarget);
+                matches!(video_default_for(container).policy(), Policy::NotATarget);
             assert_eq!(
                 is_no_video_target,
                 known.contains(&container),
-                "{container:?}: NotAVideoTarget classification does not match the known \
-                 set of twelve audio-only containers"
+                "{container:?}: Policy::NotATarget (video) classification does not match \
+                 the known set of twelve audio-only containers"
             );
         }
     }
@@ -807,8 +826,8 @@ mod tests {
     /// misclassification, because `expected` followed the misclassification.
     ///
     /// This is the assertion the old name promised: for every container this
-    /// codebase actually targets for video (all but the twelve
-    /// `NotAVideoTarget`), the resolved default codec must have an AVAILABLE
+    /// codebase actually targets for video (all but the twelve classified
+    /// `Policy::NotATarget`), the resolved default codec must have an AVAILABLE
     /// encoder in this build. This is also the exact check that would have
     /// caught the `dvvideo`/`msmpeg4v3` gap by hand — before those rows
     /// existed in `CODEC_PREFERENCES`, `default_codec_for_container(Dv)`
@@ -836,7 +855,7 @@ mod tests {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
 
         for container in ContainerFormat::iter() {
-            if matches!(video_default_for(container), VideoDefault::NotAVideoTarget) {
+            if matches!(video_default_for(container).policy(), Policy::NotATarget) {
                 continue;
             }
             let codec = default_codec_for_container(container);

@@ -42,6 +42,7 @@
 mod audio_codecs;
 pub mod audio_encoder_registry;
 pub(crate) mod codec_registry;
+pub(crate) mod container_default;
 mod dts_synth;
 pub(crate) use dts_synth::DtsSynthesizer;
 mod encoding_tag;
@@ -57,6 +58,7 @@ mod normalize_types;
 mod options;
 mod probe;
 mod remux;
+pub mod source;
 // `#[doc(hidden)] pub`, not `pub(crate)`: the corruption-recovery path
 // (`salvage_remux_sync`) is otherwise unreachable from `tests/`, where its
 // only meaningful coverage can live — `scripts/check-no-cli.sh` forbids
@@ -95,6 +97,14 @@ pub use normalize_types::{
 };
 pub use options::{AudioExtractOptions, ChapterEntry, RemuxOptions, VideoConvertOptions};
 pub use probe::{MediaInfo, StreamInfo, StreamKind};
+// `source::{Audio, Source, SourceAudio, SourceState, SourceVideo, Video}` are
+// deliberately NOT re-exported here: every consumer already imports them via
+// `rdlp_ffmpeg::ffmpeg::source::`, so a second top-level path would be an
+// unused, unmaintained alias. `source::StreamKind` additionally could not be
+// re-exported even if a consumer wanted it that way: `probe::StreamKind` (an
+// enum: which stream a probed `MediaInfo` entry is) already owns this name at
+// `ffmpeg::` scope, and `source::StreamKind` (a sealed marker trait) is a
+// different concept with the same name — re-exporting both would be E0255.
 pub use video_codecs::{
     VideoCodecInfo, VideoEncoderInfo, available_encoders_for_codec, is_encoder_available,
     list_available_codecs, preferred_video_encoder, resolve_encoder,

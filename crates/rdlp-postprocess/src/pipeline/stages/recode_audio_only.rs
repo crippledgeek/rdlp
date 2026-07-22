@@ -16,87 +16,17 @@
 
 use log::{debug, warn};
 
+use rdlp_ffmpeg::ffmpeg::source::{Audio, SourceAudio, muxer_decides};
 use rdlp_ffmpeg::{AudioExtractOptions, FFmpegRunner, PostProcessError};
+use rdlp_types::media_name::CodecName;
 use rdlp_types::{AudioEncoderName, ContainerFormat, RecodeAudioMode};
 
 use super::audio_convert;
 use super::recode::RecodeStage;
 use crate::pipeline::PipelineMessage;
 
-/// What the probe established about the source's audio stream.
-///
-/// The audio mirror of `SourceVideo`, and it exists for the same reason: a
-/// bare `Option<&str>` merges "no audio stream at all" with "an audio stream
-/// this build cannot name", and the audio-only route needs to tell them apart
-/// — the first has nothing to convert, the second can still be re-encoded
-/// through the muxer's default.
-#[derive(Debug, Clone, Copy)]
-pub(super) enum SourceAudio<'a> {
-    /// No audio stream.
-    Absent,
-    /// An audio stream whose codec this build cannot name. Proves nothing
-    /// about representability, so it must not authorise a stream copy — but
-    /// it is still audio, and still convertible.
-    Unnamed,
-    /// The source's audio codec, as `FFmpeg`'s own descriptor name.
-    Codec(&'a str),
-}
-
-impl<'a> SourceAudio<'a> {
-    /// Classify what `probe` reported.
-    pub(super) const fn from_probe(has_audio: bool, audio_codec: Option<&'a str>) -> Self {
-        match (has_audio, audio_codec) {
-            (false, _) => Self::Absent,
-            (true, Some(codec)) => Self::Codec(codec),
-            (true, None) => Self::Unnamed,
-        }
-    }
-
-    /// Whether there is an audio stream at all, named or not.
-    const fn is_present(self) -> bool {
-        !matches!(self, Self::Absent)
-    }
-
-    /// The codec name, when the build could name it.
-    const fn name(self) -> Option<&'a str> {
-        match self {
-            Self::Codec(c) => Some(c),
-            Self::Absent | Self::Unnamed => None,
-        }
-    }
-}
-
 /// Stage name reported in logs and the callback factory.
 const STAGE_NAME: &str = "RecodeStage";
-
-/// Whether an **audio-only** source can be stream-copied into `output`
-/// (#637).
-///
-/// Deliberately a separate function from `RecodeStage::can_remux_video` rather
-/// than a branch inside it. The two ask different questions — "can this
-/// container carry that *video* codec" versus "…that *audio* codec" — and
-/// folding them together is what produced #637: every per-container arm of
-/// the video predicate answers about video, and none of them can answer
-/// for a file that has none. Four were hardcoded to `true` (which picked a
-/// remux MXF then refused at `write_header`) and the rest fell through to
-/// a codec check or an extension compare that routed to a transcode dying
-/// in `open_input_and_decoder` with `NoVideoStream`.
-///
-/// Asked of the same #630 predicate with `MediaKind::Audio`, so routing
-/// and the mux agree here exactly as they do for video. An unnamed or
-/// absent codec is no positive evidence a copy works, so it re-encodes.
-pub(super) fn can_copy_audio_only(output: ContainerFormat, audio: SourceAudio<'_>) -> bool {
-    audio.name().is_some_and(|codec| {
-        // `codec` is `FFmpeg`'s own descriptor name (it came from
-        // `MediaInfo::audio_codec`, already a validated `CodecName` degraded
-        // to `&str` at `SourceAudio::from_probe`), so re-validating it here
-        // can never plausibly fail — `is_ok_and` degrades to `false` rather
-        // than panicking in the theoretical case it somehow does.
-        rdlp_types::media_name::CodecName::new(codec).is_ok_and(|codec| {
-            rdlp_ffmpeg::muxer_can_represent(output, &codec, rdlp_ffmpeg::MediaKind::Audio)
-        })
-    })
-}
 
 /// Convert a source that has no video stream into `target` (#637).
 ///
@@ -109,7 +39,7 @@ pub(super) fn can_copy_audio_only(output: ContainerFormat, audio: SourceAudio<'_
 /// Three outcomes, none of them new machinery:
 ///
 /// 1. the container can carry the source's audio codec → stream copy,
-///    decided by [`can_copy_audio_only`];
+///    decided by <code>[muxer_decides]::<[Audio]></code>;
 /// 2. it cannot (`webm` + aac) → re-encode to the container's own default
 ///    via [`RecodeStage::resolve_audio_params`], which is yt-dlp's behaviour;
 /// 3. it cannot hold an audio-only file at all (`mxf` requires exactly one
@@ -120,7 +50,7 @@ pub(super) async fn recode_audio_only(
     ffmpeg: &FFmpegRunner,
     mut msg: PipelineMessage,
     target: ContainerFormat,
-    audio: SourceAudio<'_>,
+    audio: &SourceAudio,
 ) -> anyhow::Result<PipelineMessage> {
     let input_file = msg.tracker.primary();
     let target_ext = target.as_ext();
@@ -174,11 +104,11 @@ pub(super) async fn recode_audio_only(
 pub(super) fn resolve_audio_only_params(
     recode_audio: &RecodeAudioMode,
     target: ContainerFormat,
-    audio: SourceAudio<'_>,
+    audio: &SourceAudio,
 ) -> Result<(bool, Option<AudioEncoderName>), PostProcessError> {
     let target_ext = target.as_ext();
 
-    if can_copy_audio_only(target, audio) {
+    if muxer_decides::<Audio>(target).eval(audio) {
         debug!("RecodeStage: audio-only source → {target_ext} (stream copy)");
         return Ok((true, None));
     }
@@ -228,7 +158,9 @@ pub(super) fn resolve_audio_only_params(
         warn!(
             "RecodeStage: cannot confirm {target_ext} carries {}, so it cannot be \
              stream-copied safely; re-encoding to {} instead (this may be lossy)",
-            audio.name().unwrap_or("the source audio codec"),
+            audio
+                .name()
+                .map_or("the source audio codec", CodecName::as_str),
             encoder_name.as_ref().map_or(
                 "the container default",
                 rdlp_types::media_name::MediaName::as_str
@@ -252,6 +184,28 @@ pub(super) fn resolve_audio_only_params(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rdlp_ffmpeg::ffmpeg::source::Source;
+
+    /// Builds a [`SourceAudio`] whose codec is named.
+    fn audio_codec(name: &'static str) -> SourceAudio {
+        Source::from_probe(true, Some(CodecName::from_static(name)))
+    }
+
+    /// Builds a [`SourceAudio`] with a stream present but an unnameable codec.
+    fn audio_unnamed() -> SourceAudio {
+        Source::from_probe(true, None)
+    }
+
+    /// Builds a [`SourceAudio`] with no audio stream at all.
+    fn audio_absent() -> SourceAudio {
+        Source::from_probe(false, None)
+    }
+
+    /// The yes/no form of `muxer_decides::<Audio>`, for the tests below that
+    /// only care about the answer.
+    fn can_copy_audio_only(output: ContainerFormat, audio: &SourceAudio) -> bool {
+        muxer_decides::<Audio>(output).eval(audio)
+    }
 
     /// Tier 1: the container carries the codec, so copy — and report no
     /// encoder, which is what makes `encoding_tool` read "copy".
@@ -261,7 +215,7 @@ mod tests {
         let (copy, encoder) = resolve_audio_only_params(
             &RecodeAudioMode::Copy,
             ContainerFormat::Mkv,
-            SourceAudio::Codec("aac"),
+            &audio_codec("aac"),
         )
         .expect("mkv carries aac");
         assert!(copy);
@@ -276,7 +230,7 @@ mod tests {
         let (copy, encoder) = resolve_audio_only_params(
             &RecodeAudioMode::Copy,
             ContainerFormat::WebM,
-            SourceAudio::Codec("aac"),
+            &audio_codec("aac"),
         )
         .expect("webm resolves an encoder");
         assert!(!copy, "webm cannot stream-copy aac");
@@ -294,7 +248,7 @@ mod tests {
         let (copy, encoder) = resolve_audio_only_params(
             &RecodeAudioMode::Copy,
             ContainerFormat::Mkv,
-            SourceAudio::Unnamed,
+            &audio_unnamed(),
         )
         .expect("mkv resolves an encoder");
         assert!(!copy);
@@ -325,7 +279,7 @@ mod tests {
             ContainerFormat::Ts,
         ] {
             assert!(
-                can_copy_audio_only(target, SourceAudio::Codec("aac")),
+                can_copy_audio_only(target, &audio_codec("aac")),
                 "{target:?}: carries aac, so an audio-only source must stream-copy"
             );
         }
@@ -340,7 +294,7 @@ mod tests {
     fn audio_only_input_does_not_copy_into_mxf() {
         rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
         assert!(
-            !can_copy_audio_only(ContainerFormat::Mxf, SourceAudio::Codec("aac")),
+            !can_copy_audio_only(ContainerFormat::Mxf, &audio_codec("aac")),
             "mxf needs exactly one video stream; an audio-only copy cannot work"
         );
     }
@@ -356,7 +310,7 @@ mod tests {
             ContainerFormat::Ogg,
         ] {
             assert!(
-                !can_copy_audio_only(target, SourceAudio::Codec("aac")),
+                !can_copy_audio_only(target, &audio_codec("aac")),
                 "{target:?} cannot carry aac, so it must re-encode rather than copy"
             );
         }
@@ -364,13 +318,14 @@ mod tests {
 
     /// No audio codec — no audio stream at all, or one this build cannot name
     /// — is not evidence a copy works, so it must not authorise one. Mirrors
-    /// `SourceVideo::Unnamed`'s rule on the video side.
+    /// <code>[Source]<[Video](rdlp_ffmpeg::ffmpeg::source::Video)></code>'s
+    /// `Unnamed` rule on the video side.
     #[test]
     fn audio_only_input_without_a_named_codec_does_not_copy() {
         rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
-        for audio in [SourceAudio::Absent, SourceAudio::Unnamed] {
+        for audio in [audio_absent(), audio_unnamed()] {
             assert!(
-                !can_copy_audio_only(ContainerFormat::Mkv, audio),
+                !can_copy_audio_only(ContainerFormat::Mkv, &audio),
                 "{audio:?} proves nothing about representability, so it must not copy"
             );
         }
