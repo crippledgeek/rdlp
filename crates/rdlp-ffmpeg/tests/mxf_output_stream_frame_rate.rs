@@ -161,9 +161,13 @@ async fn transcode_into_mxf_carries_the_frame_rate() {
     let runner = FFmpegRunner::new().expect("ffmpeg init");
     let opts = VideoConvertOptions {
         remux_only: false,
-        video_codec: Some("libx264".to_string()),
+        video_codec: Some(rdlp_types::media_name::VideoEncoderName::from_static(
+            "libx264",
+        )),
         audio_copy: false,
-        audio_codec: Some("pcm_s16le".to_string()),
+        audio_codec: Some(rdlp_types::media_name::AudioEncoderName::from_static(
+            "pcm_s16le",
+        )),
         ..Default::default()
     };
     runner

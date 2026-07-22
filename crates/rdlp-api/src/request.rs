@@ -4,7 +4,7 @@
 //! initiating a download. All types use typed enums from `rdlp-types`
 //! (re-exported through `rdlp-core`) instead of raw strings.
 
-use rdlp_types::{AudioFormat, BrowserType, ContainerFormat, SubtitleFormat};
+use rdlp_types::{AudioFormat, BrowserType, ContainerFormat, SubtitleFormat, VideoEncoderName};
 use std::path::PathBuf;
 
 /// Top-level request for initiating a download.
@@ -211,7 +211,7 @@ pub struct PostProcessOptions {
     pub recode_video: Option<ContainerFormat>,
     /// Explicit video encoder override (e.g., "libsvtav1", "libx264").
     /// `None` = auto-select best available encoder for the target codec.
-    pub video_encoder: Option<String>,
+    pub video_encoder: Option<VideoEncoderName>,
     /// Target container for recode (overrides `recode_video` when set).
     pub recode_container: Option<ContainerFormat>,
     /// Audio handling during video recode.

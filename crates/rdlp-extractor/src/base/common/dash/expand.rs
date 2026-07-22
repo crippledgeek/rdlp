@@ -4,7 +4,7 @@
 //! per-Repr-Format level. The DASH downloader is the consumer; it reads
 //! `format.fragments` directly without re-parsing the manifest.
 
-use rdlp_types::{Codec, DownloadProtocol, Format, Fragment};
+use rdlp_types::{Codec, DownloadProtocol, Format, Fragment, Rfc6381Codec};
 use url::Url;
 
 use super::audio_sampling_rate::parse_audio_sampling_rate;
@@ -87,8 +87,14 @@ enum MimeClass {
 /// Classify an MPD Representation's effective MIME type into a [`MimeClass`].
 ///
 /// `mime` is the resolved MIME type (Repr-level falling back to AdaptationSet-level).
-/// `codecs_str` is used only to distinguish `application/mp4` text sub-types.
-fn classify_mime(mime: &str, codecs_str: &str) -> MimeClass {
+/// `codecs` is used only to distinguish `application/mp4` text sub-types. It is
+/// `Option<&Rfc6381Codec>` rather than a bare `&str` with an empty-string
+/// sentinel: a Representation with no `codecs` attribute at all is a real,
+/// common case (most text AdaptationSets omit it), and [`Rfc6381Codec`]
+/// cannot represent an empty value — `None` is the correct spelling of
+/// "no codecs declared" here, matching how `expand_dash_representations`
+/// already models a missing MIME type.
+fn classify_mime(mime: &str, codecs: Option<&Rfc6381Codec>) -> MimeClass {
     if mime.starts_with("video/") {
         return MimeClass::Video;
     }
@@ -96,7 +102,11 @@ fn classify_mime(mime: &str, codecs_str: &str) -> MimeClass {
         return MimeClass::Audio;
     }
     let is_text = mime.starts_with("text/")
-        || (mime == "application/mp4" && matches!(codecs_str, "stpp" | "wvtt" | "ttml" | "dfxp"));
+        || (mime == "application/mp4"
+            && matches!(
+                codecs.map(Rfc6381Codec::as_str),
+                Some("stpp" | "wvtt" | "ttml" | "dfxp")
+            ));
     if is_text {
         return MimeClass::Text;
     }
@@ -364,13 +374,17 @@ pub fn expand_dash_representations(
                 .as_deref()
                 .or(adapt.mimeType.as_deref())
                 .unwrap_or("");
-            let codecs_str = repr
+            // A raw manifest codecs string is validated into `Rfc6381Codec` here
+            // rather than carried as `&str`: an invalid/empty attribute degrades
+            // to `None` ("no codecs declared") instead of propagating a
+            // would-be codec value into `classify_mime` / `mime_to_sub_ext`.
+            let codecs: Option<Rfc6381Codec> = repr
                 .codecs
                 .as_deref()
                 .or(adapt.codecs.as_deref())
-                .unwrap_or("");
+                .and_then(|s| Rfc6381Codec::new(s).ok());
 
-            let mime_class = classify_mime(mime, codecs_str);
+            let mime_class = classify_mime(mime, codecs.as_ref());
             match mime_class {
                 MimeClass::Unknown => continue,
                 MimeClass::Text => {
@@ -379,7 +393,7 @@ pub fn expand_dash_representations(
                     let synth_id = format!("sub_{adapt_idx}_{repr_idx}");
                     let frags = build_fragments(adapt, repr, &synth_id, 0, period_duration_seconds);
                     if frags.is_empty() {
-                        let ext = mime_to_sub_ext(mime, codecs_str);
+                        let ext = mime_to_sub_ext(mime, codecs.as_ref());
                         subtitles.push(DashSubtitle {
                             language: adapt_lang.clone(),
                             url: final_base.to_string(),
@@ -530,12 +544,14 @@ fn build_fragments(
 /// `mimeType` and (for `application/mp4` containers) `codecs`.
 ///
 /// Defaults to `"ttml"` for unknown text mime types — defensive, matching
-/// yt-dlp's convention.
-fn mime_to_sub_ext(mime: &str, codecs: &str) -> String {
+/// yt-dlp's convention. `codecs` is `None` when the Representation declares
+/// no `codecs` attribute at all — see [`classify_mime`] for why this is an
+/// `Option` rather than an empty-string sentinel.
+fn mime_to_sub_ext(mime: &str, codecs: Option<&Rfc6381Codec>) -> String {
     match mime {
         "text/vtt" => "vtt",
-        "application/mp4" => match codecs {
-            "wvtt" => "vtt",
+        "application/mp4" => match codecs.map(Rfc6381Codec::as_str) {
+            Some("wvtt") => "vtt",
             _ => "ttml",
         },
         _ => "ttml",
@@ -803,25 +819,29 @@ mod tests {
 
     #[test]
     fn mime_to_sub_ext_text_ttml() {
-        assert_eq!(mime_to_sub_ext("text/ttml", ""), "ttml");
-        assert_eq!(mime_to_sub_ext("application/ttml+xml", ""), "ttml");
+        assert_eq!(mime_to_sub_ext("text/ttml", None), "ttml");
+        assert_eq!(mime_to_sub_ext("application/ttml+xml", None), "ttml");
     }
 
     #[test]
     fn mime_to_sub_ext_text_vtt() {
-        assert_eq!(mime_to_sub_ext("text/vtt", ""), "vtt");
+        assert_eq!(mime_to_sub_ext("text/vtt", None), "vtt");
     }
 
     #[test]
     fn mime_to_sub_ext_mp4_stpp() {
-        assert_eq!(mime_to_sub_ext("application/mp4", "stpp"), "ttml");
-        assert_eq!(mime_to_sub_ext("application/mp4", "ttml"), "ttml");
-        assert_eq!(mime_to_sub_ext("application/mp4", "dfxp"), "ttml");
+        let stpp = Rfc6381Codec::from_static("stpp");
+        let ttml = Rfc6381Codec::from_static("ttml");
+        let dfxp = Rfc6381Codec::from_static("dfxp");
+        assert_eq!(mime_to_sub_ext("application/mp4", Some(&stpp)), "ttml");
+        assert_eq!(mime_to_sub_ext("application/mp4", Some(&ttml)), "ttml");
+        assert_eq!(mime_to_sub_ext("application/mp4", Some(&dfxp)), "ttml");
     }
 
     #[test]
     fn mime_to_sub_ext_mp4_wvtt() {
-        assert_eq!(mime_to_sub_ext("application/mp4", "wvtt"), "vtt");
+        let wvtt = Rfc6381Codec::from_static("wvtt");
+        assert_eq!(mime_to_sub_ext("application/mp4", Some(&wvtt)), "vtt");
     }
 
     // ─── SSRF gate (per-fragment URL validation) ──────────────────────────

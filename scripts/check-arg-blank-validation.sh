@@ -88,6 +88,16 @@ scan() {
             needs = ""
             if (type ~ /PathBuf/) {
                 needs = "non_blank_path"
+            } else if (type ~ /VideoEncoderName/) {
+                # #642: a validated `MediaName` newtype cannot hold an empty
+                # value by construction, but the parser still needs to run
+                # `reject_blank` FIRST for the shared blank-value UX every
+                # other string-valued flag gets (whitespace-only input
+                # otherwise reaches `MediaName::new` and reports a less
+                # specific "must be ASCII"-family error instead of "must not
+                # be empty or whitespace-only"). `video_encoder_name` is that
+                # dedicated wrapper — see its doc comment in args.rs.
+                needs = "video_encoder_name"
             } else if (type ~ /String/) {
                 # Substring, not equality: this must also catch Vec<String>,
                 # Option<Vec<String>> and fully-qualified std::string::String.
@@ -272,5 +282,5 @@ if [ -n "$missing" ]; then
     exit 1
 fi
 
-count=$(grep -cE 'value_parser = non_blank(_path)?\)?' "$TARGET" || true)
+count=$(grep -cE 'value_parser = (non_blank(_path)?|video_encoder_name)\)?' "$TARGET" || true)
 echo "OK ($count string/path arguments reject blank input)"

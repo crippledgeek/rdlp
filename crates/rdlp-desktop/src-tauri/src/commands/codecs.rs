@@ -30,10 +30,14 @@ pub fn available_audio_codecs(container: Option<ContainerFormat>) -> Vec<AudioCo
     if let Some(c) = container {
         all.into_iter()
             .filter(|codec| {
-                rdlp_ffmpeg::ffmpeg::audio_encoder_registry::container_supports_audio_codec(
-                    c,
-                    &codec.codec,
-                )
+                // `codec.codec` is the serde-facing `String` form (always
+                // sourced from a validated `CodecName` in `list_available_audio_codecs`),
+                // so re-validating it here can never plausibly fail.
+                rdlp_types::media_name::CodecName::new(&codec.codec).is_ok_and(|name| {
+                    rdlp_ffmpeg::ffmpeg::audio_encoder_registry::container_supports_audio_codec(
+                        c, &name,
+                    )
+                })
             })
             .collect()
     } else {

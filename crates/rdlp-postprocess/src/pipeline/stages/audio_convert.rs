@@ -22,6 +22,7 @@ use anyhow::Context as _;
 use log::info;
 
 use rdlp_ffmpeg::{AudioExtractOptions, FFmpegRunner};
+use rdlp_types::CodecName;
 
 use crate::pipeline::PipelineMessage;
 
@@ -45,7 +46,7 @@ pub(super) struct AudioExtractJob<'a> {
     /// `wav`/PCM row). A **codec** name, never a container: this field is what
     /// stops the `encoding_tool` slot being filled with something that does
     /// not name an encoder.
-    pub fallback_codec: Option<String>,
+    pub fallback_codec: Option<CodecName>,
     /// Context prefix for a failure, e.g. `"audio extract stage failed"`.
     pub error_context: &'static str,
 }
@@ -91,8 +92,13 @@ pub(super) async fn run_audio_extract(
     let encoder_for_tag = job
         .opts
         .encoder_name
-        .as_deref()
-        .or(job.fallback_codec.as_deref());
+        .as_ref()
+        .map(rdlp_types::media_name::MediaName::as_str)
+        .or_else(|| {
+            job.fallback_codec
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str)
+        });
     msg.encoding_tool =
         Some(rdlp_ffmpeg::ffmpeg::audio_tag_component(job.opts.copy, encoder_for_tag).to_string());
 

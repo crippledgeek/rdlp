@@ -165,9 +165,12 @@ async fn process_embeds_gif_and_tiff_thumbnails_into_mkv_natively() {
             .iter()
             .find(|s| s.index == 1)
             .expect("second stream (thumbnail attachment) must be present");
-        assert_eq!(thumb_stream.codec_type, "video");
+        assert_eq!(thumb_stream.codec_type, rdlp_ffmpeg::StreamKind::Video);
         assert_eq!(
-            thumb_stream.codec_name.as_deref(),
+            thumb_stream
+                .codec_name
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
             Some(expected_codec),
             "{format} must attach natively (own codec), not be transcoded"
         );
@@ -224,9 +227,12 @@ async fn process_normalizes_bmp_thumbnail_into_mkv_as_mjpeg() {
         .iter()
         .find(|s| s.index == 1)
         .expect("second stream (thumbnail attachment) must be present");
-    assert_eq!(thumb_stream.codec_type, "video");
+    assert_eq!(thumb_stream.codec_type, rdlp_ffmpeg::StreamKind::Video);
     assert_eq!(
-        thumb_stream.codec_name.as_deref(),
+        thumb_stream
+            .codec_name
+            .as_ref()
+            .map(rdlp_types::media_name::MediaName::as_str),
         Some("mjpeg"),
         "bmp under mkv must be normalized to mjpeg — its mimetype is not \
          recognized by FFmpeg's Matroska read-back and would attach \

@@ -146,7 +146,9 @@ async fn recode_preserves_color_range_and_matrix() {
 
     let opts = VideoConvertOptions {
         remux_only: false,
-        video_codec: Some("libx264".into()),
+        video_codec: Some(rdlp_types::media_name::VideoEncoderName::from_static(
+            "libx264",
+        )),
         crf: Some(30), // fast, low-quality — we only care about the tags
         ..Default::default()
     };

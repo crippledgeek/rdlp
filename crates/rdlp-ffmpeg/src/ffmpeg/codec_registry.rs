@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use log::info;
+use rdlp_types::media_name::{CodecName, MediaName, NameKind};
 
 /// The minimal view of a preference-table row the shared lookups need.
 ///
@@ -18,10 +19,18 @@ use log::info;
 /// remain per-media; audio's `supported_containers` and video's speed-control
 /// derivation are genuinely media-specific and stay in the owning module.
 pub trait CodecRow {
+    /// Which encoder-name vocabulary this row's table resolves into —
+    /// [`AudioEncoder`](rdlp_types::media_name::AudioEncoder) for the audio
+    /// registry, [`VideoEncoder`](rdlp_types::media_name::VideoEncoder) for
+    /// the video one. An associated type rather than a second generic
+    /// parameter on [`Registry`] because every row of a given table shares
+    /// exactly one vocabulary — there is nothing to parameterise per-row.
+    type Encoder: NameKind;
+
     /// Canonical codec name, e.g. `"aac"` / `"h264"`.
-    fn codec(&self) -> &'static str;
+    fn codec(&self) -> &CodecName;
     /// Ordered encoder preference list: `(encoder_name, display_name)`.
-    fn encoders(&self) -> &'static [(&'static str, &'static str)];
+    fn encoders(&self) -> &'static [(MediaName<Self::Encoder>, &'static str)];
     /// Alternate names that should also resolve to this row, e.g. a
     /// pre-existing CLI vocabulary word that predates the row being keyed to
     /// its exact codec-ID name. Defaults to none so rows (and the video
@@ -33,7 +42,7 @@ pub trait CodecRow {
     /// uppercase alias here would silently never match. [`Registry::find_row`]
     /// case-folds both sides instead and has no such restriction — that
     /// divergence is deliberate; don't "fix" `find_row` to match this map.
-    fn aliases(&self) -> &'static [&'static str] {
+    fn aliases(&self) -> &'static [CodecName] {
         &[]
     }
 }
@@ -65,7 +74,7 @@ impl std::fmt::Display for MediaKind {
 /// registry's cache is not a shape the type system can even express.
 pub struct Registry<R: CodecRow + 'static> {
     table: &'static [R],
-    cache: OnceLock<HashMap<&'static str, Option<&'static str>>>,
+    cache: OnceLock<HashMap<CodecName, Option<MediaName<R::Encoder>>>>,
     kind: MediaKind,
 }
 
@@ -85,11 +94,11 @@ impl<R: CodecRow + 'static> Registry<R> {
     #[must_use]
     pub fn find_row(&self, codec: &str) -> Option<&'static R> {
         self.table.iter().find(|row| {
-            row.codec().eq_ignore_ascii_case(codec)
+            row.codec().as_str().eq_ignore_ascii_case(codec)
                 || row
                     .aliases()
                     .iter()
-                    .any(|alias| alias.eq_ignore_ascii_case(codec))
+                    .any(|alias| alias.as_str().eq_ignore_ascii_case(codec))
         })
     }
 
@@ -97,7 +106,7 @@ impl<R: CodecRow + 'static> Registry<R> {
     ///
     /// Requires [`super::ensure_init`] to have been called first.
     #[must_use]
-    pub fn preferred_encoder(&self, codec: &str) -> Option<&'static str> {
+    pub fn preferred_encoder(&self, codec: &str) -> Option<MediaName<R::Encoder>> {
         self.lookup_preferred(&codec.to_ascii_lowercase())
     }
 
@@ -105,17 +114,17 @@ impl<R: CodecRow + 'static> Registry<R> {
     ///
     /// Lets [`Self::resolve`] lowercase its input once and reuse the same
     /// lookup, instead of lowercasing again on the way in here.
-    fn lookup_preferred(&self, lower: &str) -> Option<&'static str> {
+    fn lookup_preferred(&self, lower: &str) -> Option<MediaName<R::Encoder>> {
         let map = self.cache.get_or_init(|| {
             let mut map = HashMap::new();
             for row in self.table {
                 let selected = row
                     .encoders()
                     .iter()
-                    .find(|(enc, _)| is_encoder_available(enc))
-                    .map(|(enc, _)| *enc);
+                    .find(|(enc, _)| is_encoder_available(enc.as_str()))
+                    .map(|(enc, _)| enc.clone());
 
-                if let Some(enc) = selected {
+                if let Some(enc) = &selected {
                     info!(
                         "Using {enc} as {codec} {kind} encoder",
                         codec = row.codec(),
@@ -123,7 +132,7 @@ impl<R: CodecRow + 'static> Registry<R> {
                     );
                 }
 
-                map.insert(row.codec(), selected);
+                map.insert(row.codec().clone(), selected.clone());
 
                 // Aliases resolve through this same map, not just through
                 // `find_row` — otherwise a codec reachable only by its alias
@@ -143,17 +152,17 @@ impl<R: CodecRow + 'static> Registry<R> {
                 // covers release builds.
                 for alias in row.aliases() {
                     debug_assert_eq!(
-                        *alias,
-                        alias.to_ascii_lowercase(),
+                        alias.as_str(),
+                        alias.as_str().to_ascii_lowercase(),
                         "CodecRow::aliases must be declared lowercase: {alias:?}"
                     );
-                    map.insert(alias, selected);
+                    map.insert(alias.clone(), selected.clone());
                 }
             }
             map
         });
 
-        map.get(lower).copied().flatten()
+        map.get(lower).cloned().flatten()
     }
 
     /// Resolves either a codec name or a direct encoder name to an available encoder.
@@ -163,7 +172,7 @@ impl<R: CodecRow + 'static> Registry<R> {
     ///
     /// Requires [`super::ensure_init`] to have been called first.
     #[must_use]
-    pub fn resolve(&self, input: &str) -> Option<&'static str> {
+    pub fn resolve(&self, input: &str) -> Option<MediaName<R::Encoder>> {
         let lower = input.to_ascii_lowercase();
 
         if let Some(enc) = self.lookup_preferred(&lower) {
@@ -175,8 +184,8 @@ impl<R: CodecRow + 'static> Registry<R> {
         self.table
             .iter()
             .flat_map(CodecRow::encoders)
-            .find(|(enc, _)| enc.eq_ignore_ascii_case(input))
-            .and_then(|(enc, _)| is_encoder_available(enc).then_some(*enc))
+            .find(|(enc, _)| enc.as_str().eq_ignore_ascii_case(input))
+            .and_then(|(enc, _)| is_encoder_available(enc.as_str()).then_some(enc.clone()))
     }
 }
 
@@ -192,60 +201,68 @@ pub fn is_encoder_available(encoder: &str) -> bool {
 /// The row's encoders that are present in this build, in preference order.
 pub fn available_encoders<R: CodecRow>(
     row: &'static R,
-) -> impl Iterator<Item = (&'static str, &'static str)> {
+) -> impl Iterator<Item = (MediaName<R::Encoder>, &'static str)> {
     row.encoders()
         .iter()
-        .filter(|(enc, _)| is_encoder_available(enc))
-        .map(|(enc, display)| (*enc, *display))
+        .filter(|(enc, _)| is_encoder_available(enc.as_str()))
+        .map(|(enc, display)| (enc.clone(), *display))
 }
 
 #[cfg(test)]
 mod tests {
+    use rdlp_types::media_name::AudioEncoder;
+
     use super::*;
 
+    /// Test fixtures reuse the `AudioEncoder` vocabulary marker regardless of
+    /// what the fixture data represents — these tables are synthetic and
+    /// never touch a real audio/video registry, so which real kind stands in
+    /// is arbitrary; only that it is a single, consistent kind matters.
     struct FakeRow {
-        codec: &'static str,
-        encoders: &'static [(&'static str, &'static str)],
+        codec: CodecName,
+        encoders: &'static [(MediaName<AudioEncoder>, &'static str)],
     }
 
     impl CodecRow for FakeRow {
-        fn codec(&self) -> &'static str {
-            self.codec
+        type Encoder = AudioEncoder;
+        fn codec(&self) -> &CodecName {
+            &self.codec
         }
-        fn encoders(&self) -> &'static [(&'static str, &'static str)] {
+        fn encoders(&self) -> &'static [(MediaName<AudioEncoder>, &'static str)] {
             self.encoders
         }
     }
 
     static FAKE_TABLE: &[FakeRow] = &[FakeRow {
-        codec: "fakecodec",
-        encoders: &[("nonexistent_encoder_xyz", "Fake")],
+        codec: CodecName::from_static("fakecodec"),
+        encoders: &[(MediaName::from_static("nonexistent_encoder_xyz"), "Fake")],
     }];
 
     static REGISTRY_FAKE: Registry<FakeRow> = Registry::new(FAKE_TABLE, MediaKind::Audio);
 
     struct AliasedRow {
-        codec: &'static str,
-        aliases: &'static [&'static str],
-        encoders: &'static [(&'static str, &'static str)],
+        codec: CodecName,
+        aliases: &'static [CodecName],
+        encoders: &'static [(MediaName<AudioEncoder>, &'static str)],
     }
 
     impl CodecRow for AliasedRow {
-        fn codec(&self) -> &'static str {
-            self.codec
+        type Encoder = AudioEncoder;
+        fn codec(&self) -> &CodecName {
+            &self.codec
         }
-        fn encoders(&self) -> &'static [(&'static str, &'static str)] {
+        fn encoders(&self) -> &'static [(MediaName<AudioEncoder>, &'static str)] {
             self.encoders
         }
-        fn aliases(&self) -> &'static [&'static str] {
+        fn aliases(&self) -> &'static [CodecName] {
             self.aliases
         }
     }
 
     static ALIASED_TABLE: &[AliasedRow] = &[AliasedRow {
-        codec: "pcm_s16le",
-        aliases: &["pcm"],
-        encoders: &[("pcm_s16le", "PCM")],
+        codec: CodecName::from_static("pcm_s16le"),
+        aliases: &[CodecName::from_static("pcm")],
+        encoders: &[(MediaName::from_static("pcm_s16le"), "PCM")],
     }];
 
     static REGISTRY_ALIASED: Registry<AliasedRow> = Registry::new(ALIASED_TABLE, MediaKind::Audio);
@@ -260,7 +277,7 @@ mod tests {
             "case-insensitive"
         );
         assert_eq!(
-            REGISTRY_ALIASED.find_row("pcm").unwrap().codec(),
+            REGISTRY_ALIASED.find_row("pcm").unwrap().codec().as_str(),
             "pcm_s16le"
         );
     }
@@ -281,7 +298,13 @@ mod tests {
     #[test]
     fn preferred_encoder_resolves_via_alias() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
-        assert_eq!(REGISTRY_ALIASED.preferred_encoder("pcm"), Some("pcm_s16le"));
+        assert_eq!(
+            REGISTRY_ALIASED
+                .preferred_encoder("pcm")
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("pcm_s16le")
+        );
     }
 
     /// Same gap through the `resolve` entry point (what
@@ -290,7 +313,13 @@ mod tests {
     #[test]
     fn resolve_resolves_via_alias() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
-        assert_eq!(REGISTRY_ALIASED.resolve("pcm"), Some("pcm_s16le"));
+        assert_eq!(
+            REGISTRY_ALIASED
+                .resolve("pcm")
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("pcm_s16le")
+        );
     }
 
     /// Negative control: an undeclared alias-shaped string must still miss
@@ -324,15 +353,18 @@ mod tests {
     }
 
     static TABLE_A: &[FakeRow] = &[FakeRow {
-        codec: "shared_name",
-        encoders: &[("aac", "AAC")],
+        codec: CodecName::from_static("shared_name"),
+        encoders: &[(MediaName::from_static("aac"), "AAC")],
     }];
     static TABLE_C: &[FakeRow] = &[FakeRow {
-        codec: "ordered",
+        codec: CodecName::from_static("ordered"),
         encoders: &[
-            ("nonexistent_encoder_first", "Missing 1"),
-            ("aac", "AAC"),
-            ("pcm_s16le", "PCM"),
+            (
+                MediaName::from_static("nonexistent_encoder_first"),
+                "Missing 1",
+            ),
+            (MediaName::from_static("aac"), "AAC"),
+            (MediaName::from_static("pcm_s16le"), "PCM"),
         ],
     }];
 
@@ -342,7 +374,13 @@ mod tests {
     #[test]
     fn preferred_encoder_returns_first_available() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
-        assert_eq!(REGISTRY_A.preferred_encoder("shared_name"), Some("aac"));
+        assert_eq!(
+            REGISTRY_A
+                .preferred_encoder("shared_name")
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("aac")
+        );
     }
 
     #[test]
@@ -359,7 +397,13 @@ mod tests {
     #[test]
     fn preferred_encoder_skips_unavailable_and_respects_order() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
-        assert_eq!(REGISTRY_C.preferred_encoder("ordered"), Some("aac"));
+        assert_eq!(
+            REGISTRY_C
+                .preferred_encoder("ordered")
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("aac")
+        );
     }
 
     /// Pins both the availability filter AND the preservation of preference
@@ -367,8 +411,13 @@ mod tests {
     #[test]
     fn available_encoders_filters_and_preserves_order() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
-        let got: Vec<_> = available_encoders(TABLE_C.first().expect("row")).collect();
-        assert_eq!(got, vec![("aac", "AAC"), ("pcm_s16le", "PCM")]);
+        let got: Vec<_> = available_encoders(TABLE_C.first().expect("row"))
+            .map(|(enc, display)| (enc.as_str().to_owned(), display))
+            .collect();
+        assert_eq!(
+            got,
+            vec![("aac".to_string(), "AAC"), ("pcm_s16le".to_string(), "PCM")]
+        );
     }
 
     #[test]
@@ -380,13 +429,25 @@ mod tests {
     #[test]
     fn resolve_accepts_a_codec_name() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
-        assert_eq!(REGISTRY_A.resolve("shared_name"), Some("aac"));
+        assert_eq!(
+            REGISTRY_A
+                .resolve("shared_name")
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("aac")
+        );
     }
 
     #[test]
     fn resolve_accepts_a_direct_encoder_name() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
-        assert_eq!(REGISTRY_A.resolve("aac"), Some("aac"));
+        assert_eq!(
+            REGISTRY_A
+                .resolve("aac")
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("aac")
+        );
     }
 
     #[test]
@@ -406,7 +467,9 @@ mod tests {
             "unavailable encoder must be filtered out"
         );
 
-        let got: Vec<_> = available_encoders(TABLE_A.first().expect("row")).collect();
-        assert_eq!(got, vec![("aac", "AAC")]);
+        let got: Vec<_> = available_encoders(TABLE_A.first().expect("row"))
+            .map(|(enc, display)| (enc.as_str().to_owned(), display))
+            .collect();
+        assert_eq!(got, vec![("aac".to_string(), "AAC")]);
     }
 }

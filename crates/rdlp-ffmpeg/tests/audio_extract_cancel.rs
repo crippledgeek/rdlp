@@ -63,7 +63,9 @@ async fn precancelled_token_aborts_audio_extract() {
     let out = dir.path().join("out.mp3");
     // copy=false forces the transcode path (the :421 packet loop).
     let opts = AudioExtractOptions {
-        encoder_name: Some("libmp3lame".to_string()),
+        encoder_name: Some(rdlp_types::media_name::AudioEncoderName::from_static(
+            "libmp3lame",
+        )),
         copy: false,
         ..Default::default()
     };

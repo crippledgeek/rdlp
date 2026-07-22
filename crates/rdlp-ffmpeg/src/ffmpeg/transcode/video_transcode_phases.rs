@@ -162,7 +162,10 @@ impl FFmpegRunner {
             })?;
 
         // Find video encoder
-        let video_codec_name = opts.video_codec.as_deref().unwrap_or("libx264");
+        let video_codec_name = opts
+            .video_codec
+            .as_ref()
+            .map_or("libx264", rdlp_types::media_name::MediaName::as_str);
         let video_enc_codec = ffmpeg_the_third::encoder::find_by_name(video_codec_name)
             .ok_or_else(|| PostProcessError::UnsupportedCodec {
                 codec: video_codec_name.to_string(),
@@ -356,7 +359,9 @@ impl FFmpegRunner {
         let audio_encode_codec: Option<&str> = if opts.audio_copy {
             None
         } else {
-            opts.audio_codec.as_deref()
+            opts.audio_codec
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str)
         };
 
         // Add audio output stream (stream copy) if audio exists and copy requested
@@ -501,11 +506,16 @@ impl FFmpegRunner {
     ) -> anyhow::Result<()> {
         let opts = ctx.opts;
         let output = ctx.output_path;
-        let video_codec_name = opts.video_codec.as_deref().unwrap_or("libx264");
+        let video_codec_name = opts
+            .video_codec
+            .as_ref()
+            .map_or("libx264", rdlp_types::media_name::MediaName::as_str);
         let audio_encode_codec: Option<&str> = if opts.audio_copy {
             None
         } else {
-            opts.audio_codec.as_deref()
+            opts.audio_codec
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str)
         };
 
         // Build muxer options dictionary

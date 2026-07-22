@@ -264,8 +264,12 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
                     width: v.width,
                     height: v.height,
                     fps: v.fps,
-                    vcodec: v.vcodec,
-                    acodec: v.acodec,
+                    // `M3u8Format.vcodec`/`.acodec` are plain `String` at the
+                    // WIT boundary (the wire format is unaffected by #642's
+                    // `Rfc6381Codec` newtype), so the validated value is
+                    // stringified here rather than propagated as a typed field.
+                    vcodec: v.vcodec.map(|c| c.to_string()),
+                    acodec: v.acodec.map(|c| c.to_string()),
                     vbr: v.vbr,
                     abr: v.abr,
                     language: v.language,

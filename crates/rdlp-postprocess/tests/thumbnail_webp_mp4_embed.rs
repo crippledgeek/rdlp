@@ -149,9 +149,12 @@ async fn process_embeds_webp_thumbnail_into_mp4_as_mjpeg() {
         .iter()
         .find(|s| s.index == 1)
         .expect("second stream (thumbnail) must be present");
-    assert_eq!(thumb_stream.codec_type, "video");
+    assert_eq!(thumb_stream.codec_type, rdlp_ffmpeg::StreamKind::Video);
     assert_eq!(
-        thumb_stream.codec_name.as_deref(),
+        thumb_stream
+            .codec_name
+            .as_ref()
+            .map(rdlp_types::media_name::MediaName::as_str),
         Some("mjpeg"),
         "thumbnail stream must be normalized to mjpeg, not stream-copied webp"
     );
@@ -263,12 +266,16 @@ async fn process_normalizes_webp_thumbnail_into_mkv_as_mjpeg() {
         .find(|s| s.index == 1)
         .expect("second stream (thumbnail attachment) must be present");
     assert_eq!(
-        thumb_stream.codec_type, "video",
+        thumb_stream.codec_type,
+        rdlp_ffmpeg::StreamKind::Video,
         "the normalized cover must promote to a real, player-visible video \
          (attached_pic) stream, not a generic attachment"
     );
     assert_eq!(
-        thumb_stream.codec_name.as_deref(),
+        thumb_stream
+            .codec_name
+            .as_ref()
+            .map(rdlp_types::media_name::MediaName::as_str),
         Some("mjpeg"),
         "webp under mkv must be normalized to mjpeg — the raw webp mimetype \
          is not recognized by FFmpeg's Matroska read-back and would attach \
@@ -342,7 +349,10 @@ async fn process_embeds_mislabeled_webp_named_jpg_into_mp4() {
         .find(|s| s.index == 1)
         .expect("thumbnail stream must be present");
     assert_eq!(
-        thumb_stream.codec_name.as_deref(),
+        thumb_stream
+            .codec_name
+            .as_ref()
+            .map(rdlp_types::media_name::MediaName::as_str),
         Some("mjpeg"),
         "the mislabeled webp must be normalized to mjpeg — its .jpg NAME must \
          not have been taken as proof it was already embeddable"

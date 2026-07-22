@@ -135,12 +135,13 @@ impl FFmpegRunner {
             })?;
 
         let enc_name = super::helpers::resolve_normalize_audio_encoder(final_output_ext, label)?;
-        let enc_codec = ffmpeg_the_third::encoder::find_by_name(enc_name).ok_or_else(|| {
-            PostProcessError::UnsupportedCodec {
-                codec: enc_name.to_string(),
-                operation: format!("audio normalization ({label})"),
-            }
-        })?;
+        let enc_codec =
+            ffmpeg_the_third::encoder::find_by_name(enc_name.as_str()).ok_or_else(|| {
+                PostProcessError::UnsupportedCodec {
+                    codec: enc_name.to_string(),
+                    operation: format!("audio normalization ({label})"),
+                }
+            })?;
 
         let needs_global_header = octx
             .format()
@@ -179,7 +180,7 @@ impl FFmpegRunner {
         let target_bitrate = if input_audio_bitrate > 0 {
             input_audio_bitrate
         } else {
-            default_bitrate_for_encoder(enc_name)
+            default_bitrate_for_encoder(&enc_name)
         };
         audio_encoder.set_bit_rate(target_bitrate);
 
@@ -231,10 +232,14 @@ impl FFmpegRunner {
         }
 
         // Set format-level encoding_tool metadata
-        crate::ffmpeg::encoding_tag::set_encoding_tool(&mut octx, enc_name);
+        crate::ffmpeg::encoding_tag::set_encoding_tool(&mut octx, enc_name.as_str());
 
         // Set per-stream encoder tag on audio output stream
-        crate::ffmpeg::encoding_tag::set_stream_encoder(&mut octx, audio_ost_index, enc_name);
+        crate::ffmpeg::encoding_tag::set_stream_encoder(
+            &mut octx,
+            audio_ost_index,
+            enc_name.as_str(),
+        );
 
         let mut muxer_opts = ffmpeg_the_third::Dictionary::new();
         muxer_opts.set("cluster_time_limit", "500");

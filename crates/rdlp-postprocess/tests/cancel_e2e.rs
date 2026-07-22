@@ -155,7 +155,7 @@ async fn cancel_mid_recode_aborts_and_cleans_up() {
     // forces `can_remux == false` in RecodeStage::process).
     let config = Arc::new(PostProcess {
         recode_video: Some(ContainerFormat::Mkv),
-        video_encoder: Some("libx264".to_string()),
+        video_encoder: Some(rdlp_types::VideoEncoderName::from_static("libx264")),
         ..PostProcess::default()
     });
 
@@ -244,7 +244,7 @@ async fn cancel_after_remux_deletes_real_named_source() {
 
     let config = Arc::new(PostProcess {
         recode_video: Some(ContainerFormat::Mkv),
-        video_encoder: Some("libx264".to_string()),
+        video_encoder: Some(rdlp_types::VideoEncoderName::from_static("libx264")),
         ..PostProcess::default()
     });
     let info = InfoDict::new(

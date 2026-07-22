@@ -19,7 +19,7 @@
 
 use std::path::Path;
 
-use rdlp_ffmpeg::FFmpegRunner;
+use rdlp_ffmpeg::{FFmpegRunner, StreamKind};
 
 /// Generate a minimal 5-frame MKV (mpeg4 video) carrying format- and
 /// stream-level `title` metadata tags.
@@ -148,7 +148,7 @@ async fn probe_extracts_format_and_stream_metadata() {
     let video = info
         .streams
         .iter()
-        .find(|s| s.codec_type == "video")
+        .find(|s| s.codec_type == StreamKind::Video)
         .expect("expected a video stream");
     assert_eq!(
         video.metadata.get("title").map(String::as_str),

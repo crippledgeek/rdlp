@@ -6,7 +6,9 @@
 use rdlp_types::ContainerFormat;
 use thiserror::Error;
 
-use super::video_codecs::{KnobField, KnobKindDef, resolve_encoder, speed_controls_def};
+use super::video_codecs::{
+    KnobField, KnobKindDef, SpeedKnobDef, resolve_encoder, speed_controls_def,
+};
 use super::{codec_registry, muxer_defaults};
 
 /// The codec every container falls back to when the linked build's muxer
@@ -265,6 +267,10 @@ pub fn default_codec_for_container(container: ContainerFormat) -> &'static str {
         VideoDefault::NotAVideoTarget => DEFAULT_VIDEO_CODEC,
         VideoDefault::FromMuxer => {
             muxer_defaults::declared_codec(container, codec_registry::MediaKind::Video)
+                // `declared_codec` validates FFmpeg's own static descriptor-table
+                // name via `CodecName::new_static`, so it is always recoverable
+                // as `&'static str` here — see `MediaName::into_static`.
+                .and_then(rdlp_types::media_name::CodecName::into_static)
                 .unwrap_or(DEFAULT_VIDEO_CODEC)
         }
     }
@@ -281,8 +287,13 @@ pub fn resolve_recode_encoder(
     recode_container: Option<&str>,
 ) -> Option<&'static str> {
     super::ensure_init().ok();
+    // `resolve_encoder` resolves only ever through `VIDEO_REGISTRY`'s
+    // `from_static` table entries, so its result always recovers as
+    // `&'static str` — see `MediaName::into_static`. Keeps this function's
+    // own `&'static str` return type, so its CLI/desktop pre-flight callers
+    // need no change.
     if let Some(ve) = video_encoder.filter(|s| !s.is_empty()) {
-        return resolve_encoder(ve);
+        return resolve_encoder(ve).and_then(rdlp_types::media_name::VideoEncoderName::into_static);
     }
     let target = recode_container.or(recode_video)?;
     // These arrive as raw config strings, so the parse is the boundary where
@@ -303,7 +314,7 @@ pub fn resolve_recode_encoder(
     let codec = target
         .parse::<ContainerFormat>()
         .map_or(DEFAULT_VIDEO_CODEC, default_codec_for_container);
-    resolve_encoder(codec)
+    resolve_encoder(codec).and_then(rdlp_types::media_name::VideoEncoderName::into_static)
 }
 
 /// Strict per-encoder speed-control validation error.
@@ -357,13 +368,23 @@ fn check_knob(
     let Some(val) = value else {
         return Ok(());
     };
-    let def = speed_controls_def(encoder)
-        .iter()
-        .find(|k| k.field == field)
-        .ok_or_else(|| SpeedControlError::NotApplicable {
+    // `encoder` arrives as a raw `&str` from the public `Option<&str>` API
+    // boundary (an operator-supplied CLI/config value, not yet a validated
+    // vocabulary member) — construct the typed name here rather than widen
+    // `speed_controls_def`'s signature back to `&str`. An encoder string that
+    // fails `MediaName` validation (empty, non-ASCII, whitespace, a control
+    // character) can never match a real table row either, so it degrades to
+    // "no knobs for this encoder" — the same answer an unrecognised-but-valid
+    // name gets.
+    let no_knobs: &[SpeedKnobDef] = &[];
+    let knobs = rdlp_types::media_name::VideoEncoderName::new(encoder)
+        .map_or(no_knobs, |name| speed_controls_def(&name));
+    let def = knobs.iter().find(|k| k.field == field).ok_or_else(|| {
+        SpeedControlError::NotApplicable {
             knob: field,
             encoder: encoder.to_string(),
-        })?;
+        }
+    })?;
     match def.kind {
         KnobKindDef::Choice { choices, .. } => {
             if choices.contains(&val) {
@@ -572,7 +593,9 @@ mod tests {
         for alias in ["3gpp", "mpegts"] {
             assert_eq!(
                 resolve_recode_encoder(None, Some(alias), None),
-                resolve_encoder(DEFAULT_VIDEO_CODEC),
+                resolve_encoder(DEFAULT_VIDEO_CODEC)
+                    .as_ref()
+                    .map(rdlp_types::media_name::MediaName::as_str),
                 "{alias} must resolve exactly as the unconditional h264 default does"
             );
         }
@@ -607,7 +630,9 @@ mod tests {
     fn unparseable_container_string_still_falls_back_to_h264() {
         assert_eq!(
             resolve_recode_encoder(None, Some("not-a-container"), None),
-            resolve_encoder(DEFAULT_VIDEO_CODEC),
+            resolve_encoder(DEFAULT_VIDEO_CODEC)
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
             "an unknown container string must resolve exactly as the h264 default did"
         );
     }

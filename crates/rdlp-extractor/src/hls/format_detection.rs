@@ -125,10 +125,10 @@ async fn enrich_single_hls_format(
         format.format_note = Some(format!("{h}p"));
     }
     if let Some(vc) = hls_info.video_codec {
-        format.vcodec = Codec::from(vc);
+        format.vcodec = Codec::from(vc.as_str());
     }
     if let Some(ac) = hls_info.audio_codec {
-        format.acodec = Codec::from(ac);
+        format.acodec = Codec::from(ac.as_str());
     }
     format.fps = hls_info.frame_rate;
     if let Some(bw) = hls_info.bandwidth {
@@ -247,21 +247,27 @@ pub(crate) fn apply_variant_labels(
         format.acodec = Codec::from(
             variant
                 .audio_codec
-                .clone()
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str)
+                .map(str::to_owned)
                 .or_else(|| Some("mp4a".to_string())),
         );
     } else {
         format.vcodec = Codec::from(
             variant
                 .video_codec
-                .clone()
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str)
+                .map(str::to_owned)
                 .or_else(|| parent_format.vcodec.as_str().map(str::to_owned))
                 .or_else(|| detect_codec_from_id(&parent_format.format_id, true)),
         );
         format.acodec = Codec::from(
             variant
                 .audio_codec
-                .clone()
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str)
+                .map(str::to_owned)
                 .or_else(|| parent_format.acodec.as_str().map(str::to_owned))
                 .or_else(|| detect_codec_from_id(&parent_format.format_id, false)),
         );

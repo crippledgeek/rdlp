@@ -135,6 +135,46 @@ mod tests {
         assert_eq!(loaded.concurrent_fragments, original.concurrent_fragments);
     }
 
+    /// #642: `postprocess.video_encoder` moved from `Option<String>` to
+    /// `Option<VideoEncoderName>`. The wire format is unchanged — a plain
+    /// TOML string — so an existing `config.toml` with a valid encoder name
+    /// still loads exactly as before.
+    #[test]
+    fn test_video_encoder_toml_roundtrip() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "[postprocess]").unwrap();
+        writeln!(file, "video_encoder = \"libx264\"").unwrap();
+
+        let config = from_toml_file(file.path()).unwrap();
+        assert_eq!(
+            config
+                .postprocess
+                .video_encoder
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("libx264")
+        );
+    }
+
+    /// Negative companion: an empty `video_encoder` value — tolerated as
+    /// "no override" before #642's `Option<String>` → `Option<VideoEncoderName>`
+    /// change — now fails to deserialize with a clear, actionable message
+    /// instead of silently reaching the recode stage as a would-be empty
+    /// encoder override.
+    #[test]
+    fn test_video_encoder_empty_string_rejected_at_load() {
+        let mut file = NamedTempFile::new().unwrap();
+        writeln!(file, "[postprocess]").unwrap();
+        writeln!(file, "video_encoder = \"\"").unwrap();
+
+        let err = from_toml_file(file.path()).expect_err("empty video_encoder must fail to load");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("must not be empty"),
+            "error should name the actual problem, got: {msg}"
+        );
+    }
+
     #[test]
     fn test_load_config_explicit_path() {
         let mut file = NamedTempFile::new().unwrap();

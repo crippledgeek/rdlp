@@ -35,6 +35,7 @@ pub mod fixup_policy;
 pub mod format;
 pub mod info_dict;
 pub mod match_filter;
+pub mod media_name;
 pub mod parse_error;
 pub mod postprocess;
 pub mod progress;
@@ -59,6 +60,9 @@ pub use format::{
     Codec, Format, FormatSelectError, FormatSelector, FormatSorter, Fragment, format_select,
 };
 pub use info_dict::{Chapter, InfoDict, Subtitle, Thumbnail};
+pub use media_name::{
+    AudioEncoderName, CodecName, InvalidMediaName, Rfc6381Codec, VideoEncoderName,
+};
 pub use parse_error::ParseEnumError;
 pub use postprocess::{ContainerRequest, ContainerSource, ExplicitContainer, PostProcess};
 pub use progress::Progress;

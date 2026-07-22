@@ -253,7 +253,7 @@ mod tests {
     fn probe_video_codec_appended_to_warnings() {
         let mut msg = make_msg();
         let probe = MediaInfo {
-            video_codec: Some("h264".to_string()),
+            video_codec: Some(rdlp_types::media_name::CodecName::from_static("h264")),
             ..Default::default()
         };
         apply_probe_media_info(&probe, &mut msg);
@@ -268,7 +268,7 @@ mod tests {
     fn probe_audio_codec_appended_to_warnings() {
         let mut msg = make_msg();
         let probe = MediaInfo {
-            audio_codec: Some("aac".to_string()),
+            audio_codec: Some(rdlp_types::media_name::CodecName::from_static("aac")),
             ..Default::default()
         };
         apply_probe_media_info(&probe, &mut msg);
