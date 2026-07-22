@@ -1033,9 +1033,14 @@ mod tests {
 
     /// The negative (`AVERROR_PATCHWELCOME`, "information unavailable") arm.
     /// `mxfenc` ships no `query_codec` callback and a null `codec_tag` table,
-    /// so every pair answers negative. "Unknown" is not evidence a stream copy
-    /// works, so it takes the same conservative branch as an explicit 0 —
-    /// mirroring `resolve_codec_tag`'s `query > 0` rule.
+    /// so an undeclared codec answers negative. "Unknown" is not evidence a
+    /// stream copy works, so it takes the same conservative branch as an
+    /// explicit 0 — mirroring `resolve_codec_tag`'s `query > 0` rule.
+    ///
+    /// This used to assert `h264`, which #633 moved into
+    /// `KNOWN_UNDECLARED_SUPPORT` — `mxfenc` does implement H.264, so that
+    /// assertion pinned a false negative rather than the rule. `hevc` still
+    /// demonstrates it: no evidence, no allow-list entry, so still "no".
     #[test]
     fn transcodes_when_representability_is_unknown() {
         rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
@@ -1043,9 +1048,25 @@ mod tests {
             !RecodeStage::can_remux_video(
                 ContainerFormat::Mp4.as_ext(),
                 ContainerFormat::Mxf,
+                SourceVideo::Codec("hevc")
+            ),
+            "mxf answers AVERROR_PATCHWELCOME for hevc; unknown != supported"
+        );
+    }
+
+    /// The #633 allow-list reaches the recode router: `h264 → mxf` is now a
+    /// stream copy rather than a needless re-encode, because `mxfenc`
+    /// implements it (`mxf_h264_codec_uls`) even though it declares nothing.
+    #[test]
+    fn remuxes_h264_into_mxf_via_the_known_support_table() {
+        rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
+        assert!(
+            RecodeStage::can_remux_video(
+                ContainerFormat::Mp4.as_ext(),
+                ContainerFormat::Mxf,
                 SourceVideo::Codec("h264")
             ),
-            "mxf answers AVERROR_PATCHWELCOME for every codec; unknown != supported"
+            "mxf implements h264; routing must copy rather than re-encode (#633)"
         );
     }
 

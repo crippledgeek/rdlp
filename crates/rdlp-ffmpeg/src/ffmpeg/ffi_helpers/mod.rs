@@ -89,14 +89,20 @@ pub(crate) enum CodecTagAction {
 /// `AVERROR_PATCHWELCOME` there. "Unknown" is not evidence a stream copy
 /// works, so it takes the same branch as an explicit `0`.
 ///
-/// **Known, accepted false negatives.** A muxer can *implement* a codec
-/// without *declaring* it through either channel, and this rule reads that as
-/// no. `mxfenc` is the live example: it carries a full H.264 essence mapping
+/// **Known false negatives are handled one level up, not here.** A muxer can
+/// *implement* a codec without *declaring* it through either channel, and this
+/// rule reads that as no — correctly, because it has no evidence. `mxfenc` is
+/// the live example: it carries a full H.264 essence mapping
 /// (`mxf_h264_codec_uls`, `mxf_parse_h264_frame`) and `ffmpeg -c copy` muxes
-/// `h264 → mxf` fine, but exposes it via neither a tag table nor
-/// `query_codec`, so routing re-encodes instead of copying. That costs a
-/// stream copy, never correctness — the alternative (assume yes on no
-/// evidence) is what produced #630. Tracked in #633.
+/// `h264 → mxf` fine, but exposes it via neither channel.
+///
+/// This function is deliberately left conservative. The curated exceptions
+/// live in `muxer_defaults::KNOWN_UNDECLARED_SUPPORT` (#633), consulted by
+/// `muxer_can_represent` *after* its media-kind check, so a table entry can
+/// never authorise a copy for the wrong medium. Enforcement
+/// (`resolve_codec_tag`) is unaffected and keeps its own more-permissive rule,
+/// which preserves the implication above — routing now says yes to `h264 →
+/// mxf`, and enforcement was already not refusing it.
 ///
 /// A positive answer is not always `1`: `mp3enc`'s `query_codec` returns
 /// `MKTAG('A','P','I','C')` for attached-picture codecs, which is why the
@@ -1092,6 +1098,39 @@ mod tests {
             routed_copies >= 10,
             "expected the matrix to exercise real copies, got {routed_copies}"
         );
+
+        // The #633 allow-list is the one place routing says yes on evidence
+        // FFmpeg does not publish, so it is the most likely source of a future
+        // drift. Iterate the table itself rather than restating its rows here:
+        // the fixed matrix above is video-only and would have missed the
+        // `aac → mpegts` row entirely, and any row added later is covered by
+        // construction instead of by remembering to extend a list.
+        let allow_list = crate::ffmpeg::muxer_defaults::KNOWN_UNDECLARED_SUPPORT;
+        assert!(
+            !allow_list.is_empty(),
+            "the allow-list is empty — this loop would pass vacuously"
+        );
+        for &(container, codec_id) in allow_list {
+            let oformat = oformat_for_extension(dir.path(), container.as_ext());
+
+            // The descriptor gives the row's true medium, so the synthesised
+            // params match what a real stream of this codec would carry.
+            // SAFETY: pure lookup over FFmpeg's static descriptor table; the
+            // returned pointer is null-checked before its fields are read.
+            let media_type = unsafe {
+                let desc = ffmpeg_the_third::ffi::avcodec_descriptor_get(codec_id);
+                assert!(!desc.is_null(), "allow-listed codec has no descriptor");
+                (*desc).type_
+            };
+
+            let params = fake_params(codec_id, media_type);
+            assert!(
+                FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params)).is_ok(),
+                "KNOWN_UNDECLARED_SUPPORT routes a stream copy into {} that enforcement \
+                 refuses — the allow-list has outrun resolve_codec_tag",
+                container.as_ext()
+            );
+        }
     }
 
     #[test]
