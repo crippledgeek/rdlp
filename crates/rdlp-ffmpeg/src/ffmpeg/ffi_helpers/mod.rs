@@ -699,7 +699,9 @@ impl FFmpegRunner {
     /// Tells the buffersink to output exactly `frame_size` samples per frame.
     /// The last frame at EOF is automatically zero-padded. This is the proper
     /// way to feed fixed-frame-size encoders (AAC=1024, MP3=1152, Opus=960,
-    /// FLAC=4608 — `flacenc` sets `frame_size` from its `max_blocksize`).
+    /// FLAC=4608 at 44.1/48 kHz — `flacenc` sets `frame_size` from its
+    /// `max_blocksize`, itself `select_blocksize(sample_rate, 105 ms)`, so the
+    /// FLAC figure is rate-dependent and smaller at low sample rates).
     ///
     /// No-op if `frame_size` is 0. That means either the encoder accepts
     /// variable-length frames (`AV_CODEC_CAP_VARIABLE_FRAME_SIZE` — the
@@ -707,7 +709,12 @@ impl FFmpegRunner {
     /// measurement-only analysis graph. FLAC is **not** in that group: it
     /// reports 4608 and rejects anything else, which is why
     /// `--audio-format=flac` was broken until #638.
-    pub(crate) fn set_buffersink_frame_size(
+    /// Private on purpose: the only legitimate caller is
+    /// [`super::filter_graph::build_audio_filter_graph`], a child module, which
+    /// applies it as part of building the graph. Leaving it `pub(crate)` would
+    /// let a future author elsewhere in the crate hand-roll around the builder
+    /// and reintroduce #638 — the omission this pairing exists to prevent.
+    fn set_buffersink_frame_size(
         graph: &mut ffmpeg_the_third::filter::Graph,
         sink_name: &str,
         frame_size: u32,
