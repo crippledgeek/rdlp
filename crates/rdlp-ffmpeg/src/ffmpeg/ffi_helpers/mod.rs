@@ -89,14 +89,20 @@ pub(crate) enum CodecTagAction {
 /// `AVERROR_PATCHWELCOME` there. "Unknown" is not evidence a stream copy
 /// works, so it takes the same branch as an explicit `0`.
 ///
-/// **Known, accepted false negatives.** A muxer can *implement* a codec
-/// without *declaring* it through either channel, and this rule reads that as
-/// no. `mxfenc` is the live example: it carries a full H.264 essence mapping
+/// **Known false negatives are handled one level up, not here.** A muxer can
+/// *implement* a codec without *declaring* it through either channel, and this
+/// rule reads that as no — correctly, because it has no evidence. `mxfenc` is
+/// the live example: it carries a full H.264 essence mapping
 /// (`mxf_h264_codec_uls`, `mxf_parse_h264_frame`) and `ffmpeg -c copy` muxes
-/// `h264 → mxf` fine, but exposes it via neither a tag table nor
-/// `query_codec`, so routing re-encodes instead of copying. That costs a
-/// stream copy, never correctness — the alternative (assume yes on no
-/// evidence) is what produced #630. Tracked in #633.
+/// `h264 → mxf` fine, but exposes it via neither channel.
+///
+/// This function is deliberately left conservative. The curated exceptions
+/// live in `muxer_defaults::KNOWN_UNDECLARED_SUPPORT` (#633), consulted by
+/// `muxer_can_represent` *after* its media-kind check, so a table entry can
+/// never authorise a copy for the wrong medium. Enforcement
+/// (`resolve_codec_tag`) is unaffected and keeps its own more-permissive rule,
+/// which preserves the implication above — routing now says yes to `h264 →
+/// mxf`, and enforcement was already not refusing it.
 ///
 /// A positive answer is not always `1`: `mp3enc`'s `query_codec` returns
 /// `MKTAG('A','P','I','C')` for attached-picture codecs, which is why the

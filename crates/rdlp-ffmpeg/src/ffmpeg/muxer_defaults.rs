@@ -172,8 +172,76 @@ pub fn muxer_can_represent(container: ContainerFormat, codec: &str, kind: MediaK
             return false;
         }
 
-        super::ffi_helpers::oformat_can_represent(ofmt, (*desc).id)
+        if super::ffi_helpers::oformat_can_represent(ofmt, (*desc).id) {
+            return true;
+        }
+
+        // Third evidence channel: pairings FFmpeg implements but declares
+        // through neither of the two above (#633). Reached only after the
+        // media-kind check, so an entry cannot leak across kinds — the
+        // `"avc"`/ON2AVC collision stays impossible.
+        is_known_undeclared_support(container, (*desc).id)
     }
+}
+
+/// Muxer/codec pairings `FFmpeg` implements but declares through **neither**
+/// evidence channel [`muxer_can_represent`] can otherwise consult (#633).
+///
+/// # Why a table is the only remedy
+///
+/// `avformat_query_codec` is the only structured acceptance predicate `FFmpeg`
+/// ships, and it is advisory. Its chain (`libavformat/mux_utils.c:32-69`) ends
+/// at `AVERROR_PATCHWELCOME` when a muxer supplies none of: a `query_codec`
+/// callback, a `codec_tag` table, a matching declared-default codec, or the
+/// `ONLY_DEFAULT_CODECS`/`MAX_ONE_OF_EACH` flags. That is "the muxer declared
+/// nothing", **not** "the muxer refuses" — and some muxers implement codecs
+/// entirely through internal mappings none of those channels expose.
+///
+/// There is no third API to ask instead: `check_bitstream` drives post-hoc
+/// bitstream conversion, not acceptance. And the `ffmpeg` CLI does not
+/// pre-check stream copy at all — `streamcopy_init`
+/// (`fftools/ffmpeg_mux_init.c`) consults `av_codec_get_tag2` only to *pick* a
+/// tag when the input's is empty, never to reject a copy, and `init_muxer`
+/// never calls `avformat_query_codec`. Upstream simply attempts the mux and
+/// lets `write_header` fail, so rdlp's routing is strictly more conservative
+/// than the reference implementation.
+///
+/// # Rules for this table
+///
+/// **Asymmetric and evidence-only.** It may only turn a `false` into a `true`,
+/// and is never consulted to refuse anything — a reject-list would become a
+/// second source of truth able to contradict the muxer.
+///
+/// **Under-inclusive is the safe direction.** A missing entry costs a needless
+/// re-encode; a *wrong* entry routes to a stream copy the muxer then refuses
+/// mid-mux, which is the #630 failure class.
+///
+/// **Never add an entry on the strength of a declared default codec.** That
+/// field is a legacy default, not a statement of acceptance — `FFmpeg`'s own
+/// hls/dash muxers declare h264 over the same payload the raw `mpegts` muxer
+/// declares mpeg2video for.
+///
+/// **Every entry cites the upstream implementation and is proven by a real
+/// mux** in `tests/muxer_known_accepts.rs`, which fails if `ffmpeg -c copy`
+/// disagrees with any row.
+const KNOWN_UNDECLARED_SUPPORT: &[(ContainerFormat, AVCodecID)] = &[
+    // `mxfenc.c` carries a full H.264 essence mapping (`mxf_h264_codec_uls`,
+    // `mxf_parse_h264_frame`) but registers no `query_codec` callback and a
+    // NULL top-level `codec_tag`, so every codec it does not declare as a
+    // default answers PATCHWELCOME.
+    (ContainerFormat::Mxf, AVCodecID::AV_CODEC_ID_H264),
+    // `mpegts.c` maps AAC to a stream type internally; the muxer declares
+    // `mp2` as its default audio codec and exposes AAC through neither a tag
+    // table nor `query_codec`.
+    (ContainerFormat::Ts, AVCodecID::AV_CODEC_ID_AAC),
+];
+
+/// Whether `container` is known to accept `codec_id` despite declaring
+/// nothing. See [`KNOWN_UNDECLARED_SUPPORT`].
+fn is_known_undeclared_support(container: ContainerFormat, codec_id: AVCodecID) -> bool {
+    KNOWN_UNDECLARED_SUPPORT
+        .iter()
+        .any(|&(known, accepted)| known == container && accepted == codec_id)
 }
 
 #[cfg(test)]
@@ -269,17 +337,52 @@ mod tests {
     /// `query_codec` callback nor a `codec_tag` table, so every codec *other
     /// than the ones it declares* answers "unknown", and unknown must not be
     /// read as yes.
+    ///
+    /// `h264` used to be asserted here too. It is now in
+    /// [`KNOWN_UNDECLARED_SUPPORT`] (#633) — `mxfenc` does implement it, so
+    /// that assertion was pinning a false negative rather than the rule. The
+    /// rule itself is unchanged and `hevc` still demonstrates it: mxf has no
+    /// evidence for it and no table entry, so it stays "no".
     #[test]
     fn treats_unknown_representability_as_no() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         assert!(!muxer_can_represent(
+            ContainerFormat::Mxf,
+            "hevc",
+            MediaKind::Video
+        ));
+        assert!(!muxer_can_represent(
+            ContainerFormat::Mxf,
+            "vp9",
+            MediaKind::Video
+        ));
+    }
+
+    /// The allow-list is consulted only AFTER the media-kind check, so an
+    /// entry can never authorise a copy for the wrong medium — the
+    /// `"avc"`/ON2AVC collision `muxer_can_represent`'s doc describes stays
+    /// impossible.
+    #[test]
+    fn known_undeclared_support_does_not_cross_media_kinds() {
+        crate::ffmpeg::ensure_init().expect("ffmpeg init");
+        assert!(muxer_can_represent(
             ContainerFormat::Mxf,
             "h264",
             MediaKind::Video
         ));
         assert!(!muxer_can_represent(
             ContainerFormat::Mxf,
-            "hevc",
+            "h264",
+            MediaKind::Audio
+        ));
+        assert!(muxer_can_represent(
+            ContainerFormat::Ts,
+            "aac",
+            MediaKind::Audio
+        ));
+        assert!(!muxer_can_represent(
+            ContainerFormat::Ts,
+            "aac",
             MediaKind::Video
         ));
     }
