@@ -183,14 +183,36 @@ impl RecodeStage {
             });
         }
 
-        let target_codec = Self::default_codec_for(params.target);
-        let encoder = video_codecs::resolve_encoder(target_codec);
+        Self::options_for_codec(Self::default_codec_for(params.target), params)
+    }
+
+    /// Resolves `target_codec` to an available encoder and assembles the
+    /// transcode options, refusing (`None`) rather than silently no-opping
+    /// when no encoder is available.
+    ///
+    /// Split out of `build_convert_options`'s no-override branch so the
+    /// "unresolvable codec" refusal is directly testable with a bogus codec
+    /// name (Important-4 of PR-3's #618 review), independent of what any
+    /// particular linked `FFmpeg` build's muxers happen to declare. Before
+    /// this fix, that branch computed `encoder: Option<&str>` and mapped it
+    /// straight into `video_codec: encoder.map(String::from)` while still
+    /// returning `Some(..)` unconditionally — a silent no-op transcode (no
+    /// `video_codec` set, so `FFmpegRunner::convert_video` streams the
+    /// source through with no video encoder configured), the exact shape
+    /// that hid the `dvvideo` bug ("pipeline terminated with no output and
+    /// no error"). Mirrors the audio side's honest refusal in
+    /// `resolve_declared_codec`.
+    fn options_for_codec(
+        target_codec: &'static str,
+        params: &RecodeParams,
+    ) -> Option<VideoConvertOptions> {
+        let encoder = video_codecs::resolve_encoder(target_codec)?;
         let (default_preset, crf) = Self::default_preset_crf_for_codec(target_codec);
         let preset = params.preset_override.clone().or(default_preset);
 
         Some(VideoConvertOptions {
             remux_only: false,
-            video_codec: encoder.map(String::from),
+            video_codec: Some(encoder.to_string()),
             preset,
             crf,
             threads: params.threads,
@@ -420,14 +442,29 @@ impl PipelineStage for RecodeStage {
             },
             can_remux,
         ) else {
-            let requested = msg.config.video_encoder.as_deref().unwrap_or("");
-            return Err(PostProcessError::UnsupportedFormat {
-                format: requested.to_string(),
-                operation: format!(
-                    "video encoder '{requested}' is not available in this FFmpeg build"
-                ),
-            }
-            .into());
+            // Two distinct causes land here now that Important-4 makes the
+            // default-codec path refuse instead of silently no-opping: an
+            // explicit `--video-encoder` override that isn't available, or
+            // (no override) an unresolvable default codec for the target
+            // container. Distinguish them so the message names the thing
+            // that actually failed, rather than a blank encoder name.
+            let (format, operation) = if let Some(requested) = msg.config.video_encoder.as_deref() {
+                (
+                    requested.to_string(),
+                    format!("video encoder '{requested}' is not available in this FFmpeg build"),
+                )
+            } else {
+                let target_codec = Self::default_codec_for(target);
+                (
+                    target_codec.to_string(),
+                    format!(
+                        "no encoder available for default video codec '{target_codec}' \
+                         (target container '{target_ext}'); pass --video-encoder to \
+                         choose one explicitly, or select a different container"
+                    ),
+                )
+            };
+            return Err(PostProcessError::UnsupportedFormat { format, operation }.into());
         };
 
         opts.verbose = msg.verbose;
@@ -908,6 +945,56 @@ mod tests {
         };
         let result = RecodeStage::build_convert_options(&params, false);
         assert!(result.is_none());
+    }
+
+    /// Important-4 of PR-3's #618 review: an unresolvable *default* codec
+    /// (no `--video-encoder` override) must refuse, not silently return
+    /// `Some(VideoConvertOptions { video_codec: None, .. })` — the shape
+    /// that hid the `dvvideo` bug ("pipeline terminated with no output and
+    /// no error"). `options_for_codec` is the seam that makes this
+    /// falsifiable with a bogus codec name, independent of any real
+    /// container or any particular linked `FFmpeg` build's muxers.
+    #[test]
+    fn options_for_codec_refuses_an_unresolvable_codec_rather_than_no_opping() {
+        let params = RecodeParams {
+            target: ContainerFormat::Mp4,
+            encoder_override: None,
+            audio_copy: true,
+            audio_codec: None,
+            threads: None,
+            preset_override: None,
+            deadline: None,
+            cpu_used: None,
+            speed_level: None,
+        };
+        let result = RecodeStage::options_for_codec("definitely_not_a_real_codec_xyz", &params);
+        assert!(
+            result.is_none(),
+            "an unresolvable codec must refuse rather than returning \
+             Some(..) with video_codec: None"
+        );
+    }
+
+    /// Positive companion: a genuinely resolvable codec must still produce
+    /// `video_codec: Some(..)` through the same seam.
+    #[test]
+    fn options_for_codec_resolves_a_real_codec() {
+        rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
+        let params = RecodeParams {
+            target: ContainerFormat::Mp4,
+            encoder_override: None,
+            audio_copy: true,
+            audio_codec: None,
+            threads: None,
+            preset_override: None,
+            deadline: None,
+            cpu_used: None,
+            speed_level: None,
+        };
+        let opts =
+            RecodeStage::options_for_codec("h264", &params).expect("libx264 available in tests");
+        assert!(!opts.remux_only);
+        assert!(opts.video_codec.is_some());
     }
 
     #[test]
