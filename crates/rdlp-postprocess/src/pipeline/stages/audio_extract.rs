@@ -7,11 +7,12 @@ use std::sync::Arc;
 
 use anyhow::Context;
 use async_trait::async_trait;
-use log::{debug, info};
+use log::debug;
 
 use rdlp_ffmpeg::ffmpeg::{AudioCodecConfig, AudioExtractOptions, get_audio_codec};
 use rdlp_ffmpeg::{FFmpegRunner, PostProcessError};
 
+use crate::pipeline::stages::audio_convert;
 use crate::pipeline::{PipelineMessage, PipelineStage};
 
 /// Extracts audio from the primary current file.
@@ -134,42 +135,23 @@ impl PipelineStage for AudioExtractStage {
             msg.config.audio_quality.as_deref(),
         );
 
-        let stage_callback = msg.callback_factory.as_ref().map(|f| f(self.name()));
-        let _log_bridge = stage_callback
-            .as_ref()
-            .and_then(|cb| rdlp_ffmpeg::bridge_ffmpeg_logs(cb).ok());
-        let callback = stage_callback.map(|cb| -> Arc<dyn Fn(f64) + Send + Sync> {
-            Arc::new(move |frac| cb.on_progress(rdlp_types::Progress::from_f64(frac)))
-        });
-
-        self.ffmpeg
-            .extract_audio(
-                &input_file,
-                &output_path,
-                &opts,
-                callback,
-                Some(msg.cancel.clone()),
-            )
-            .await
-            .context("audio extract stage failed")?;
-
-        // Capture the encoding_tool for downstream pass-through stages.
-        let encoder_display = if opts.copy {
-            "copy".to_string()
-        } else {
-            opts.encoder_name
-                .as_deref()
-                .unwrap_or(target_format)
-                .to_string()
-        };
-        msg.encoding_tool = Some(encoder_display);
-
-        info!(
-            "AudioExtractStage: audio extracted to {}",
-            output_path.display()
-        );
-
-        msg.tracker.replace(vec![output_path]);
+        audio_convert::run_audio_extract(
+            &self.ffmpeg,
+            &mut msg,
+            audio_convert::AudioExtractJob {
+                stage_name: self.name(),
+                input: input_file,
+                output: output_path,
+                opts,
+                summary: None,
+                // `wav`'s row carries no encoder name — `extract_audio` defers
+                // to the muxer's PCM default — so the target codec is what
+                // names the encoding for the tag.
+                fallback_codec: Some(target_format.to_string()),
+                error_context: "audio extract stage failed",
+            },
+        )
+        .await?;
 
         Ok(msg)
     }
