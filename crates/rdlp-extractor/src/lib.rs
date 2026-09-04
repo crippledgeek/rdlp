@@ -55,8 +55,8 @@ pub mod utils;
 pub use extractors::{
     AbxxxExtractor, EMPFlixSearchExtractor, EPornerExtractor, GenericExtractor, HQPornerExtractor,
     KoreanPornMovieExtractor, MovieFapSearchExtractor, NineAnimeExtractor, PornHubExtractor,
-    RedTubeExtractor, SpankBangExtractor, TNAFlixExtractor, TNAFlixSearchExtractor,
-    XHamsterExtractor, XNXXExtractor, XTitsExtractor, XVideosExtractor,
+    PornoxoExtractor, RedTubeExtractor, SpankBangExtractor, TNAFlixExtractor,
+    TNAFlixSearchExtractor, XHamsterExtractor, XNXXExtractor, XTitsExtractor, XVideosExtractor,
 };
 
 // Re-export base utilities for convenient access
@@ -143,6 +143,9 @@ impl ExtractorRegistry {
         // Register SpankBang extractor
         registry.register(Arc::new(SpankBangExtractor::new()));
 
+        // Register PornoXO extractor
+        registry.register(Arc::new(PornoxoExtractor::new()));
+
         // Register Generic fallback extractor (MUST be last — lowest priority)
         registry.register(Arc::new(GenericExtractor::new()));
 
@@ -189,6 +192,9 @@ impl ExtractorRegistry {
         registry
             .search_extractors
             .push(Arc::new(SpankBangExtractor::new()));
+        registry
+            .search_extractors
+            .push(Arc::new(PornoxoExtractor::new()));
 
         registry
     }
@@ -396,6 +402,24 @@ mod tests {
     fn test_find_search_extractor_unknown() {
         let registry = ExtractorRegistry::new();
         assert!(registry.find_search_extractor("nonexistent").is_none());
+    }
+
+    #[test]
+    fn registry_routes_pornoxo_video_urls_to_the_dedicated_extractor() {
+        let registry = ExtractorRegistry::new();
+        let e = registry
+            .find_extractor("https://www.pornoxo.com/videos/2928541/slug/")
+            .expect("a PornoXO video URL must find an extractor");
+        assert_eq!(e.name(), "PornoXO", "must not fall through to Generic");
+    }
+
+    #[test]
+    fn registry_exposes_pornoxo_as_a_search_extractor() {
+        let registry = ExtractorRegistry::new();
+        assert!(
+            registry.find_search_extractor("pornoxo").is_some(),
+            "--search-site pornoxo must resolve"
+        );
     }
 
     #[test]

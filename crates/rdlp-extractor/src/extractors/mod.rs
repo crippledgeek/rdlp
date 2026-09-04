@@ -27,6 +27,7 @@ pub use hqporner::HQPornerExtractor;
 pub use koreanpornmovie::KoreanPornMovieExtractor;
 pub use nine_anime::NineAnimeExtractor;
 pub use pornhub::PornHubExtractor;
+pub use pornoxo::PornoxoExtractor;
 pub use redtube::RedTubeExtractor;
 pub use spankbang::SpankBangExtractor;
 pub use tnaflix::{

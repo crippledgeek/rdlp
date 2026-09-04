@@ -12,8 +12,11 @@ mod search_patterns;
 use async_trait::async_trait;
 use lazy_regex::Regex;
 use log::debug;
-use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result};
-use rdlp_types::{DownloadProtocol, Format, InfoDict, SearchFilter, SearchQuery};
+use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result, SearchExtractor};
+use rdlp_types::{
+    DownloadProtocol, Format, InfoDict, SearchFilter, SearchFilterDescriptor, SearchPageResponse,
+    SearchQuery, SearchResultPreview,
+};
 use scraper::Html;
 
 use crate::base::common::json_ld::{
@@ -228,6 +231,33 @@ impl PagedSearch for PornoxoExtractor {
             // The site publishes no result count on either route.
             total_estimate: None,
         })
+    }
+}
+
+#[async_trait]
+impl SearchExtractor for PornoxoExtractor {
+    fn name(&self) -> &str {
+        "PornoXO"
+    }
+
+    fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
+        search_patterns::supported_filters()
+    }
+
+    async fn search(
+        &self,
+        query: &SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<Vec<SearchResultPreview>> {
+        self.search_all_pages(query, ctx).await
+    }
+
+    async fn search_page(
+        &self,
+        query: &SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPageResponse> {
+        self.search_page_response(query, ctx).await
     }
 }
 
@@ -624,6 +654,52 @@ mod paged_search_tests {
             matches!(err, RdlpError::Http { status: 404, .. }),
             "got: {err:?}"
         );
+    }
+
+    /// Pins `SearchExtractor::search` itself, not `search_all_pages` one level
+    /// down. G2 could only prove the Cloudflare guidance survives
+    /// `search_all_pages`, because `SearchExtractor` was not implemented yet;
+    /// that gap is exactly how a prior site once wired its `search` entry
+    /// point to something that silently swallowed the error into `Ok(vec![])`
+    /// while every unit test one level down stayed green. Drives the trait
+    /// method an operator's `--search-site pornoxo` actually calls.
+    #[tokio::test]
+    async fn search_extractor_search_delegates_and_the_cloudflare_guidance_survives() {
+        let (server, _m) = serving(403, "<title>Just a moment...</title>").await;
+        let origin = SearchOrigin::new(&server.url()).expect("mockito origin is well formed");
+
+        let err = rdlp_core::SearchExtractor::search(
+            &PornoxoExtractor::with_origin(origin),
+            &query("creampie", &[]),
+            &test_ctx(),
+        )
+        .await
+        .expect_err("a gated search must not be reported as zero results");
+
+        let msg = err.to_string();
+        assert!(msg.contains("--cookies-from-browser"), "got: {msg}");
+        assert!(msg.contains("Cloudflare"), "got: {msg}");
+        assert!(msg.contains("route=tag"), "got: {msg}");
+    }
+
+    /// Same pin for the single-page entry point `SearchExtractor::search_page`.
+    #[tokio::test]
+    async fn search_extractor_search_page_delegates_and_the_cloudflare_guidance_survives() {
+        let (server, _m) = serving(403, "<title>Just a moment...</title>").await;
+        let origin = SearchOrigin::new(&server.url()).expect("mockito origin is well formed");
+
+        let err = rdlp_core::SearchExtractor::search_page(
+            &PornoxoExtractor::with_origin(origin),
+            &query("creampie", &[]),
+            &test_ctx(),
+        )
+        .await
+        .expect_err("a gated search page must not be reported as zero results");
+
+        let msg = err.to_string();
+        assert!(msg.contains("--cookies-from-browser"), "got: {msg}");
+        assert!(msg.contains("Cloudflare"), "got: {msg}");
+        assert!(msg.contains("route=tag"), "got: {msg}");
     }
 
     /// `search_all_pages` runs filters through `validate_search_filters`, so a
