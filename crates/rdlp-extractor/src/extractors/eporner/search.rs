@@ -64,15 +64,26 @@ fn build_search_url(query: &SearchQuery, page: u32) -> String {
 /// data-src="https://static-eu-cdn.eporner.com/thumbs/…">`. Reading `src`
 /// alone therefore yielded a blank transparent pixel for 81% of results —
 /// and a `data:` URI is precisely what must not reach the desktop's
-/// `<img src>`. So the placeholder is skipped in favour of `data-src`, which
-/// is where the real poster lives; the 24 eagerly-loaded cards still answer
-/// from `src`.
+/// `<img src>`.
+///
+/// `data-src` is tried FIRST, matching every sibling that handles lazy images
+/// (`hqporner/search.rs`, `xvideos/search.rs`,
+/// `tnaflix/tnaflix_search_helpers.rs`). Preferring `src` happens to agree on
+/// this fixture, where the placeholder is always a `data:` URI, but it loses
+/// the moment a placeholder is an ordinary URL — xvideos' own
+/// `lightbox-blank.gif` is exactly that shape, and a `src`-first order would
+/// hand it back in preference to a real `data-src`. The `data:` filter stays
+/// on the `src` fallback so a card with no `data-src` and a placeholder `src`
+/// yields `None` rather than a blank pixel.
 fn card_poster_src(img: scraper::ElementRef<'_>) -> Option<&str> {
     img.value()
-        .attr("src")
-        .filter(|s| !s.is_empty() && !s.starts_with("data:"))
-        .or_else(|| img.value().attr("data-src"))
+        .attr("data-src")
         .filter(|s| !s.is_empty())
+        .or_else(|| {
+            img.value()
+                .attr("src")
+                .filter(|s| !s.is_empty() && !s.starts_with("data:"))
+        })
 }
 
 /// Parse EPorner search/tag results.
@@ -384,6 +395,31 @@ mod tests {
         assert_eq!(results[1].thumbnail_url, None);
     }
 
+    /// `data-src` wins over a placeholder `src` even when that placeholder is
+    /// an ordinary URL rather than a `data:` URI.
+    ///
+    /// This is the case the committed capture CANNOT discriminate — every
+    /// placeholder in it is a `data:` GIF, so a `src`-first order passes there
+    /// too. xvideos' `lightbox-blank.gif` is a real in-tree example of the
+    /// other shape (`xvideos/search.rs` filters it by name), and it is what
+    /// makes the attribute ORDER, not the `data:` filter, the load-bearing
+    /// part. Without this test the precedence is unpinned.
+    #[test]
+    fn data_src_wins_over_a_non_data_uri_placeholder_src() {
+        let html = r#"<html><body>
+            <div class="mbcontent"><a href="/video-1/lazy/"><img class="lazyimg"
+                src="https://static-eu-cdn.eporner.com/img/lightbox-blank.gif"
+                data-src="https://static-eu-cdn.eporner.com/thumbs/static4/1/real_240.jpg" alt="Lazy"></a></div>
+        </body></html>"#;
+        let results = parse_results(html);
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].thumbnail_url.as_deref(),
+            Some("https://static-eu-cdn.eporner.com/thumbs/static4/1/real_240.jpg"),
+            "a placeholder src must never win over a real data-src"
+        );
+    }
+
     /// A lazy-loaded card takes its poster from `data-src`, not from the
     /// 1x1 `data:` placeholder sitting in `src`. Both attributes are present
     /// on the same element, so this pins WHICH one wins rather than merely
@@ -410,24 +446,33 @@ mod tests {
     /// thumbnail would vanish with the suite green. This is the eporner
     /// analogue of pornoxo's `every_card_on_both_captures_has_a_cdn_thumbnail`.
     ///
-    /// Measured on the committed capture: the cards inside `div.mbcontent`
-    /// carry real `https://static-eu-cdn.eporner.com/thumbs/...` srcs. The
-    /// `data:image/gif;base64` 1x1 placeholders elsewhere in that file sit
-    /// OUTSIDE the card anchors, so `MBIMG_SEL` never reaches them.
+    /// Measured on the committed capture: 101 of its 125 cards are lazy-loaded
+    /// (`src` is a 1x1 `data:` GIF, the poster is in `data-src`) and 24 are
+    /// eager. That is the fact this test exists to hold — it is what made the
+    /// assertion fail when it was first written, and `card_poster_src` is the
+    /// fix. The count is asserted exactly, not as "non-empty": a regression
+    /// that dropped every lazy card would leave the 24 eager ones, all with
+    /// real posters, and sail past a `!is_empty()` check.
     #[test]
     fn every_card_in_the_real_capture_still_yields_a_cdn_thumbnail() {
-        let results = parse_results(FIXTURE);
-        assert!(!results.is_empty(), "the capture must parse to some cards");
-        assert!(
-            results.iter().all(|r| r
-                .thumbnail_url
+        let has_cdn_poster = |r: &SearchResultPreview| {
+            r.thumbnail_url
                 .as_deref()
-                .is_some_and(|t| t.starts_with("https://") && t.contains("/thumbs/"))),
-            "every card must keep a CDN poster: {:?}",
+                .is_some_and(|t| t.starts_with("https://") && t.contains("/thumbs/"))
+        };
+        let results = parse_results(FIXTURE);
+        assert_eq!(
+            results.len(),
+            125,
+            "all 125 cards must parse — 101 lazy plus 24 eager"
+        );
+        assert!(
+            results.iter().all(has_cdn_poster),
+            "every card must keep a CDN poster; first without one: {:?}",
             results
                 .iter()
-                .find(|r| r.thumbnail_url.is_none())
-                .map(|r| &r.video_url)
+                .find(|r| !has_cdn_poster(r))
+                .map(|r| (&r.video_url, &r.thumbnail_url))
         );
     }
 

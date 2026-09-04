@@ -291,6 +291,13 @@ pub(crate) fn filter_value<'a>(filters: &'a [SearchFilter], key: &str) -> Option
 /// path-prefix guard (`Some(h) if h.starts_with("/hdporn/")`,
 /// `extractors/hqporner/search.rs:43`) and is deliberately left alone.
 ///
+/// `origin` may be a bare `scheme://authority` OR a full page URL with a path
+/// and query — xhamster passes the page's own URL so a mirror domain resolves
+/// against itself. Only [`Url::origin`] is compared, which is path- and
+/// query-insensitive, so both forms behave identically for admission; the path
+/// still participates in RFC 3986 resolution of a relative reference, which is
+/// what makes a full page URL the more correct base of the two.
+///
 /// Returns `None` when the card must be dropped; callers use `?` inside their
 /// per-card `filter_map`, so one poisoned tile costs that tile and no more.
 pub(crate) fn resolve_card_url(origin: &str, href: &str) -> Option<String> {
@@ -564,9 +571,9 @@ pub(crate) trait PagedSearch: Send + Sync {
                 // half that carries the meaning — "nothing salvageable" is the
                 // reason to propagate rather than break. The page check only
                 // restates it: the loop breaks on the first empty page, so
-                // past the first page `all_results` cannot be empty. Neither
-                // The page check is not load-bearing alone; do not
-                // "simplify" by dropping the emptiness check.
+                // past the first page `all_results` cannot be empty. The
+                // page check is not load-bearing alone; do not "simplify" by
+                // dropping the emptiness check.
                 Err(e) if all_results.is_empty() && page == self.first_page_index() => {
                     debug!(page; "{tag} First search page failed, no partial results to return: {e}");
                     return Err(e);
