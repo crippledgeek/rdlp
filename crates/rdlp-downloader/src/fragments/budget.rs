@@ -1,23 +1,39 @@
 //! List-wide retry budget for the fragment downloader (issue #570).
 //!
-//! Per-fragment retries alone do not bound a systematically failing playlist:
-//! every one of its fragments would burn its full allowance before the
-//! download gave up, so a broken stream fails slowly instead of quickly. The
-//! budget is a pool of retry attempts shared by the whole fragment list; when
-//! it runs out, the next retryable failure propagates as if it were not
-//! retryable and ends the download.
+//! What this does *not* guard against, despite the obvious guess: a
+//! systematically broken origin. The fragment stream returns `Err` on the
+//! first failing item (`fragments.rs`, the `match item` in the write loop), so
+//! a list whose every fragment fails ends the download as soon as the *first*
+//! fragment exhausts its own allowance — one backoff ladder, not N of them.
+//! Per-fragment retries already bound that case.
+//!
+//! The case they do not bound is the flaky one: a transfer where fragments
+//! fail and then succeed. Nothing there ever propagates an error, so a
+//! thousand-fragment list can spend a thousand backoff ladders and still be
+//! "making progress" hours later. The budget is a pool of retry attempts
+//! shared by the whole list, so a transfer that is limping rather than working
+//! gives up in bounded time instead of dragging on.
+//!
+//! Its size therefore expresses a rate, not a count — see
+//! [`RETRY_BUDGET_FRAGMENT_SHARE`].
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Share of a fragment list expected to need a retry on a healthy transfer,
-/// expressed as a divisor: the budget is sized as if one fragment in this many
-/// spent its full per-fragment allowance.
+/// Divisor setting how much cumulative retrying a fragment list may do before
+/// it is judged to be limping rather than working.
 ///
-/// A transfer that needs to re-fetch more than a tenth of its fragments is not
-/// hitting isolated transient errors — it is talking to a broken origin, and
-/// further retrying only delays a failure that is already certain. The number
-/// is a judgement, not a measurement; it is the knob to move if real transfers
-/// are seen failing on this bound.
+/// The budget is `max_retries x max(fragments / SHARE, 1)`, so dividing
+/// through by the fragment count, the list gets `max_retries / SHARE` retries
+/// per fragment *on average* — at the default ten retries and a share of ten,
+/// exactly one. A transfer where every fragment needs one retry fits; one
+/// where every fragment needs two does not, and fails partway rather than
+/// taking twice as long as it should.
+///
+/// That average is the real bound, and it is deliberately far below the
+/// per-fragment allowance: the allowance is there for the occasional bad
+/// fragment, not for all of them. The number is a judgement, not a
+/// measurement — it is the knob to move if real transfers are seen failing on
+/// this bound.
 const RETRY_BUDGET_FRAGMENT_SHARE: u64 = 10;
 
 /// A pool of retry attempts shared across one fragment list.
@@ -31,7 +47,7 @@ pub(crate) struct FragmentRetryBudget {
 
 impl FragmentRetryBudget {
     /// Size a budget for a list of `total_fragments`, given the per-fragment
-    /// allowance `max_retries` from the operator's `RetryConfig`.
+    /// allowance `max_retries` (the operator's `--fragment-retries`).
     ///
     /// The floor of one fragment's allowance keeps a short list (anything under
     /// `RETRY_BUDGET_FRAGMENT_SHARE` fragments) able to retry at all — without
@@ -88,6 +104,25 @@ mod tests {
             0,
             "a refused attempt must not wrap the counter"
         );
+    }
+
+    #[test]
+    fn the_average_allowance_per_fragment_is_the_documented_rate() {
+        // The property the SHARE constant actually expresses: budget divided by
+        // fragment count is max_retries / SHARE, whatever the list length.
+        for fragments in [10_usize, 100, 1_000, 10_000] {
+            let budget = FragmentRetryBudget::for_list(10, fragments);
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "test inputs are small literals"
+            )]
+            let per_fragment = budget.remaining() / fragments as u64;
+            assert_eq!(
+                per_fragment, 1,
+                "at ten retries and a share of ten, a {fragments}-fragment list \
+                 gets one retry per fragment on average"
+            );
+        }
     }
 
     #[test]

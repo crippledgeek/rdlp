@@ -13,13 +13,11 @@ mod trait_impl;
 mod tests;
 
 #[cfg(test)]
-pub(crate) use parallel::{download_chunk_with_retry, verify_merged_size};
+pub(crate) use parallel::{ChunkRequestSpec, download_chunk_with_retry, verify_merged_size};
 
-use backon::Retryable;
-use log::warn;
 use rdlp_core::{
     DownloadProgress, DownloadStats, ProgressCallback, RdlpError, Result, RetryConfig,
-    check_http_response, is_retryable_error,
+    check_http_response,
 };
 use std::collections::HashMap;
 use std::path::Path;
@@ -31,6 +29,7 @@ use wreq::header::{HeaderMap, HeaderName, HeaderValue};
 
 use crate::chunking::ChunkSizeStrategy;
 use crate::progress::SpeedMeter;
+use crate::retry::{RetryPolicy, with_retry};
 use config::{DownloaderConfig, PROGRESS_UPDATE_INTERVAL};
 use rdlp_ratelimit::RateLimiter;
 
@@ -49,26 +48,6 @@ fn to_header_map(headers: Option<&HashMap<String, String>>) -> HeaderMap {
         }
     }
     map
-}
-
-/// Execute an async operation with retry logic
-async fn with_retry<F, Fut, T>(
-    retry_config: &RetryConfig,
-    context: &'static str,
-    operation: F,
-) -> Result<T>
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<T>>,
-{
-    let backoff = retry_config.to_backoff();
-    operation
-        .retry(backoff)
-        .when(is_retryable_error)
-        .notify(|err, dur| {
-            warn!(delay:? = dur; "{context} failed, retrying: {err}");
-        })
-        .await
 }
 
 /// Re-export of the shared `ProbeResult` from `rdlp-http`. Single source of
@@ -355,6 +334,13 @@ impl HttpDownloader {
         self
     }
 
+    /// Set the per-fragment / per-segment retry policy (`--fragment-retries`).
+    #[must_use]
+    pub fn with_fragment_retry_config(mut self, config: RetryConfig) -> Self {
+        Arc::make_mut(&mut self.config).fragment_retry_config = config;
+        self
+    }
+
     /// Set number of concurrent fragment downloads
     #[must_use = "builder methods consume self and return a new instance"]
     pub fn with_concurrent_fragments(mut self, count: usize) -> Self {
@@ -478,19 +464,22 @@ impl HttpDownloader {
         let window = PROBE_WINDOW_BYTES;
         let timeout = self.config.read_timeout;
 
-        let probed = with_retry(&self.config.retry_config, "HTTP probe (F3)", || {
-            let client = client.clone();
-            let url = url_string.clone();
-            let hdrs = hdrs.clone();
-            async move {
-                rdlp_http::probe_size(&client, &url, Some(&hdrs), window, timeout)
-                    .await
-                    .map_err(|e| RdlpError::Network {
-                        message: format!("probe failed: {e}"),
-                        url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
-                    })
-            }
-        })
+        let probed = with_retry(
+            RetryPolicy::new(&self.config.retry_config, &"HTTP probe (F3)"),
+            || {
+                let client = client.clone();
+                let url = url_string.clone();
+                let hdrs = hdrs.clone();
+                async move {
+                    rdlp_http::probe_size(&client, &url, Some(&hdrs), window, timeout)
+                        .await
+                        .map_err(|e| RdlpError::Network {
+                            message: format!("probe failed: {e}"),
+                            url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
+                        })
+                }
+            },
+        )
         .await;
 
         Ok(probed.unwrap_or(ProbeResult {
@@ -525,26 +514,29 @@ impl HttpDownloader {
         let url = url.to_string();
         let hdrs = self.headers();
 
-        let response = with_retry(&self.config.retry_config, "HTTP GET (range)", || {
-            let client = client.clone();
-            let url = url.clone();
-            let hdrs = hdrs.clone();
-            async move {
-                let response = client
-                    .get(&url)
-                    .headers(hdrs)
-                    .header("Range", format!("bytes={start}-{end}"))
-                    .send()
-                    .await
-                    .map_err(|e| RdlpError::Network {
-                        message: format!("Range request failed: {e}"),
-                        url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
-                    })?;
+        let response = with_retry(
+            RetryPolicy::new(&self.config.retry_config, &"HTTP GET (range)"),
+            || {
+                let client = client.clone();
+                let url = url.clone();
+                let hdrs = hdrs.clone();
+                async move {
+                    let response = client
+                        .get(&url)
+                        .headers(hdrs)
+                        .header("Range", format!("bytes={start}-{end}"))
+                        .send()
+                        .await
+                        .map_err(|e| RdlpError::Network {
+                            message: format!("Range request failed: {e}"),
+                            url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
+                        })?;
 
-                check_http_response(&response)?;
-                Ok(response)
-            }
-        })
+                    check_http_response(&response)?;
+                    Ok(response)
+                }
+            },
+        )
         .await?;
 
         // Confirm the response encloses exactly the requested span BEFORE any
@@ -700,22 +692,25 @@ impl HttpDownloader {
             return Err(RdlpError::Cancelled);
         }
 
-        let response = with_retry(&self.config.retry_config, "HTTP GET", || {
-            let client = client.clone();
-            let url = url_string.clone();
-            let hdrs = hdrs.clone();
-            async move {
-                let response = client.get(&*url).headers(hdrs).send().await.map_err(|e| {
-                    RdlpError::Network {
-                        message: format!("GET request failed: {e}"),
-                        url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
-                    }
-                })?;
+        let response = with_retry(
+            RetryPolicy::new(&self.config.retry_config, &"HTTP GET"),
+            || {
+                let client = client.clone();
+                let url = url_string.clone();
+                let hdrs = hdrs.clone();
+                async move {
+                    let response = client.get(&*url).headers(hdrs).send().await.map_err(|e| {
+                        RdlpError::Network {
+                            message: format!("GET request failed: {e}"),
+                            url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
+                        }
+                    })?;
 
-                check_http_response(&response)?;
-                Ok(response)
-            }
-        })
+                    check_http_response(&response)?;
+                    Ok(response)
+                }
+            },
+        )
         .await?;
 
         let total_size = response.content_length();

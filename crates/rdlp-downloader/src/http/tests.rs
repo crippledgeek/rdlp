@@ -4,6 +4,7 @@
 
 use super::*;
 use rdlp_core::Downloader;
+use rdlp_core::is_retryable_error;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
@@ -299,12 +300,14 @@ async fn test_chunk_retry_succeeds_on_second_attempt() {
 
     let result = download_chunk_with_retry(
         &downloader,
-        &url,
-        0,
-        1023,
-        &chunk_path,
+        ChunkRequestSpec {
+            url: &url,
+            start: 0,
+            end: 1023,
+            chunk_path: &chunk_path,
+            chunk_id: 0,
+        },
         Some(progress),
-        0,
         None,
     )
     .await;
@@ -344,12 +347,14 @@ async fn test_chunk_retry_exhausted_returns_error() {
 
     let result = download_chunk_with_retry(
         &downloader,
-        &url,
-        0,
-        1023,
-        &chunk_path,
+        ChunkRequestSpec {
+            url: &url,
+            start: 0,
+            end: 1023,
+            chunk_path: &chunk_path,
+            chunk_id: 0,
+        },
         Some(progress),
-        0,
         None,
     )
     .await;
@@ -388,12 +393,14 @@ async fn test_chunk_retry_non_retryable_fails_immediately() {
 
     let result = download_chunk_with_retry(
         &downloader,
-        &url,
-        0,
-        1023,
-        &chunk_path,
+        ChunkRequestSpec {
+            url: &url,
+            start: 0,
+            end: 1023,
+            chunk_path: &chunk_path,
+            chunk_id: 0,
+        },
         Some(progress),
-        0,
         None,
     )
     .await;
@@ -454,12 +461,14 @@ async fn test_chunk_retry_cleans_partial_file() {
 
     let result = download_chunk_with_retry(
         &downloader,
-        &url,
-        0,
-        511,
-        &chunk_path,
+        ChunkRequestSpec {
+            url: &url,
+            start: 0,
+            end: 511,
+            chunk_path: &chunk_path,
+            chunk_id: 0,
+        },
         Some(progress),
-        0,
         None,
     )
     .await;
@@ -1681,12 +1690,14 @@ async fn chunk_retry_recovers_from_wrong_span_response() {
     let url = format!("{}/video.mp4", server.url());
     let result = download_chunk_with_retry(
         &downloader,
-        &url,
-        0,
-        1023,
-        &chunk_path,
+        ChunkRequestSpec {
+            url: &url,
+            start: 0,
+            end: 1023,
+            chunk_path: &chunk_path,
+            chunk_id: 0,
+        },
         Some(Arc::new(AtomicU64::new(0))),
-        0,
         None,
     )
     .await;
@@ -1747,12 +1758,14 @@ async fn chunk_retry_recovers_from_short_body() {
     let url = format!("{}/video.mp4", server.url());
     let result = download_chunk_with_retry(
         &downloader,
-        &url,
-        0,
-        1023,
-        &chunk_path,
+        ChunkRequestSpec {
+            url: &url,
+            start: 0,
+            end: 1023,
+            chunk_path: &chunk_path,
+            chunk_id: 0,
+        },
         Some(Arc::new(AtomicU64::new(0))),
-        0,
         None,
     )
     .await;
@@ -1802,12 +1815,14 @@ async fn chunk_retry_does_not_retry_range_ignoring_server() {
     let url = format!("{}/video.mp4", server.url());
     let result = download_chunk_with_retry(
         &downloader,
-        &url,
-        0,
-        1023,
-        &chunk_path,
+        ChunkRequestSpec {
+            url: &url,
+            start: 0,
+            end: 1023,
+            chunk_path: &chunk_path,
+            chunk_id: 0,
+        },
         Some(Arc::new(AtomicU64::new(0))),
-        0,
         None,
     )
     .await;
@@ -2229,5 +2244,62 @@ async fn adaptive_failure_cleans_up_chunks_d2() {
         std::collections::HashSet::from(["unrelated.txt".to_string()]),
         "chunk files must be cleaned up after a failed adaptive download; \
          only the foreign file may remain, found: {names:?}"
+    );
+}
+
+// --- chunk retry policy (issue #570) ---
+
+#[test]
+fn chunk_policy_caps_the_attempt_count_but_never_raises_it() {
+    use super::parallel::chunk_retry_policy;
+    use rdlp_core::RetryConfig;
+
+    let base = |max_retries| {
+        RetryConfig::new(
+            max_retries,
+            Duration::from_millis(10),
+            Duration::from_secs(30),
+            2.0,
+        )
+    };
+    // Both sides of the cap: at it, one under it, one over it. The cap exists
+    // because this layer nests over the range request's own retry, so the
+    // attempt counts multiply.
+    assert_eq!(chunk_retry_policy(&base(2)).max_retries, 2, "under the cap");
+    assert_eq!(chunk_retry_policy(&base(3)).max_retries, 3, "at the cap");
+    assert_eq!(chunk_retry_policy(&base(4)).max_retries, 3, "over the cap");
+    assert_eq!(
+        chunk_retry_policy(&base(10)).max_retries,
+        3,
+        "the default ten must not compose to ~100 requests per chunk"
+    );
+    assert_eq!(
+        chunk_retry_policy(&base(0)).max_retries,
+        0,
+        "a caller asking for no retries must get none"
+    );
+}
+
+#[test]
+fn chunk_policy_holds_the_delay_ceiling_but_keeps_the_caller_s_shape() {
+    use super::parallel::chunk_retry_policy;
+    use rdlp_core::RetryConfig;
+
+    // The real production input: the default whole-resource policy, whose 60s
+    // ceiling is exactly what the chunk layer must not inherit.
+    let slow = RetryConfig::default_config();
+    let policy = chunk_retry_policy(&slow);
+    assert_eq!(policy.initial_delay, Duration::from_secs(1));
+    assert_eq!(
+        policy.max_delay,
+        Duration::from_secs(3),
+        "1s, 2s, 3s — the sequence this path used before #570"
+    );
+
+    // A caller under the ceiling keeps its own, so tests stay fast.
+    let fast = RetryConfig::new(3, Duration::from_millis(1), Duration::from_millis(5), 2.0);
+    assert_eq!(
+        chunk_retry_policy(&fast).max_delay,
+        Duration::from_millis(5)
     );
 }

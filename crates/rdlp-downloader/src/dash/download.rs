@@ -14,12 +14,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use backon::Retryable;
 use futures::StreamExt;
 use log::{debug, info, warn};
-use rdlp_core::{
-    DownloadStats, ProgressCallback, RdlpError, Result, RetryConfig, is_retryable_error,
-};
+use rdlp_core::{DownloadStats, ProgressCallback, RdlpError, Result, RetryConfig};
 use rdlp_ffmpeg::{FFmpegRunner, RemuxOptions};
 use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncWriteExt, BufWriter};
@@ -34,6 +31,7 @@ use crate::dash::manifest;
 use crate::dash::segments::SegmentPlan;
 use crate::dash::state::DashDownloadState;
 use crate::http::HttpDownloader;
+use crate::retry::{RetryPolicy, with_retry_cancellable};
 
 /// Number of successful segment fetches between state-save flushes.
 const STATE_SAVE_BATCH: usize = 16;
@@ -661,12 +659,11 @@ async fn download_one(
     } else {
         wreq::header::HeaderMap::new()
     };
-    let backoff = retry.to_backoff();
     let url_str = url.to_string();
-    // The retried fetch future (send + status check + body read, with backoff).
-    // All existing retry/backoff/header-gate/timeout logic is preserved inside
-    // it unchanged.
-    let fetch = (|| {
+    // The fetch itself: send + status check + body read. The retry policy,
+    // the backoff, and the cancel race all live in `crate::retry` — this
+    // closure is only the work that varies between callers.
+    let fetch = || {
         let client = client.clone();
         let headers = headers.clone();
         let url_str = url_str.clone();
@@ -695,29 +692,18 @@ async fn download_one(
             })?;
             Ok(bytes.to_vec())
         }
-    })
-    .retry(backoff)
-    .when(is_retryable_error)
-    .notify(|err, dur| {
-        warn!("DASH segment fetch retry after {dur:?}: {err}");
-    });
+    };
 
-    // Mid-read cancel: race the retried fetch against the cancel token so an
-    // in-flight `send()`/`bytes()` (or a stalled CDN body) aborts immediately
-    // instead of blocking until `read_timeout` fires. Mirrors the fragment
-    // downloader's `FragmentFetchCtx::fetch` — `biased`
-    // gives the cancel arm priority. When no token is supplied, await the
-    // fetch directly.
-    match cancel {
-        Some(token) => {
-            tokio::select! {
-                biased;
-                () = token.cancelled() => Err(RdlpError::Cancelled),
-                res = fetch => res,
-            }
-        }
-        None => fetch.await,
-    }
+    // Mid-read cancel is part of the shared runner: it races the whole retry
+    // loop, so an in-flight `send()`/`bytes()`, a stalled CDN body, or a
+    // backoff sleep all abort immediately rather than blocking until
+    // `read_timeout` fires.
+    with_retry_cancellable(
+        RetryPolicy::new(retry, &"DASH segment fetch"),
+        cancel,
+        fetch,
+    )
+    .await
 }
 
 /// 0-retry `RetryConfig` so failing tests fail immediately rather than

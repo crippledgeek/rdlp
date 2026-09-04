@@ -15,10 +15,13 @@ async fn byte_range_emits_http_range_header() {
         .create_async()
         .await;
 
-    // Catch-all 501 if Range header is missing or wrong.
+    // Catch-all if the Range header is missing or wrong. 418 rather than a
+    // 5xx because a canary's job is to fail the test *fast*: since #570 a
+    // 5xx is retryable, so a regression here would walk the whole backoff
+    // ladder before surfacing. `is_retryable_error` rejects 418.
     let _unmatched = server
         .mock("GET", Matcher::Any)
-        .with_status(501)
+        .with_status(418)
         .create_async()
         .await;
 
@@ -1009,7 +1012,7 @@ fn make_downloader_with_header(name: &str, value: &str) -> HttpDownloader {
 /// Two mockito servers = two origins (same loopback address, different ports).
 /// The fragment is served from `format_server` (same-origin) → must see Referer.
 /// The init segment is served from `init_server` (cross-origin) → must NOT see
-/// Referer. The catch-all 501 on `init_server` fires if the header leaks.
+/// Referer. The catch-all 418 on `init_server` fires if the header leaks.
 #[tokio::test]
 async fn cross_origin_init_url_does_not_forward_seed_headers() {
     let mut format_server = mockito::Server::new_async().await;
@@ -1033,10 +1036,10 @@ async fn cross_origin_init_url_does_not_forward_seed_headers() {
         .create_async()
         .await;
 
-    // Catch-all on init_server: 501 if Referer arrived unexpectedly.
+    // Catch-all on init_server: 418 if Referer arrived unexpectedly.
     let _init_catchall = init_server
         .mock("GET", Matcher::Any)
-        .with_status(501)
+        .with_status(418)
         .create_async()
         .await;
 
@@ -1073,7 +1076,7 @@ async fn cross_origin_init_url_does_not_forward_seed_headers() {
 /// Positive companion: same-origin init URL DOES forward `Format.http_headers`.
 ///
 /// Both fragment and init are on `format_server` (same-origin as `format_url`).
-/// Both must receive the Referer. The catch-all 501 fires if headers were
+/// Both must receive the Referer. The catch-all 418 fires if headers were
 /// stripped due to an over-aggressive same-origin check (always-strip regression).
 #[tokio::test]
 async fn same_origin_init_url_forwards_seed_headers() {
@@ -1095,10 +1098,10 @@ async fn same_origin_init_url_forwards_seed_headers() {
         .create_async()
         .await;
 
-    // Catch-all: 501 if Referer was NOT present (headers were stripped).
+    // Catch-all: 418 if Referer was NOT present (headers were stripped).
     let _catchall = format_server
         .mock("GET", Matcher::Any)
-        .with_status(501)
+        .with_status(418)
         .create_async()
         .await;
 
@@ -1135,7 +1138,7 @@ async fn same_origin_init_url_forwards_seed_headers() {
 /// Negative test: fragment URL on a different origin from `format_url` drops headers.
 ///
 /// `init_url` is `None`; only the fragment itself is cross-origin. The catch-all
-/// 501 on `cross_server` fires if the Referer was forwarded.
+/// 418 on `cross_server` fires if the Referer was forwarded.
 #[tokio::test]
 async fn cross_origin_fragment_url_does_not_forward_seed_headers() {
     let format_server = mockito::Server::new_async().await;
@@ -1150,10 +1153,10 @@ async fn cross_origin_fragment_url_does_not_forward_seed_headers() {
         .create_async()
         .await;
 
-    // Catch-all on cross_server: 501 if Referer arrived.
+    // Catch-all on cross_server: 418 if Referer arrived.
     let _catchall = cross_server
         .mock("GET", Matcher::Any)
-        .with_status(501)
+        .with_status(418)
         .create_async()
         .await;
 
@@ -1320,14 +1323,14 @@ async fn resume_is_byte_identical_and_skips_done_fragments() {
     tokio::fs::write(&output, &reference[..done]).await.unwrap();
 
     // Resume server: paths identical (so the path-only fingerprint matches),
-    // but the already-done fragments are 501 — if resume re-fetches them the
+    // but the already-done fragments are 418 — if resume re-fetches them the
     // download errors, proving they were skipped. Remaining fragments serve
     // their real bodies.
     let mut server = mockito::Server::new_async().await;
     for i in 0..done {
         server
             .mock("GET", format!("/seg-{i}.ts").as_str())
-            .with_status(501)
+            .with_status(418)
             .create_async()
             .await;
     }
@@ -1351,7 +1354,7 @@ async fn resume_is_byte_identical_and_skips_done_fragments() {
 
     download_pre_resolved_fragments(&http, &frags, None, None, None, &output, None, None)
         .await
-        .expect("resume must succeed without hitting the 501 done-fragments");
+        .expect("resume must succeed without hitting the 418 done-fragments");
 
     let written = tokio::fs::read(&output).await.unwrap();
     assert_eq!(written, reference, "resumed output must be byte-identical");
@@ -1409,7 +1412,7 @@ async fn extra_tail_is_truncated_to_byte_len_on_resume() {
     for i in 0..2 {
         server
             .mock("GET", format!("/seg-{i}.ts").as_str())
-            .with_status(501)
+            .with_status(418)
             .create_async()
             .await;
     }
@@ -1749,12 +1752,19 @@ async fn unranged_fragment_plain_200_still_succeeds() {
 /// starts at 1s and doubles to 60s, which would turn a millisecond test into
 /// a five-minute one.
 fn http_with_retries(max_retries: usize) -> HttpDownloader {
-    HttpDownloader::with_client(wreq::Client::new()).with_retry_config(rdlp_core::RetryConfig::new(
+    let config = rdlp_core::RetryConfig::new(
         max_retries,
         std::time::Duration::from_millis(1),
         std::time::Duration::from_millis(5),
         2.0,
-    ))
+    );
+    // Both policies: the fragment path reads `fragment_retry_config`, and the
+    // range request underneath it reads `retry_config`. Setting only one
+    // leaves the other at the 10-attempt / 60s-ceiling default, which is
+    // minutes per failing test.
+    HttpDownloader::with_client(wreq::Client::new())
+        .with_retry_config(config.clone())
+        .with_fragment_retry_config(config)
 }
 
 /// Retries enabled, concurrency pinned to 1 so retry accounting is

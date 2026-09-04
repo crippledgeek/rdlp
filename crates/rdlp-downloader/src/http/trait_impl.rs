@@ -17,8 +17,9 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio_util::sync::CancellationToken;
 
 use super::config::PROGRESS_UPDATE_INTERVAL;
-use super::{ContentRange, HTTP_PARTIAL_CONTENT, HttpDownloader, with_retry};
+use super::{ContentRange, HTTP_PARTIAL_CONTENT, HttpDownloader};
 use crate::progress::SpeedMeter;
+use crate::retry::{RetryPolicy, with_retry};
 
 #[allow(clippy::too_many_lines, clippy::option_if_let_else)]
 #[async_trait]
@@ -229,22 +230,26 @@ impl HttpDownloader {
             let url_string = url.to_string();
             let hdrs = self.headers();
 
-            let response = with_retry(&self.config.retry_config, "HTTP GET (stdout)", || {
-                let client = client.clone();
-                let url = url_string.clone();
-                let hdrs = hdrs.clone();
-                async move {
-                    let response = client.get(&url).headers(hdrs).send().await.map_err(|e| {
-                        RdlpError::Network {
-                            message: format!("GET request failed: {e}"),
-                            url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
-                        }
-                    })?;
+            let response = with_retry(
+                RetryPolicy::new(&self.config.retry_config, &"HTTP GET (stdout)"),
+                || {
+                    let client = client.clone();
+                    let url = url_string.clone();
+                    let hdrs = hdrs.clone();
+                    async move {
+                        let response =
+                            client.get(&url).headers(hdrs).send().await.map_err(|e| {
+                                RdlpError::Network {
+                                    message: format!("GET request failed: {e}"),
+                                    url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
+                                }
+                            })?;
 
-                    check_http_response(&response)?;
-                    Ok(response)
-                }
-            })
+                        check_http_response(&response)?;
+                        Ok(response)
+                    }
+                },
+            )
             .await?;
 
             let total_size = response.content_length();
@@ -378,7 +383,7 @@ impl HttpDownloader {
             let url_string: Arc<str> = Arc::from(url);
             let hdrs = self.headers();
 
-            let response = with_retry(&self.config.retry_config, "HTTP GET (resume)", || {
+            let response = with_retry(RetryPolicy::new(&self.config.retry_config, &"HTTP GET (resume)"), || {
                 let client = client.clone();
                 let url = Arc::clone(&url_string);
                 let hdrs = hdrs.clone();
