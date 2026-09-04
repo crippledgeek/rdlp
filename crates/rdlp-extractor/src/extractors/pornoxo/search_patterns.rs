@@ -63,6 +63,16 @@ pub(crate) fn supported_filters() -> Vec<SearchFilterDescriptor> {
     ]
 }
 
+/// The filter keys that are forwarded verbatim as listing query parameters,
+/// in the order they appear in a built URL.
+///
+/// `route` is deliberately absent: it selects the PATH (`/tags/` vs
+/// `/search/`) and is rdlp's own concept, so emitting it as a parameter would
+/// put a meaningless `route=` on every request. Every other descriptor key
+/// belongs here, and `every_non_route_filter_is_forwarded_to_the_url` fails if
+/// a future descriptor is added without one.
+pub(crate) const URL_FILTER_KEYS: [&str; 3] = ["sort", "filter_quality", "filter_length"];
+
 /// Reject any filter key or value PornoXO does not understand.
 ///
 /// Every key uses the default `AllowedValues` policy, with no `FreeText`
@@ -175,6 +185,30 @@ mod tests {
             assert!(keys.iter().any(|d| d == k), "descriptor missing for {k}");
         }
         assert_eq!(keys.len(), 4, "no undocumented filter keys");
+    }
+
+    /// A descriptor added without a matching `URL_FILTER_KEYS` entry would
+    /// validate fine and then be silently dropped from every request — the
+    /// same silent-ignore failure this vocabulary exists to prevent, moved
+    /// one layer inward.
+    #[test]
+    fn every_non_route_filter_is_forwarded_to_the_url() {
+        for d in supported_filters() {
+            if d.key == "route" {
+                continue;
+            }
+            assert!(
+                URL_FILTER_KEYS.contains(&d.key.as_str()),
+                "descriptor {} is validated but never reaches the URL",
+                d.key
+            );
+        }
+        for key in URL_FILTER_KEYS {
+            assert!(
+                supported_filters().iter().any(|d| d.key == key),
+                "{key} is forwarded to the URL but is not a declared filter"
+            );
+        }
     }
 
     /// Every descriptor's declared default must itself be an accepted value —

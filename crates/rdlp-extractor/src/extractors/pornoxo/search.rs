@@ -1,11 +1,12 @@
 //! Listing-grid parsing shared by the `/tags/` and `/search/` routes.
 
 use lazy_regex::{Lazy, Regex, lazy_regex};
-use rdlp_types::SearchResultPreview;
+use rdlp_types::{SearchQuery, SearchResultPreview};
 use scraper::{Html, Selector};
 use std::sync::LazyLock;
+use url::form_urlencoded;
 
-use crate::base::common::BaseExtractor;
+use crate::base::common::{BaseExtractor, SearchOrigin, filter_value};
 
 /// The RESULTS grid only.
 ///
@@ -44,7 +45,7 @@ static LAST_PAGE: Lazy<Regex> = lazy_regex!(
 ///
 /// Cards with no href or no title are skipped rather than failing the page: a
 /// single malformed tile must not cost the operator the other 51 results.
-pub(crate) fn parse_listing(origin: &str, html: &str) -> Vec<SearchResultPreview> {
+pub(crate) fn parse_listing(origin: &SearchOrigin, html: &str) -> Vec<SearchResultPreview> {
     let document = Html::parse_document(html);
     document
         .select(&GRID_ITEM)
@@ -87,6 +88,71 @@ pub(crate) fn parse_listing(origin: &str, html: &str) -> Vec<SearchResultPreview
         .collect()
 }
 
+/// PornoXO's production origin.
+const DEFAULT_ORIGIN: &str = "https://www.pornoxo.com";
+
+/// The production origin, as the typed value the URL builders take.
+pub(crate) fn default_origin() -> SearchOrigin {
+    SearchOrigin::from_static(DEFAULT_ORIGIN)
+}
+
+/// Normalise a free-text query into a tag slug: lowercased, whitespace runs
+/// collapsed to a single `-`.
+///
+/// The server is forgiving here — `big-ass`, `big%20ass` and `bigass` all
+/// resolve — so this is for tidy URLs, not correctness. Percent-encoding it
+/// afterwards is NOT cosmetic: the slug is operator text interpolated into a
+/// PATH, and an unencoded `?` or `&` would graft chosen parameters onto the
+/// request (including a second `page=`, which would defeat the clamp guard).
+fn tag_slug(query: &str) -> String {
+    let normalised = query
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-")
+        .to_lowercase();
+    form_urlencoded::byte_serialize(normalised.as_bytes()).collect()
+}
+
+/// Build the listing URL for `page` of `query`, on whichever route its `route`
+/// filter selects.
+///
+/// `route=tag` puts the query in the PATH as a tag slug (`/tags/<slug>/`);
+/// anything else uses the default full-text route (`/search/?q=`). Filters are
+/// emitted in [`URL_FILTER_KEYS`] order so the output is deterministic
+/// regardless of the order the caller supplied them in.
+///
+/// [`URL_FILTER_KEYS`]: super::search_patterns::URL_FILTER_KEYS
+pub(crate) fn build_listing_url(origin: &SearchOrigin, query: &SearchQuery, page: u32) -> String {
+    let mut pairs: Vec<(&str, String)> = Vec::new();
+
+    let path = if filter_value(&query.filters, "route") == Some("tag") {
+        format!("/tags/{}/", tag_slug(&query.query))
+    } else {
+        pairs.push((
+            "q",
+            form_urlencoded::byte_serialize(query.query.as_bytes()).collect(),
+        ));
+        "/search/".to_owned()
+    };
+
+    for key in super::search_patterns::URL_FILTER_KEYS {
+        if let Some(value) = filter_value(&query.filters, key) {
+            pairs.push((
+                key,
+                form_urlencoded::byte_serialize(value.as_bytes()).collect(),
+            ));
+        }
+    }
+    pairs.push(("page", page.to_string()));
+
+    let query_string = pairs
+        .iter()
+        .map(|(k, v)| format!("{k}={v}"))
+        .collect::<Vec<_>>()
+        .join("&");
+    format!("{origin}{path}?{query_string}")
+}
+
 /// Whether a `Next` pagination anchor is present.
 ///
 /// This is the ONLY safe `has_more` signal for this site: `?page=999` answers
@@ -105,6 +171,7 @@ pub(crate) fn max_page(html: &str) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rdlp_types::{SearchFilter, SearchQuery};
 
     /// The everyday production shape: one grid, no recommendation blocks.
     const TAG_PAGE: &str = include_str!("tests/pornoxo_tag_page.html");
@@ -118,15 +185,13 @@ mod tests {
     const TAG_PAGE_RECOMMENDATIONS: &str =
         include_str!("tests/pornoxo_tag_page_recommendations.html");
 
-    const ORIGIN: &str = "https://www.pornoxo.com";
-
     /// The load-bearing test: this fixture carries two extra 10-card
     /// recommendation grids, so a selector that drops
     /// `.main-listing-grid-offset` collects 52 + 10 + 10 = 72 here and fails.
     /// Verified by mutation, not assumed.
     #[test]
     fn parses_the_results_grid_not_the_recommendation_grids() {
-        let results = parse_listing(ORIGIN, TAG_PAGE_RECOMMENDATIONS);
+        let results = parse_listing(&default_origin(), TAG_PAGE_RECOMMENDATIONS);
         assert_eq!(
             results.len(),
             52,
@@ -138,12 +203,12 @@ mod tests {
     /// the same 52 rows.
     #[test]
     fn parses_a_page_that_carries_only_the_results_grid() {
-        assert_eq!(parse_listing(ORIGIN, TAG_PAGE).len(), 52);
+        assert_eq!(parse_listing(&default_origin(), TAG_PAGE).len(), 52);
     }
 
     #[test]
     fn parses_first_card_fields() {
-        let listing = parse_listing(ORIGIN, TAG_PAGE);
+        let listing = parse_listing(&default_origin(), TAG_PAGE);
         let r = &listing[0];
         assert_eq!(r.title, "Test V*E*C*XFiveFive Six Mosaic Removed");
         assert_eq!(
@@ -164,7 +229,7 @@ mod tests {
 
     #[test]
     fn every_card_has_an_absolute_video_url_and_a_duration() {
-        let listing = parse_listing(ORIGIN, TAG_PAGE);
+        let listing = parse_listing(&default_origin(), TAG_PAGE);
         assert!(
             listing
                 .iter()
@@ -181,7 +246,8 @@ mod tests {
     /// one host never yields card URLs pointing at another.
     #[test]
     fn resolves_cards_against_the_supplied_origin() {
-        let listing = parse_listing("http://127.0.0.1:1234", TAG_PAGE);
+        let origin = SearchOrigin::new("http://127.0.0.1:1234").unwrap();
+        let listing = parse_listing(&origin, TAG_PAGE);
         assert!(
             listing[0]
                 .video_url
@@ -209,8 +275,101 @@ mod tests {
         assert_eq!(max_page(&last), None);
     }
 
+    fn q(query: &str, filters: &[(&str, &str)]) -> SearchQuery {
+        SearchQuery {
+            query: query.to_owned(),
+            filters: filters
+                .iter()
+                .map(|(k, v)| SearchFilter {
+                    key: (*k).to_owned(),
+                    value: (*v).to_owned(),
+                })
+                .collect(),
+            max_results: None,
+            page: None,
+        }
+    }
+
+    #[test]
+    fn builds_the_tag_route_url_from_the_query_as_slug() {
+        assert_eq!(
+            build_listing_url(
+                &default_origin(),
+                &q("big ass", &[("route", "tag"), ("sort", "mr")]),
+                3
+            ),
+            "https://www.pornoxo.com/tags/big-ass/?sort=mr&page=3"
+        );
+    }
+
+    #[test]
+    fn builds_the_search_route_url_by_default() {
+        assert_eq!(
+            build_listing_url(&default_origin(), &q("creampie", &[]), 1),
+            "https://www.pornoxo.com/search/?q=creampie&page=1"
+        );
+    }
+
+    #[test]
+    fn percent_encodes_the_search_query() {
+        let u = build_listing_url(&default_origin(), &q("big ass & more", &[]), 1);
+        assert!(
+            u.contains("q=big+ass+%26+more") || u.contains("q=big%20ass%20%26%20more"),
+            "{u}"
+        );
+    }
+
+    /// A tag name is operator-supplied text pasted into a URL PATH. Without
+    /// encoding, a `?` or `&` in it would graft attacker-chosen parameters
+    /// onto the request — including a `page=` that defeats the clamp guard.
+    #[test]
+    fn a_tag_slug_cannot_inject_query_parameters() {
+        let u = build_listing_url(
+            &default_origin(),
+            &q("x/?page=1&sort=zz", &[("route", "tag")]),
+            2,
+        );
+        assert!(u.ends_with("&page=2") || u.ends_with("?page=2"), "{u}");
+        assert_eq!(u.matches("page=").count(), 1, "exactly one page param: {u}");
+        assert!(!u.contains("sort=zz"), "slug must not become a filter: {u}");
+    }
+
+    #[test]
+    fn forwards_every_supplied_filter_in_declaration_order() {
+        let u = build_listing_url(
+            &default_origin(),
+            &q(
+                "x",
+                &[
+                    ("filter_length", "long"),
+                    ("sort", "lg"),
+                    ("filter_quality", "hd"),
+                ],
+            ),
+            1,
+        );
+        assert_eq!(
+            u,
+            "https://www.pornoxo.com/search/?q=x&sort=lg&filter_quality=hd&filter_length=long&page=1",
+            "filter order follows URL_FILTER_KEYS, not the caller's ordering"
+        );
+    }
+
+    #[test]
+    fn slug_normalisation_lowercases_and_hyphenates() {
+        let u = build_listing_url(
+            &default_origin(),
+            &q("  Big   ASS  ", &[("route", "tag")]),
+            1,
+        );
+        assert!(
+            u.starts_with("https://www.pornoxo.com/tags/big-ass/?"),
+            "{u}"
+        );
+    }
+
     #[test]
     fn empty_page_yields_no_results() {
-        assert!(parse_listing(ORIGIN, "<html><body></body></html>").is_empty());
+        assert!(parse_listing(&default_origin(), "<html><body></body></html>").is_empty());
     }
 }

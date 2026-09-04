@@ -13,23 +13,37 @@ use async_trait::async_trait;
 use lazy_regex::Regex;
 use log::debug;
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result};
-use rdlp_types::{DownloadProtocol, Format, InfoDict};
+use rdlp_types::{DownloadProtocol, Format, InfoDict, SearchFilter, SearchQuery};
 use scraper::Html;
 
-use crate::base::common::BaseExtractor;
 use crate::base::common::json_ld::{
     extract_json_ld, extract_tags, extract_view_count, get_thumbnail_url,
 };
+use crate::base::common::{BaseExtractor, PagedSearch, SearchOrigin, SearchPage, filter_value};
 use crate::hls::detect_format_sizes_lazy;
 
 /// PornoXO — signed per-page-load HLS ladder read from an inline `playerConfig`.
-pub struct PornoxoExtractor;
+pub struct PornoxoExtractor {
+    /// Origin the listing/search URLs are built against. Production literal by
+    /// default; test-injected to a mockito origin via `with_origin`, mirroring
+    /// the PornHub seam. Typed rather than a `String` so only a shape-validated
+    /// origin can reach the URL builders and the card URLs they produce.
+    origin: SearchOrigin,
+}
 
 impl PornoxoExtractor {
     /// Create a new PornoXO extractor.
     #[must_use]
     pub fn new() -> Self {
-        Self
+        Self {
+            origin: search::default_origin(),
+        }
+    }
+
+    /// Test-only: point the listing builders at a mockito origin.
+    #[cfg(test)]
+    pub(crate) fn with_origin(origin: SearchOrigin) -> Self {
+        Self { origin }
     }
 }
 
@@ -129,6 +143,89 @@ impl InfoExtractor for PornoxoExtractor {
             info.is_live = Some(true);
         }
         Ok(info)
+    }
+}
+
+impl PagedSearch for PornoxoExtractor {
+    fn search_log_tag(&self) -> &'static str {
+        "[PornoXO]"
+    }
+
+    fn validate_search_filters(&self, filters: &[SearchFilter]) -> Result<()> {
+        search_patterns::validate(filters)
+    }
+
+    /// Fetch and parse one listing page.
+    ///
+    /// A custom body rather than a `fetch_via_spec` one-liner, because two of
+    /// this site's behaviours cannot be expressed as a build-URL/parse pair:
+    /// the out-of-range page has to be refused BEFORE parsing, and a 403 means
+    /// different things on the two routes.
+    async fn fetch_page(
+        &self,
+        query: &SearchQuery,
+        page: u32,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPage> {
+        let route = filter_value(&query.filters, "route").unwrap_or("search");
+        let url = search::build_listing_url(&self.origin, query, page);
+
+        debug!(
+            "[PornoXO] Fetching {route} listing page {page}: {}",
+            rdlp_redact::RedactedUrl::new(&url)
+        );
+
+        // Deliberately routed through `fetch_webpage`, which runs
+        // `check_http_response` BEFORE reading the body. That ordering is the
+        // structural defence for this site's nastiest behaviour: `/search/?q=`
+        // answers a nonsense query with HTTP 404 AND a fully populated 52-row
+        // grid of unrelated filler. Parsing that body would hand the operator
+        // 52 confident, wrong results.
+        let body = match BaseExtractor::fetch_webpage(&url, ctx).await {
+            Ok(body) => body,
+            // The search route sits behind a Cloudflare challenge; a
+            // clearance solved once in a browser transplants into our client
+            // and survives pagination, so the actionable advice is cookies.
+            // The tag route is cookie-free, so the same status there means
+            // something else and must not send the operator chasing cookies.
+            Err(RdlpError::Http { status: 403, .. }) if route == "search" => {
+                return Err(RdlpError::Extraction {
+                    message: "PornoXO search is behind a Cloudflare challenge. Pass \
+                              --cookies-from-browser <browser> after solving it once in \
+                              that browser, or use --search-filter route=tag to list a \
+                              tag instead (which returns different results)."
+                        .to_owned(),
+                    url: None,
+                });
+            }
+            Err(e) => return Err(e),
+        };
+
+        // An out-of-range page answers HTTP 200 with page 1's videos rather
+        // than an error or an empty grid, so the bound has to come from the
+        // pager on the page, never from the response status or row count.
+        // Returning page 1 labelled as page 999 would be confidently wrong.
+        if let Some(max) = search::max_page(&body)
+            && page > max
+        {
+            return Err(RdlpError::Extraction {
+                message: format!(
+                    "page {page} is beyond this listing's last page ({max}); \
+                     the site silently serves page 1 for out-of-range pages"
+                ),
+                url: None,
+            });
+        }
+
+        Ok(SearchPage {
+            results: search::parse_listing(&self.origin, &body),
+            // `?page=999` returning HTTP 200 with page 1's content means an
+            // empty-grid stop condition never fires; the `Next` anchor is the
+            // only signal that terminates.
+            has_more: search::has_next_page(&body),
+            // The site publishes no result count on either route.
+            total_estimate: None,
+        })
     }
 }
 
@@ -319,5 +416,190 @@ mod tests {
             .await
             .expect_err("a page with no playerConfig must error");
         assert!(err.to_string().contains("playerConfig"), "got: {err}");
+    }
+}
+
+/// Tests for the listing/search path: the three site behaviours a naive
+/// implementation gets wrong, driven end to end through `fetch_page` against a
+/// mockito origin (the seam established for PornHub in issue #457).
+#[cfg(test)]
+mod paged_search_tests {
+    use super::*;
+    use crate::base::common::SearchOrigin;
+    use crate::hls::test_support::test_ctx;
+
+    /// Declared here rather than reused from `search.rs`'s test module: a
+    /// `const` inside a `#[cfg(test)] mod tests` is not in scope from here.
+    const TAG_PAGE: &str = include_str!("tests/pornoxo_tag_page.html");
+
+    /// The last page this fixture's `>>` anchor advertises. Read from the
+    /// committed capture, not assumed.
+    const FIXTURE_MAX_PAGE: u32 = 37;
+
+    fn query(q: &str, filters: &[(&str, &str)]) -> SearchQuery {
+        SearchQuery {
+            query: q.to_owned(),
+            filters: filters
+                .iter()
+                .map(|(k, v)| SearchFilter {
+                    key: (*k).to_owned(),
+                    value: (*v).to_owned(),
+                })
+                .collect(),
+            max_results: None,
+            page: None,
+        }
+    }
+
+    /// One helper for every route rather than a per-route trio: the route is
+    /// just a filter, so three near-identical helpers would be three copies of
+    /// the same three lines.
+    async fn page_against(
+        server: &mockito::Server,
+        filters: &[(&str, &str)],
+        page: u32,
+    ) -> Result<SearchPage> {
+        let origin = SearchOrigin::new(&server.url()).expect("mockito origin is well formed");
+        PornoxoExtractor::with_origin(origin)
+            .fetch_page(&query("creampie", filters), page, &test_ctx())
+            .await
+    }
+
+    async fn serving(status: usize, body: &str) -> (mockito::ServerGuard, mockito::Mock) {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(status)
+            .with_body(body)
+            .create_async()
+            .await;
+        (server, mock)
+    }
+
+    /// Behaviour 1. `/search/?q=` answers a nonsense query with HTTP 404 AND a
+    /// fully populated 52-row grid of filler. Parsing that body would hand the
+    /// operator 52 confident, wrong results, so the status must decide.
+    #[tokio::test]
+    async fn a_404_with_a_populated_grid_is_an_error_not_52_results() {
+        let (server, _m) = serving(404, TAG_PAGE).await;
+
+        let err = page_against(&server, &[], 1)
+            .await
+            .expect_err("a 404 must not be parsed, however full its body is");
+        assert!(
+            matches!(err, RdlpError::Http { status: 404, .. }),
+            "must fail on the STATUS, not on some later parse step: {err:?}"
+        );
+    }
+
+    /// Behaviour 2. `?page=999` answers HTTP 200 with page 1's videos, so an
+    /// explicitly requested out-of-range page must be refused against the `>>`
+    /// bound rather than returned as if it were page 999.
+    #[tokio::test]
+    async fn refuses_a_page_beyond_the_pager_maximum() {
+        let (server, _m) = serving(200, TAG_PAGE).await;
+
+        let err = page_against(&server, &[], 999)
+            .await
+            .expect_err("an out-of-range page must be refused, not silently clamped");
+        let msg = err.to_string();
+        assert!(msg.contains("999"), "must name the requested page: {msg}");
+        assert!(msg.contains("37"), "must name the bound it exceeded: {msg}");
+    }
+
+    /// The boundary itself, both sides. A `>=` slip would still refuse 999 and
+    /// pass the test above while wrongly rejecting the real last page, so the
+    /// only assertions that pin the comparison are max and max+1.
+    #[tokio::test]
+    async fn accepts_the_last_page_and_refuses_the_one_after_it() {
+        let (server, _m) = serving(200, TAG_PAGE).await;
+
+        let last = page_against(&server, &[], FIXTURE_MAX_PAGE).await;
+        assert!(
+            last.is_ok(),
+            "page {FIXTURE_MAX_PAGE} IS the last page and must be served: {:?}",
+            last.err()
+        );
+        assert!(
+            page_against(&server, &[], FIXTURE_MAX_PAGE + 1)
+                .await
+                .is_err(),
+            "page {} is one past the end and must be refused",
+            FIXTURE_MAX_PAGE + 1
+        );
+    }
+
+    /// Behaviour 3, route-specific. The search route is Cloudflare-gated and a
+    /// browser-solved clearance transplants into our client, so the operator
+    /// needs that advice rather than a bare HTTP 403.
+    #[tokio::test]
+    async fn a_403_on_the_search_route_names_cookies_from_browser() {
+        let (server, _m) = serving(403, "<title>Just a moment...</title>").await;
+
+        let err = page_against(&server, &[("route", "search")], 1)
+            .await
+            .expect_err("a challenged search must error");
+        let msg = err.to_string();
+        assert!(msg.contains("--cookies-from-browser"), "got: {msg}");
+        assert!(msg.contains("Cloudflare"), "got: {msg}");
+        assert!(
+            msg.contains("route=tag"),
+            "must offer the open route: {msg}"
+        );
+    }
+
+    /// The same status on the TAG route is not a clearance problem. The tag
+    /// route is cookie-free, so claiming otherwise would send the operator
+    /// chasing a cookie that would not have helped.
+    #[tokio::test]
+    async fn a_403_on_the_tag_route_does_not_mention_cookies() {
+        let (server, _m) = serving(403, "nope").await;
+
+        let err = page_against(&server, &[("route", "tag")], 1)
+            .await
+            .expect_err("a 403 must still be an error on the tag route");
+        let msg = err.to_string();
+        assert!(!msg.contains("--cookies-from-browser"), "got: {msg}");
+        assert!(
+            matches!(err, RdlpError::Http { status: 403, .. }),
+            "the tag route must propagate the raw status: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn reports_has_more_from_the_next_link() {
+        let (server, _m) = serving(200, TAG_PAGE).await;
+
+        let page = page_against(&server, &[], 1)
+            .await
+            .expect("page 1 must parse");
+        assert_eq!(page.results.len(), 52);
+        assert!(page.has_more, "page 1 of 37 has a Next anchor");
+        assert_eq!(
+            page.total_estimate, None,
+            "the site publishes no result count"
+        );
+    }
+
+    /// `search_all_pages` runs filters through `validate_search_filters`, so a
+    /// typo is refused before any request is made.
+    #[tokio::test]
+    async fn an_unknown_filter_is_refused_before_fetching() {
+        let mut server = mockito::Server::new_async().await;
+        let never = server
+            .mock("GET", mockito::Matcher::Any)
+            .with_status(200)
+            .with_body(TAG_PAGE)
+            .expect(0)
+            .create_async()
+            .await;
+
+        let origin = SearchOrigin::new(&server.url()).expect("mockito origin is well formed");
+        let err = PornoxoExtractor::with_origin(origin)
+            .search_all_pages(&query("x", &[("sort", "newest")]), &test_ctx())
+            .await
+            .expect_err("an invalid sort must be refused");
+        assert!(err.to_string().contains("newest"), "got: {err}");
+        never.assert_async().await;
     }
 }

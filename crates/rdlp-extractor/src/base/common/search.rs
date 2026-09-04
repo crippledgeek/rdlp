@@ -21,6 +21,7 @@ use crate::base::common::BaseExtractor;
 /// One parsed search page: the rows, whether another page exists, and an
 /// optional total-result estimate. Produced by a site's `parse` hook in a
 /// single pass (no re-scan of the body).
+#[derive(Debug)]
 pub(crate) struct SearchPage {
     pub results: Vec<SearchResultPreview>,
     pub has_more: bool,
