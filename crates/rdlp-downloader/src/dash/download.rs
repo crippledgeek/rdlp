@@ -650,16 +650,11 @@ async fn download_one(
     cancel: Option<&CancellationToken>,
 ) -> Result<Vec<u8>> {
     let client = http.client().clone();
-    // Same-origin header gate (issue #319). When the segment URL's origin
-    // differs from the MPD URL's origin (CDN-redirected media), strip the
-    // operator-set headers. `Origin::Opaque` compares not-equal — fails
-    // closed. Mirrors PR #273 for the modern per-Repr path.
-    let headers = if url.origin() == *mpd_origin {
-        http.headers()
-    } else {
-        wreq::header::HeaderMap::new()
-    };
     let url_str = url.to_string();
+    // Same-origin header gate (#319): a segment on a different origin from the
+    // MPD (CDN-redirected media) gets no operator headers. Shared with the
+    // fragment path — one implementation of the credential gate, not two.
+    let headers = crate::http::same_origin_headers(Some(mpd_origin), &url_str, &http.headers());
     // The fetch itself: send + status check + body read. The retry policy,
     // the backoff, and the cancel race all live in `crate::retry` — this
     // closure is only the work that varies between callers.

@@ -313,8 +313,7 @@ mod tests {
         // The guarantee this whole wrapper exists for: the operation always
         // fails, and the backoff between attempts is 30s, so anything that
         // waits out a sleep cannot finish inside the assertion below.
-        // 30s between attempts: far longer than the assertion below tolerates,
-        // so a wrapper that waited for the sleep could not pass.
+
         let config = RetryConfig::new(5, Duration::from_secs(30), Duration::from_secs(30), 2.0);
         let token = CancellationToken::new();
         let cancel_token = token.clone();

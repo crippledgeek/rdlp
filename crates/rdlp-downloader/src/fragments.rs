@@ -580,16 +580,23 @@ async fn fetch_with_optional_range(
 
     let safe_url = rdlp_security::sanitize_for_logging(url);
 
-    // Same-origin gate: forward operator headers only when the target origin
-    // matches the format origin. Fails closed on any parse failure or opaque origin.
-    let same_origin = match (format_origin, url::Url::parse(url).ok()) {
-        (Some(seed), Some(target)) => *seed == target.origin(),
-        _ => false,
-    };
-    let mut req = http.client().get(url);
-    if same_origin {
-        req = req.headers(http.headers());
-    }
+    // Same-origin gate (#273): operator headers reach only a target on the
+    // format's own origin. Shared with the DASH segment path.
+    //
+    // The request timeout matches what the DASH segment path has carried since
+    // its own Item 8: without one, a CDN that accepts the connection and then
+    // stalls never produces an error at all, so the retry this path gained in
+    // #570 could not help the commonest CDN failure. Cancellation covers a
+    // stall only when the caller supplied a token.
+    let mut req = http
+        .client()
+        .get(url)
+        .timeout(http.config.read_timeout)
+        .headers(crate::http::same_origin_headers(
+            format_origin,
+            url,
+            &http.headers(),
+        ));
 
     // `byte_range` is `(start, end_exclusive)`; RFC 9110's `Range` header and
     // `RequestedSpan` are both inclusive, so `end_exclusive` is converted once

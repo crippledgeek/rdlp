@@ -852,9 +852,11 @@ fn test_validate_rejects_retry_multiplier_below_one() {
 }
 
 #[test]
-fn test_validate_rejects_retry_multiplier_that_would_not_narrow_to_f32() {
-    // The downloader casts this to f32; the validated range is what makes that
-    // narrowing exact, and is cited as such at the cast site.
+fn test_validate_rejects_retry_multiplier_that_saturates_to_infinity() {
+    // The downloader casts this to f32, and `as` saturates an out-of-range
+    // float rather than erroring: `1e40_f64 as f32` is `inf`. Bounding the
+    // range is what keeps the cast finite — it does NOT make the narrowing
+    // exact, since 1.1f64 and 1.1f32 differ in the mantissa.
     let mut config = Config::default();
     config.retry_backoff_multiplier = 1e40;
     let err = config.validate().unwrap_err();

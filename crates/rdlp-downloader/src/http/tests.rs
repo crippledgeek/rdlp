@@ -11,6 +11,15 @@ use rdlp_core::is_retryable_error;
 /// `chunk_retry_policy` derives the chunk layer's attempt count from this, so
 /// a config of 0 — which every one of these tests used to carry — silently
 /// turns a retry test into a single-request test.
+///
+/// Which layer a test actually drives is worth knowing, because this one knob
+/// moves both. A 5xx is converted by `check_http_response` *inside*
+/// `download_range_with_progress`'s own `with_retry`, so the status-code tests
+/// are satisfied by the inner range layer and may never iterate the outer
+/// chunk loop. The tests that unambiguously drive the outer loop are
+/// `chunk_retry_recovers_from_wrong_span_response` and
+/// `..._from_short_body`: span and length validation run after the inner
+/// retry has already returned, so only the chunk layer can retry them.
 fn chunk_test_downloader(max_retries: usize) -> HttpDownloader {
     HttpDownloader::new().with_retry_config(crate::retry::test_retry_config(max_retries))
 }
@@ -1843,10 +1852,6 @@ async fn chunk_retry_does_not_retry_range_ignoring_server() {
         "a Range-ignoring server must fail the chunk"
     );
     mock_200.assert_async().await;
-
-    // Every mock must have been consumed: without this an accidental
-    // single-request run would satisfy the assertions above.
-    mock_200.assert_async().await;
 }
 
 // ---------------------------------------------------------------------------
@@ -1945,7 +1950,10 @@ async fn resume_rejects_response_starting_at_wrong_offset() {
         .create_async()
         .await;
 
-    let downloader = chunk_test_downloader(3);
+    // Not a chunk test: this drives `download_with_resume`, and the offset
+    // rejection it asserts happens above the retry layer. Retries stay off, as
+    // they were before the chunk tests were converged onto a shared helper.
+    let downloader = chunk_test_downloader(0);
 
     let temp_file = NamedTempFile::new().unwrap();
     let path = temp_file.path();
@@ -2312,4 +2320,99 @@ fn chunk_policy_holds_the_delay_ceiling_but_keeps_the_caller_s_shape() {
         chunk_retry_policy(&fast).max_delay,
         Duration::from_millis(5)
     );
+}
+
+// --- same-origin header gate (#273 / #319, converged for #570) ---
+//
+// This gate decides whether the operator's Referer / Cookie / Authorization
+// reach a given target. It used to be written twice; these tests cover the
+// union of what both spellings had to get right.
+
+fn seed_headers() -> wreq::header::HeaderMap {
+    let mut headers = wreq::header::HeaderMap::new();
+    headers.insert("Referer", "https://seed.example/page".parse().unwrap());
+    headers.insert("Cookie", "session=secret".parse().unwrap());
+    headers
+}
+
+fn origin_of(url: &str) -> url::Origin {
+    url::Url::parse(url).unwrap().origin()
+}
+
+#[test]
+fn same_origin_target_receives_the_operator_headers() {
+    let seed = origin_of("https://cdn.example/master.m3u8");
+    let out = same_origin_headers(Some(&seed), "https://cdn.example/seg1.ts", &seed_headers());
+    assert_eq!(out.len(), 2, "same origin forwards every header");
+    assert!(out.contains_key("Cookie"));
+}
+
+#[test]
+fn a_different_host_receives_nothing() {
+    let seed = origin_of("https://cdn.example/master.m3u8");
+    let out = same_origin_headers(
+        Some(&seed),
+        "https://attacker.example/seg1.ts",
+        &seed_headers(),
+    );
+    assert!(
+        out.is_empty(),
+        "a foreign host must not receive credentials"
+    );
+}
+
+#[test]
+fn origin_is_scheme_host_and_port_not_just_host() {
+    // RFC 6454: all three components. A downgrade to http, or a different
+    // port, is a different origin even with the host unchanged.
+    let seed = origin_of("https://cdn.example/master.m3u8");
+    for target in [
+        "http://cdn.example/seg1.ts",
+        "https://cdn.example:8443/seg1.ts",
+        "https://sub.cdn.example/seg1.ts",
+    ] {
+        let out = same_origin_headers(Some(&seed), target, &seed_headers());
+        assert!(out.is_empty(), "{target} must not receive credentials");
+    }
+}
+
+#[test]
+fn absent_seed_fails_closed() {
+    // No format URL, or one that would not parse: nothing is known about the
+    // intended origin, so nothing is forwarded.
+    let out = same_origin_headers(None, "https://cdn.example/seg1.ts", &seed_headers());
+    assert!(out.is_empty());
+}
+
+#[test]
+fn unparseable_target_fails_closed() {
+    let seed = origin_of("https://cdn.example/master.m3u8");
+    let out = same_origin_headers(Some(&seed), "not a url", &seed_headers());
+    assert!(out.is_empty());
+}
+
+#[test]
+fn opaque_origins_never_match_not_even_themselves() {
+    // A non-tuple origin (`data:`) yields `Origin::Opaque`, and two opaque
+    // origins are never equal — which is what makes the gate fail closed
+    // rather than accidentally matching one such URL against another.
+    let opaque = origin_of("data:text/plain,seed");
+    let out = same_origin_headers(Some(&opaque), "data:text/plain,seed", &seed_headers());
+    assert!(
+        out.is_empty(),
+        "an opaque origin must not match, even against an identical URL"
+    );
+}
+
+#[test]
+fn a_same_origin_target_with_a_different_path_or_query_still_matches() {
+    // Origin is scheme/host/port only — a CDN token in the query, or a deep
+    // path, does not make the target foreign.
+    let seed = origin_of("https://cdn.example/master.m3u8");
+    let out = same_origin_headers(
+        Some(&seed),
+        "https://cdn.example/deep/path/seg1.ts?token=abc123",
+        &seed_headers(),
+    );
+    assert_eq!(out.len(), 2);
 }

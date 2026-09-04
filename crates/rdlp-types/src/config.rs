@@ -552,8 +552,9 @@ impl Config {
             return Err(ConfigValidationError::OutOfRange {
                 field: "retry_backoff_multiplier",
                 reason: "must be 1.0..=10.0 (below 1.0 shrinks each delay instead of \
-                         backing off; the range is also what makes the f64 -> f32 \
-                         narrowing at the downloader boundary exact)",
+                         backing off; the upper bound keeps the f64 -> f32 narrowing at \
+                         the downloader boundary finite, since an out-of-range float \
+                         saturates to infinity)",
             });
         }
         if self.buffer_size == 0 {

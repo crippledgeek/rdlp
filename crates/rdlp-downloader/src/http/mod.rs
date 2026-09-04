@@ -55,6 +55,37 @@ fn to_header_map(headers: Option<&HashMap<String, String>>) -> HeaderMap {
 /// `BaseExtractor::detect_file_size`. Closes #306.
 pub(crate) use rdlp_http::ProbeResult;
 
+/// The operator's headers, but only for a target on the seed's origin.
+///
+/// `Format.http_headers` carry Referer, Cookie, Authorization and Origin. A
+/// manifest names its own fragment and segment URLs, so a compromised or
+/// hostile playlist can point them at a host of its choosing; forwarding the
+/// operator's headers there hands that host the user's credentials. The gate
+/// is origin equality per RFC 6454 — scheme, host and port.
+///
+/// Fails closed on every uncertainty: no seed, a target that will not parse,
+/// and an opaque origin on either side (two opaque origins are never equal,
+/// so a `data:` or otherwise non-tuple origin can never match).
+///
+/// One function because this decision existed twice — once for the fragment
+/// path (#273) and once for DASH's legacy MPD path (#319) — and two copies of
+/// a credential gate is one copy too many. Both call sites now share it.
+pub(crate) fn same_origin_headers(
+    seed: Option<&url::Origin>,
+    target_url: &str,
+    headers: &HeaderMap,
+) -> HeaderMap {
+    let same_origin = match (seed, url::Url::parse(target_url).ok()) {
+        (Some(seed), Some(target)) => *seed == target.origin(),
+        _ => false,
+    };
+    if same_origin {
+        headers.clone()
+    } else {
+        HeaderMap::new()
+    }
+}
+
 /// HTTP status a single-part ranged response must carry (RFC 9110 §15.3.7).
 ///
 /// A `200` means the server ignored `Range` — permitted by §14.2 — and the
@@ -516,8 +547,9 @@ impl HttpDownloader {
 
         // NOTE: plain `with_retry`, not the cancellable form — this loop's
         // backoff sleeps are not themselves raced against `cancel`. That is
-        // safe only because the sole caller (`download_chunk_with_retry`)
-        // wraps this whole call in `with_retry_cancellable`. A future caller
+        // safe only because the sole production caller
+        // (`download_chunk_with_retry`) wraps this whole call in
+        // `with_retry_cancellable`. A future caller
         // invoking this directly and expecting a cancel to interrupt a backoff
         // would not get one.
         let response = with_retry(

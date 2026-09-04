@@ -1940,3 +1940,42 @@ async fn retry_budget_bounds_cumulative_retries_across_the_fragment_list() {
         "exactly two fragments may be rescued by a budget of two retries"
     );
 }
+
+#[tokio::test]
+async fn a_stalled_fragment_fetch_times_out_rather_than_hanging() {
+    // The failure mode the fragment path could not see before it carried a
+    // request timeout: a CDN that accepts the connection and then sends
+    // nothing. No error is ever produced, so #570's retry cannot help — and
+    // without a cancellation token there is nothing else to end the wait.
+    // mockito cannot express this (it has no delay API), so this is a raw
+    // listener that accepts and holds.
+    // Bound but never accepted: the kernel completes the handshake into the
+    // backlog, so the client connects successfully and then waits forever for
+    // a response that no one will write. `listener` must stay in scope for the
+    // whole test — dropping it closes the port, and the connect would then
+    // fail fast instead of stalling, which is not what this test is about.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+
+    let http = http_with_retries(0).with_read_timeout(std::time::Duration::from_millis(100));
+    let frags = vec![frag(format!("http://{addr}/stalled.ts"))];
+    let tmp = tempfile::NamedTempFile::new().expect("tmp");
+
+    let started = Instant::now();
+    let err =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+            .await
+            .expect_err("a stalled fragment must fail, not hang");
+    let elapsed = started.elapsed();
+
+    assert!(
+        matches!(err, rdlp_core::RdlpError::Network { .. }),
+        "a timeout is a transient network failure, so it stays retryable: {err:?}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "returned only after {elapsed:?}; the fetch was not bounded by read_timeout"
+    );
+}

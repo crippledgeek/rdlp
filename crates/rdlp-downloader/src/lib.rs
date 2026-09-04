@@ -355,10 +355,15 @@ const fn retry_config_from(config: &Config, max_retries: usize) -> RetryConfig {
         #[allow(
             clippy::cast_possible_truncation,
             reason = "RetryConfig's multiplier is f32; Config carries f64 for TOML/serde \
-                      symmetry with the other numeric settings. Config::validate rejects \
-                      anything outside 1.0..=10.0 (see its retry_backoff_multiplier arm \
-                      and test_validate_rejects_retry_multiplier_that_would_not_narrow_to_f32), \
-                      and every f64 in that range is exactly representable as f32."
+                      symmetry with the other numeric settings. The lint's concern is a \
+                      value that does not survive the narrowing: `as` saturates an \
+                      out-of-range float to +/-infinity and admits NaN. Config::validate \
+                      rejects both by bounding this to 1.0..=10.0 (see its \
+                      retry_backoff_multiplier arm and \
+                      test_validate_rejects_retry_multiplier_that_saturates_to_infinity). \
+                      Mantissa precision is still lost — 1.1f64 is not 1.1f32 — but the \
+                      residual is under 2^-24 relative, which no backoff schedule can \
+                      observe."
         )]
         {
             config.retry_backoff_multiplier as f32
