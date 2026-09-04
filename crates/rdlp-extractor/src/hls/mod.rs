@@ -47,6 +47,7 @@ mod variants;
 
 // Re-export public API unchanged
 pub use detector::HlsSizeDetector;
+pub(crate) use expand::validate_resolved_url;
 pub use expand::{HlsExpandError, expand_hls_url};
 pub use expand_in_place::expand_hls_in_place;
 pub use format_detection::{detect_format_sizes, detect_format_sizes_lazy};

@@ -1,0 +1,248 @@
+//! Filter vocabulary for PornoXO search and tag listings.
+
+use rdlp_core::Result;
+use rdlp_types::{SearchFilter, SearchFilterDescriptor, SearchFilterValue};
+
+use crate::base::common::{format_std_filter_error, validate_against_descriptors};
+
+/// The filters PornoXO accepts, and the only values it accepts for each.
+///
+/// `route` is PornoXO's own, not the site's: the site exposes two listing
+/// paths, `/search/?q=` (Cloudflare-gated, full-text) and `/tags/<slug>/`
+/// (open, slug-matched). Making the choice an explicit filter keeps a missing
+/// `cf_clearance` from silently degrading a search into a tag listing, which
+/// would return different videos than the operator asked for.
+///
+/// The other three are the site's own query parameters, read off its listing
+/// controls.
+pub(crate) fn supported_filters() -> Vec<SearchFilterDescriptor> {
+    vec![
+        SearchFilterDescriptor::new(
+            "route",
+            "Listing Route",
+            SearchFilterValue::list([
+                ("search", "Full-text search"),
+                ("tag", "Tag listing (query is the tag slug)"),
+            ]),
+            Some("search"),
+        ),
+        SearchFilterDescriptor::new(
+            "sort",
+            "Sort By",
+            SearchFilterValue::list([
+                ("re", "Trending"),
+                ("mr", "New"),
+                ("mw", "Most Popular"),
+                ("tr", "Top Rated"),
+                ("lg", "Longest"),
+            ]),
+            Some("re"),
+        ),
+        SearchFilterDescriptor::new(
+            "quality",
+            "Quality",
+            // Values read off the site's own Quality control, which offers
+            // exactly three buttons and pre-selects `videos` ("All"). The KEY
+            // is rdlp's `quality` (xhamster precedent); the site's
+            // `filter_quality` spelling lives in `URL_FILTER_PARAMS`.
+            SearchFilterValue::list([("videos", "All"), ("hd", "HD"), ("vr", "VR")]),
+            Some("videos"),
+        ),
+        SearchFilterDescriptor::new(
+            // The KEY is the user-facing vocabulary and the LABEL is what it
+            // means; they must not disagree. An operator reading "Duration"
+            // reaches for `--search-filter duration=long` first. R23 already
+            // ruled the site's own `filter_length` spelling out of the CLI
+            // surface; it stays inside `URL_FILTER_PARAMS`. xhamster's
+            // `min-duration`/`max-duration` are numeric bounds, so a bucketed
+            // `duration` here does not collide with them.
+            "duration",
+            "Duration",
+            SearchFilterValue::list([
+                ("all", "Any length"),
+                ("short", "Short"),
+                ("normal", "Normal"),
+                ("long", "Long"),
+            ]),
+            Some("all"),
+        ),
+    ]
+}
+
+/// Maps each filter key to the site query parameter it is sent as, in the
+/// order the parameters appear in a built URL.
+///
+/// The filter key is rdlp's user-facing vocabulary; the site's raw parameter
+/// name is an internal detail that stops here. PornoXO spells two of these
+/// `filter_quality` / `filter_length`, and leaking that spelling into the CLI
+/// would make one site's URL schema part of rdlp's surface. `sort` happens to
+/// coincide.
+///
+/// `route` is deliberately absent: it selects the PATH (`/tags/` vs
+/// `/search/`) and is rdlp's own concept, so emitting it as a parameter would
+/// put a meaningless `route=` on every request. Every other descriptor key
+/// belongs here, and `every_non_route_filter_is_forwarded_to_the_url` fails if
+/// a future descriptor is added without an entry.
+pub(crate) const URL_FILTER_PARAMS: [(&str, &str); 3] = [
+    ("sort", "sort"),
+    ("quality", "filter_quality"),
+    ("duration", "filter_length"),
+];
+
+/// Reject any filter key or value PornoXO does not understand.
+///
+/// Every key uses the default `AllowedValues` policy, with no `FreeText`
+/// escape: the site accepts a bad value SILENTLY — a live `?sort=zz` returns
+/// the default results byte-identically — so there is no server-side check to
+/// defer to and a typo would otherwise be indistinguishable from a deliberate
+/// unsorted query.
+pub(crate) fn validate(filters: &[SearchFilter]) -> Result<()> {
+    validate_against_descriptors(filters, &supported_filters(), &[])
+        .map_err(|e| format_std_filter_error("PornoXO", e))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rdlp_types::SearchFilter;
+
+    fn f(key: &str, value: &str) -> SearchFilter {
+        SearchFilter {
+            key: key.to_owned(),
+            value: value.to_owned(),
+        }
+    }
+
+    #[test]
+    fn accepts_every_documented_sort_code() {
+        for code in ["re", "mr", "mw", "tr", "lg"] {
+            assert!(
+                validate(&[f("sort", code)]).is_ok(),
+                "sort={code} must be accepted"
+            );
+        }
+    }
+
+    /// The site SILENTLY ignores an unknown sort and returns the default
+    /// results byte-identically (verified live: `?sort=zz` == no `sort`).
+    /// There is no server-side rejection to defer to, so this check is the
+    /// only thing that can tell an operator they mistyped.
+    #[test]
+    fn rejects_an_unknown_sort_code() {
+        let e = validate(&[f("sort", "newest")]).unwrap_err();
+        let msg = e.to_string();
+        assert!(
+            msg.contains("newest"),
+            "must name the rejected value: {msg}"
+        );
+        assert!(msg.contains("sort"), "must name the key: {msg}");
+        assert!(
+            msg.contains("re") && msg.contains("lg"),
+            "must list what IS allowed: {msg}"
+        );
+    }
+
+    #[test]
+    fn rejects_an_unknown_filter_key() {
+        // `ordering` is the key four sibling extractors use for this concept,
+        // so it is the typo an operator is most likely to arrive with.
+        let e = validate(&[f("ordering", "mr")]).unwrap_err();
+        let msg = e.to_string();
+        assert!(msg.contains("ordering"), "must name the bad key: {msg}");
+        assert!(msg.contains("sort"), "must suggest the real keys: {msg}");
+    }
+
+    #[test]
+    fn accepts_both_routes_and_rejects_a_third() {
+        assert!(validate(&[f("route", "search")]).is_ok());
+        assert!(validate(&[f("route", "tag")]).is_ok());
+        assert!(validate(&[f("route", "tags")]).is_err());
+    }
+
+    /// The VALUES are the ones the site's own listing controls emit -- `videos`
+    /// ("All") is a real third quality value and omitting it would leave an
+    /// operator unable to ask for non-VR videos. The KEYS are rdlp's, not the
+    /// site's: `quality` (xhamster precedent) and `duration`, mapped to the
+    /// site's `filter_quality` / `filter_length` inside the URL builder.
+    #[test]
+    fn accepts_quality_and_duration_vocabularies() {
+        for v in ["videos", "hd", "vr"] {
+            assert!(validate(&[f("quality", v)]).is_ok(), "quality={v}");
+        }
+        assert!(validate(&[f("quality", "4k")]).is_err());
+        for v in ["all", "short", "normal", "long"] {
+            assert!(validate(&[f("duration", v)]).is_ok(), "duration={v}");
+        }
+        assert!(validate(&[f("duration", "medium")]).is_err());
+    }
+
+    /// The site's raw parameter names are an internal mapping, not part of the
+    /// CLI surface. Accepting them too would leak one site's URL schema into
+    /// rdlp's vocabulary and give every filter two spellings.
+    #[test]
+    fn the_sites_raw_parameter_names_are_not_filter_keys() {
+        assert!(validate(&[f("filter_quality", "hd")]).is_err());
+        assert!(validate(&[f("filter_length", "long")]).is_err());
+    }
+
+    #[test]
+    fn accepts_an_empty_filter_set_and_a_valid_combination() {
+        assert!(validate(&[]).is_ok());
+        assert!(
+            validate(&[f("route", "tag"), f("sort", "lg"), f("quality", "hd")]).is_ok(),
+            "filters must be independent, not mutually exclusive"
+        );
+    }
+
+    /// `supported_filters` is what the CLI advertises and what `validate`
+    /// checks against; a key present in one and absent from the other is
+    /// either an undocumented filter or an unenforced one.
+    #[test]
+    fn descriptors_cover_every_validated_key() {
+        let keys: Vec<_> = supported_filters().into_iter().map(|d| d.key).collect();
+        for k in ["route", "sort", "quality", "duration"] {
+            assert!(keys.iter().any(|d| d == k), "descriptor missing for {k}");
+        }
+        assert_eq!(keys.len(), 4, "no undocumented filter keys");
+    }
+
+    /// A descriptor added without a matching `URL_FILTER_PARAMS` entry would
+    /// validate fine and then be silently dropped from every request — the
+    /// same silent-ignore failure this vocabulary exists to prevent, moved
+    /// one layer inward.
+    #[test]
+    fn every_non_route_filter_is_forwarded_to_the_url() {
+        for d in supported_filters() {
+            if d.key == "route" {
+                continue;
+            }
+            assert!(
+                URL_FILTER_PARAMS.iter().any(|(k, _)| *k == d.key),
+                "descriptor {} is validated but never reaches the URL",
+                d.key
+            );
+        }
+        for (key, _) in URL_FILTER_PARAMS {
+            assert!(
+                supported_filters().iter().any(|d| d.key == key),
+                "{key} is forwarded to the URL but is not a declared filter"
+            );
+        }
+    }
+
+    /// Every descriptor's declared default must itself be an accepted value —
+    /// a default outside its own vocabulary would be rejected the moment a
+    /// frontend echoed it back.
+    #[test]
+    fn every_declared_default_is_itself_valid() {
+        for d in supported_filters() {
+            if let Some(default) = d.default {
+                assert!(
+                    validate(&[f(&d.key, &default)]).is_ok(),
+                    "default {default} for {} is not an allowed value",
+                    d.key
+                );
+            }
+        }
+    }
+}

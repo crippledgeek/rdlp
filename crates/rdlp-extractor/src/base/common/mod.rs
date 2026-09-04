@@ -36,6 +36,7 @@
 pub mod age_rating;
 pub mod dash;
 pub mod json_ld;
+pub(crate) mod manifest_url;
 mod metadata;
 mod parsing;
 pub(crate) mod protocol;
@@ -61,7 +62,8 @@ pub(crate) use protocol::protocol_for_url;
 pub(crate) use search::SearchOrigin;
 pub(crate) use search::{
     FilterValidationError, KeyValidation, PagedSearch, SearchPage, SearchPageSpec, Termination,
-    append_search_filters, format_std_filter_error, validate_against_descriptors,
+    append_search_filters, filter_value, format_std_filter_error, resolve_card_url,
+    resolve_media_url, validate_against_descriptors,
 };
 pub(crate) use selectors::*;
 
