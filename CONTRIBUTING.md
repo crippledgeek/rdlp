@@ -103,7 +103,7 @@ Tier 2: TnaFlixNetworkBase     (shared logic for site families)
 Tier 3: Site Extractors        (individual site implementations)
 ```
 
-**Currently supported extractors:** 13 site extractors + a Generic fallback. See [`crates/rdlp-extractor/src/extractors/`](crates/rdlp-extractor/src/extractors/) for the canonical list. Sites include TNAFlix family (TNAFlix/EMPFlix/MovieFap), RedTube, PornHub, SpankBang, XHamster, HQPorner, NineAnime, KoreanPornMovie, XVideos, XNXX, EPorner, XTits.
+**Currently supported extractors:** 16 site extractors (14 extractor modules — the TNAFlix family shares one module for TNAFlix/EMPFlix/MovieFap) + a Generic fallback. See [`crates/rdlp-extractor/src/extractors/`](crates/rdlp-extractor/src/extractors/) for the canonical list. Sites include TNAFlix family (TNAFlix/EMPFlix/MovieFap), RedTube, PornHub, SpankBang, XHamster, HQPorner, NineAnime, KoreanPornMovie, XVideos, XNXX, EPorner, XTits, ABXXX, PornoXO.
 
 ## Development Workflow
 

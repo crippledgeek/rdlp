@@ -15,14 +15,14 @@ post-processes with FFmpeg library bindings. Inspired by
 - yt-dlp-compatible format selection and output templates
 - Browser cookie extraction (Chrome, Firefox) and Netscape cookie files
 - Browser TLS fingerprint impersonation for sites that block other downloaders
-- Keyword search across supported sites with filters (13 search-capable extractors)
+- Keyword search across supported sites with filters (16 search-capable extractors)
 - Signed WASM plugin system for adding new sites without recompiling
 - Rate limiting, download archive, JSON metadata export
 - Interactive format and container selection
 
 ## Supported Sites
 
-PornHub, XHamster, RedTube, HQPorner, XTits, TNAFlix, EMPFlix, MovieFap, NineAnime, KoreanPornMovie, XVideos, XNXX, EPorner, ABXXX, plus a generic fallback extractor.
+PornHub, XHamster, RedTube, HQPorner, XTits, TNAFlix, EMPFlix, MovieFap, NineAnime, KoreanPornMovie, XVideos, XNXX, EPorner, ABXXX, SpankBang, PornoXO, plus a generic fallback extractor.
 
 See `rdlp --list-extractors` for the current list.
 
