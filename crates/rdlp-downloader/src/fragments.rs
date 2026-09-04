@@ -16,8 +16,10 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
+use backon::Retryable as _;
 use futures::StreamExt as _;
-use rdlp_core::{DownloadProgress, DownloadStats, ProgressCallback, Result};
+use log::warn;
+use rdlp_core::{DownloadProgress, DownloadStats, ProgressCallback, Result, is_retryable_error};
 use rdlp_types::Fragment;
 use tokio::io::{AsyncSeekExt as _, AsyncWriteExt as _};
 use tokio_util::sync::CancellationToken;
@@ -95,6 +97,15 @@ fn extrapolate_total(
 /// fragments. Otherwise it starts fresh. The sidecar is rewritten atomically
 /// after each fragment and removed on successful completion; it is left in
 /// place on cancel or error so a later run can resume.
+///
+/// # Retry
+///
+/// Each fragment (and init-segment) fetch retries transient failures under the
+/// operator's `RetryConfig` backoff, gated on `is_retryable_error` — the same
+/// policy the DASH segment path uses. A list-wide budget
+/// (`retry::FragmentRetryBudget`) additionally caps the total across all
+/// fragments, so a systematically broken playlist fails in bounded time rather
+/// than retrying every fragment to exhaustion.
 ///
 /// # Same-origin header gate
 ///
@@ -240,6 +251,13 @@ pub async fn download_pre_resolved_fragments(
     ));
     let sem = controller.semaphore().clone();
 
+    // One retry pool for the whole list (issue #570). Per-fragment retries
+    // bound a single bad fragment; this bounds a systematically bad playlist.
+    let budget = Arc::new(retry::FragmentRetryBudget::for_list(
+        http.config.retry_config.max_retries,
+        fragments.len(),
+    ));
+
     // Determine per-fragment init-fetch needs in a single linear pass over the
     // source list (cheap clone of Option<String>). Only the first fragment of
     // each new init-group fetches the init segment; consecutive fragments under
@@ -285,7 +303,14 @@ pub async fn download_pre_resolved_fragments(
         // Clone the parsed origin so each parallel task owns a copy.
         // `url::Origin` is Clone (it is an enum of copyable fields).
         let task_origin = format_origin.clone();
+        let budget = Arc::clone(&budget);
         async move {
+            let ctx = FragmentFetchCtx {
+                http,
+                format_origin: task_origin,
+                cancel,
+                budget,
+            };
             let _permit =
                 sem.acquire_owned()
                     .await
@@ -300,27 +325,13 @@ pub async fn download_pre_resolved_fragments(
             // Init bytes (if this fragment introduces a new init group).
             if needs_init && let Some(init_url) = &frag.init_url {
                 let resolved_init = resolve_fragment_url(init_url, base.as_deref())?;
-                let init_bytes = fetch_with_optional_cancel(
-                    http,
-                    &resolved_init,
-                    frag.init_byte_range,
-                    task_origin.as_ref(),
-                    cancel.as_ref(),
-                )
-                .await?;
+                let init_bytes = ctx.fetch(&resolved_init, frag.init_byte_range).await?;
                 out.extend_from_slice(&init_bytes);
             }
 
             // Fragment bytes.
             let resolved_url = resolve_fragment_url(&frag.url, base.as_deref())?;
-            let bytes = fetch_with_optional_cancel(
-                http,
-                &resolved_url,
-                frag.byte_range,
-                task_origin.as_ref(),
-                cancel.as_ref(),
-            )
-            .await?;
+            let bytes = ctx.fetch(&resolved_url, frag.byte_range).await?;
             out.extend_from_slice(&bytes);
 
             let fetch_elapsed = fetch_start.elapsed();
@@ -403,7 +414,7 @@ pub async fn download_pre_resolved_fragments(
         }
 
         // Cancellation check between fragment writes. Per-fetch cancel is
-        // already wired inside fetch_with_optional_cancel; this catches
+        // already wired inside FragmentFetchCtx::fetch; this catches
         // cancels that fire after a fetch completes but before the next poll.
         if cancel.is_some_and(CancellationToken::is_cancelled) {
             out_file.flush().await.ok();
@@ -476,30 +487,74 @@ pub(crate) fn resolve_fragment_url(fragment_url: &str, base_url: Option<&str>) -
     }
 }
 
-/// Fetch a fragment with cooperative cancellation.
+/// Everything a fragment fetch needs that is fixed for the whole fragment
+/// list: the HTTP client, the format origin behind the same-origin header
+/// gate, the cancellation token, and the list-wide retry budget.
 ///
-/// Wraps `fetch_with_optional_range` in `tokio::select!` against the optional
-/// cancellation token. Without this, a hung connection (TCP accepted but body
-/// never arrives) would block indefinitely between cooperative cancel points
-/// — `fetch_with_optional_range` itself has no per-read timeout, and the
-/// helper's only `is_cancelled()` checks are between fragments.
-///
-/// `format_origin` is forwarded to `fetch_with_optional_range` for the
-/// same-origin header gate.
-async fn fetch_with_optional_cancel(
-    http: &HttpDownloader,
-    url: &str,
-    byte_range: Option<(u64, u64)>,
-    format_origin: Option<&url::Origin>,
-    cancel: Option<&CancellationToken>,
-) -> Result<Vec<u8>> {
-    match cancel {
-        Some(token) => tokio::select! {
-            biased;
-            () = token.cancelled() => Err(rdlp_core::RdlpError::Cancelled),
-            res = fetch_with_optional_range(http, url, byte_range, format_origin) => res,
-        },
-        None => fetch_with_optional_range(http, url, byte_range, format_origin).await,
+/// Each parallel task builds its own from cheap clones, so the two fetch call
+/// sites in the task body pass only what actually varies — the URL and the
+/// byte range.
+struct FragmentFetchCtx<'a> {
+    http: &'a HttpDownloader,
+    /// `None` (or an opaque origin) fails the header gate closed: no operator
+    /// headers are forwarded to any target.
+    format_origin: Option<url::Origin>,
+    cancel: Option<CancellationToken>,
+    budget: Arc<retry::FragmentRetryBudget>,
+}
+
+impl FragmentFetchCtx<'_> {
+    /// Fetch a fragment with retry and cooperative cancellation.
+    ///
+    /// The cancel race wraps the whole retry loop — backoff sleeps included —
+    /// so a hung connection (TCP accepted but body never arrives) or a
+    /// mid-backoff cancel aborts immediately. Without it, cancellation would
+    /// only be observed between fragments: `fetch_with_optional_range` has no
+    /// per-read timeout of its own.
+    async fn fetch(&self, url: &str, byte_range: Option<(u64, u64)>) -> Result<Vec<u8>> {
+        match &self.cancel {
+            Some(token) => tokio::select! {
+                biased;
+                () = token.cancelled() => Err(rdlp_core::RdlpError::Cancelled),
+                res = self.fetch_with_retry(url, byte_range) => res,
+            },
+            None => self.fetch_with_retry(url, byte_range).await,
+        }
+    }
+
+    /// Fetch a fragment, retrying transient failures (issue #570).
+    ///
+    /// The parallel-chunk path (`http::parallel::download_chunk_with_retry`)
+    /// and the DASH segment path (`dash::download::download_one`) both retry;
+    /// this path did not, so a single bad CDN edge node failed an entire
+    /// multi-hundred-fragment download. The policy mirrors DASH's exactly —
+    /// the operator's `RetryConfig` backoff, gated on `is_retryable_error` —
+    /// rather than the chunk path's fixed 3-attempt linear backoff, because
+    /// both fetch one server-sized object per request and neither leaves a
+    /// partial file to clean up between attempts.
+    ///
+    /// Non-retryable failures (403, 404, a body that contradicts its own
+    /// `Content-Range`) return on the first response: `is_retryable_error`
+    /// admits only 5xx, 429, and network/I/O errors.
+    ///
+    /// Every retry also draws from the list-wide budget, and the `&&`
+    /// short-circuits so a non-retryable error never spends one. backon
+    /// consults this predicate *before* asking the backoff for another delay
+    /// (`backon-1.6.0/src/retry.rs:392-396`), so the failure that exhausts a
+    /// fragment's own allowance still takes a token it cannot use — an
+    /// over-count of at most one per permanently-failing fragment, and such a
+    /// fragment ends the download anyway.
+    async fn fetch_with_retry(&self, url: &str, byte_range: Option<(u64, u64)>) -> Result<Vec<u8>> {
+        let safe_url = rdlp_security::sanitize_for_logging(url);
+        (|| async {
+            fetch_with_optional_range(self.http, url, byte_range, self.format_origin.as_ref()).await
+        })
+        .retry(self.http.config.retry_config.to_backoff())
+        .when(|e| is_retryable_error(e) && self.budget.try_consume())
+        .notify(|err, dur| {
+            warn!("fragment fetch {safe_url} retry after {dur:?}: {err}");
+        })
+        .await
     }
 }
 
@@ -623,6 +678,7 @@ async fn fetch_with_optional_range(
     Ok(body)
 }
 
+pub(crate) mod retry;
 pub(crate) mod state;
 
 #[cfg(test)]

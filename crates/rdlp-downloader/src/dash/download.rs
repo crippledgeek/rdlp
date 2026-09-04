@@ -456,7 +456,7 @@ async fn download_representation(
             // The check below short-circuits a segment whose task starts after
             // cancel; an in-flight segment body is ALSO interrupted mid-read by
             // the `biased` select! inside `download_one` (this PR — matches the
-            // fragment downloader's `fetch_with_optional_cancel` fidelity), so a
+            // fragment downloader's `FragmentFetchCtx::fetch` fidelity), so a
             // stalled CDN body no longer blocks until `read_timeout` fires.
             if cancel.as_ref().is_some_and(CancellationToken::is_cancelled) {
                 return Err(RdlpError::Cancelled);
@@ -705,7 +705,7 @@ async fn download_one(
     // Mid-read cancel: race the retried fetch against the cancel token so an
     // in-flight `send()`/`bytes()` (or a stalled CDN body) aborts immediately
     // instead of blocking until `read_timeout` fires. Mirrors the fragment
-    // downloader's `fetch_with_optional_cancel` (fragments.rs:396) — `biased`
+    // downloader's `FragmentFetchCtx::fetch` — `biased`
     // gives the cancel arm priority. When no token is supplied, await the
     // fetch directly.
     match cancel {

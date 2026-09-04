@@ -404,7 +404,9 @@ async fn fragment_progress_mid_stream_failure_returns_error_partial_file() {
         frag(format!("{}/f2", server.url())),
     ];
     let tmp = tempfile::NamedTempFile::new().expect("tmp");
-    let http = HttpDownloader::with_client(wreq::Client::new());
+    // Retries off: the 500 is retryable since #570, and the default backoff
+    // would spend minutes here proving something this test is not about.
+    let http = no_retry_http();
     let res =
         download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
             .await;
@@ -1604,7 +1606,9 @@ async fn ranged_fragment_content_range_wrong_span_is_rejected() {
     let url = format!("{}/seg.m4s", server.url());
     let frags = vec![ranged_frag(url, 1024, 2048)];
 
-    let http = HttpDownloader::with_client(wreq::Client::new());
+    // Retries off: a wrong span is retryable (#570), and this test is about
+    // the rejection itself, not the retry loop.
+    let http = no_retry_http();
     let tmp = tempfile::NamedTempFile::new().unwrap();
     let res =
         download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
@@ -1730,4 +1734,196 @@ async fn unranged_fragment_plain_200_still_succeeds() {
         .expect("unranged fragment fetch must still succeed on a plain 200");
     let written = tokio::fs::read(tmp.path()).await.unwrap();
     assert_eq!(written, body);
+}
+
+// --- fragment retry (issue #570) ---
+//
+// The parallel-chunk path (`download_chunk_with_retry`) and the DASH segment
+// path (`dash/download.rs::download_one`) both retry transient failures; the
+// fragment path did not, so one bad edge node killed a whole multi-hundred-
+// fragment HLS download. These tests pin the retry semantics: retryable
+// failures are re-fetched, non-retryable ones fail on the first response.
+
+/// `HttpDownloader` with a millisecond retry backoff, so retry-path tests
+/// exercise the real loop without sleeping: `RetryConfig::default_config`
+/// starts at 1s and doubles to 60s, which would turn a millisecond test into
+/// a five-minute one.
+fn http_with_retries(max_retries: usize) -> HttpDownloader {
+    HttpDownloader::with_client(wreq::Client::new()).with_retry_config(rdlp_core::RetryConfig::new(
+        max_retries,
+        std::time::Duration::from_millis(1),
+        std::time::Duration::from_millis(5),
+        2.0,
+    ))
+}
+
+/// Retries enabled, concurrency pinned to 1 so retry accounting is
+/// deterministic across fragments.
+fn retrying_http(max_retries: usize) -> HttpDownloader {
+    http_with_retries(max_retries).with_concurrent_fragments(1)
+}
+
+/// Retries disabled, for the tests that assert a *failure* on a retryable
+/// error and are not themselves about the retry loop.
+fn no_retry_http() -> HttpDownloader {
+    http_with_retries(0)
+}
+
+#[tokio::test]
+async fn retryable_fragment_failure_is_retried_then_succeeds() {
+    let mut server = mockito::Server::new_async().await;
+    // Measured against mockito 1.7.2: mocks are matched in CREATION order and
+    // a mock is retired once its `expect(n)` count is met. So creating the 500
+    // first and the success second makes the response sequence exactly
+    // 500, then 200. (`assert_async` on both below proves each was consumed —
+    // without it a single-fetch success would pass this test vacuously.)
+    let body = vec![0x5A; 128];
+    let fail = server
+        .mock("GET", "/f1")
+        .with_status(500)
+        .expect(1)
+        .create_async()
+        .await;
+    let ok = server
+        .mock("GET", "/f1")
+        .with_body(body.clone())
+        .expect(1)
+        .create_async()
+        .await;
+
+    let frags = vec![frag(format!("{}/f1", server.url()))];
+    let http = retrying_http(3);
+    let tmp = tempfile::NamedTempFile::new().expect("tmp");
+    download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+        .await
+        .expect("a transient 500 on one fragment must be retried, not fail the download");
+
+    let written = tokio::fs::read(tmp.path()).await.expect("read output");
+    assert_eq!(
+        written, body,
+        "the retried fetch's bytes must be what lands in the output"
+    );
+    fail.assert_async().await;
+    ok.assert_async().await;
+}
+
+#[tokio::test]
+async fn non_retryable_fragment_status_fails_without_retrying() {
+    let mut server = mockito::Server::new_async().await;
+    // 404 is not retryable. `expect(1)` fails the assertion below if a second
+    // request arrives, which is the guard against a retry storm on a dead URL.
+    let mock = server
+        .mock("GET", "/f1")
+        .with_status(404)
+        .expect(1)
+        .create_async()
+        .await;
+
+    let frags = vec![frag(format!("{}/f1", server.url()))];
+    let http = retrying_http(3);
+    let tmp = tempfile::NamedTempFile::new().expect("tmp");
+    let err =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+            .await
+            .expect_err("a 404 fragment must fail the download");
+    assert!(
+        matches!(err, rdlp_core::RdlpError::Http { status: 404, .. }),
+        "unexpected err shape: {err:?}"
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn ranged_fragment_wrong_span_is_retried_then_succeeds() {
+    // #564 deliberately reports a wrong Content-Range span as a *retryable*
+    // `Network` error, reasoning that a retry against another CDN node
+    // plausibly gets the right bytes. That distinction was inert on this path
+    // until #570 — this test is what makes it load-bearing.
+    let mut server = mockito::Server::new_async().await;
+    let body = vec![0xEE; 1024];
+    // Creation order is match order (see the note in
+    // `retryable_fragment_failure_is_retried_then_succeeds`): wrong span first,
+    // correct span second.
+    let wrong_span = server
+        .mock("GET", "/seg.m4s")
+        .with_status(206)
+        .with_header("Content-Range", "bytes 0-1023/8192")
+        .with_body(vec![0xBB; 1024])
+        .expect(1)
+        .create_async()
+        .await;
+    let ok = server
+        .mock("GET", "/seg.m4s")
+        .with_status(206)
+        .with_header("Content-Range", "bytes 1024-2047/8192")
+        .with_body(body.clone())
+        .expect(1)
+        .create_async()
+        .await;
+
+    let frags = vec![ranged_frag(format!("{}/seg.m4s", server.url()), 1024, 2048)];
+    let http = retrying_http(3);
+    let tmp = tempfile::NamedTempFile::new().expect("tmp");
+    download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+        .await
+        .expect("a wrong-span 206 is retryable and the retry delivers the right span");
+
+    let written = tokio::fs::read(tmp.path()).await.expect("read output");
+    assert_eq!(
+        written, body,
+        "only the correctly-spanned body may land in the output"
+    );
+    wrong_span.assert_async().await;
+    ok.assert_async().await;
+}
+
+#[tokio::test]
+async fn retry_budget_bounds_cumulative_retries_across_the_fragment_list() {
+    // Per-fragment retries alone do not bound a systematically failing
+    // playlist: every fragment would burn its full allowance before the
+    // download gave up. The list-wide budget caps the total.
+    //
+    // 20 fragments with `max_retries = 1` sizes the budget at
+    // 1 x (20 / RETRY_BUDGET_FRAGMENT_SHARE) = 2 retries for the whole list.
+    // Each fragment answers 500 once, then its real body. So fragments 1 and 2
+    // spend the budget and complete; fragment 3's failure finds it empty, is
+    // not retried, and fails the download.
+    const TOTAL: usize = 20;
+    let mut server = mockito::Server::new_async().await;
+    let body = vec![0x77; 32];
+    for i in 1..=TOTAL {
+        // Creation order is match order: the 500 first, the body second.
+        server
+            .mock("GET", format!("/f{i}").as_str())
+            .with_status(500)
+            .expect(1)
+            .create_async()
+            .await;
+        server
+            .mock("GET", format!("/f{i}").as_str())
+            .with_body(body.clone())
+            .create_async()
+            .await;
+    }
+
+    let frags: Vec<Fragment> = (1..=TOTAL)
+        .map(|i| frag(format!("{}/f{i}", server.url())))
+        .collect();
+    let http = retrying_http(1);
+    let tmp = tempfile::NamedTempFile::new().expect("tmp");
+    let err =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+            .await
+            .expect_err("the third fragment must find the retry budget spent");
+    assert!(
+        matches!(err, rdlp_core::RdlpError::Http { status: 500, .. }),
+        "unexpected err shape: {err:?}"
+    );
+
+    let written = tokio::fs::read(tmp.path()).await.expect("read output");
+    assert_eq!(
+        written.len(),
+        body.len() * 2,
+        "exactly two fragments may be rescued by a budget of two retries"
+    );
 }
