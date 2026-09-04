@@ -308,69 +308,6 @@ fn sanitize_for_logging_redacts_new_328_patterns_via_delegate() {
     );
 }
 
-// ── Reserved IPv4 ranges the predicate used to miss (#663) ──────
-//
-// Each range is pinned from BOTH sides: the first and last address inside
-// it must be private, and the addresses immediately below and above must
-// stay public. A test placed only in the middle of a range passes against
-// an off-by-one in the bound and so guards nothing.
-
-#[test]
-fn cgnat_shared_address_space_is_private() {
-    // RFC 6598: 100.64.0.0/10 spans 100.64.0.0 ..= 100.127.255.255.
-    assert!(is_private_host("100.64.0.0"), "first address in the range");
-    assert!(is_private_host("100.100.50.1"), "interior");
-    assert!(
-        is_private_host("100.127.255.255"),
-        "last address in the range"
-    );
-}
-
-#[test]
-fn addresses_bracketing_the_cgnat_range_stay_public() {
-    assert!(!is_private_host("100.63.255.255"), "one below the range");
-    assert!(!is_private_host("100.128.0.0"), "one above the range");
-}
-
-#[test]
-fn ietf_protocol_assignment_range_is_private() {
-    // RFC 6890: 192.0.0.0/24 spans 192.0.0.0 ..= 192.0.0.255.
-    assert!(is_private_host("192.0.0.0"));
-    assert!(is_private_host("192.0.0.255"));
-}
-
-#[test]
-fn addresses_bracketing_the_ietf_range_stay_public() {
-    assert!(!is_private_host("191.255.255.255"), "one below the range");
-    assert!(!is_private_host("192.0.1.0"), "one above the range");
-}
-
-#[test]
-fn benchmarking_range_is_private() {
-    // RFC 2544: 198.18.0.0/15 spans 198.18.0.0 ..= 198.19.255.255.
-    assert!(is_private_host("198.18.0.0"));
-    assert!(is_private_host("198.19.255.255"));
-}
-
-#[test]
-fn addresses_bracketing_the_benchmarking_range_stay_public() {
-    assert!(!is_private_host("198.17.255.255"), "one below the range");
-    assert!(!is_private_host("198.20.0.0"), "one above the range");
-}
-
-#[test]
-fn six_to_four_relay_anycast_is_private() {
-    // RFC 7526 deprecated 192.88.99.0/24; it still routes on some networks.
-    assert!(is_private_host("192.88.99.0"));
-    assert!(is_private_host("192.88.99.255"));
-}
-
-#[test]
-fn addresses_bracketing_the_six_to_four_range_stay_public() {
-    assert!(!is_private_host("192.88.98.255"), "one below the range");
-    assert!(!is_private_host("192.88.100.0"), "one above the range");
-}
-
 // ── IPv6 forms that wrap an IPv4 address (#663) ─────────────────
 
 #[test]
@@ -438,71 +375,6 @@ fn alternate_ipv4_encodings_are_rejected_through_validate_url_security() {
             "{url} must be rejected as loopback"
         );
     }
-}
-
-// ── The rest of the IANA special-purpose registry (#663 review) ──
-//
-// The predicate is a longest-prefix match over the registry, so these pin
-// the two things a table can get wrong: a row that should block, and a row
-// that must NOT block because the registry marks it globally reachable.
-
-#[test]
-fn this_network_range_is_private() {
-    // RFC 791 s3.2: 0.0.0.0/8. Only 0.0.0.0 itself used to be covered, yet
-    // 0.x.y.z reaches the local host on several stacks.
-    assert!(is_private_host("0.0.0.0"), "first address in the range");
-    assert!(
-        is_private_host("0.255.255.255"),
-        "last address in the range"
-    );
-}
-
-#[test]
-fn addresses_bracketing_the_this_network_range_stay_public() {
-    assert!(!is_private_host("1.0.0.0"), "one above the range");
-}
-
-#[test]
-fn reserved_class_e_range_is_private() {
-    // RFC 1112 s4: 240.0.0.0/4, which also swallows the limited broadcast
-    // address at its top.
-    assert!(is_private_host("240.0.0.0"), "first address in the range");
-    assert!(
-        is_private_host("255.255.255.255"),
-        "last address in the range"
-    );
-}
-
-#[test]
-fn addresses_bracketing_the_reserved_class_e_range_stay_public() {
-    // The address one below 240.0.0.0 is 239.255.255.255, which is multicast
-    // and private for that reason — the two ranges abut, so the nearest
-    // genuinely public address is the one below multicast.
-    assert!(
-        !is_private_host("223.255.255.255"),
-        "below multicast, public"
-    );
-}
-
-#[test]
-fn documentation_ranges_are_private() {
-    // RFC 5737 TEST-NET-1/2/3, each pinned at both ends.
-    assert!(is_private_host("192.0.2.0"));
-    assert!(is_private_host("192.0.2.255"));
-    assert!(is_private_host("198.51.100.0"));
-    assert!(is_private_host("198.51.100.255"));
-    assert!(is_private_host("203.0.113.0"));
-    assert!(is_private_host("203.0.113.255"));
-}
-
-#[test]
-fn addresses_bracketing_the_documentation_ranges_stay_public() {
-    assert!(!is_private_host("192.0.1.255"));
-    assert!(!is_private_host("192.0.3.0"));
-    assert!(!is_private_host("198.51.99.255"));
-    assert!(!is_private_host("198.51.101.0"));
-    assert!(!is_private_host("203.0.112.255"));
-    assert!(!is_private_host("203.0.114.0"));
 }
 
 #[test]
@@ -599,4 +471,122 @@ fn rfc8215_local_use_nat64_prefix_is_not_the_well_known_prefix() {
     // match is the only thing keeping it out, and without this test deleting
     // that clause leaves the suite green.
     assert!(!is_private_host("64:ff9b:1:0:0:0:10.0.0.1"));
+}
+
+// ── The registry table, checked against an independent transcription ──
+//
+// `IPV4_SPECIAL_PURPOSE` is hand-typed as `Ipv4Addr::new(a, b, c, d)` plus a
+// prefix length. Ranges that used to come from `Ipv4Addr::is_private()` and
+// friends are now among those rows, so a `/12` mistyped as `/16` on
+// 172.16.0.0 would silently unblock 172.32.0.0-172.31.255.255.
+//
+// These tests are a differential check, not a restatement: the expectations
+// below are transcribed from the IANA registry independently, in CIDR
+// notation, so a slip in either transcription makes the two disagree. Reading
+// the expectation off the implementation's own table would prove nothing.
+
+/// Every row of the registry the predicate is meant to implement.
+/// `true` = must be refused.
+const EXPECTED_REGISTRY: &[(&str, bool)] = &[
+    ("0.0.0.0/8", true),
+    ("10.0.0.0/8", true),
+    ("100.64.0.0/10", true),
+    ("127.0.0.0/8", true),
+    ("169.254.0.0/16", true),
+    ("172.16.0.0/12", true),
+    ("192.0.0.0/24", true),
+    ("192.0.0.9/32", false),
+    ("192.0.0.10/32", false),
+    ("192.0.2.0/24", true),
+    ("192.88.99.0/24", true),
+    ("192.168.0.0/16", true),
+    ("198.18.0.0/15", true),
+    ("198.51.100.0/24", true),
+    ("203.0.113.0/24", true),
+    ("240.0.0.0/4", true),
+];
+
+/// Registry rows deliberately left out of `IPV4_SPECIAL_PURPOSE`, and how the
+/// omission rule says each must still resolve. The first seven are `Blocked`
+/// rows nested inside another `Blocked` row, so the parent decides; the last
+/// three are `Globally Reachable` rows with no blocked parent, so matching no
+/// row at all leaves them fetchable.
+const OMITTED_ROWS: &[(&str, bool)] = &[
+    ("0.0.0.0/32", true),         // inside 0.0.0.0/8
+    ("192.0.0.0/29", true),       // inside 192.0.0.0/24
+    ("192.0.0.8/32", true),       // IPv4 dummy address, RFC 7600
+    ("192.0.0.170/32", true),     // NAT64/DNS64 discovery, RFC 8880
+    ("192.0.0.171/32", true),     // NAT64/DNS64 discovery, RFC 8880
+    ("192.88.99.2/32", true),     // 6a44-relay anycast, inside 192.88.99.0/24
+    ("255.255.255.255/32", true), // inside 240.0.0.0/4
+    ("192.31.196.0/24", false),   // AS112-v4, RFC 7535
+    ("192.52.193.0/24", false),   // AMT, RFC 7450
+    ("192.175.48.0/24", false),   // AS112 delegation, RFC 7534
+];
+
+/// What the independent transcription says about one address: longest-prefix
+/// match over [`EXPECTED_REGISTRY`], then multicast, then public.
+fn model_refuses(ip: Ipv4Addr) -> bool {
+    let matched = EXPECTED_REGISTRY
+        .iter()
+        .filter_map(|(cidr, blocked)| {
+            let net: ipnet::Ipv4Net = cidr.parse().expect("test CIDR must parse");
+            net.contains(&ip).then_some((net.prefix_len(), *blocked))
+        })
+        .max_by_key(|(len, _)| *len);
+    match matched {
+        Some((_, blocked)) => blocked,
+        None => ip.is_multicast(),
+    }
+}
+
+fn assert_agrees(ip: Ipv4Addr, context: &str) {
+    let expected = model_refuses(ip);
+    assert_eq!(
+        is_private_host(&ip.to_string()),
+        expected,
+        "{ip} ({context}): registry says refuse={expected}"
+    );
+}
+
+#[test]
+fn every_registry_row_is_pinned_at_both_ends() {
+    for (cidr, _) in EXPECTED_REGISTRY {
+        let net: ipnet::Ipv4Net = cidr.parse().expect("test CIDR must parse");
+        assert_agrees(net.network(), &format!("first address of {cidr}"));
+        assert_agrees(net.broadcast(), &format!("last address of {cidr}"));
+    }
+}
+
+#[test]
+fn addresses_immediately_outside_every_row_agree_with_the_registry() {
+    // The neighbours are checked against the model rather than asserted
+    // public outright, because rows abut: the address below 240.0.0.0 is
+    // 239.255.255.255, which is multicast and refused for its own reason.
+    for (cidr, _) in EXPECTED_REGISTRY {
+        let net: ipnet::Ipv4Net = cidr.parse().expect("test CIDR must parse");
+        if let Some(below) = u32::from(net.network()).checked_sub(1) {
+            assert_agrees(Ipv4Addr::from(below), &format!("one below {cidr}"));
+        }
+        if let Some(above) = u32::from(net.broadcast()).checked_add(1) {
+            assert_agrees(Ipv4Addr::from(above), &format!("one above {cidr}"));
+        }
+    }
+}
+
+#[test]
+fn omitted_registry_rows_resolve_as_the_rule_claims() {
+    // The table's doc comment justifies leaving these out on the grounds that
+    // neither kind can change an answer. That justification is only as good as
+    // its last check, so it is checked.
+    for (cidr, expected) in OMITTED_ROWS {
+        let net: ipnet::Ipv4Net = cidr.parse().expect("test CIDR must parse");
+        for (ip, end) in [(net.network(), "first"), (net.broadcast(), "last")] {
+            assert_eq!(
+                is_private_host(&ip.to_string()),
+                *expected,
+                "{ip} ({end} address of omitted row {cidr})"
+            );
+        }
+    }
 }

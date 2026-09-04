@@ -166,10 +166,10 @@ pub fn validate_url_security(url: &str) -> Result<()> {
 ///   globally reachable — RFC 1918 private space, loopback, link-local, CGNAT,
 ///   benchmarking, documentation, `240.0.0.0/4` and the rest — plus multicast
 /// - IPv6 loopback, unspecified, unique-local, link-local and multicast
-/// - Every IPv6 form that carries an IPv4 address inside it, judged by that
-///   inner address: mapped (`::ffff:0:0/96`), the deprecated compatible form
-///   (`::/96`), the NAT64 Well-Known Prefix (`64:ff9b::/96`), 6to4
-///   (`2002::/16`) and Teredo (`2001:0000::/32`)
+/// - The five IPv6 forms whose own prefix identifies them as carrying an IPv4
+///   address, judged by that inner address: mapped (`::ffff:0:0/96`), the
+///   deprecated compatible form (`::/96`), the NAT64 Well-Known Prefix
+///   (`64:ff9b::/96`), 6to4 (`2002::/16`) and Teredo (`2001:0000::/32`)
 ///
 /// # What it does NOT do
 ///
@@ -179,9 +179,10 @@ pub fn validate_url_security(url: &str) -> Result<()> {
 /// resolve → validate → connect-to-the-validated-IP, which the HTTP stack
 /// does not expose. Accepted residual risk; tracked in #662.
 ///
-/// It recognises only the NAT64 *Well-Known* Prefix. A Network-Specific
-/// Prefix is site-chosen and carries nothing that identifies it as NAT64, so
-/// an address using one is indistinguishable from ordinary IPv6 here.
+/// It unwraps only the forms a prefix identifies. ISATAP (RFC 5214) and 6rd
+/// (RFC 5969) also embed an IPv4 address but under a site-chosen prefix, as
+/// does a NAT64 Network-Specific Prefix — nothing in such an address marks it
+/// as carrying an IPv4, so it is indistinguishable from ordinary IPv6 here.
 ///
 /// # Arguments
 /// * `host` - The hostname or IP address to check
@@ -234,7 +235,7 @@ pub fn is_private_host(host: &str) -> bool {
     if let Ok(ip) = host.parse::<IpAddr>() {
         return match ip {
             IpAddr::V4(ipv4) => is_private_ipv4(ipv4),
-            IpAddr::V6(ipv6) => is_private_ipv6(&ipv6),
+            IpAddr::V6(ipv6) => is_private_ipv6(ipv6),
         };
     }
 
@@ -261,12 +262,14 @@ enum Reach {
 /// blocked.
 ///
 /// Two kinds of registry row are deliberately absent, because neither can
-/// change an answer: a `Blocked` row wholly inside another `Blocked` row
-/// (`0.0.0.0/32`, `192.0.0.0/29`, `192.88.99.2/32`, and `255.255.255.255/32`
-/// inside `240.0.0.0/4`), and a `Public` row with no `Blocked` parent
-/// (`192.31.196.0/24` AS112-v4, `192.52.193.0/24` AMT, `192.175.48.0/24`
-/// AS112) — an address matching no row is allowed anyway. The `Public` rows
-/// that ARE here sit inside a `Blocked` parent, where they must win.
+/// change an answer: a `Blocked` row wholly inside another `Blocked` row, and
+/// a `Public` row with no `Blocked` parent — an address matching no row is
+/// allowed anyway. The `Public` rows that ARE here sit inside a `Blocked`
+/// parent, where they must win.
+///
+/// That rule is asserted rather than asserted-in-prose: every omitted row is
+/// listed in `omitted_registry_rows_resolve_as_the_rule_claims`, which fails
+/// if one of them ever stops resolving the way the rule says it does.
 const IPV4_SPECIAL_PURPOSE: &[(Ipv4Net, Reach)] = &[
     // "This network" (RFC 791 §3.2). 0.x.y.z reaches the local host on
     // several stacks, so the whole /8 goes, not just 0.0.0.0.
@@ -381,10 +384,12 @@ fn registry_blocks(ip: Ipv4Addr) -> bool {
 
 /// Whether an IPv6 address must not be fetched.
 ///
-/// The four prefix families come from `std` (`is_unique_local` and
-/// `is_unicast_link_local` are stable since 1.84, below this crate's 1.85
-/// MSRV), so this crate hand-rolls no IPv6 prefix arithmetic at all.
-fn is_private_ipv6(ip: &Ipv6Addr) -> bool {
+/// The five `std` predicates below replaced hand-rolled equivalents
+/// (`is_unique_local` and `is_unicast_link_local` are stable since 1.84,
+/// below this crate's 1.85 MSRV). The tunnel prefixes reached through
+/// `embedded_ipv4s` are still matched by hand, because `std` has no notion
+/// of them.
+fn is_private_ipv6(ip: Ipv6Addr) -> bool {
     ip.is_loopback()                  // ::1
         || ip.is_unspecified()        // ::
         || ip.is_multicast()          // ff00::/8
@@ -401,7 +406,7 @@ fn is_private_ipv6(ip: &Ipv6Addr) -> bool {
 ///
 /// Teredo carries two — the server's and the client's; every other form
 /// carries one.
-fn embedded_ipv4s(ip: &Ipv6Addr) -> impl Iterator<Item = Ipv4Addr> {
+fn embedded_ipv4s(ip: Ipv6Addr) -> impl Iterator<Item = Ipv4Addr> {
     [
         // `::ffff:0:0/96` IPv4-mapped (RFC 4291 §2.5.5.2) and `::/96`
         // IPv4-compatible (§2.5.5.1, deprecated). `to_ipv4_mapped()` sees only
@@ -425,8 +430,7 @@ fn embedded_ipv4s(ip: &Ipv6Addr) -> impl Iterator<Item = Ipv4Addr> {
 /// and translators "MUST drop these packets". A conformant NAT64 address
 /// wrapping a public IPv4 stays allowed — refusing those would break NAT64
 /// networks outright.
-#[inline]
-fn nat64_well_known_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
+fn nat64_well_known_ipv4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
     /// A /96 prefix occupies the first six segments. All six must match:
     /// RFC 8215's local-use `64:ff9b:1::/48` differs only in segment 2 and is
     /// explicitly *not* the Well-Known Prefix, so RFC 6052 §3.1's guarantee
@@ -443,8 +447,7 @@ fn nat64_well_known_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
 /// what makes it reachable rather than decorative: a packet to a 6to4 address
 /// is encapsulated "with IPv4 destination address = the NLA value V4ADDR
 /// extracted from the next hop IPv6 address".
-#[inline]
-fn six_to_four_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
+fn six_to_four_ipv4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
     const PREFIX: u16 = 0x2002;
 
     let s = ip.segments();
@@ -457,8 +460,7 @@ fn six_to_four_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
 /// port | obfuscated client IPv4, putting the server at bits 32..=63 —
 /// segments 2 and 3, unobfuscated. RFC 5991 randomises bits within the flags
 /// field only; the prefix and both embedded addresses keep these positions.
-#[inline]
-fn teredo_server_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
+fn teredo_server_ipv4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
     let s = ip.segments();
     is_teredo(ip).then(|| ipv4_from_segments(s[2], s[3]))
 }
@@ -468,15 +470,13 @@ fn teredo_server_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
 /// RFC 4380 §4: "Each bit in the address and port number is reversed; this can
 /// be done by an exclusive OR of the ... 32-bit address with the hexadecimal
 /// value 0xFFFFFFFF." Per segment, that exclusive OR is a bitwise NOT.
-#[inline]
-fn teredo_client_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
+fn teredo_client_ipv4(ip: Ipv6Addr) -> Option<Ipv4Addr> {
     let s = ip.segments();
     is_teredo(ip).then(|| ipv4_from_segments(!s[6], !s[7]))
 }
 
 /// Whether this is a Teredo address: prefix `2001:0000::/32` (RFC 4380 §2.6).
-#[inline]
-const fn is_teredo(ip: &Ipv6Addr) -> bool {
+const fn is_teredo(ip: Ipv6Addr) -> bool {
     let s = ip.segments();
     s[0] == 0x2001 && s[1] == 0x0000
 }
@@ -486,7 +486,6 @@ const fn is_teredo(ip: &Ipv6Addr) -> bool {
 /// One definition for all four extractors above: assembling the halves by hand
 /// at each site is how an octet-order slip gets into one of them and not the
 /// others.
-#[inline]
 fn ipv4_from_segments(high: u16, low: u16) -> Ipv4Addr {
     Ipv4Addr::from((u32::from(high) << 16) | u32::from(low))
 }
