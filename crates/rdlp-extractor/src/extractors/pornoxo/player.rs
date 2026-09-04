@@ -16,16 +16,23 @@ use serde::Deserialize;
 /// player, a user-controlled field — and `hlsAuto` decides what we fetch, so
 /// page text placed before the player block would choose our target.
 ///
+/// The anchor is the DECLARATION (`var playerConfig =`), not the bare word.
+/// Matching the word alone would let any mention re-open the window — a
+/// `<!-- playerConfig -->` comment, a `var notThePlayerConfig`, a UGC field —
+/// and a decoy `sources:` following that mention would win again. The `var` is
+/// optional so a reassignment or a differently-declared player still matches,
+/// but `\s*=` is required, so a mention that assigns nothing cannot anchor.
+///
 /// `(?s)` so the window crosses newlines; `{0,4096}?` is non-greedy, so the
 /// FIRST `sources:` after the anchor wins rather than a later one. The 4096
 /// bound keeps the window inside the player block: in the captured fixture
-/// `sources:` follows `playerConfig` by ~30 characters, so this is ~2 orders of
-/// magnitude of headroom while still stopping the scan from running on into
+/// `sources:` follows the declaration by ~30 characters, so this is ~2 orders
+/// of magnitude of headroom while still stopping the scan from running on into
 /// unrelated script further down the page.
 ///
 /// `[^}]*` is safe because `sources` has no nested objects.
 static SOURCES_PATTERN: Lazy<Regex> =
-    lazy_regex!(r"(?s)playerConfig.{0,4096}?sources:\s*(\{[^}]*\})");
+    lazy_regex!(r"(?s)(?:var\s+)?playerConfig\s*=.{0,4096}?sources:\s*(\{[^}]*\})");
 
 #[derive(Deserialize)]
 struct Sources {
@@ -93,6 +100,21 @@ mod tests {
     fn decoy_sources_before_the_player_block_is_ignored() {
         let html = concat!(
             r#"<script>var adConfig = { sources: {"hlsAuto":"https://decoy.test/x.mp4"}, };</script>"#,
+            r#"<script>var playerConfig = { sources: {"hlsAuto":"https://real.test/y.mp4"}, };</script>"#
+        );
+        let url = extract_master_url(html).expect("must find the real player block");
+        assert_eq!(url, "https://real.test/y.mp4");
+    }
+
+    /// The anchor must match the DECLARATION, not the bare word. Text that
+    /// merely mentions `playerConfig` — a comment, a differently-named
+    /// variable, a UGC field — would otherwise re-open the window and let a
+    /// following decoy win, which is the same defect the anchor closed.
+    #[test]
+    fn a_mere_mention_of_player_config_does_not_open_the_window() {
+        let html = concat!(
+            r#"<!-- playerConfig -->"#,
+            r#"<script>var notThePlayerConfig = { sources: {"hlsAuto":"https://decoy.test/x.mp4"}, };</script>"#,
             r#"<script>var playerConfig = { sources: {"hlsAuto":"https://real.test/y.mp4"}, };</script>"#
         );
         let url = extract_master_url(html).expect("must find the real player block");

@@ -35,6 +35,30 @@ where
     Ok(serde_json::from_value(value).ok())
 }
 
+/// Deserialize an optional count that may arrive as a number OR as a
+/// number-shaped string.
+///
+/// schema.org types `userInteractionCount` as an Integer, but sites commonly
+/// emit `"21400"`. Under [`lenient`] alone that shape is merely *tolerated* —
+/// the enclosing object survives, but the count silently reads as absent,
+/// which is the same invisible metadata loss in miniature. One coercion
+/// avoids it.
+///
+/// Fail-soft is preserved: this both coerces and swallows, because a field can
+/// carry only one `deserialize_with`, so the two cannot be layered. Any shape
+/// that is neither a number nor a parseable string costs this field only.
+fn lenient_count<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(match value {
+        serde_json::Value::Number(n) => n.as_u64(),
+        serde_json::Value::String(s) => s.trim().parse().ok(),
+        _ => None,
+    })
+}
+
 // ============================================================================
 // Core Types
 // ============================================================================
@@ -305,7 +329,11 @@ pub struct JsonLdInteraction {
     #[serde(rename = "interactionType", default, deserialize_with = "lenient")]
     pub interaction_type_ref: Option<JsonLdInteractionType>,
     /// Count of user interactions recorded for this entry.
-    #[serde(rename = "userInteractionCount", default, deserialize_with = "lenient")]
+    #[serde(
+        rename = "userInteractionCount",
+        default,
+        deserialize_with = "lenient_count"
+    )]
     pub user_interaction_count: Option<u64>,
 }
 
@@ -578,6 +606,26 @@ mod tests {
         let video = extract_json_ld(&html).expect("string count must not lose the video");
         assert_eq!(video.name.as_deref(), Some("Video"));
         assert_eq!(video.duration.as_deref(), Some("PT15M30S"));
+        // Fail-soft alone would turn a total loss into a SILENT field loss.
+        // The count is coerced, so a string-encoded count is still readable.
+        assert_eq!(extract_view_count(&video), Some(21400));
+    }
+
+    /// The coercion does not cost fail-soft: a count that is neither a number
+    /// nor a parseable string still costs only that field.
+    #[test]
+    fn uncoercible_interaction_count_costs_only_that_field() {
+        let html_str = r#"<html><head><script type="application/ld+json">
+        {"@type": "VideoObject", "name": "Video", "duration": "PT15M30S",
+         "interactionStatistic": {"@type": "InteractionCounter",
+           "interactionType": {"@type": "WatchAction"},
+           "userInteractionCount": {"value": "lots"}}}
+        </script></head></html>"#;
+        let html = Html::parse_document(html_str);
+        let video = extract_json_ld(&html).expect("odd count must not lose the video");
+        assert_eq!(video.name.as_deref(), Some("Video"));
+        assert_eq!(video.duration.as_deref(), Some("PT15M30S"));
+        assert_eq!(extract_view_count(&video), None);
     }
 
     /// `@type` is absent — `JsonLdVideo`'s docstring promises every field is
