@@ -37,20 +37,16 @@ pub(crate) fn parse_video_id(url: &str) -> Option<String> {
         return Some(id.as_str().to_owned());
     }
 
+    // Shares the definition of "loopback origin" with the SSRF gate's own
+    // `cfg(test)` seam, so the two cannot drift apart on what loopback means.
+    // The gates themselves stay separate: this is an id parser, not a security
+    // boundary, and the two should be free to change independently.
     #[cfg(test)]
-    {
-        if let Ok(parsed) = url::Url::parse(url) {
-            let scheme_ok = matches!(parsed.scheme(), "http" | "https");
-            let host_loopback = parsed.host_str().is_some_and(|h| {
-                h == "127.0.0.1" || h == "localhost" || h == "[::1]" || h == "::1"
-            });
-            if scheme_ok && host_loopback {
-                return VIDEO_PATH_PATTERN
-                    .captures(url)
-                    .and_then(|c| c.get(1))
-                    .map(|m| m.as_str().to_owned());
-            }
-        }
+    if crate::base::common::manifest_url::is_loopback_origin(url) {
+        return VIDEO_PATH_PATTERN
+            .captures(url)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_owned());
     }
 
     None
