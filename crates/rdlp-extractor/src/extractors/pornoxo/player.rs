@@ -18,10 +18,18 @@ use serde::Deserialize;
 ///
 /// The anchor is the DECLARATION (`var playerConfig =`), not the bare word.
 /// Matching the word alone would let any mention re-open the window — a
-/// `<!-- playerConfig -->` comment, a `var notThePlayerConfig`, a UGC field —
+/// `<!-- playerConfig -->` comment, a `var notTheplayerConfig`, a UGC field —
 /// and a decoy `sources:` following that mention would win again. The `var` is
 /// optional so a reassignment or a differently-declared player still matches,
 /// but `\s*=` is required, so a mention that assigns nothing cannot anchor.
+///
+/// `\b` is what makes "the identifier" rather than "the substring" the unit.
+/// Without it `(?:var\s+)?` is optional, so the pattern matched inside ANY
+/// identifier ending in `playerConfig` — `xplayerConfig={sources:…}` in an ad
+/// script would have chosen our fetch target. Measured: `\b` rejects
+/// `myplayerConfig`, `notTheplayerConfig` and `xplayerConfig` while still
+/// admitting `var playerConfig`, `window.playerConfig` and a bare
+/// `playerConfig =`.
 ///
 /// `(?s)` so the window crosses newlines; `{0,4096}?` is non-greedy, so the
 /// FIRST `sources:` after the anchor wins rather than a later one. The 4096
@@ -32,7 +40,7 @@ use serde::Deserialize;
 ///
 /// `[^}]*` is safe because `sources` has no nested objects.
 static SOURCES_PATTERN: Lazy<Regex> =
-    lazy_regex!(r"(?s)(?:var\s+)?playerConfig\s*=.{0,4096}?sources:\s*(\{[^}]*\})");
+    lazy_regex!(r"(?s)(?:var\s+)?\bplayerConfig\s*=.{0,4096}?sources:\s*(\{[^}]*\})");
 
 #[derive(Deserialize)]
 struct Sources {
@@ -110,15 +118,31 @@ mod tests {
     /// merely mentions `playerConfig` — a comment, a differently-named
     /// variable, a UGC field — would otherwise re-open the window and let a
     /// following decoy win, which is the same defect the anchor closed.
+    ///
+    /// Every decoy here is spelled with the SAME capitalisation as the real
+    /// identifier, and the loop is what makes that non-negotiable: the
+    /// original single-case version of this test used `notThePlayerConfig`
+    /// and passed against a regex with no `\b` purely because a capital `P`
+    /// cannot match a case-sensitive `playerConfig`. It asserted a spelling,
+    /// not the property. Measured against the unpatched regex, three of these
+    /// four cases resolve to the decoy.
     #[test]
     fn a_mere_mention_of_player_config_does_not_open_the_window() {
-        let html = concat!(
-            r#"<!-- playerConfig -->"#,
-            r#"<script>var notThePlayerConfig = { sources: {"hlsAuto":"https://decoy.test/x.mp4"}, };</script>"#,
-            r#"<script>var playerConfig = { sources: {"hlsAuto":"https://real.test/y.mp4"}, };</script>"#
-        );
-        let url = extract_master_url(html).expect("must find the real player block");
-        assert_eq!(url, "https://real.test/y.mp4");
+        for decoy_name in [
+            "notTheplayerConfig",
+            "window.myplayerConfig",
+            "xplayerConfig",
+            "notThePlayerConfig",
+        ] {
+            let html = format!(
+                r#"<!-- playerConfig --><script>var {decoy_name} = {{ sources: {{"hlsAuto":"https://decoy.test/x.mp4"}}, }};</script><script>var playerConfig = {{ sources: {{"hlsAuto":"https://real.test/y.mp4"}}, }};</script>"#
+            );
+            let url = extract_master_url(&html).expect("must find the real player block");
+            assert_eq!(
+                url, "https://real.test/y.mp4",
+                "`{decoy_name}` must not re-open the window"
+            );
+        }
     }
 
     #[test]
