@@ -36,6 +36,7 @@
 pub mod age_rating;
 pub mod dash;
 pub mod json_ld;
+pub(crate) mod manifest_url;
 mod metadata;
 mod parsing;
 pub(crate) mod protocol;

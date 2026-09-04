@@ -19,32 +19,15 @@ use super::segments::{
 /// Hard cap on representations per MPD. Task 11 exercises the truncation logic.
 pub(crate) const MAX_REPS_PER_MPD: usize = 50;
 
-/// Validate a resolved URL via `rdlp_security::validate_url_security`.
+/// Validate a manifest-resolved URL, as a [`DashExpandError`].
 ///
-/// Production behavior: rejects `file://`, `javascript:`, RFC 1918 private
-/// hosts, link-local `169.254.0.0/16` (incl. cloud-metadata IPs), and other
-/// SSRF-prone targets.
-///
-/// Test behavior: allows `http`/`https` on `127.0.0.1` / `localhost` / `[::1]`
-/// so mockito-driven unit tests in this file can drive expansion against
-/// loopback fixtures. All other private hosts and non-http(s) schemes still
-/// go through the real validator. Bypass is `cfg(test)`-gated; production
-/// builds compile without any loopback exemption. Mirrors
-/// `crates/rdlp-extractor/src/hls/expand.rs:92`.
+/// The gate itself — including the `cfg(test)` loopback exemption and its
+/// scope — lives in
+/// [`crate::base::common::manifest_url::validate_manifest_sourced_url`],
+/// shared with the HLS expander so the two protocols cannot drift apart. This
+/// function is only the mapping into DASH's error type.
 fn validate_resolved_url(url: &str) -> Result<(), DashExpandError> {
-    #[cfg(test)]
-    {
-        if let Ok(parsed) = url::Url::parse(url) {
-            let scheme_ok = matches!(parsed.scheme(), "http" | "https");
-            let host_loopback = parsed.host_str().is_some_and(|h| {
-                h == "127.0.0.1" || h == "localhost" || h == "[::1]" || h == "::1"
-            });
-            if scheme_ok && host_loopback {
-                return Ok(());
-            }
-        }
-    }
-    rdlp_security::validate_url_security(url).map_err(|e| {
+    crate::base::common::manifest_url::validate_manifest_sourced_url(url).map_err(|e| {
         DashExpandError::UrlRejected(format!("{}: {e}", rdlp_security::sanitize_for_logging(url)))
     })
 }
