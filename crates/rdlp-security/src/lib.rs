@@ -49,7 +49,7 @@
 #![warn(missing_docs)]
 #![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 
-use std::net::IpAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use thiserror::Error;
 
 pub mod text;
@@ -162,7 +162,20 @@ pub fn validate_url_security(url: &str) -> Result<()> {
 /// - Localhost variants: `localhost`, `127.0.0.1`, `::1`
 /// - Internal hostnames: `*.local`, `*.internal`
 /// - Private IPv4 ranges: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`
-/// - Loopback and link-local addresses
+/// - Loopback, link-local, unspecified, broadcast and multicast addresses
+/// - Reserved IPv4 ranges `std` has no stable predicate for: `100.64.0.0/10`
+///   (CGNAT), `192.0.0.0/24` (IETF), `192.88.99.0/24` (6to4 relay),
+///   `198.18.0.0/15` (benchmarking)
+/// - IPv6 forms wrapping a private IPv4: mapped (`::ffff:`), the deprecated
+///   compatible form (`::`), and the NAT64 Well-Known Prefix (`64:ff9b::`)
+///
+/// # What it does NOT do
+///
+/// It validates the host **string**, never a resolved address. A name that
+/// resolves to a private address (`evil.example.com A 127.0.0.1`) passes,
+/// and always will under this design — closing DNS rebinding requires
+/// resolve → validate → connect-to-the-validated-IP, which the HTTP stack
+/// does not expose. Accepted residual risk; see #662, #663.
 ///
 /// # Arguments
 /// * `host` - The hostname or IP address to check
@@ -214,26 +227,56 @@ pub fn is_private_host(host: &str) -> bool {
     // Try to parse as IP address
     if let Ok(ip) = host.parse::<IpAddr>() {
         return match ip {
-            IpAddr::V4(ipv4) => {
-                ipv4.is_loopback()           // 127.0.0.0/8
-                    || ipv4.is_private()     // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
-                    || ipv4.is_link_local()  // 169.254.0.0/16
-                    || ipv4.is_unspecified() // 0.0.0.0
-                    || ipv4.is_broadcast()   // 255.255.255.255
-                    || ipv4.is_multicast() // 224.0.0.0/4
-            }
+            IpAddr::V4(ipv4) => is_private_ipv4(ipv4),
             IpAddr::V6(ipv6) => {
                 ipv6.is_loopback()           // ::1
                     || ipv6.is_unspecified() // ::
                     || is_ipv6_link_local(&ipv6) // fe80::/10
                     || is_ipv6_unique_local(&ipv6) // fc00::/7
                     || is_ipv6_multicast(&ipv6)    // ff00::/8
-                    || is_ipv6_v4_mapped_private(&ipv6) // ::ffff:rfc1918
+                    || is_ipv6_wrapping_private_v4(&ipv6) // ::ffff:/ ::/ 64:ff9b::
             }
         };
     }
 
     false
+}
+
+/// Whether an IPv4 address must not be fetched.
+///
+/// The single definition of "private IPv4" for this crate. Three call sites
+/// need it — the bare-IPv4 host, an IPv4 wrapped in an IPv6 form, and the
+/// NAT64-embedded address — and they must not be able to disagree.
+const fn is_private_ipv4(ip: Ipv4Addr) -> bool {
+    ip.is_loopback()           // 127.0.0.0/8
+        || ip.is_private()     // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
+        || ip.is_link_local()  // 169.254.0.0/16
+        || ip.is_unspecified() // 0.0.0.0
+        || ip.is_broadcast()   // 255.255.255.255
+        || ip.is_multicast()   // 224.0.0.0/4
+        || is_reserved_ipv4(ip)
+}
+
+/// Reserved IPv4 ranges that reach internal infrastructure but that `std`
+/// does not expose a predicate for on stable.
+///
+/// Matched on octets rather than by calling `std`: `Ipv4Addr::is_shared` and
+/// `Ipv4Addr::is_benchmarking` are unstable behind feature `ip`
+/// (rust-lang/rust#27709, verified against rustc 1.97.0), and no
+/// `is_ietf_protocol_assignment` exists on stable at all.
+const fn is_reserved_ipv4(ip: Ipv4Addr) -> bool {
+    let [a, b, c, _] = ip.octets();
+
+    // 100.64.0.0/10 — CGNAT shared address space (RFC 6598). Routable inside
+    // a carrier network, so it reaches real hosts.
+    (a == 100 && matches!(b, 64..=127))
+        // 192.0.0.0/24 — IETF protocol assignments (RFC 6890 §2.2.2).
+        || (a == 192 && b == 0 && c == 0)
+        // 192.88.99.0/24 — 6to4 relay anycast, deprecated by RFC 7526 but
+        // still routed on some networks.
+        || (a == 192 && b == 88 && c == 99)
+        // 198.18.0.0/15 — benchmarking (RFC 2544 §C.2.2).
+        || (a == 198 && matches!(b, 18 | 19))
 }
 
 /// IPv6 link-local: `fe80::/10`. First 10 bits == `1111111010`.
@@ -254,18 +297,46 @@ const fn is_ipv6_multicast(ip: &std::net::Ipv6Addr) -> bool {
     (ip.segments()[0] & 0xff00) == 0xff00
 }
 
-/// `::ffff:0:0/96` IPv4-mapped IPv6. Reject when the wrapped IPv4 is
-/// itself private/loopback/link-local — otherwise an attacker writes
-/// `[::ffff:127.0.0.1]` and bypasses the IPv4 gate.
+/// An IPv6 address that carries an IPv4 address inside it, rejected when
+/// that inner address is one we would refuse on its own — otherwise an
+/// attacker writes `[::ffff:127.0.0.1]` and walks around the IPv4 gate.
+///
+/// Three forms carry one, and each needs its own extraction:
+///
+/// - `::ffff:0:0/96` IPv4-**mapped** (RFC 4291 §2.5.5.2)
+/// - `::/96` IPv4-**compatible** (RFC 4291 §2.5.5.1, deprecated). Distinct
+///   from the mapped form: `to_ipv4_mapped()` returns `None` for it, so it
+///   is invisible to a mapped-only check. `to_ipv4()` covers both.
+/// - `64:ff9b::/96` the NAT64 Well-Known Prefix (RFC 6052 §2.1)
 #[inline]
-fn is_ipv6_v4_mapped_private(ip: &std::net::Ipv6Addr) -> bool {
-    ip.to_ipv4_mapped().is_some_and(|v4| {
-        v4.is_loopback()
-            || v4.is_private()
-            || v4.is_link_local()
-            || v4.is_unspecified()
-            || v4.is_broadcast()
-            || v4.is_multicast()
+fn is_ipv6_wrapping_private_v4(ip: &Ipv6Addr) -> bool {
+    ip.to_ipv4()
+        .or_else(|| nat64_embedded_ipv4(ip))
+        .is_some_and(is_private_ipv4)
+}
+
+/// The IPv4 address embedded in a `64:ff9b::/96` NAT64 address, if this is
+/// one.
+///
+/// Only the Well-Known Prefix is recognised; a Network-Specific Prefix is
+/// site-chosen and cannot be identified from the address alone.
+///
+/// RFC 6052 §3.1 is what makes rejecting a private inner address correct
+/// rather than merely cautious: "The Well-Known Prefix MUST NOT be used to
+/// represent non-global IPv4 addresses, such as those defined in [RFC1918]",
+/// and translators "MUST drop these packets". A conformant NAT64 address
+/// wrapping a public IPv4 stays allowed — refusing those would break NAT64
+/// networks outright.
+#[inline]
+fn nat64_embedded_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
+    let segments = ip.segments();
+    // §2.2: for a /96 prefix the IPv4 address occupies bits 96..=127, i.e.
+    // the final two segments, with the first six forming the prefix.
+    let is_well_known =
+        segments[0] == 0x0064 && segments[1] == 0xff9b && segments[2..6] == [0, 0, 0, 0];
+    is_well_known.then(|| {
+        let embedded = (u32::from(segments[6]) << 16) | u32::from(segments[7]);
+        Ipv4Addr::from(embedded)
     })
 }
 

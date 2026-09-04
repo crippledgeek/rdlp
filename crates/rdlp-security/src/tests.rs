@@ -297,3 +297,134 @@ fn sanitize_for_logging_redacts_new_328_patterns_via_delegate() {
         "https://cdn/s?X-Amz-Security-Token=***&code=***"
     );
 }
+
+// ── Reserved IPv4 ranges the predicate used to miss (#663) ──────
+//
+// Each range is pinned from BOTH sides: the first and last address inside
+// it must be private, and the addresses immediately below and above must
+// stay public. A test placed only in the middle of a range passes against
+// an off-by-one in the bound and so guards nothing.
+
+#[test]
+fn cgnat_shared_address_space_is_private() {
+    // RFC 6598: 100.64.0.0/10 spans 100.64.0.0 ..= 100.127.255.255.
+    assert!(is_private_host("100.64.0.0"), "first address in the range");
+    assert!(is_private_host("100.100.50.1"), "interior");
+    assert!(
+        is_private_host("100.127.255.255"),
+        "last address in the range"
+    );
+}
+
+#[test]
+fn addresses_bracketing_the_cgnat_range_stay_public() {
+    assert!(!is_private_host("100.63.255.255"), "one below the range");
+    assert!(!is_private_host("100.128.0.0"), "one above the range");
+}
+
+#[test]
+fn ietf_protocol_assignment_range_is_private() {
+    // RFC 6890: 192.0.0.0/24 spans 192.0.0.0 ..= 192.0.0.255.
+    assert!(is_private_host("192.0.0.0"));
+    assert!(is_private_host("192.0.0.255"));
+}
+
+#[test]
+fn addresses_bracketing_the_ietf_range_stay_public() {
+    assert!(!is_private_host("191.255.255.255"), "one below the range");
+    assert!(!is_private_host("192.0.1.0"), "one above the range");
+}
+
+#[test]
+fn benchmarking_range_is_private() {
+    // RFC 2544: 198.18.0.0/15 spans 198.18.0.0 ..= 198.19.255.255.
+    assert!(is_private_host("198.18.0.0"));
+    assert!(is_private_host("198.19.255.255"));
+}
+
+#[test]
+fn addresses_bracketing_the_benchmarking_range_stay_public() {
+    assert!(!is_private_host("198.17.255.255"), "one below the range");
+    assert!(!is_private_host("198.20.0.0"), "one above the range");
+}
+
+#[test]
+fn six_to_four_relay_anycast_is_private() {
+    // RFC 7526 deprecated 192.88.99.0/24; it still routes on some networks.
+    assert!(is_private_host("192.88.99.0"));
+    assert!(is_private_host("192.88.99.255"));
+}
+
+#[test]
+fn addresses_bracketing_the_six_to_four_range_stay_public() {
+    assert!(!is_private_host("192.88.98.255"), "one below the range");
+    assert!(!is_private_host("192.88.100.0"), "one above the range");
+}
+
+// ── IPv6 forms that wrap an IPv4 address (#663) ─────────────────
+
+#[test]
+fn ipv4_compatible_ipv6_wrapping_a_private_v4_is_private() {
+    // The deprecated IPv4-COMPATIBLE form (RFC 4291 s2.5.5.1), distinct from
+    // the IPv4-mapped `::ffff:` form already covered. Measured on Rust
+    // 1.97.0: `"::127.0.0.1".parse::<Ipv6Addr>()` yields `to_ipv4_mapped()
+    // == None` and `is_loopback() == false`, so neither existing check fires.
+    assert!(is_private_host("::127.0.0.1"));
+    assert!(is_private_host("::10.0.0.1"));
+    assert!(is_private_host("::192.168.1.1"));
+}
+
+#[test]
+fn ipv4_compatible_ipv6_wrapping_a_public_v4_stays_public() {
+    assert!(!is_private_host("::8.8.8.8"));
+}
+
+#[test]
+fn nat64_well_known_prefix_wrapping_a_private_v4_is_private() {
+    // RFC 6052 s3.1: "The Well-Known Prefix MUST NOT be used to represent
+    // non-global IPv4 addresses, such as those defined in [RFC1918]" and
+    // translators "MUST drop these packets". Such an address is therefore
+    // both non-conformant and an SSRF attempt.
+    assert!(is_private_host("64:ff9b::127.0.0.1"));
+    assert!(is_private_host("64:ff9b::10.0.0.1"));
+    assert!(is_private_host("64:ff9b::169.254.169.254"));
+}
+
+#[test]
+fn nat64_well_known_prefix_wrapping_a_global_v4_stays_public() {
+    // The legitimate use of the prefix. Blocking this would break NAT64
+    // networks outright, so the check must read the embedded address.
+    assert!(!is_private_host("64:ff9b::8.8.8.8"));
+}
+
+#[test]
+fn a_prefix_resembling_nat64_is_not_treated_as_nat64() {
+    // Only 64:ff9b::/96 is the Well-Known Prefix. A neighbouring prefix
+    // carrying the same trailing bits must not inherit the check.
+    assert!(!is_private_host("64:ff9c::10.0.0.1"));
+    assert!(!is_private_host("65:ff9b::10.0.0.1"));
+}
+
+// ── The decimal/octal/hex normalisation this gate relies on (#663) ──
+
+#[test]
+fn alternate_ipv4_encodings_are_rejected_through_validate_url_security() {
+    // This protection is currently a behaviour of the `url` crate rather
+    // than of this crate: special-scheme hosts ending in a number are run
+    // through `parse_ipv4addr`, which accepts decimal, octal and hex forms
+    // and re-serialises them as a dotted quad, so `is_private_host` sees
+    // "127.0.0.1". Nothing in this repo would notice if that stopped.
+    //
+    // 2130706433 == 0x7f000001 == 127.0.0.1
+    for url in [
+        "http://2130706433/x", // decimal
+        "http://0x7f000001/x", // hex
+        "http://0177.0.0.1/x", // octal first octet
+        "http://127.1/x",      // short form
+    ] {
+        assert!(
+            validate_url_security(url).is_err(),
+            "{url} must be rejected as loopback"
+        );
+    }
+}
