@@ -663,18 +663,21 @@ async fn download_one(
         let headers = headers.clone();
         let url_str = url_str.clone();
         async move {
-            let resp = client
-                .get(&url_str)
-                .headers(headers)
-                // Item 8: was a hardcoded 60s; now uses the operator-tunable
-                // read (idle) timeout (DownloaderConfig default is also 60s).
-                .timeout(http.config.read_timeout)
-                .send()
-                .await
-                .map_err(|e| RdlpError::Network {
-                    message: format!("DASH segment fetch failed: {e}"),
-                    url: Some(rdlp_redact::RedactedUrlBuf::from(url_str.as_str())),
-                })?;
+            let resp = crate::http::with_transfer_timeouts(
+                client.get(&url_str),
+                // Item 8 replaced a hardcoded 60s with this operator-tunable
+                // value, but wired it to wreq's *total* timeout while calling
+                // it an idle one. Both axes are now bounded, each by the timer
+                // that actually implements it.
+                http.config.read_timeout,
+            )
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|e| RdlpError::Network {
+                message: format!("DASH segment fetch failed: {e}"),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url_str.as_str())),
+            })?;
             if !resp.status().is_success() {
                 return Err(RdlpError::Http {
                     status: resp.status().as_u16(),

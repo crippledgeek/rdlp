@@ -1979,3 +1979,125 @@ async fn a_stalled_fragment_fetch_times_out_rather_than_hanging() {
         "returned only after {elapsed:?}; the fetch was not bounded by read_timeout"
     );
 }
+
+#[tokio::test]
+async fn a_slow_but_progressing_fragment_is_not_cut_off() {
+    // The case the first version of this timeout got wrong. wreq's
+    // `.timeout()` is a total request deadline whose timer never resets, so
+    // wiring the idle value to it aborts a large fragment on a slow link even
+    // while bytes are steadily arriving. `.read_timeout()` resets on every
+    // frame, so only genuine inactivity trips it.
+    //
+    // The body below arrives in six pieces 40ms apart: no single gap comes
+    // near the 400ms idle bound — a 10x margin, so a loaded machine cannot
+    // trip it spuriously — while the total (~240ms) still exceeds that bound
+    // comfortably. A total-timeout implementation fails this; an idle one
+    // must not.
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    const PIECES: usize = 6;
+    const PIECE: usize = 100;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept");
+        // Consume the request head so the client's write completes.
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf).await;
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+            PIECES * PIECE
+        );
+        stream.write_all(head.as_bytes()).await.expect("head");
+        for _ in 0..PIECES {
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+            stream.write_all(&[0x7Eu8; PIECE]).await.expect("piece");
+            stream.flush().await.expect("flush");
+        }
+    });
+
+    let http = http_with_retries(0).with_read_timeout(std::time::Duration::from_millis(400));
+    let frags = vec![frag(format!("http://{addr}/slow.ts"))];
+    let tmp = tempfile::NamedTempFile::new().expect("tmp");
+
+    let stats =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+            .await
+            .expect("a slow but progressing transfer must not be aborted");
+
+    server.await.expect("server task");
+    assert_eq!(
+        stats.bytes_downloaded,
+        (PIECES * PIECE) as u64,
+        "every byte of the slow transfer must land"
+    );
+    assert_eq!(
+        stats.retries, 0,
+        "a successful slow transfer needs no retry"
+    );
+}
+
+#[tokio::test]
+async fn an_endless_dribble_is_cut_off_by_the_total_deadline() {
+    // The one case the idle timer cannot see. Every frame resets
+    // `read_timeout`, so a server that sends one byte just often enough would
+    // hold the fragment open forever; only the total deadline ends it.
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept");
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf).await;
+        // A body far larger than we will ever send, dribbled indefinitely.
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100000000\r\n\r\n")
+            .await
+            .expect("head");
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            if stream.write_all(b"x").await.is_err() {
+                return; // client gave up, which is the point
+            }
+        }
+    });
+
+    // Idle bound 100ms, never reached because a byte lands every 20ms.
+    // Total deadline is 10x that, so the dribble must end at about 1s.
+    let http = http_with_retries(0).with_read_timeout(std::time::Duration::from_millis(100));
+    let frags = vec![frag(format!("http://{addr}/dribble.ts"))];
+    let tmp = tempfile::NamedTempFile::new().expect("tmp");
+
+    let started = Instant::now();
+    let err =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+            .await
+            .expect_err("an endless dribble must be cut off, not served forever");
+    let elapsed = started.elapsed();
+    server.abort();
+
+    assert!(
+        matches!(err, rdlp_core::RdlpError::Network { .. }),
+        "a timeout is transient, so it stays retryable: {err:?}"
+    );
+    // Lower bound, and it is the load-bearing half. Without it a scheduling
+    // hiccup that stretched one 20ms gap past the 100ms idle bound would trip
+    // the *idle* timer at ~150ms, and this test would pass while demonstrating
+    // the opposite of its name. Only a repeatedly-reset idle timer can carry
+    // the request past 500ms, so reaching here that late means the total
+    // deadline is what ended it.
+    assert!(
+        elapsed >= std::time::Duration::from_millis(500),
+        "ended after only {elapsed:?}; the idle timer fired, so this proves \
+         nothing about the total deadline"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "returned only after {elapsed:?}; the total deadline did not bound the dribble"
+    );
+}

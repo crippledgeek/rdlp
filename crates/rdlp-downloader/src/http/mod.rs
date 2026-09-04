@@ -55,6 +55,50 @@ fn to_header_map(headers: Option<&HashMap<String, String>>) -> HeaderMap {
 /// `BaseExtractor::detect_file_size`. Closes #306.
 pub(crate) use rdlp_http::ProbeResult;
 
+/// Multiple of the idle timeout used as a whole-request backstop.
+///
+/// Sized so only a request that is pathological reaches it, never one that is
+/// merely slow: at the 60s default that is a ten-minute ceiling per fragment.
+const TRANSFER_DEADLINE_MULTIPLE: u32 = 10;
+
+/// Apply the two timeouts a media transfer needs, on their two distinct axes.
+///
+/// Read from wreq 6.0.0-rc.28's source rather than its doc lines, because the
+/// two methods' names do not describe when they actually fire:
+///
+/// - **Before the response arrives**, `ResponseFuture::poll`
+///   (`client/layer/timeout/future.rs:53-61`) polls *both* sleeps as plain
+///   deadlines running from request start. So `read_timeout` alone already
+///   bounds a connection that is accepted and then never answered — the
+///   header phase is not the "read" phase its name suggests.
+/// - **Once the body is arriving**, they diverge
+///   (`client/layer/timeout/body.rs`): `ReadTimeoutBody` resets its timer on
+///   every frame, so it never punishes a transfer that is slow but
+///   progressing, while `TotalTimeoutBody` holds one sleep that is never
+///   reset.
+///
+/// That is why both are set. `read_timeout` does the real work — silence
+/// before the headers, and inactivity during the body. The total deadline
+/// exists for the one case the idle timer cannot see: a body that dribbles a
+/// frame at a time forever, resetting the idle timer on each one, which would
+/// otherwise hold a fragment open indefinitely.
+///
+/// Wiring the idle value to `timeout` instead — as this code did briefly, and
+/// as the DASH path did since its Item 8 — makes a 60s *total* deadline for
+/// the whole transfer, which kills a large fragment on a slow link while bytes
+/// are still arriving. `Config::read_timeout` documents itself as "per-read
+/// inactivity, not total"; this is what honouring that requires.
+///
+/// Shared by the fragment and DASH segment paths so the two cannot drift back
+/// to disagreeing about which axis they bound.
+pub(crate) fn with_transfer_timeouts(
+    req: wreq::RequestBuilder,
+    idle: Duration,
+) -> wreq::RequestBuilder {
+    req.read_timeout(idle)
+        .timeout(idle.saturating_mul(TRANSFER_DEADLINE_MULTIPLE))
+}
+
 /// The operator's headers, but only for a target on the seed's origin.
 ///
 /// `Format.http_headers` carry Referer, Cookie, Authorization and Origin. A

@@ -2378,8 +2378,9 @@ fn origin_is_scheme_host_and_port_not_just_host() {
 
 #[test]
 fn absent_seed_fails_closed() {
-    // No format URL, or one that would not parse: nothing is known about the
-    // intended origin, so nothing is forwarded.
+    // No format URL at all. A caller whose own parse failed passes `None` too,
+    // so this one case covers both — the function never sees the unparsed
+    // string. (A target that will not parse is the separate test below.)
     let out = same_origin_headers(None, "https://cdn.example/seg1.ts", &seed_headers());
     assert!(out.is_empty());
 }

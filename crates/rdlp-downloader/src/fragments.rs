@@ -583,20 +583,17 @@ async fn fetch_with_optional_range(
     // Same-origin gate (#273): operator headers reach only a target on the
     // format's own origin. Shared with the DASH segment path.
     //
-    // The request timeout matches what the DASH segment path has carried since
-    // its own Item 8: without one, a CDN that accepts the connection and then
-    // stalls never produces an error at all, so the retry this path gained in
-    // #570 could not help the commonest CDN failure. Cancellation covers a
-    // stall only when the caller supplied a token.
-    let mut req = http
-        .client()
-        .get(url)
-        .timeout(http.config.read_timeout)
-        .headers(crate::http::same_origin_headers(
-            format_origin,
-            url,
-            &http.headers(),
-        ));
+    // Timeouts: this path carried none at all before #570, so a CDN that
+    // accepted the connection and then went silent produced no error for the
+    // new retry to act on. See `with_transfer_timeouts` for which timer bounds
+    // which failure — they are not interchangeable.
+    let mut req =
+        crate::http::with_transfer_timeouts(http.client().get(url), http.config.read_timeout)
+            .headers(crate::http::same_origin_headers(
+                format_origin,
+                url,
+                &http.headers(),
+            ));
 
     // `byte_range` is `(start, end_exclusive)`; RFC 9110's `Range` header and
     // `RequestedSpan` are both inclusive, so `end_exclusive` is converted once
