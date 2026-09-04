@@ -27,13 +27,13 @@ fn is_temp_named(path: &Path) -> bool {
 
 /// Tracks current and temporary file paths for a single post-processing job.
 ///
-/// After each stage produces output, the stage calls [`replace`] to promote
+/// After each stage produces output, the stage calls [`Self::replace`] to promote
 /// the output to `current_files` and move the old files to `temp_files`.
-/// When the pipeline completes successfully, [`cleanup`] deletes all temp files.
+/// When the pipeline completes successfully, [`Self::cleanup`] deletes all temp files.
 ///
-/// On `Drop` without a prior [`commit`] (or [`cleanup`], which commits as its
+/// On `Drop` without a prior [`Self::commit`] (or [`Self::cleanup`], which commits as its
 /// last step), `FileTracker` performs graceful-cancel cleanup: it deletes every
-/// uncommitted path it issued via [`temp_path`] plus any `current_files` and
+/// uncommitted path it issued via [`Self::temp_path`] plus any `current_files` and
 /// superseded `temp_files`, and releases each from [`TempRegistry`]. This
 /// prevents partial recode output and
 /// intermediate files from leaking when a job is cancelled mid-pipeline (#335, #404).
@@ -41,8 +41,8 @@ fn is_temp_named(path: &Path) -> bool {
 /// process dies before `Drop` runs.
 ///
 /// When post-processing a pre-existing local file (`process_local_file`, #414),
-/// use [`new_borrowing`] so the user's original file is never deleted — neither
-/// on success nor on cancel. The download path uses [`new`] (empty borrowed set)
+/// use [`Self::new_borrowing`] so the user's original file is never deleted — neither
+/// on success nor on cancel. The download path uses [`Self::new`] (empty borrowed set)
 /// and retains its existing behaviour unchanged.
 pub struct FileTracker {
     /// The live files currently being processed.
@@ -102,20 +102,20 @@ impl FileTracker {
     /// since it signals a caller-contract violation. The orchestrator satisfies
     /// this precondition by UUID-renaming inputs to `*.rdlp-tmp-*` before
     /// constructing the tracker. To post-process a pre-existing user-owned file
-    /// (which must NOT be deleted), use [`new_borrowing`] instead of satisfying
+    /// (which must NOT be deleted), use [`Self::new_borrowing`] instead of satisfying
     /// this precondition.
     pub const fn new(files: Vec<PathBuf>, temp_registry: Arc<TempRegistry>) -> Self {
         Self::with_borrowed(files, Vec::new(), temp_registry)
     }
 
-    /// Like [`new`], but marks every initial file as a **borrowed** user-owned
+    /// Like [`Self::new`], but marks every initial file as a **borrowed** user-owned
     /// input: never deleted (success or cancel), never queued for deletion by
-    /// [`replace`]. For post-processing a pre-existing local file (#414) rather
+    /// [`Self::replace`]. For post-processing a pre-existing local file (#414) rather
     /// than a file rdlp downloaded.
     ///
     /// Each borrowed path is canonicalized at construction time (the files exist
     /// here, so [`std::fs::canonicalize`] succeeds). The canonical form is stored
-    /// alongside the raw path so [`is_borrowed`] can match equivalent-but-
+    /// alongside the raw path so `is_borrowed` can match equivalent-but-
     /// textually-distinct representations such as symlinks at cancel/cleanup time,
     /// when the file may have been moved and canonicalize on the candidate would
     /// fail (#416 M2).

@@ -203,7 +203,7 @@ pub trait SearchExtractor: Send + Sync {
     /// override.
     ///
     /// # Arguments
-    /// * `preview` — A preview previously returned by [`search`] / [`search_page`].
+    /// * `preview` — A preview previously returned by [`Self::search`] / [`Self::search_page`].
     /// * `ctx` — Shared extraction context.
     async fn enrich(
         &self,
@@ -231,7 +231,7 @@ pub trait SearchExtractor: Send + Sync {
 ///
 /// ## Arc vs Box Trade-offs
 ///
-/// | Criterion | Arc<T> | Box<T> |
+/// | Criterion | `Arc<T>` | `Box<T>` |
 /// |-----------|--------|--------|
 /// | **Ownership** | Multiple owners (shared) | Single owner (unique) |
 /// | **Thread Safety** | Yes (Send + Sync) | Depends on T |
@@ -244,11 +244,11 @@ pub trait SearchExtractor: Send + Sync {
 /// - Sharing data across async tasks (`tokio::spawn`)
 /// - Sharing clients/connections (HTTP, database)
 /// - Caching expensive-to-create objects
-/// - Trait objects that need Clone (Arc<dyn Trait>)
+/// - Trait objects that need Clone (`Arc<dyn Trait>`)
 ///
 /// **When to use Box:**
 /// - Single ownership with no sharing
-/// - Trait objects without cloning (Box<dyn Trait>)
+/// - Trait objects without cloning (`Box<dyn Trait>`)
 /// - Breaking recursive type cycles
 /// - Storing large values on heap to avoid stack overflow
 ///
@@ -275,19 +275,19 @@ pub struct ExtractionContext {
 
     /// JavaScript engine for executing site JavaScript (e.g., signature decryption)
     ///
-    /// **Arc<dyn Trait>** enables runtime polymorphism with shared ownership.
+    /// **`Arc<dyn Trait>`** enables runtime polymorphism with shared ownership.
     /// Different JS engines (boa, V8) can be swapped without changing extractor code.
     pub js_engine: Arc<dyn JsEngine>,
 
     /// Cookie jar for authentication
     ///
-    /// **Arc<dyn Trait>** allows sharing cookie state across extraction tasks while
+    /// **`Arc<dyn Trait>`** allows sharing cookie state across extraction tasks while
     /// maintaining thread-safety for concurrent access.
     pub cookie_jar: Arc<dyn CookieJar>,
 
     /// Application configuration
     ///
-    /// **Arc<Config>** eliminates expensive Config clones. Phase 1 optimization:
+    /// **`Arc<Config>`** eliminates expensive Config clones. Phase 1 optimization:
     /// sharing Config via Arc saves ~200ns per orchestrator creation.
     pub config: Arc<Config>,
 }

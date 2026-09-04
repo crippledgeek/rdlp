@@ -85,7 +85,7 @@ impl ThumbnailEmbedStrategy {
 
 /// Whether `format` can carry an embedded thumbnail at all.
 ///
-/// The public gateway to [`ThumbnailEmbedStrategy::for_container`] — exposed
+/// The public gateway to `ThumbnailEmbedStrategy::for_container` — exposed
 /// so `rdlp-postprocess` gates its auto-remux/embed decision directly against
 /// the real strategy table instead of a hand-copied mirror of it (#533).
 #[must_use]
@@ -96,7 +96,7 @@ pub const fn supports_thumbnail_embed(format: ContainerFormat) -> bool {
 /// Whether `format` attaches the thumbnail's source codec natively
 /// (Matroska attachment) and therefore never needs image normalization.
 ///
-/// The public gateway to the [`ThumbnailEmbedStrategy::MatroskaAttachment`]
+/// The public gateway to the `ThumbnailEmbedStrategy::MatroskaAttachment`
 /// case — exposed so `rdlp-postprocess` derives its normalization gate from
 /// the real strategy table instead of a hand-copied container list (#533).
 /// Named for the PROPERTY the caller cares about (no stream-codec

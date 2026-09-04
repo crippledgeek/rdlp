@@ -1,6 +1,6 @@
 //! Rich subtitle track metadata and extraction result types
 //!
-//! Provides [`SubtitleTrack`] (richer than the legacy [`Subtitle`](crate::info_dict::Subtitle)
+//! Provides [`SubtitleTrack`] (richer than the legacy [`Subtitle`]
 //! wire format), [`SubtitleResult`] for pipeline status reporting, and the
 //! [`normalize_from_info_dict`] bridge function.
 

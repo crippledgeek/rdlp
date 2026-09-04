@@ -103,7 +103,7 @@ pub fn decipher_format_url(format_url: &str) -> Option<String> {
 /// `XHamster` ciphertext.
 ///
 /// Plausible means it carries a hex payload that decodes to at least
-/// [`MIN_CIPHERTEXT_BYTES`] bytes (algorithm ID + seed + ≥1 ciphertext byte),
+/// `MIN_CIPHERTEXT_BYTES` bytes (algorithm ID + seed + ≥1 ciphertext byte),
 /// via either accepted input form (full URL with hex path, or bare hex).
 ///
 /// This is deliberately weaker than [`decipher_format_url`]: it does **not**

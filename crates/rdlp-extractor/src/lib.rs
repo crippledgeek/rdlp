@@ -21,7 +21,7 @@
 //!
 //! 1. **Base Utilities** (`base::common`) - Common extraction utilities,
 //!    including `base::common::dash::expand_dash_representations` which eagerly
-//!    expands DASH MPD manifests into per-Representation [`Format`] entries so
+//!    expands DASH MPD manifests into per-Representation [`rdlp_types::Format`] entries so
 //!    that `-f bv*+ba*` selection works against DASH the same as HTTP or HLS.
 //! 2. **Network Bases** (`base::tnaflix_network`) - Site family patterns
 //! 3. **Site Extractors** (`extractors::*`) - Individual site implementations

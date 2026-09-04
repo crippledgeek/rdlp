@@ -137,7 +137,7 @@ pub fn declared_codec(container: ContainerFormat, kind: MediaKind) -> Option<Cod
 /// whether a stream *copy* into that container is a question `FFmpeg` answers
 /// yes to, rather than one it refuses mid-mux.
 ///
-/// `codec` is a codec name as [`crate::ffmpeg::probe`] reports it (`FFmpeg`'s own
+/// `codec` is a codec name as `crate::ffmpeg::probe` reports it (`FFmpeg`'s own
 /// descriptor name — `"h264"`, `"hevc"`, `"vp9"`), which is what
 /// `avcodec_descriptor_get_by_name` round-trips: probe derives it from
 /// `avcodec_get_name`, the inverse of this lookup. A name no descriptor claims
@@ -155,7 +155,7 @@ pub fn declared_codec(container: ContainerFormat, kind: MediaKind) -> Option<Cod
 /// representability. The descriptor's own media type must match what the
 /// caller is asking about.
 ///
-/// The decision rule itself is [`crate::ffmpeg::ffi_helpers::oformat_can_represent`],
+/// The decision rule itself is `crate::ffmpeg::ffi_helpers::oformat_can_represent`,
 /// shared with the enforcement point inside the mux so routing and enforcement
 /// cannot drift apart. See that function for why the answer is tri-state and
 /// why "unknown" counts as "no".

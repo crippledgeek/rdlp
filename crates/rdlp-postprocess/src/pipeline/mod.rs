@@ -302,7 +302,7 @@ impl Pipeline {
 
     /// Run the pipeline concurrently for multiple videos.
     ///
-    /// Concurrency is bounded by the semaphore configured in [`new`].
+    /// Concurrency is bounded by the semaphore configured in [`Self::new`].
     ///
     /// Takes `self: Arc<Self>` so that the pipeline can be shared across tasks.
     pub async fn run_batch(

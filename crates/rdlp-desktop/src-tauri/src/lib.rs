@@ -7,15 +7,14 @@
 #![warn(missing_docs)]
 #![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 
-/// Tauri IPC command handlers.
+// No outer `///` on the modules below: each already carries its own `//!`
+// doc, and an outer doc merged with it makes rustdoc resolve the inner
+// doc's intra-doc links against THIS module's scope instead of the
+// submodule's own — "no item named `AppError` in scope" (#661).
 pub mod commands;
-/// Frontend-facing error types for IPC responses.
 pub mod error;
-/// Tauri event types for frontend notifications.
 pub mod events;
-/// Global panic hook installer.
 pub mod panic_hook;
-/// Application state managed by Tauri.
 pub mod state;
 
 use rdlp_postprocess::TempRegistry;
