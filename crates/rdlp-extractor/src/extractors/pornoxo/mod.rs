@@ -682,6 +682,41 @@ mod paged_search_tests {
         assert!(msg.contains("route=tag"), "got: {msg}");
     }
 
+    /// Pins that `SearchExtractor::search` runs the FULL `search_all_pages`
+    /// pagination loop, not a single-page adapter. A compatible-but-lossy
+    /// wiring — `self.search_page_response(query, ctx).await.map(|r| r.results)`
+    /// — compiles, and both the 403-guidance delegation tests above still pass
+    /// (a first-page failure propagates identically through either path), but
+    /// it silently caps `search()` at one page, discarding pagination and the
+    /// `max_results` aggregation loop entirely. `TAG_PAGE` serves the same
+    /// 52-row grid regardless of the requested page (`Matcher::Any`) with
+    /// `has_next: true` (37-page pager), so requesting `max_results: Some(60)`
+    /// forces a second fetch to satisfy the cap — a single-page adapter can
+    /// never clear 52 results, only the aggregating loop can reach 60.
+    #[tokio::test]
+    async fn search_extractor_search_aggregates_results_across_pages_not_just_one() {
+        let (server, _m) = serving(200, TAG_PAGE).await;
+        let origin = SearchOrigin::new(&server.url()).expect("mockito origin is well formed");
+
+        let mut q = query("creampie", &[]);
+        q.max_results = Some(60);
+
+        let results = rdlp_core::SearchExtractor::search(
+            &PornoxoExtractor::with_origin(origin),
+            &q,
+            &test_ctx(),
+        )
+        .await
+        .expect("a healthy multi-page search must succeed");
+
+        assert_eq!(
+            results.len(),
+            60,
+            "must aggregate a second page to reach the requested cap, not stop at \
+             one page's 52 results"
+        );
+    }
+
     /// Same pin for the single-page entry point `SearchExtractor::search_page`.
     #[tokio::test]
     async fn search_extractor_search_page_delegates_and_the_cloudflare_guidance_survives() {
