@@ -13,7 +13,7 @@ use rdlp_types::{
     SearchFilter, SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchResultPreview,
 };
 use std::time::Duration;
-use url::form_urlencoded;
+use url::{Url, form_urlencoded};
 
 use super::MAX_PLAYLIST_SIZE;
 use crate::base::common::BaseExtractor;
@@ -255,6 +255,66 @@ pub(crate) fn filter_value<'a>(filters: &'a [SearchFilter], key: &str) -> Option
         .iter()
         .find(|f| f.key == key)
         .map(|f| f.value.as_str())
+}
+
+/// Resolve a listing card's `href` against the origin that served the listing,
+/// dropping the card when the result would leave that origin.
+///
+/// **The mechanism this replaces is `format!("{origin}{href}")`.** `href` is
+/// page content and a bare origin has no trailing slash, so nothing required
+/// the href to start with `/` — concatenation let page content pick the
+/// authority. Measured against `https://www.pornoxo.com`:
+///
+/// ```text
+/// href                              concatenated authority
+/// "@evil.test/videos/1/x/"       ->  evil.test                 (userinfo)
+/// ".evil.test/videos/1/x/"       ->  www.pornoxo.com.evil.test (lookalike)
+/// "https://evil.test/x/"         ->  www.pornoxo.comhttps      (malformed)
+/// ```
+///
+/// The two-arm variant (`href.starts_with("http") ? verbatim : concat`) is not
+/// safer: its first arm accepts any absolute URL the page supplies verbatim,
+/// and its second arm is the concatenation above.
+///
+/// RFC 3986 reference resolution ([`Url::join`]) fixes the first two by
+/// construction — a relative-path reference cannot introduce an authority, so
+/// they resolve to `/@evil.test/…` and `/.evil.test/…` ON the origin. The
+/// remaining vector is a reference that CAN carry an authority (an absolute
+/// URL, or a protocol-relative `//evil.test/…`), which is what the origin
+/// comparison rejects. Comparing [`Url::origin`] rather than the host also
+/// refuses an `https` → `http` downgrade on the same host.
+///
+/// The in-tree precedent is hqporner, which reaches the same place with a
+/// path-prefix guard (`Some(h) if h.starts_with("/hdporn/")`,
+/// `extractors/hqporner/search.rs:43`) and is deliberately left alone.
+///
+/// Returns `None` when the card must be dropped; callers use `?` inside their
+/// per-card `filter_map`, so one poisoned tile costs that tile and no more.
+pub(crate) fn resolve_card_url(origin: &str, href: &str) -> Option<String> {
+    let (base, resolved) = resolve_reference(origin, href)?;
+    (resolved.origin() == base.origin()).then(|| resolved.into())
+}
+
+/// Resolve a media reference (an `img src`) against the origin that served it,
+/// keeping only `http(s)`.
+///
+/// Deliberately NOT [`resolve_card_url`]: a poster legitimately lives on a
+/// different host from the listing (PornoXO's are on `cdn77-t.pornoxo.com`),
+/// so an origin comparison would drop every real thumbnail. What must not
+/// survive is a non-http(s) reference — a `data:` or `javascript:` value
+/// reaching the desktop's `<img src>` — and a relative `src` that would
+/// otherwise be handed to the UI unresolved.
+pub(crate) fn resolve_media_url(origin: &str, src: &str) -> Option<String> {
+    let (_, resolved) = resolve_reference(origin, src)?;
+    matches!(resolved.scheme(), "http" | "https").then(|| resolved.into())
+}
+
+/// The parse-and-join shared by [`resolve_card_url`] and [`resolve_media_url`],
+/// returning `(base, resolved)` so each can apply its own admission policy.
+fn resolve_reference(origin: &str, reference: &str) -> Option<(Url, Url)> {
+    let base = Url::parse(origin).ok()?;
+    let resolved = base.join(reference).ok()?;
+    Some((base, resolved))
 }
 
 /// Format a [`FilterValidationError`] into an `RdlpError::Extraction` using the
@@ -1078,6 +1138,92 @@ mod tests {
             0,
             "must not fetch when validation fails"
         );
+    }
+
+    // ---- resolve_card_url / resolve_media_url ----
+
+    const ORIGIN: &str = "https://www.pornoxo.com";
+
+    /// The whole point of the helper: what the old `format!("{origin}{href}")`
+    /// produced for each of these is recorded beside the expectation, because
+    /// three of the four were a well-formed URL with an authority the PAGE
+    /// chose, and one of those (`@evil.test`) is invisible to a `starts_with`
+    /// assertion.
+    #[test]
+    fn resolve_card_url_never_lets_the_reference_choose_the_authority() {
+        // concatenated -> authority evil.test
+        assert_eq!(
+            resolve_card_url(ORIGIN, "@evil.test/videos/1/x/").as_deref(),
+            Some("https://www.pornoxo.com/@evil.test/videos/1/x/")
+        );
+        // concatenated -> authority www.pornoxo.com.evil.test
+        assert_eq!(
+            resolve_card_url(ORIGIN, ".evil.test/videos/1/x/").as_deref(),
+            Some("https://www.pornoxo.com/.evil.test/videos/1/x/")
+        );
+        // taken verbatim by the two-arm variant
+        assert_eq!(resolve_card_url(ORIGIN, "https://evil.test/x/"), None);
+        // protocol-relative: concatenated, and NOT caught by starts_with("http")
+        assert_eq!(resolve_card_url(ORIGIN, "//evil.test/x/"), None);
+    }
+
+    #[test]
+    fn resolve_card_url_keeps_on_origin_references() {
+        assert_eq!(
+            resolve_card_url(ORIGIN, "/videos/1/x/").as_deref(),
+            Some("https://www.pornoxo.com/videos/1/x/")
+        );
+        assert_eq!(
+            resolve_card_url(ORIGIN, "videos/1/x/").as_deref(),
+            Some("https://www.pornoxo.com/videos/1/x/")
+        );
+        assert_eq!(
+            resolve_card_url(ORIGIN, "https://www.pornoxo.com/videos/1/x/").as_deref(),
+            Some("https://www.pornoxo.com/videos/1/x/")
+        );
+    }
+
+    /// The comparison is [`Url::origin`], not the host, so a same-host
+    /// downgrade to cleartext is refused along with a foreign host. A
+    /// different port is a different origin for the same reason.
+    #[test]
+    fn resolve_card_url_refuses_a_scheme_or_port_change_on_the_same_host() {
+        assert_eq!(resolve_card_url(ORIGIN, "http://www.pornoxo.com/x/"), None);
+        assert_eq!(
+            resolve_card_url(ORIGIN, "https://www.pornoxo.com:8443/x/"),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_card_url_refuses_non_http_schemes() {
+        assert_eq!(resolve_card_url(ORIGIN, "javascript:alert(1)"), None);
+        assert_eq!(resolve_card_url(ORIGIN, "data:text/html,x"), None);
+    }
+
+    /// A poster legitimately lives off-origin, so the media resolver checks the
+    /// SCHEME and not the origin — swapping the two helpers would drop every
+    /// real thumbnail on this site.
+    #[test]
+    fn resolve_media_url_keeps_off_origin_http_and_drops_everything_else() {
+        assert_eq!(
+            resolve_media_url(ORIGIN, "https://cdn77-t.pornoxo.com/t.jpg").as_deref(),
+            Some("https://cdn77-t.pornoxo.com/t.jpg")
+        );
+        assert_eq!(
+            resolve_media_url(ORIGIN, "/thumbs/t.jpg").as_deref(),
+            Some("https://www.pornoxo.com/thumbs/t.jpg")
+        );
+        assert_eq!(resolve_media_url(ORIGIN, "data:text/html,x"), None);
+        assert_eq!(resolve_media_url(ORIGIN, "javascript:alert(1)"), None);
+    }
+
+    /// Both resolvers take the origin as a `&str`, so a caller that hands over
+    /// something that is not a URL must get `None` rather than a panic.
+    #[test]
+    fn both_resolvers_reject_an_unparseable_origin() {
+        assert_eq!(resolve_card_url("not a url", "/x/"), None);
+        assert_eq!(resolve_media_url("not a url", "/x.jpg"), None);
     }
 
     // ---- SearchOrigin ----

@@ -6,7 +6,9 @@ use scraper::{Html, Selector};
 use std::sync::LazyLock;
 use url::form_urlencoded;
 
-use crate::base::common::{BaseExtractor, SearchOrigin, filter_value};
+use crate::base::common::{
+    BaseExtractor, SearchOrigin, filter_value, resolve_card_url, resolve_media_url,
+};
 
 /// The RESULTS grid only.
 ///
@@ -101,14 +103,21 @@ pub(crate) fn parse_listing_page(origin: &SearchOrigin, html: &str) -> Listing {
 
 /// Parse the results grid into previews, resolving each card against `origin`.
 ///
-/// Cards with no href or no title are skipped rather than failing the page: a
-/// single malformed tile must not cost the operator the other 51 results.
+/// Cards with no href, no title, or an href that resolves OFF the origin are
+/// skipped rather than failing the page: a single malformed tile must not cost
+/// the operator the other 51 results.
 fn parse_cards(document: &Html, origin: &SearchOrigin) -> Vec<SearchResultPreview> {
     document
         .select(&GRID_ITEM)
         .filter_map(|li| {
             let link = li.select(&CARD_LINK).next()?;
             let href = link.value().attr("href")?;
+            // Resolved, not concatenated. `href` is listing HTML and a bare
+            // origin has no trailing slash, so `format!("{origin}{href}")` let
+            // page content choose the authority — `@evil.test/…` yields the
+            // well-formed `https://www.pornoxo.com@evil.test/…`, whose host is
+            // `evil.test`. See `resolve_card_url` for the measured shapes.
+            let video_url = resolve_card_url(origin.as_ref(), href)?;
             let title = link
                 .value()
                 .attr("title")
@@ -118,14 +127,18 @@ fn parse_cards(document: &Html, origin: &SearchOrigin) -> Vec<SearchResultPrevie
                 return None;
             }
             Some(SearchResultPreview {
-                video_url: format!("{origin}{href}"),
+                video_url,
                 title,
+                // The desktop renders this straight into an `<img src>`, so a
+                // `data:` or `javascript:` value from the listing must not
+                // reach it. Host-agnostic on purpose: real posters are served
+                // from `cdn77-t.pornoxo.com`, off the listing origin.
                 thumbnail_url: li
                     .select(&CARD_THUMB)
                     .next()
                     .and_then(|i| i.value().attr("src"))
                     .filter(|s| !s.is_empty())
-                    .map(str::to_owned),
+                    .and_then(|src| resolve_media_url(origin.as_ref(), src)),
                 // The card's `H:MM:SS` / `M:SS` label is exactly the colon
                 // vocabulary `BaseExtractor::parse_duration` already owns for
                 // four sibling extractors; a site-local copy would be a
@@ -334,6 +347,122 @@ mod tests {
                 "every tile must resolve a CDN poster"
             );
         }
+    }
+
+    /// Replace the first tile's href with `hostile`, so the assertions below
+    /// speak about a real grid with exactly one poisoned card in it.
+    fn tag_page_with_first_href(hostile: &str) -> String {
+        let real = r#"<a href="/videos/2939836/test-v-e-c-xfivefive-six-mosaic-removed/" class="mtile-x7__title""#;
+        let poisoned = format!(r#"<a href="{hostile}" class="mtile-x7__title""#);
+        let out = TAG_PAGE.replacen(real, &poisoned, 1);
+        assert_ne!(out, TAG_PAGE, "the hostile href must actually be injected");
+        out
+    }
+
+    /// The authority must come from the origin we fetched, never from the
+    /// listing body.
+    ///
+    /// Asserted on the PARSED HOST, not on a `starts_with` prefix, because the
+    /// prefix test is blind to the shape that makes this real:
+    /// `https://www.pornoxo.com@evil.test/…` starts with the origin and is a
+    /// perfectly well-formed URL whose host is `evil.test`. Under the previous
+    /// `format!("{origin}{href}")` all four hrefs below produced an authority
+    /// the page chose.
+    #[test]
+    fn no_card_can_move_the_authority_off_the_listing_origin() {
+        let origin = default_origin();
+        for hostile in [
+            "@evil.test/videos/1/x/",
+            ".evil.test/videos/1/x/",
+            "https://evil.test/videos/1/x/",
+            "//evil.test/videos/1/x/",
+        ] {
+            let listing = parse_listing_page(&origin, &tag_page_with_first_href(hostile)).results;
+            for r in &listing {
+                let host = url::Url::parse(&r.video_url)
+                    .expect("every emitted card URL must parse")
+                    .host_str()
+                    .map(str::to_owned);
+                assert_eq!(
+                    host.as_deref(),
+                    Some("www.pornoxo.com"),
+                    "href {hostile:?} moved the authority: {}",
+                    r.video_url
+                );
+            }
+        }
+    }
+
+    /// A reference that CAN carry its own authority is dropped outright; one
+    /// that cannot is resolved onto the origin and kept. The distinction is
+    /// RFC 3986's, not ours: `@evil.test/…` is a relative-path reference, so
+    /// joining it can only ever produce a path.
+    #[test]
+    fn an_off_origin_href_is_dropped_and_a_relative_one_is_resolved() {
+        let origin = default_origin();
+
+        for droppable in ["https://evil.test/videos/1/x/", "//evil.test/videos/1/x/"] {
+            let listing = parse_listing_page(&origin, &tag_page_with_first_href(droppable)).results;
+            assert_eq!(
+                listing.len(),
+                51,
+                "{droppable:?} must cost exactly its own card"
+            );
+        }
+
+        for neutralised in ["@evil.test/videos/1/x/", ".evil.test/videos/1/x/"] {
+            let listing =
+                parse_listing_page(&origin, &tag_page_with_first_href(neutralised)).results;
+            assert_eq!(
+                listing.len(),
+                52,
+                "{neutralised:?} is a path, so its card survives"
+            );
+            assert!(
+                listing[0].video_url.starts_with("https://www.pornoxo.com/"),
+                "must resolve onto the origin's path space: {}",
+                listing[0].video_url
+            );
+        }
+    }
+
+    /// A `data:` or `javascript:` poster would flow into the desktop's
+    /// `<img src>`. The scheme check is the whole guard here — an origin
+    /// comparison would be wrong, because real posters are served from
+    /// `cdn77-t.pornoxo.com`, off the listing origin.
+    #[test]
+    fn a_non_http_thumbnail_is_dropped_and_a_cdn_one_is_kept() {
+        // Targeted at the `src=` form: the same URL also appears once as a
+        // `<link rel="preload" href=…>`, which no selector here reads, so a
+        // positional `replacen` would poison nothing and pass vacuously.
+        let real_poster = concat!(
+            r#"src="https://cdn77-t.pornoxo.com/b-pornoxo/thumbs/pxo-320x240/2026-08/b3/"#,
+            r#"abd8ecfb35ed90985ef6ac7a826c0017b.mp4-320x240-5.jpg""#
+        );
+        let poisoned = TAG_PAGE.replace(
+            real_poster,
+            r#"src="data:text/html,<script>alert(1)</script>""#,
+        );
+        assert_ne!(
+            poisoned, TAG_PAGE,
+            "the data: URL must actually be injected"
+        );
+
+        let listing = parse_listing_page(&default_origin(), &poisoned).results;
+        assert_eq!(listing.len(), 52, "a bad poster must not cost the card");
+        assert!(
+            listing.iter().all(|r| r
+                .thumbnail_url
+                .as_deref()
+                .is_none_or(|t| t.starts_with("https://") || t.starts_with("http://"))),
+            "no non-http(s) poster may reach the UI: {:?}",
+            listing[0].thumbnail_url
+        );
+        assert!(
+            listing[0].thumbnail_url.is_none(),
+            "the poisoned tile's poster must be dropped, not rewritten: {:?}",
+            listing[0].thumbnail_url
+        );
     }
 
     /// The origin is threaded in rather than hardcoded, so a listing served by

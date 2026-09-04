@@ -10,7 +10,7 @@ use scraper::Html;
 use serde_json::Value;
 use std::sync::LazyLock;
 
-use crate::base::common::BaseExtractor;
+use crate::base::common::{BaseExtractor, resolve_card_url};
 
 use super::patterns::VIDEO_CLOSED_PATTERN;
 
@@ -459,6 +459,9 @@ pub fn extract_actors(webpage: &str) -> Vec<String> {
     actors
 }
 
+/// The origin every relative href on an XHamster page resolves against.
+const XHAMSTER_ROOT: &str = "https://xhamster.com";
+
 static MAIN_SELECTOR: LazyLock<scraper::Selector> = crate::static_selector!("main");
 
 // ============================================================================
@@ -506,11 +509,14 @@ pub fn extract_channel(webpage: &str) -> Option<(String, String)> {
         if name.is_empty() {
             continue;
         }
-        // Absolute URL: some hrefs are relative, others absolute
-        let url = if href.starts_with("http") {
-            href.to_string()
-        } else {
-            format!("https://xhamster.com{href}")
+        // Resolved against the site origin, and dropped if it lands off it.
+        // The selector is `a[href*="/channels/"]` — a CONTAINS match, so a
+        // page-supplied `https://evil.test/channels/x` was previously taken
+        // verbatim, and `@evil.test/channels/x` was concatenated into
+        // `https://xhamster.com@evil.test/channels/x`, whose host is
+        // `evil.test`. This URL becomes the channel/uploader link.
+        let Some(url) = resolve_card_url(XHAMSTER_ROOT, href) else {
+            continue;
         };
         return Some((name, url));
     }
@@ -611,6 +617,42 @@ mod actor_tests {
         </main></body></html>"#;
         let (_name, url) = extract_channel(html).expect("channel should be found");
         assert_eq!(url, "https://xhamster.com/channels/acme-studio");
+    }
+
+    /// The selector is `a[href*="/channels/"]` — a CONTAINS match, so the page
+    /// decides the href entirely. It must not decide the AUTHORITY.
+    ///
+    /// Asserted on the parsed host rather than a prefix, because
+    /// `https://xhamster.com@evil.test/channels/x` starts with the site root
+    /// and is a well-formed URL whose host is `evil.test` — a prefix assertion
+    /// is blind to exactly the shape that makes this real. Each hostile link
+    /// is followed by a legitimate one, so the assertion also pins that a
+    /// poisoned link costs itself and not the whole extraction.
+    #[test]
+    fn a_channel_href_cannot_move_the_authority_off_xhamster() {
+        for hostile in [
+            "https://evil.test/channels/x",
+            "//evil.test/channels/x",
+            "@evil.test/channels/x",
+            ".evil.test/channels/x",
+        ] {
+            let html = format!(
+                r#"<html><body><main>
+                    <a href="{hostile}">Hostile</a>
+                    <a href="/channels/real-studio">Real</a>
+                </main></body></html>"#
+            );
+            let (_name, url) = extract_channel(&html).expect("the legitimate channel remains");
+            let host = url::Url::parse(&url)
+                .expect("channel URL must parse")
+                .host_str()
+                .map(str::to_owned);
+            assert_eq!(
+                host.as_deref(),
+                Some("xhamster.com"),
+                "href {hostile:?} moved the authority: {url}"
+            );
+        }
     }
 
     #[test]

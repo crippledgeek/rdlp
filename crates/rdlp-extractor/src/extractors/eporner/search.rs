@@ -12,7 +12,9 @@ use scraper::{Html, Selector};
 use std::sync::LazyLock;
 
 use super::EPornerExtractor;
-use crate::base::common::{BaseExtractor, PagedSearch, SearchPage, SearchPageSpec};
+use crate::base::common::{
+    BaseExtractor, PagedSearch, SearchPage, SearchPageSpec, resolve_card_url, resolve_media_url,
+};
 
 const EPORNER_ROOT: &str = "https://www.eporner.com";
 
@@ -94,16 +96,16 @@ fn parse_results(html: &str) -> Vec<SearchResultPreview> {
             continue;
         }
 
-        let video_url = if href.starts_with("http") {
-            href.to_string()
-        } else {
-            format!("{EPORNER_ROOT}{href}")
+        let Some(video_url) = resolve_card_url(EPORNER_ROOT, href) else {
+            continue;
         };
 
         let thumbnail_url = cover_a
             .select(&MBIMG_SEL)
             .next()
-            .and_then(|i| i.value().attr("src").map(str::to_string));
+            .and_then(|i| i.value().attr("src"))
+            .filter(|s| !s.is_empty())
+            .and_then(|src| resolve_media_url(EPORNER_ROOT, src));
 
         // Find the matching mbunder by scanning forward from the parent of
         // mbcontent until the next mbtit anchor pointing at the same href.
@@ -195,11 +197,11 @@ fn parse_results(html: &str) -> Vec<SearchResultPreview> {
         let thumbnail_url = link
             .select(&MBIMG_SEL)
             .next()
-            .and_then(|i| i.value().attr("src").map(str::to_string));
-        let video_url = if href.starts_with("http") {
-            href.to_string()
-        } else {
-            format!("{EPORNER_ROOT}{href}")
+            .and_then(|i| i.value().attr("src"))
+            .filter(|s| !s.is_empty())
+            .and_then(|src| resolve_media_url(EPORNER_ROOT, src));
+        let Some(video_url) = resolve_card_url(EPORNER_ROOT, href) else {
+            continue;
         };
         out.push(SearchResultPreview {
             video_url,
@@ -301,6 +303,60 @@ mod tests {
 
     // Fixture recorded live on 2026-04-23 from www.eporner.com/tag/amateur/1/
     const FIXTURE: &str = include_str!("tests/eporner_tag_page.html");
+
+    /// EPorner's card selector is `a[href^='/video-']` — an attribute PREFIX
+    /// match, which is the same guard hqporner spells as
+    /// `h.starts_with("/hdporn/")`. Measured: it already refused every hostile
+    /// href below, so unlike PornoXO and XHamster this site was not reachable
+    /// through the concatenation, and routing it through `resolve_card_url`
+    /// removes a dependence on that selector rather than closing a live hole.
+    /// The assertion is on the parsed host so it stays honest if the selector
+    /// is ever loosened to a `*=` contains match.
+    #[test]
+    fn no_result_can_move_the_authority_off_eporner() {
+        for hostile in [
+            "https://evil.test/video-abc/x/",
+            "//evil.test/video-abc/x/",
+            "@evil.test/video-abc/x/",
+            ".evil.test/video-abc/x/",
+        ] {
+            let html = format!(
+                r#"<html><body>
+                    <div class="mbcontent"><a href="{hostile}"><img src="/t.jpg" alt="Hostile"></a></div>
+                    <div class="mbcontent"><a href="/video-1/real/"><img src="/r.jpg" alt="Real"></a></div>
+                </body></html>"#
+            );
+            for r in parse_results(&html) {
+                let host = url::Url::parse(&r.video_url)
+                    .expect("every emitted result URL must parse")
+                    .host_str()
+                    .map(str::to_owned);
+                assert_eq!(
+                    host.as_deref(),
+                    Some("www.eporner.com"),
+                    "href {hostile:?} moved the authority: {}",
+                    r.video_url
+                );
+            }
+        }
+    }
+
+    /// A relative poster is resolved against the site root rather than handed
+    /// to the UI as `/r.jpg`, and a `data:` one is dropped.
+    #[test]
+    fn thumbnails_are_resolved_and_non_http_ones_dropped() {
+        let html = r#"<html><body>
+            <div class="mbcontent"><a href="/video-1/real/"><img src="/r.jpg" alt="Real"></a></div>
+            <div class="mbcontent"><a href="/video-2/bad/"><img src="data:text/html,x" alt="Bad"></a></div>
+        </body></html>"#;
+        let results = parse_results(html);
+        assert_eq!(results.len(), 2, "a bad poster must not cost the card");
+        assert_eq!(
+            results[0].thumbnail_url.as_deref(),
+            Some("https://www.eporner.com/r.jpg")
+        );
+        assert_eq!(results[1].thumbnail_url, None);
+    }
 
     #[test]
     fn keyword_hyphenation() {
