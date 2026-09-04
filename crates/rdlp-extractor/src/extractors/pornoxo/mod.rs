@@ -1,0 +1,3 @@
+//! PornoXO extractor.
+
+mod patterns;

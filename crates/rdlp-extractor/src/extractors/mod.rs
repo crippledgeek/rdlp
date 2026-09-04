@@ -11,6 +11,7 @@ pub mod hqporner;
 pub mod koreanpornmovie;
 pub mod nine_anime;
 pub mod pornhub;
+pub mod pornoxo;
 pub mod redtube;
 pub mod spankbang;
 pub mod tnaflix;
