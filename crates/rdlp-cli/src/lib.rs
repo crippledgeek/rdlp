@@ -13,9 +13,11 @@
 
 #![warn(missing_docs)]
 
-/// CLI event handler mapping API events to indicatif progress bars.
+// No outer `///` on `event_handler`/`interactive` below: both already carry
+// their own `//!` doc, and an outer doc merged with it makes rustdoc resolve
+// the inner doc's intra-doc links against THIS module's scope instead of the
+// submodule's own — "no item named `Event` in scope" (#661).
 pub mod event_handler;
-/// CLI interactive callback using inquire.
 pub mod interactive;
 /// `rdlp plugin <subcommand>` handlers, exported so integration tests can
 /// drive them without going through `clap`'s argument parsing.

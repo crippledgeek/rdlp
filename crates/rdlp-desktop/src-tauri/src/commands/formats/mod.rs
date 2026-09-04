@@ -2,9 +2,9 @@
 //!
 //! Exposes available download formats for a given URL so the
 //! frontend can present an interactive format selector. The
-//! [`get_formats`] command validates the URL via SSRF protection,
+//! [`formats()`] command validates the URL via SSRF protection,
 //! extracts metadata through the rdlp-api client, and returns a
-//! serialisable [`FormatListResponse`] containing format details,
+//! serialisable `FormatListResponse` containing format details,
 //! subtitles, thumbnail URL, and duration.
 
 mod models;
@@ -22,7 +22,7 @@ use crate::state::AppState;
 ///
 /// Validates the URL for SSRF safety, extracts metadata via the
 /// rdlp-api client, and maps the result into a frontend-friendly
-/// [`FormatListResponse`].
+/// `FormatListResponse`.
 ///
 /// # Arguments
 ///
@@ -31,7 +31,7 @@ use crate::state::AppState;
 ///
 /// # Returns
 ///
-/// A [`FormatListResponse`] on success, or an [`AppError`] on failure.
+/// A `FormatListResponse` on success, or an [`AppError`] on failure.
 ///
 /// # Errors
 ///

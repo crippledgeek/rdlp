@@ -53,7 +53,7 @@ const EBML_CORRUPTION_MARKERS: &[&str] = &[
 /// timestamps, allowing decode of partially corrupt containers that would otherwise
 /// produce invalid packets and cascade into muxer failures.
 ///
-/// Used as Tier 3 recovery in [`super::normalize::helpers::with_mux_retry`] when
+/// Used as Tier 3 recovery in `super::normalize::helpers::with_mux_retry` when
 /// both normal encode and salvage remux fail.
 ///
 /// # Errors

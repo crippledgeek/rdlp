@@ -369,7 +369,7 @@ impl<K: NameKind> MediaName<K> {
 
     /// Converts to a [`CString`] for an FFI call.
     ///
-    /// Infallible in practice: [`validate`] already rejects any control
+    /// Infallible in practice: `validate` already rejects any control
     /// character — including an interior NUL, the one input
     /// [`CString::new`] can fail on — so a `MediaName` can never fail this
     /// conversion. This is the intended replacement for a scattered
@@ -392,7 +392,7 @@ impl<K: NameKind> MediaName<K> {
     ///
     /// The **only** sanctioned way to cross between vocabularies — greppable
     /// so every crossing can be audited. Infallible by construction: every
-    /// kind shares the exact same [`validate`] floor (see the module
+    /// kind shares the exact same `validate` floor (see the module
     /// documentation), so a byte sequence that is already a valid
     /// `MediaName<K>` is necessarily a valid `MediaName<K2>` too. Preserves
     /// the `Cow` variant untouched — a `from_static`/`new_static`-backed

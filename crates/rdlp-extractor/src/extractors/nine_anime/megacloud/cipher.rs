@@ -9,7 +9,7 @@
 //! 3. Seed-based character shift
 //!
 //! The key for each layer is derived from a combined key (megacloud key +
-//! client key) via [`keygen`].
+//! client key) via `keygen`.
 //!
 //! ## References
 //!

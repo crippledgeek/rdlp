@@ -62,8 +62,9 @@ impl StreamKind {
         }
     }
 
-    /// Projects to the audio/video routing kind [`muxer_can_represent`]
-    /// (`crate::ffmpeg::muxer_defaults`) and `Registry` ask about. `None` for
+    /// Projects to the audio/video routing kind
+    /// `crate::ffmpeg::muxer_defaults::muxer_can_represent` and `Registry`
+    /// ask about. `None` for
     /// [`Subtitle`](Self::Subtitle) / [`Data`](Self::Data) /
     /// [`Unknown`](Self::Unknown), which have no muxer-representability
     /// question to answer.

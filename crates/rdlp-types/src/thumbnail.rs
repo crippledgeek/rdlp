@@ -52,7 +52,7 @@ pub const THUMBNAIL_EXTENSIONS: &[&str] =
 /// "unrecognized", never "definitely not an image": callers should fall back to
 /// their previous behavior rather than discarding the file.
 ///
-/// Matching is table-driven over [`SIGNATURES`]; see [`SignatureFragment`] for
+/// Matching is table-driven over `SIGNATURES`; see `SignatureFragment` for
 /// why patterns carry an offset rather than being leading-byte prefixes.
 #[must_use]
 pub fn sniff_thumbnail_format(bytes: &[u8]) -> Option<ThumbnailFormat> {

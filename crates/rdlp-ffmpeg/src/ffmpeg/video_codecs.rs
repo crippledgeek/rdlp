@@ -521,7 +521,7 @@ pub fn resolve_encoder(input: &str) -> Option<VideoEncoderName> {
 }
 
 /// Resolves `name` to its codec group's canonical (primary table) key,
-/// case-insensitively, via [`CodecRow::aliases`](codec_registry::CodecRow::aliases).
+/// case-insensitively, via `codec_registry::CodecRow::aliases`.
 ///
 /// `"avc"` and `"h264"` both resolve to `"h264"`; `"hevc"` and `"h265"` both
 /// resolve to `"h265"`. A name with no table row or alias (an unmodeled or

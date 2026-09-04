@@ -242,18 +242,18 @@ const fn video_default_for(container: ContainerFormat) -> ContainerDefault<Video
 ///
 /// Of the 31 [`ContainerFormat`] variants, 10 defer to the linked build's own
 /// muxer declaration (`FromMuxer`), 9 override it (`Override`), and 12 are
-/// declared not a video target (`Policy::NotATarget`) — see [`video_default_for`]
+/// declared not a video target (`Policy::NotATarget`) — see `video_default_for`
 /// for the exact classification and per-arm citations (corrected count, Item
 /// 16(b) of PR-3's re-review: the prior prose said "most" defer, which was
 /// true before Part A reclassified nine containers from `FromMuxer` to
 /// `Override`). rdlp keeps no second copy of `FFmpeg`'s table for the ten
-/// that do defer. Deviations are named in [`video_default_for`] with their
+/// that do defer. Deviations are named in `video_default_for` with their
 /// reasons: the
-/// `FromMuxer` arm falls back to [`DEFAULT_VIDEO_CODEC_STR`] only when
+/// `FromMuxer` arm falls back to `DEFAULT_VIDEO_CODEC_STR` only when
 /// `declared_codec` returns `None` (which does NOT mean "this container
 /// carries no video" — see that function's doc comment — an ABI-skew codec id
 /// or no muxer claiming the extension both produce it too); the twelve
-/// audio-only containers always resolve [`DEFAULT_VIDEO_CODEC_STR`] via the
+/// audio-only containers always resolve `DEFAULT_VIDEO_CODEC_STR` via the
 /// dedicated `Policy::NotATarget` (video kind) regardless of what their
 /// muxer declares.
 ///
@@ -262,7 +262,7 @@ const fn video_default_for(container: ContainerFormat) -> ContainerDefault<Video
 /// "callers always pass a canonical extension" invariant was conventional.
 /// It is now structural — the same argument as #536.
 ///
-/// No longer `const`: [`muxer_defaults::declared_codec`] performs a runtime
+/// No longer `const`: `muxer_defaults::declared_codec` performs a runtime
 /// FFI lookup against the linked build, so this can't be evaluated at compile
 /// time. Callers that were `const fn` purely to delegate here must drop
 /// `const` too.
