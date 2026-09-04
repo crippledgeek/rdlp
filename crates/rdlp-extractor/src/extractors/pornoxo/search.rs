@@ -89,7 +89,15 @@ pub(crate) fn parse_listing_page(origin: &SearchOrigin, html: &str) -> Listing {
                     .attr("href")
                     .and_then(|href| PAGE_PARAM.captures(href))
                     .and_then(|c| c.get(1))
-                    .and_then(|m| m.as_str().parse().ok());
+                    // Saturating, not `.parse().ok()`. `PAGE_PARAM` captures
+                    // `(\d+)`, so the only way this parse fails is a value too
+                    // large for `u32` — and `None` is the value that means "no
+                    // pager on this page", which SKIPS the out-of-range guard
+                    // in `fetch_page`. Collapsing an unrepresentable bound into
+                    // it would make "no bound" and "a bound we could not read"
+                    // indistinguishable, silently and in the unguarded
+                    // direction. `u32::MAX` refuses no realistic page.
+                    .map(|m| m.as_str().parse::<u32>().unwrap_or(u32::MAX));
             }
             _ => {}
         }
@@ -462,6 +470,32 @@ mod tests {
             listing[0].thumbnail_url.is_none(),
             "the poisoned tile's poster must be dropped, not rewritten: {:?}",
             listing[0].thumbnail_url
+        );
+    }
+
+    /// A pager value too large for `u32` must still read as "we found a
+    /// bound", saturated, rather than as `None`.
+    ///
+    /// `None` is the value that means "this listing rendered no pager", and it
+    /// SKIPS the out-of-range guard in `fetch_page` entirely. Letting an
+    /// unparseable number collapse to it makes "no bound published" and "a
+    /// bound we could not represent" indistinguishable — silently, and in the
+    /// direction that removes the guard. `u32::MAX` refuses no realistic page,
+    /// so the saturation costs nothing and keeps the two cases apart.
+    #[test]
+    fn an_oversized_pager_bound_saturates_rather_than_vanishing() {
+        let huge = TAG_PAGE.replace(
+            r#"<a class="rightKey" href="/tags/creampie/?page=37">>></a>"#,
+            r#"<a class="rightKey" href="/tags/creampie/?page=99999999999">>></a>"#,
+        );
+        assert_ne!(
+            huge, TAG_PAGE,
+            "the oversized bound must actually be injected"
+        );
+        assert_eq!(
+            parse_listing_page(&default_origin(), &huge).max_page,
+            Some(u32::MAX),
+            "an all-digits bound beyond u32 must saturate, not become None"
         );
     }
 

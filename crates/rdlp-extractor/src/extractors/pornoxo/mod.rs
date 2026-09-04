@@ -158,6 +158,17 @@ impl PagedSearch for PornoxoExtractor {
         search_patterns::validate(filters)
     }
 
+    /// Floor an explicitly requested page at 1.
+    ///
+    /// The same failure the `max_page` guard covers, at the low end: `?page=0`
+    /// answers HTTP 200 with page 1's grid, so without this the response
+    /// echoes `page: 0` over page 1's videos. `clamp_page`'s default is
+    /// identity and a universal `.max(first_page_index())` would be wrong for
+    /// 0-indexed sites, so it is opt-in per site; ABXXX is the precedent.
+    fn clamp_page(&self, page: u32) -> u32 {
+        page.max(1)
+    }
+
     /// Fetch and parse one listing page.
     ///
     /// A custom body rather than a `fetch_via_spec` one-liner, because two of
@@ -559,6 +570,35 @@ mod paged_search_tests {
             "page {} is one past the end and must be refused",
             FIXTURE_MAX_PAGE + 1
         );
+    }
+
+    /// The low end of the same failure the max-page guard covers. `?page=0`
+    /// answers HTTP 200 with page 1's grid, and without a floor
+    /// `search_page_response` echoes `SearchPageResponse { page: 0, .. }` —
+    /// page 1's videos labelled page 0, which is the confidently-wrong answer
+    /// the high-end guard exists to prevent.
+    ///
+    /// `clamp_page`'s default is identity and a universal `.max(1)` would be
+    /// wrong for 0-indexed sites, so this is an opt-in override; ABXXX is the
+    /// in-tree precedent (`abxxx/search.rs`). `rdlp-cli` currently hardcodes
+    /// `page: Some(1)`, but `SearchQuery` is a public API type and a desktop
+    /// or embedder call can supply `Some(0)`.
+    #[tokio::test]
+    async fn page_zero_is_clamped_to_the_first_page_not_echoed_back() {
+        let (server, _m) = serving(200, TAG_PAGE).await;
+        let origin = SearchOrigin::new(&server.url()).expect("mockito origin is well formed");
+        let mut q = query("creampie", &[]);
+        q.page = Some(0);
+
+        let resp = PornoxoExtractor::with_origin(origin)
+            .search_page_response(&q, &test_ctx())
+            .await
+            .expect("page 0 must be served, not refused");
+        assert_eq!(
+            resp.page, 1,
+            "page 0 must be reported as the page actually served"
+        );
+        assert_eq!(resp.results.len(), 52);
     }
 
     /// Behaviour 3, route-specific. The search route is Cloudflare-gated and a
