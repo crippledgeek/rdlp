@@ -4,7 +4,9 @@
 //! extractor can call the same code path. Replaces every `Format` row whose
 //! protocol is `M3u8` or `M3u8Native` with the per-variant rows produced by
 //! [`expand_hls_url`]. On any [`HlsExpandError`] the row is dropped entirely
-//! (no fallback to legacy variant-URL path).
+//! (no fallback to legacy variant-URL path) — including a `seed.url` refused
+//! by `expand_hls_url`'s security gate, so one hostile entry in a ladder costs
+//! only its own rendition (issue #660).
 //!
 //! ## Convention
 //!
@@ -106,6 +108,79 @@ mod tests {
         assert_eq!(out.len(), 1, "M3u8Native must expand identically to M3u8");
         assert!(out[0].fragments.is_some());
         assert_eq!(out[0].fragments.as_ref().unwrap().len(), 2);
+    }
+
+    /// Issue #660 acceptance criterion 2: one refused seed drops only its own
+    /// format row — a ladder with one hostile entry must keep its good
+    /// renditions and its non-HLS rows.
+    ///
+    /// Scope, stated so this is not mistaken for a security test: it pins the
+    /// partial-drop CONTRACT, not the gate's presence. It passes with the seed
+    /// gate deleted too, because the unpatched code drops the same row via a
+    /// failed connect — deliberately, since the brief required reusing the
+    /// existing `Err` arm rather than inventing a new disposition. The gate's
+    /// provenance is what `expand::tests::seed_*_rejected` assert (on the
+    /// `URI rejected:` prefix, which only `validate_resolved_url` emits); those
+    /// four are the ones that go red when the gate is removed. What is new
+    /// here is the surviving set: every pre-existing drop test passes a
+    /// single-format `Vec`, so none of them could have caught a rejection that
+    /// aborted the whole ladder.
+    #[tokio::test]
+    async fn rejected_seed_drops_only_its_own_format() {
+        let mut server = mockito::Server::new_async().await;
+        let _good = server
+            .mock("GET", "/good.m3u8")
+            .with_body(
+                "#EXTM3U\n#EXT-X-VERSION:3\n#EXT-X-TARGETDURATION:6\n\
+                 #EXTINF:6.0,\nseg-1.ts\n#EXTINF:6.0,\nseg-2.ts\n#EXT-X-ENDLIST\n",
+            )
+            .create_async()
+            .await;
+
+        let good = Format::new(
+            "hls-good",
+            format!("{}/good.m3u8", server.url()),
+            "m3u8",
+            DownloadProtocol::M3u8,
+        );
+        // Link-local metadata address: refused by the seed gate, and refused
+        // there rather than by a failed connect — the `expand.rs` seed tests
+        // assert the `URI rejected:` provenance directly.
+        let hostile = Format::new(
+            "hls-hostile",
+            "http://169.254.169.254/latest/meta-data/master.m3u8",
+            "m3u8",
+            DownloadProtocol::M3u8,
+        );
+        let mp4 = Format::new(
+            "1080p",
+            "https://h.com/x.mp4",
+            "mp4",
+            DownloadProtocol::Https,
+        );
+
+        let http = Arc::new(wreq::Client::new());
+        let out = expand_hls_in_place(vec![good, hostile, mp4], http).await;
+
+        let ids: Vec<&str> = out.iter().map(|f| f.format_id.as_str()).collect();
+        assert!(
+            !ids.iter().any(|id| id.contains("hostile")),
+            "the rejected seed must be dropped; got {ids:?}"
+        );
+        assert_eq!(
+            out.len(),
+            2,
+            "the good HLS rendition and the non-HLS row must survive; got {ids:?}"
+        );
+        assert!(
+            out.iter()
+                .any(|f| f.fragments.as_ref().is_some_and(|fr| fr.len() == 2)),
+            "the good rendition must still be fully expanded; got {ids:?}"
+        );
+        assert!(
+            out.iter().any(|f| f.format_id == "1080p"),
+            "the non-HLS row must pass through; got {ids:?}"
+        );
     }
 
     #[tokio::test]

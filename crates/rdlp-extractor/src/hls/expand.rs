@@ -86,7 +86,10 @@ const MAX_INIT_SEGMENTS: usize = 50;
 /// Cap on raw playlist body size (master or media).
 const MAX_PLAYLIST_BYTES: usize = 8 * 1024 * 1024;
 
-/// Validate a resolved URL (variant URI or segment URI from a playlist body).
+/// Validate a URL that came out of attacker-influenceable content before it is
+/// fetched — a variant or segment URI resolved out of a playlist body, or the
+/// master URL an extractor lifted out of page JavaScript and handed in as
+/// `seed.url`. Same trust class, so the same gate (issue #660).
 ///
 /// Production behavior: delegate to `rdlp_security::validate_url_security`,
 /// which rejects file://, javascript:, private hosts, and other SSRF-prone
@@ -127,14 +130,21 @@ fn validate_resolved_url(url: &str) -> Result<(), HlsExpandError> {
 ///
 /// # Errors
 ///
-/// Returns `HlsExpandError` for refusal cases (encrypted, live, multi-init,
-/// byte-ranged init, empty variants/segments, network/parse failures). The
-/// caller should treat any error as a signal to keep the original `Format`
-/// row (legacy fallback).
+/// Returns `HlsExpandError` for refusal cases (a `seed.url` refused by the
+/// security gate, encrypted, live, multi-init, byte-ranged init, empty
+/// variants/segments, network/parse failures). The caller should treat any
+/// error as a signal to keep the original `Format` row (legacy fallback).
 pub async fn expand_hls_url(
     seed: &Format,
     http: Arc<wreq::Client>,
 ) -> Result<Vec<Format>, HlsExpandError> {
+    // The seed is the first URL in the chain and the same trust class as the
+    // variant/segment URIs resolved below: extractors mint it from page
+    // JavaScript or an embed response. Gating it here rather than at each call
+    // site is what makes a forgotten caller impossible — six of seven callers
+    // did not opt in when this was call-site validation (issue #660).
+    validate_resolved_url(&seed.url)?;
+
     let headers = seed.http_headers.as_ref();
     // Seed origin (scheme + host + port) — used to gate cross-origin header
     // forwarding on variant fetches. `Url::origin()` returns Opaque for URLs
@@ -1348,6 +1358,122 @@ seg-1.m4s
             .expect_err("private-host init URI must be refused");
         // validate_resolved_url returns HlsExpandError::Network with a sanitized message.
         assert!(matches!(err, HlsExpandError::Network(_)));
+    }
+
+    // ---- Seed (master) URL validation — issue #660 -------------------
+    //
+    // `expand_hls_url` fetches `seed.url` first. That URL is lifted out of
+    // page JavaScript or an embed response by the calling extractor, so it is
+    // the same trust class as the variant/segment URIs resolved out of a
+    // playlist body and goes through the same gate.
+    //
+    // Every test below asserts on the `URI rejected:` prefix, which ONLY
+    // `validate_resolved_url` produces. A plain `HlsExpandError::Network(_)`
+    // match would also be satisfied by the connect failure the unpatched code
+    // produces, so it would pass with the gate deleted.
+
+    /// Bound the RED run against unpatched code: without the seed gate these
+    /// tests really attempt a TCP connect to a private/link-local address,
+    /// which can otherwise hang for the OS default connect timeout.
+    const REJECTION_TEST_CONNECT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
+    async fn expand_seed_err(url: &str) -> HlsExpandError {
+        let mut s = seed();
+        s.url = url.to_string();
+        let http = std::sync::Arc::new(
+            wreq::Client::builder()
+                .connect_timeout(REJECTION_TEST_CONNECT_TIMEOUT)
+                .build()
+                .expect("client builds"),
+        );
+        expand_hls_url(&s, http)
+            .await
+            .expect_err("seed URL must be refused before any fetch")
+    }
+
+    fn assert_rejected_by_gate(err: &HlsExpandError, url: &str) {
+        match err {
+            HlsExpandError::Network(msg) => assert!(
+                msg.starts_with("URI rejected:"),
+                "{url} must be refused by the seed gate, not by a failed fetch; got: {msg}"
+            ),
+            other => panic!("expected Network(URI rejected: ...) for {url}, got: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn seed_file_scheme_rejected() {
+        let url = "file:///etc/passwd";
+        assert_rejected_by_gate(&expand_seed_err(url).await, url);
+    }
+
+    /// A loopback HOST over a non-HTTP scheme is not a loopback ORIGIN, so it
+    /// gets no share of the `cfg(test)` mockito exemption.
+    ///
+    /// The loopback rejection class cannot be asserted directly here: the gate
+    /// deliberately exempts `http(s)` loopback under `cfg(test)` so mockito
+    /// fixtures can drive expansion at all. This is the reachable half of that
+    /// class — the half that proves the exemption is scoped to the origin and
+    /// not to the host.
+    #[tokio::test]
+    async fn seed_loopback_host_on_non_http_scheme_rejected() {
+        let url = "file://localhost/etc/passwd";
+        assert_rejected_by_gate(&expand_seed_err(url).await, url);
+    }
+
+    #[tokio::test]
+    async fn seed_link_local_metadata_address_rejected() {
+        let url = "http://169.254.169.254/latest/meta-data/";
+        assert_rejected_by_gate(&expand_seed_err(url).await, url);
+    }
+
+    #[tokio::test]
+    async fn seed_rfc1918_private_addresses_rejected() {
+        for url in [
+            "http://10.0.0.1/master.m3u8",
+            "http://192.168.1.1/master.m3u8",
+            "http://172.16.0.1/master.m3u8",
+        ] {
+            assert_rejected_by_gate(&expand_seed_err(url).await, url);
+        }
+    }
+
+    /// The gate must not refuse an ordinary public master URL — the property
+    /// the six affected extractors depend on.
+    #[test]
+    fn public_seed_url_passes_the_gate() {
+        validate_resolved_url("https://cdn.example.com/master.m3u8")
+            .expect("a public https master URL must pass the seed gate");
+    }
+
+    /// End-to-end companion: a legitimate master playlist still expands into
+    /// its per-variant rows with the seed gate in place.
+    #[tokio::test]
+    async fn legitimate_master_still_expands_with_seed_gate() {
+        let mut server = mockito::Server::new_async().await;
+        let _master = server
+            .mock("GET", "/master.m3u8")
+            .with_body(MASTER_ONE_VARIANT)
+            .create_async()
+            .await;
+        let _media = server
+            .mock("GET", "/v720.m3u8")
+            .with_body(MEDIA_PLAIN)
+            .create_async()
+            .await;
+
+        let mut s = seed();
+        s.url = format!("{}/master.m3u8", server.url());
+
+        let http = std::sync::Arc::new(wreq::Client::new());
+        let rows = expand_hls_url(&s, http)
+            .await
+            .expect("public-shaped master must still expand");
+        assert_eq!(rows.len(), 1, "one variant in, one row out");
+        assert!(
+            rows[0].fragments.as_ref().is_some_and(|f| !f.is_empty()),
+            "expanded row must carry fragments"
+        );
     }
 
     /// Negative companion to the test above — proves the test infrastructure
