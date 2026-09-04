@@ -289,7 +289,7 @@ impl FormatSelector {
     /// Returns 1 format for single selectors, 2 for merge (`video+audio`),
     /// or 0 if nothing matches.
     ///
-    /// Use `select_all()` to evaluate every comma-separated node.
+    /// Use [`Self::select_all`] to evaluate every comma-separated node.
     pub fn select<'a>(&self, formats: &'a [Format]) -> Vec<&'a Format> {
         self.selectors
             .first()
