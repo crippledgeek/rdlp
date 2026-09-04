@@ -59,7 +59,8 @@ static PAGE_PARAM: Lazy<Regex> = lazy_regex!(r"[?&]page=(\d+)");
 /// One parsed listing page: the cards plus both pagination facts.
 ///
 /// Returned together because `fetch_page` needs all three and the document is
-/// 250-315 KB — parsing it once per fetch rather than once per question.
+/// large — the two committed captures are 254,873 and 314,346 bytes — so it is
+/// parsed once per fetch rather than once per question.
 pub(crate) struct Listing {
     pub results: Vec<SearchResultPreview>,
     /// Whether a `Next` anchor is present.
@@ -253,6 +254,15 @@ mod tests {
     /// recommendation grids, so a selector that drops
     /// `.main-listing-grid-offset` collects 52 + 10 + 10 = 72 here and fails.
     /// Verified by mutation, not assumed.
+    ///
+    /// This file deliberately applies two standards, and the difference is the
+    /// point rather than an inconsistency to tidy away. The badge case below
+    /// is SYNTHESISED by injection because no capture contains a badge and the
+    /// markup we would inject is fully specified by the selector we are
+    /// testing. This case is a REAL 314 KB capture because the whole reason it
+    /// exists is that a guess about the recommendation-grid markup was wrong —
+    /// an injected grid would only re-encode that guess and pass. Do not
+    /// replace it with an injection to save the bytes.
     #[test]
     fn parses_the_results_grid_not_the_recommendation_grids() {
         let results = parse_listing_page(&default_origin(), TAG_PAGE_RECOMMENDATIONS).results;

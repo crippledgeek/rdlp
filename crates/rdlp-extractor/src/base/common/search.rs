@@ -240,8 +240,11 @@ pub(crate) fn validate_against_descriptors(
 /// value or feeds it to a URL builder that takes `&str`.
 ///
 /// Shared because looking a filter up by key is the same knowledge everywhere:
-/// nine of the ten `PagedSearch` sites resolve an `ordering` / `period` /
-/// `category` / `browse` / `sort` / `route` filter this way.
+/// nine of the sixteen `PagedSearch` extractors resolve an `ordering` /
+/// `period` / `category` / `browse` / `sort` / `route` filter this way, over
+/// twelve call sites in ten files. Counted, not estimated: `impl PagedSearch
+/// for` appears seventeen times, of which one is this module's own
+/// `MockSearch`.
 ///
 /// **First match wins, and duplicates are reachable.** `rdlp-cli` pushes every
 /// `--search-filter key=value` verbatim with no de-duplication
@@ -556,6 +559,14 @@ pub(crate) trait PagedSearch: Send + Sync {
                 // `debug!` the operator has not enabled discards the only
                 // thing that tells them what to do. An empty-but-SUCCESSFUL
                 // first page is a different case and still returns `Ok`.
+                // The conjunct is deliberate redundancy, kept because it is
+                // cheap and a gap here is not. `all_results.is_empty()` is the
+                // half that carries the meaning — "nothing salvageable" is the
+                // reason to propagate rather than break. The page check only
+                // restates it: the loop breaks on the first empty page, so
+                // past the first page `all_results` cannot be empty. Neither
+                // is load-bearing alone; do not "simplify" by dropping the
+                // first one.
                 Err(e) if all_results.is_empty() && page == self.first_page_index() => {
                     debug!(page; "{tag} First search page failed, no partial results to return: {e}");
                     return Err(e);
