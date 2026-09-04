@@ -7,8 +7,33 @@
 
 use scraper::Html;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 use super::selectors::JSONLD_SELECTOR;
+
+/// Deserialize a tolerant optional field: an unrecognised shape costs THAT
+/// FIELD only, never the object containing it.
+///
+/// [`JsonLdVideo`] is deserialized inside an untagged [`JsonLdRoot`], where a
+/// sub-field serde cannot shape-match aborts the ENTIRE deserialization. The
+/// untagged enum then falls through to its next variant and the page reads as
+/// though it carried no JSON-LD at all — silently losing title, duration,
+/// description, thumbnail and tags because of one unmodelled corner. Real
+/// pages hit this: schema.org lets any property be an array, counts appear as
+/// strings, and `@type` is routinely absent.
+///
+/// Buffering into a `serde_json::Value` always succeeds for well-formed JSON;
+/// only the typed conversion is allowed to fail, and it fails into `None`.
+/// This is what makes [`JsonLdVideo`]'s "all fields are optional to handle
+/// partial/malformed data gracefully" contract actually hold.
+fn lenient<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value(value).ok())
+}
 
 // ============================================================================
 // Core Types
@@ -39,52 +64,58 @@ struct JsonLdGraph {
 #[derive(Debug, Deserialize)]
 pub struct JsonLdVideo {
     /// `@type` field — must be "VideoObject" (or array containing it)
-    #[serde(rename = "@type")]
+    #[serde(rename = "@type", default, deserialize_with = "lenient")]
     pub json_type: Option<JsonLdType>,
 
     /// Video title
+    #[serde(default, deserialize_with = "lenient")]
     pub name: Option<String>,
 
     /// Video description
+    #[serde(default, deserialize_with = "lenient")]
     pub description: Option<String>,
 
     /// Thumbnail URL(s)
-    #[serde(rename = "thumbnailUrl")]
+    #[serde(rename = "thumbnailUrl", default, deserialize_with = "lenient")]
     pub thumbnail_url: Option<JsonLdThumbnail>,
 
     /// Upload date (ISO 8601)
-    #[serde(rename = "uploadDate")]
+    #[serde(rename = "uploadDate", default, deserialize_with = "lenient")]
     pub upload_date: Option<String>,
 
     /// Duration (ISO 8601, e.g., "PT1H2M3S")
+    #[serde(default, deserialize_with = "lenient")]
     pub duration: Option<String>,
 
     /// Direct media URL
-    #[serde(rename = "contentUrl")]
+    #[serde(rename = "contentUrl", default, deserialize_with = "lenient")]
     pub content_url: Option<String>,
 
     /// MIME type of `contentUrl` (e.g. `"video/webm"`).
     ///
     /// Used as a fallback to derive the file extension when `contentUrl`
     /// itself has no recognizable extension (issue #496).
-    #[serde(rename = "encodingFormat")]
+    #[serde(rename = "encodingFormat", default, deserialize_with = "lenient")]
     pub encoding_format: Option<String>,
 
     /// Embed/player URL (often an iframe, not direct media)
-    #[serde(rename = "embedUrl")]
+    #[serde(rename = "embedUrl", default, deserialize_with = "lenient")]
     pub embed_url: Option<String>,
 
     /// Author/uploader
+    #[serde(default, deserialize_with = "lenient")]
     pub author: Option<JsonLdAuthor>,
 
     /// Interaction statistics (views, likes, etc.)
-    #[serde(rename = "interactionStatistic")]
+    #[serde(rename = "interactionStatistic", default, deserialize_with = "lenient")]
     pub interaction_statistic: Option<JsonLdInteractionStatistic>,
 
     /// Keywords/tags
+    #[serde(default, deserialize_with = "lenient")]
     pub keywords: Option<JsonLdKeywords>,
 
     /// Genre/categories
+    #[serde(default, deserialize_with = "lenient")]
     pub genre: Option<JsonLdGenre>,
 }
 
@@ -206,10 +237,16 @@ impl JsonLdAuthor {
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 pub enum JsonLdInteractionStatistic {
-    /// Single interaction statistic entry.
-    Single(JsonLdInteraction),
+    // Multiple must be first, for the same reason `JsonLdRoot` puts `Graph`
+    // first: serde tries untagged variants in declaration order, and serde
+    // will deserialize a struct from a SEQUENCE positionally. Since every
+    // `JsonLdInteraction` field is optional and defaulted, `Single` would
+    // otherwise swallow a two-entry array — binding the entries to the wrong
+    // fields and silently losing the WatchAction counter.
     /// Multiple interaction statistic entries.
     Multiple(Vec<JsonLdInteraction>),
+    /// Single interaction statistic entry.
+    Single(JsonLdInteraction),
 }
 
 /// The kind of interaction being counted.
@@ -239,14 +276,18 @@ pub struct JsonLdInteractionTypeObject {
 
 impl JsonLdInteractionType {
     /// Whether this names `action_type` (e.g. `"WatchAction"`), in either shape.
+    ///
+    /// The two arms match differently on purpose. `Url` holds a URI
+    /// (`"https://schema.org/WatchAction"`), so the action name is a substring
+    /// of it. `Object` holds a bare `@type` name, which is the action name
+    /// exactly — so it is compared exactly. Substring-matching a bare name
+    /// would be looseness with no reason, in the matcher that decides which
+    /// counter is the view count.
     #[must_use]
     pub fn matches(&self, action_type: &str) -> bool {
         match self {
             Self::Url(url) => url.contains(action_type),
-            Self::Object(obj) => obj
-                .json_type
-                .as_deref()
-                .is_some_and(|t| t.contains(action_type)),
+            Self::Object(obj) => obj.json_type.as_deref() == Some(action_type),
         }
     }
 }
@@ -254,14 +295,17 @@ impl JsonLdInteractionType {
 /// A single JSON-LD `InteractionCounter` entry.
 #[derive(Debug, Deserialize)]
 pub struct JsonLdInteraction {
-    /// `@type` of this interaction (e.g. "InteractionCounter").
-    #[serde(rename = "@type")]
-    pub interaction_type: String,
+    /// `@type` of this entry itself (e.g. "InteractionCounter").
+    ///
+    /// Optional, per [`JsonLdVideo`]'s contract: real pages omit it, and a
+    /// missing `@type` must not cost the enclosing `VideoObject`.
+    #[serde(rename = "@type", default, deserialize_with = "lenient")]
+    pub json_type: Option<String>,
     /// The action this entry counts (e.g. "WatchAction"), as a URL or object.
-    #[serde(rename = "interactionType")]
+    #[serde(rename = "interactionType", default, deserialize_with = "lenient")]
     pub interaction_type_ref: Option<JsonLdInteractionType>,
     /// Count of user interactions recorded for this entry.
-    #[serde(rename = "userInteractionCount")]
+    #[serde(rename = "userInteractionCount", default, deserialize_with = "lenient")]
     pub user_interaction_count: Option<u64>,
 }
 
@@ -362,7 +406,7 @@ pub fn extract_interaction_count(json_ld: &JsonLdVideo, action_type: &str) -> Op
         };
 
         for interaction in interactions {
-            if interaction.interaction_type == action_type
+            if interaction.json_type.as_deref() == Some(action_type)
                 || interaction
                     .interaction_type_ref
                     .as_ref()
@@ -487,6 +531,141 @@ mod tests {
         assert_eq!(video.name.as_deref(), Some("Video"));
         assert_eq!(video.duration.as_deref(), Some("PT15M30S"));
         assert_eq!(extract_view_count(&video), Some(21));
+    }
+
+    // ------------------------------------------------------------------
+    // Cascade guards.
+    //
+    // `JsonLdVideo` is deserialized inside an untagged `JsonLdRoot`, so any
+    // sub-field serde cannot shape-match used to abort the WHOLE
+    // deserialization — costing title, duration, description, thumbnail and
+    // tags, and leaving the page looking as though it carried no JSON-LD.
+    // Each test below feeds one plausible-but-unmodelled shape and asserts the
+    // unrelated fields SURVIVE. They pin the fail-soft mechanism, not the
+    // individual shapes.
+    // ------------------------------------------------------------------
+
+    /// JSON-LD permits an array for any property.
+    ///
+    /// Uses a TWO-element array deliberately: serde will deserialize a
+    /// one-element sequence positionally into the single-field `Object`
+    /// variant, so a one-element array does not exercise the mismatch at all.
+    #[test]
+    fn array_valued_interaction_type_does_not_discard_the_video() {
+        let html_str = r#"<html><head><script type="application/ld+json">
+        {"@graph": [{"@type": "VideoObject", "name": "Video", "duration": "PT15M30S",
+          "interactionStatistic": {"@type": "InteractionCounter",
+            "interactionType": ["https://schema.org/WatchAction",
+                                "https://schema.org/LikeAction"],
+            "userInteractionCount": 21}}]}
+        </script></head></html>"#;
+        let html = Html::parse_document(html_str);
+        let video = extract_json_ld(&html).expect("array interactionType must not lose the video");
+        assert_eq!(video.name.as_deref(), Some("Video"));
+        assert_eq!(video.duration.as_deref(), Some("PT15M30S"));
+    }
+
+    /// String-typed counts are common in the wild.
+    #[test]
+    fn string_typed_interaction_count_does_not_discard_the_video() {
+        let html_str = r#"<html><head><script type="application/ld+json">
+        {"@graph": [{"@type": "VideoObject", "name": "Video", "duration": "PT15M30S",
+          "interactionStatistic": {"@type": "InteractionCounter",
+            "interactionType": {"@type": "WatchAction"},
+            "userInteractionCount": "21400"}}]}
+        </script></head></html>"#;
+        let html = Html::parse_document(html_str);
+        let video = extract_json_ld(&html).expect("string count must not lose the video");
+        assert_eq!(video.name.as_deref(), Some("Video"));
+        assert_eq!(video.duration.as_deref(), Some("PT15M30S"));
+    }
+
+    /// `@type` is absent — `JsonLdVideo`'s docstring promises every field is
+    /// optional, so a counter entry without one must not be fatal.
+    #[test]
+    fn interaction_entry_without_type_does_not_discard_the_video() {
+        let html_str = r#"<html><head><script type="application/ld+json">
+        {"@graph": [{"@type": "VideoObject", "name": "Video", "duration": "PT15M30S",
+          "interactionStatistic": {
+            "interactionType": {"@type": "WatchAction"},
+            "userInteractionCount": 21}}]}
+        </script></head></html>"#;
+        let html = Html::parse_document(html_str);
+        let video = extract_json_ld(&html).expect("missing @type must not lose the video");
+        assert_eq!(video.name.as_deref(), Some("Video"));
+        assert_eq!(video.duration.as_deref(), Some("PT15M30S"));
+        // The entry is still usable: only the unmodelled part is dropped.
+        assert_eq!(extract_view_count(&video), Some(21));
+    }
+
+    /// The mechanism is not specific to `interactionStatistic`: an unmodelled
+    /// shape on any tolerant field costs that field alone.
+    #[test]
+    fn unmodelled_shape_on_another_field_does_not_discard_the_video() {
+        let html_str = r#"<html><head><script type="application/ld+json">
+        {"@graph": [{"@type": "VideoObject", "name": "Video", "duration": "PT15M30S",
+          "keywords": {"unexpected": "object"},
+          "thumbnailUrl": 12345}]}
+        </script></head></html>"#;
+        let html = Html::parse_document(html_str);
+        let video = extract_json_ld(&html).expect("odd sub-field shapes must not lose the video");
+        assert_eq!(video.name.as_deref(), Some("Video"));
+        assert_eq!(video.duration.as_deref(), Some("PT15M30S"));
+        assert!(extract_tags(&video).is_none());
+        assert!(get_thumbnail_url(&video).is_none());
+    }
+
+    /// The object arm carries a bare `@type` NAME, so it matches exactly; the
+    /// URL arm carries a URI, so the name is a substring of it. A bare name
+    /// that merely CONTAINS the action must not be treated as that action.
+    #[test]
+    fn object_arm_matches_exactly_url_arm_matches_by_substring() {
+        let obj = JsonLdInteractionType::Object(JsonLdInteractionTypeObject {
+            json_type: Some("WatchAction".to_string()),
+        });
+        assert!(obj.matches("WatchAction"));
+        assert!(!obj.matches("Watch"), "bare @type must match exactly");
+
+        let url = JsonLdInteractionType::Url("https://schema.org/WatchAction".to_string());
+        assert!(url.matches("WatchAction"));
+        assert!(!url.matches("LikeAction"));
+    }
+
+    /// Guards the variant ORDER of `JsonLdInteractionStatistic`.
+    ///
+    /// serde deserializes a struct from a sequence positionally, so once every
+    /// `JsonLdInteraction` field became optional and defaulted, a `Single`
+    /// declared first would swallow a two-entry array — binding entry 0 to
+    /// `@type` and entry 1 to `interactionType`, and losing the WatchAction
+    /// counter. Reordering is the fix; this test fails if it is undone.
+    #[test]
+    fn multi_entry_statistics_are_not_swallowed_by_the_single_variant() {
+        let html_str = r#"<html><head><script type="application/ld+json">
+        {"@type": "VideoObject", "name": "Video",
+         "interactionStatistic": [
+           {"@type": "InteractionCounter", "interactionType": {"@type": "LikeAction"},
+            "userInteractionCount": 500},
+           {"@type": "InteractionCounter", "interactionType": {"@type": "WatchAction"},
+            "userInteractionCount": 98765}]}
+        </script></head></html>"#;
+        let html = Html::parse_document(html_str);
+        let video = extract_json_ld(&html).expect("video must parse");
+        assert_eq!(extract_view_count(&video), Some(98765));
+        assert_eq!(extract_like_count(&video), Some(500));
+    }
+
+    /// A near-miss `@type` must not be counted as the view count.
+    #[test]
+    fn view_count_ignores_a_substring_only_object_type() {
+        let html_str = r#"<html><head><script type="application/ld+json">
+        {"@type": "VideoObject", "name": "Video",
+         "interactionStatistic": {"@type": "InteractionCounter",
+           "interactionType": {"@type": "WatchActionExtended"},
+           "userInteractionCount": 99}}
+        </script></head></html>"#;
+        let html = Html::parse_document(html_str);
+        let video = extract_json_ld(&html).expect("video must parse");
+        assert_eq!(extract_view_count(&video), None);
     }
 
     /// The string form stays supported — this is a widening, not a swap.
