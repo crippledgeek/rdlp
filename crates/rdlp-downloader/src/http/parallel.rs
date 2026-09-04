@@ -9,10 +9,11 @@ use super::config::DownloaderConfig;
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, ChunkRequest, ControllerMode};
 use crate::chunking::{ChunkSizeStrategy, calculate_chunks};
 use crate::progress::{ProgressMetrics, ProgressReporterConfig, spawn_progress_reporter};
+use crate::retry::{LazyLabel, RetryPolicy, with_retry_cancellable};
 use futures::Stream;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use log::{debug, error, info, warn};
-use rdlp_core::{DownloadStats, ProgressCallback, RdlpError, Result, is_retryable_error};
+use rdlp_core::{DownloadStats, ProgressCallback, RdlpError, Result, RetryConfig};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -22,88 +23,111 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
-/// Maximum number of retry attempts for a single chunk download.
+/// Retry policy for one chunk's body stream, derived from `base`.
 ///
-/// Covers body-stream failures (decode errors, read timeouts mid-transfer)
-/// that occur after the initial HTTP connection succeeds. The inner
-/// `download_range_with_progress` handles connection-level retries separately.
-const MAX_CHUNK_RETRIES: u32 = 3;
+/// This layer covers failures *during* body transfer — decode errors, a read
+/// timeout mid-stream, a wrong-span response — after the connection already
+/// succeeded. It nests over `download_range_with_progress`, which runs its own
+/// `with_retry` on the `send()`, so total attempts for one chunk are
+/// `(min(retries, CHUNK_RETRIES) + 1) x (retries + 1)` — the product of both
+/// layers, not a constant. Capping this layer bounds one factor; the other is
+/// bounded by `Config::validate`'s ceiling on `retries`. Without the cap, the
+/// default ten would compose to over a hundred requests for a single chunk.
+///
+/// The cap is a ceiling, not an override — a caller that asks for fewer
+/// retries (a test asking for none) gets what it asked for. Delays come from
+/// `base`, with the ceiling held at [`CHUNK_MAX_DELAY`] so the pre-jitter
+/// sequence is the 1s, 2s, 3s this path used before #570. `base`'s jitter
+/// setting is preserved and the default enables it, which backon applies
+/// *after* the clamp (`backon-1.6.0/src/backoff/exponential.rs` `next`), so
+/// realised delays run up to double those figures. That is the intended
+/// trade: parallel chunks that fail together would otherwise retry in
+/// lockstep.
+pub(super) fn chunk_retry_policy(base: &RetryConfig) -> RetryConfig {
+    RetryConfig::new(
+        base.max_retries.min(CHUNK_RETRIES),
+        base.initial_delay,
+        base.max_delay.min(CHUNK_MAX_DELAY),
+        base.multiplier,
+    )
+    .with_jitter(base.jitter)
+}
 
-/// Download a single chunk with retry for transient body-stream failures.
+/// Ceiling on the delay between chunk body-stream attempts.
+const CHUNK_MAX_DELAY: Duration = Duration::from_secs(3);
+
+/// Retries (not attempts) allowed for one chunk's body stream.
+const CHUNK_RETRIES: usize = 3;
+
+/// Download a single chunk, retrying transient body-stream failures.
 ///
-/// Wraps `download_range_with_progress` in a retry loop with linear backoff
-/// (1s, 2s, 3s). Partial files are cleaned up between attempts. Only
-/// retryable errors (5xx, 429, network, I/O) trigger retries.
+/// Shares the one retry mechanism with the HTTP, fragment, and DASH paths
+/// (`crate::retry`); what is specific to a chunk is the policy
+/// ([`chunk_retry_policy`] — small and fixed, because this nests over the
+/// range request's own retry) and the partial-file handling below.
 ///
-/// `cancel` — when `Some`, cancellation is checked at the top of every loop
-/// iteration and forwarded into `download_range_with_progress`. The backoff
-/// sleep is also raced against the token so cancellation fires immediately.
-///
-/// This is a different retry domain from the inner `with_retry` on
-/// `send()` — this handles failures that occur *during* body transfer,
-/// not connection-level failures.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "Each argument carries a distinct semantic role (downloader, url, byte range, sink path, progress counter, chunk identifier, cancel token); extracting a params struct would obscure the call sites inside the AIMD unfold closure without removing complexity."
-)]
+/// `cancel` — when `Some`, the whole retry loop races the token, so a cancel
+/// arriving mid-backoff returns immediately rather than sitting out the sleep.
+/// The partial chunk file is removed on cancel, matching the pre-#570
+/// behaviour. A chunk that fails for good needs no cleanup here: the caller's
+/// `try_collect` short-circuits and `ChunkLedger::cleanup` removes every
+/// registered chunk path, so the merge step never runs.
 pub async fn download_chunk_with_retry(
     downloader: &HttpDownloader,
-    url: &str,
-    start: u64,
-    end: u64,
-    chunk_path: &Path,
+    request: ChunkRequestSpec<'_>,
     progress: Option<Arc<AtomicU64>>,
-    chunk_id: u64,
     cancel: Option<&CancellationToken>,
 ) -> Result<u64> {
-    let mut retries = 0u32;
+    let ChunkRequestSpec {
+        url,
+        start,
+        end,
+        chunk_path,
+        chunk_id,
+    } = request;
+    let config = chunk_retry_policy(&downloader.config.retry_config);
+    let label = LazyLabel(|f| write!(f, "Chunk {chunk_id}"));
 
-    loop {
-        // Pre-iteration cancel guard.
-        if let Some(token) = cancel
-            && token.is_cancelled()
-        {
-            let _ = tokio::fs::remove_file(chunk_path).await;
-            return Err(RdlpError::Cancelled);
-        }
-
-        match downloader
+    let outcome = with_retry_cancellable(RetryPolicy::new(&config, &label), cancel, || async {
+        let attempt = downloader
             .download_range_with_progress(url, start, end, chunk_path, progress.clone(), cancel)
-            .await
-        {
-            Ok(bytes) => return Ok(bytes),
-            Err(RdlpError::Cancelled) => {
-                let _ = tokio::fs::remove_file(chunk_path).await;
-                return Err(RdlpError::Cancelled);
-            }
-            Err(e) => {
-                if retries < MAX_CHUNK_RETRIES && is_retryable_error(&e) {
-                    retries += 1;
-                    warn!(
-                        "Chunk {chunk_id} failed (attempt {}/{}): {e}",
-                        retries,
-                        MAX_CHUNK_RETRIES + 1
-                    );
-                    // Clean up partial file before retry
-                    let _ = tokio::fs::remove_file(chunk_path).await;
-                    // Race the backoff sleep against cancel so we don't block.
-                    if let Some(token) = cancel {
-                        tokio::select! {
-                            biased;
-                            () = token.cancelled() => {
-                                return Err(RdlpError::Cancelled);
-                            }
-                            () = tokio::time::sleep(Duration::from_secs(u64::from(retries))) => {}
-                        }
-                    } else {
-                        tokio::time::sleep(Duration::from_secs(u64::from(retries))).await;
-                    }
-                } else {
-                    return Err(e);
-                }
-            }
+            .await;
+        if attempt.is_err() {
+            // Drop this attempt's partial before returning. backon sleeps
+            // *after* the error and only builds the next attempt afterwards,
+            // so cleaning up at the start of that attempt instead would leave
+            // the bytes on disk for the whole backoff. Not needed for the next
+            // attempt's correctness — `download_range_with_progress` opens
+            // with `File::create`, which truncates.
+            let _ = tokio::fs::remove_file(chunk_path).await;
         }
+        attempt
+    })
+    .await;
+
+    if matches!(outcome, Err(RdlpError::Cancelled)) {
+        let _ = tokio::fs::remove_file(chunk_path).await;
     }
+    outcome
+}
+
+/// Which bytes of which URL a chunk download covers, and where they land.
+///
+/// These five values travel together through the AIMD unfold closure and the
+/// retry loop. Grouping them takes [`download_chunk_with_retry`] from eight
+/// positional arguments to four, and — the point — stops two bare `u64`
+/// offsets and a `u64` id from sitting in a row where only their order
+/// distinguishes them.
+pub struct ChunkRequestSpec<'a> {
+    pub url: &'a str,
+    /// First byte of the range, inclusive.
+    pub start: u64,
+    /// Last byte of the range, inclusive.
+    pub end: u64,
+    /// Where this chunk's bytes are written before the merge step.
+    pub chunk_path: &'a Path,
+    /// Identifies the chunk in logs.
+    pub chunk_id: u64,
 }
 
 /// Mode for chunk merging operations
@@ -545,12 +569,14 @@ impl HttpDownloader {
                 async move {
                     let result = download_chunk_with_retry(
                         &downloader,
-                        &url,
-                        start,
-                        end,
-                        &chunk_path,
+                        ChunkRequestSpec {
+                            url: &url,
+                            start,
+                            end,
+                            chunk_path: &chunk_path,
+                            chunk_id: chunk_id as u64,
+                        },
                         progress,
-                        chunk_id as u64,
                         None,
                     )
                     .await;
@@ -638,12 +664,14 @@ async fn run_adaptive_chunk(job: AdaptiveChunkJob) -> Result<(u64, PathBuf, u64)
 
     let result = download_chunk_with_retry(
         &downloader,
-        &url,
-        abs_start,
-        abs_end,
-        &chunk_path,
+        ChunkRequestSpec {
+            url: &url,
+            start: abs_start,
+            end: abs_end,
+            chunk_path: &chunk_path,
+            chunk_id,
+        },
         Some(progress),
-        chunk_id,
         cancel.as_ref(),
     )
     .await;

@@ -293,6 +293,10 @@ pub mod http;
 /// Shared progress reporting infrastructure
 pub mod progress;
 
+/// The one retry mechanism shared by the HTTP, chunk, fragment, and DASH
+/// download paths.
+pub(crate) mod retry;
+
 pub use chunking::{ChunkSizeStrategy, calculate_chunks, chunk_size_for_file};
 pub use dash::DashDownloader;
 pub use hls::HlsDownloader;
@@ -302,7 +306,7 @@ pub use progress::{
     ProgressGuard, ProgressMetrics, ProgressReporterConfig, spawn_progress_reporter,
 };
 
-use rdlp_core::Downloader;
+use rdlp_core::{Downloader, RetryConfig};
 use rdlp_http::HttpClientFactory;
 use rdlp_ratelimit::RateLimiter;
 use rdlp_types::Config;
@@ -334,6 +338,37 @@ pub struct DownloaderRegistry {
     http_base: HttpDownloader,
     /// Stored concrete HLS downloader for creating copies with headers
     hls_base: HlsDownloader,
+}
+
+/// Build a `RetryConfig` from the operator's retry-delay settings, with
+/// `max_retries` supplied by the caller so the whole-resource and per-fragment
+/// policies can differ in attempt count while sharing one backoff shape.
+///
+/// `Config::validate()` bounds every field read here — the attempt counts, both
+/// delays, and the multiplier's `1.0..=10.0` range. Until #570 it bounded none
+/// of them, because nothing read them.
+const fn retry_config_from(config: &Config, max_retries: usize) -> RetryConfig {
+    RetryConfig::new(
+        max_retries,
+        std::time::Duration::from_millis(config.retry_initial_delay_ms),
+        std::time::Duration::from_millis(config.retry_max_delay_ms),
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "RetryConfig's multiplier is f32; Config carries f64 for TOML/serde \
+                      symmetry with the other numeric settings. The lint's concern is a \
+                      value that does not survive the narrowing: `as` saturates an \
+                      out-of-range float to +/-infinity and admits NaN. Config::validate \
+                      rejects both by bounding this to 1.0..=10.0 (see its \
+                      retry_backoff_multiplier arm and \
+                      test_validate_rejects_retry_multiplier_that_saturates_to_infinity). \
+                      Mantissa precision is still lost — 1.1f64 is not 1.1f32 — but the \
+                      residual is under 2^-24 relative, which no backoff schedule can \
+                      observe."
+        )]
+        {
+            config.retry_backoff_multiplier as f32
+        },
+    )
 }
 
 impl DownloaderRegistry {
@@ -373,11 +408,25 @@ impl DownloaderRegistry {
         // Create rate limiter if configured
         let rate_limiter = config.rate_limit.map(|bps| Arc::new(RateLimiter::new(bps)));
 
+        // Wire the operator's retry settings. Until #570 these were dead:
+        // `with_retry_config` had no production caller, so every path ran
+        // `RetryConfig::default_config()` and `--retries` / `--fragment-retries`
+        // were silently ignored. Same class of gap as the timeouts below.
+        //
+        // Two policies because a fragmented download issues hundreds of
+        // independent requests, so its per-request allowance is a different
+        // question from a single whole-file transfer's — the distinction
+        // yt-dlp draws between `--retries` and `--fragment-retries`.
+        let retry_config = retry_config_from(config, config.retries);
+        let fragment_retry_config = retry_config_from(config, config.fragment_retries);
+
         // Create HTTP downloader with optimized settings
         let mut http_downloader = HttpDownloader::with_client(client)
             .with_buffer_size(config.buffer_size)
             .with_concurrent_fragments(config.concurrent_fragments)
             .with_rate_limiter(rate_limiter)
+            .with_retry_config(retry_config)
+            .with_fragment_retry_config(fragment_retry_config.clone())
             .with_adaptive(config.adaptive_downloads);
         if let Some(threshold) = config.parallel_threshold {
             http_downloader = http_downloader.with_parallel_threshold(threshold);
@@ -408,6 +457,7 @@ impl DownloaderRegistry {
         let dash_downloader = DashDownloader::new()
             .with_http_downloader(http_downloader.clone())
             .with_concurrent_segments(config.concurrent_fragments)
+            .with_retry_config(fragment_retry_config)
             .with_buffer_size(config.buffer_size);
 
         let mut registry = Self {
@@ -515,6 +565,62 @@ impl DownloaderRegistryTrait for DownloaderRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The gap #570 closed: `with_retry_config` had no production caller, so
+    /// every retry policy in the process was `RetryConfig::default_config()`
+    /// and `--retries` / `--fragment-retries` did nothing. These tests fail
+    /// against that state — they assert the operator's values arrive at the
+    /// downloader, not merely that `Config` holds them.
+    #[test]
+    fn operator_retry_settings_reach_the_http_downloader() {
+        let config = Config {
+            retries: 4,
+            fragment_retries: 7,
+            retry_initial_delay_ms: 250,
+            retry_max_delay_ms: 9_000,
+            retry_backoff_multiplier: 3.0,
+            ..Config::default()
+        };
+        let registry = DownloaderRegistry::with_config_and_client(&config, wreq::Client::new());
+        let wired = &registry.http_base.config;
+
+        assert_eq!(
+            wired.retry_config.max_retries, 4,
+            "Config::retries must reach the whole-resource policy"
+        );
+        assert_eq!(
+            wired.fragment_retry_config.max_retries, 7,
+            "Config::fragment_retries must reach the fragment policy"
+        );
+        assert_eq!(
+            wired.retry_config.initial_delay,
+            std::time::Duration::from_millis(250)
+        );
+        assert_eq!(
+            wired.retry_config.max_delay,
+            std::time::Duration::from_secs(9)
+        );
+        assert!((wired.retry_config.multiplier - 3.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn the_two_retry_policies_stay_independent() {
+        // They share a backoff shape but not an attempt count, which is the
+        // whole reason there are two of them.
+        let config = Config {
+            retries: 1,
+            fragment_retries: 9,
+            ..Config::default()
+        };
+        let registry = DownloaderRegistry::with_config_and_client(&config, wreq::Client::new());
+        let wired = &registry.http_base.config;
+        assert_eq!(wired.retry_config.max_retries, 1);
+        assert_eq!(wired.fragment_retry_config.max_retries, 9);
+        assert_eq!(
+            wired.retry_config.initial_delay, wired.fragment_retry_config.initial_delay,
+            "one backoff shape, two attempt counts"
+        );
+    }
 
     #[test]
     fn test_registry_creation() {

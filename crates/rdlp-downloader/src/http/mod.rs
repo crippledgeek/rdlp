@@ -13,13 +13,11 @@ mod trait_impl;
 mod tests;
 
 #[cfg(test)]
-pub(crate) use parallel::{download_chunk_with_retry, verify_merged_size};
+pub(crate) use parallel::{ChunkRequestSpec, download_chunk_with_retry, verify_merged_size};
 
-use backon::Retryable;
-use log::warn;
 use rdlp_core::{
     DownloadProgress, DownloadStats, ProgressCallback, RdlpError, Result, RetryConfig,
-    check_http_response, is_retryable_error,
+    check_http_response,
 };
 use std::collections::HashMap;
 use std::path::Path;
@@ -31,6 +29,7 @@ use wreq::header::{HeaderMap, HeaderName, HeaderValue};
 
 use crate::chunking::ChunkSizeStrategy;
 use crate::progress::SpeedMeter;
+use crate::retry::{RetryPolicy, with_retry};
 use config::{DownloaderConfig, PROGRESS_UPDATE_INTERVAL};
 use rdlp_ratelimit::RateLimiter;
 
@@ -51,30 +50,85 @@ fn to_header_map(headers: Option<&HashMap<String, String>>) -> HeaderMap {
     map
 }
 
-/// Execute an async operation with retry logic
-async fn with_retry<F, Fut, T>(
-    retry_config: &RetryConfig,
-    context: &'static str,
-    operation: F,
-) -> Result<T>
-where
-    F: FnMut() -> Fut,
-    Fut: std::future::Future<Output = Result<T>>,
-{
-    let backoff = retry_config.to_backoff();
-    operation
-        .retry(backoff)
-        .when(is_retryable_error)
-        .notify(|err, dur| {
-            warn!(delay:? = dur; "{context} failed, retrying: {err}");
-        })
-        .await
-}
-
 /// Re-export of the shared `ProbeResult` from `rdlp-http`. Single source of
 /// truth for probe-result shape, used by both `HttpDownloader::probe` and
 /// `BaseExtractor::detect_file_size`. Closes #306.
 pub(crate) use rdlp_http::ProbeResult;
+
+/// Multiple of the idle timeout used as a whole-request backstop.
+///
+/// Sized so only a request that is pathological reaches it, never one that is
+/// merely slow: at the 60s default that is a ten-minute ceiling per fragment.
+const TRANSFER_DEADLINE_MULTIPLE: u32 = 10;
+
+/// Apply the two timeouts a media transfer needs, on their two distinct axes.
+///
+/// Read from wreq 6.0.0-rc.28's source rather than its doc lines, because the
+/// two methods' names do not describe when they actually fire:
+///
+/// - **Before the response arrives**, `ResponseFuture::poll`
+///   (`client/layer/timeout/future.rs:53-61`) polls *both* sleeps as plain
+///   deadlines running from request start. So `read_timeout` alone already
+///   bounds a connection that is accepted and then never answered — the
+///   header phase is not the "read" phase its name suggests.
+/// - **Once the body is arriving**, they diverge
+///   (`client/layer/timeout/body.rs`): `ReadTimeoutBody` resets its timer on
+///   every frame, so it never punishes a transfer that is slow but
+///   progressing, while `TotalTimeoutBody` holds one sleep that is never
+///   reset.
+///
+/// That is why both are set. `read_timeout` does the real work — silence
+/// before the headers, and inactivity during the body. The total deadline
+/// exists for the one case the idle timer cannot see: a body that dribbles a
+/// frame at a time forever, resetting the idle timer on each one, which would
+/// otherwise hold a fragment open indefinitely.
+///
+/// Wiring the idle value to `timeout` instead — as this code did briefly, and
+/// as the DASH path did since its Item 8 — makes a 60s *total* deadline for
+/// the whole transfer, which kills a large fragment on a slow link while bytes
+/// are still arriving. `Config::read_timeout` documents itself as "per-read
+/// inactivity, not total"; this is what honouring that requires.
+///
+/// Shared by the fragment and DASH segment paths so the two cannot drift back
+/// to disagreeing about which axis they bound.
+pub(crate) fn with_transfer_timeouts(
+    req: wreq::RequestBuilder,
+    idle: Duration,
+) -> wreq::RequestBuilder {
+    req.read_timeout(idle)
+        .timeout(idle.saturating_mul(TRANSFER_DEADLINE_MULTIPLE))
+}
+
+/// The operator's headers, but only for a target on the seed's origin.
+///
+/// `Format.http_headers` carry Referer, Cookie, Authorization and Origin. A
+/// manifest names its own fragment and segment URLs, so a compromised or
+/// hostile playlist can point them at a host of its choosing; forwarding the
+/// operator's headers there hands that host the user's credentials. The gate
+/// is origin equality per RFC 6454 — scheme, host and port.
+///
+/// Fails closed on every uncertainty: no seed, a target that will not parse,
+/// and an opaque origin on either side (two opaque origins are never equal,
+/// so a `data:` or otherwise non-tuple origin can never match).
+///
+/// One function because this decision existed twice — once for the fragment
+/// path (#273) and once for DASH's legacy MPD path (#319) — and two copies of
+/// a credential gate is one copy too many. Both call sites now share it.
+pub(crate) fn same_origin_headers(
+    seed: Option<&url::Origin>,
+    target_url: &str,
+    headers: &HeaderMap,
+) -> HeaderMap {
+    let same_origin = match (seed, url::Url::parse(target_url).ok()) {
+        (Some(seed), Some(target)) => *seed == target.origin(),
+        _ => false,
+    };
+    if same_origin {
+        headers.clone()
+    } else {
+        HeaderMap::new()
+    }
+}
 
 /// HTTP status a single-part ranged response must carry (RFC 9110 §15.3.7).
 ///
@@ -355,6 +409,13 @@ impl HttpDownloader {
         self
     }
 
+    /// Set the per-fragment / per-segment retry policy (`--fragment-retries`).
+    #[must_use]
+    pub fn with_fragment_retry_config(mut self, config: RetryConfig) -> Self {
+        Arc::make_mut(&mut self.config).fragment_retry_config = config;
+        self
+    }
+
     /// Set number of concurrent fragment downloads
     #[must_use = "builder methods consume self and return a new instance"]
     pub fn with_concurrent_fragments(mut self, count: usize) -> Self {
@@ -478,19 +539,22 @@ impl HttpDownloader {
         let window = PROBE_WINDOW_BYTES;
         let timeout = self.config.read_timeout;
 
-        let probed = with_retry(&self.config.retry_config, "HTTP probe (F3)", || {
-            let client = client.clone();
-            let url = url_string.clone();
-            let hdrs = hdrs.clone();
-            async move {
-                rdlp_http::probe_size(&client, &url, Some(&hdrs), window, timeout)
-                    .await
-                    .map_err(|e| RdlpError::Network {
-                        message: format!("probe failed: {e}"),
-                        url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
-                    })
-            }
-        })
+        let probed = with_retry(
+            RetryPolicy::new(&self.config.retry_config, &"HTTP probe (F3)"),
+            || {
+                let client = client.clone();
+                let url = url_string.clone();
+                let hdrs = hdrs.clone();
+                async move {
+                    rdlp_http::probe_size(&client, &url, Some(&hdrs), window, timeout)
+                        .await
+                        .map_err(|e| RdlpError::Network {
+                            message: format!("probe failed: {e}"),
+                            url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
+                        })
+                }
+            },
+        )
         .await;
 
         Ok(probed.unwrap_or(ProbeResult {
@@ -525,26 +589,36 @@ impl HttpDownloader {
         let url = url.to_string();
         let hdrs = self.headers();
 
-        let response = with_retry(&self.config.retry_config, "HTTP GET (range)", || {
-            let client = client.clone();
-            let url = url.clone();
-            let hdrs = hdrs.clone();
-            async move {
-                let response = client
-                    .get(&url)
-                    .headers(hdrs)
-                    .header("Range", format!("bytes={start}-{end}"))
-                    .send()
-                    .await
-                    .map_err(|e| RdlpError::Network {
-                        message: format!("Range request failed: {e}"),
-                        url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
-                    })?;
+        // NOTE: plain `with_retry`, not the cancellable form — this loop's
+        // backoff sleeps are not themselves raced against `cancel`. That is
+        // safe only because the sole production caller
+        // (`download_chunk_with_retry`) wraps this whole call in
+        // `with_retry_cancellable`. A future caller
+        // invoking this directly and expecting a cancel to interrupt a backoff
+        // would not get one.
+        let response = with_retry(
+            RetryPolicy::new(&self.config.retry_config, &"HTTP GET (range)"),
+            || {
+                let client = client.clone();
+                let url = url.clone();
+                let hdrs = hdrs.clone();
+                async move {
+                    let response = client
+                        .get(&url)
+                        .headers(hdrs)
+                        .header("Range", format!("bytes={start}-{end}"))
+                        .send()
+                        .await
+                        .map_err(|e| RdlpError::Network {
+                            message: format!("Range request failed: {e}"),
+                            url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
+                        })?;
 
-                check_http_response(&response)?;
-                Ok(response)
-            }
-        })
+                    check_http_response(&response)?;
+                    Ok(response)
+                }
+            },
+        )
         .await?;
 
         // Confirm the response encloses exactly the requested span BEFORE any
@@ -700,22 +774,25 @@ impl HttpDownloader {
             return Err(RdlpError::Cancelled);
         }
 
-        let response = with_retry(&self.config.retry_config, "HTTP GET", || {
-            let client = client.clone();
-            let url = url_string.clone();
-            let hdrs = hdrs.clone();
-            async move {
-                let response = client.get(&*url).headers(hdrs).send().await.map_err(|e| {
-                    RdlpError::Network {
-                        message: format!("GET request failed: {e}"),
-                        url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
-                    }
-                })?;
+        let response = with_retry(
+            RetryPolicy::new(&self.config.retry_config, &"HTTP GET"),
+            || {
+                let client = client.clone();
+                let url = url_string.clone();
+                let hdrs = hdrs.clone();
+                async move {
+                    let response = client.get(&*url).headers(hdrs).send().await.map_err(|e| {
+                        RdlpError::Network {
+                            message: format!("GET request failed: {e}"),
+                            url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
+                        }
+                    })?;
 
-                check_http_response(&response)?;
-                Ok(response)
-            }
-        })
+                    check_http_response(&response)?;
+                    Ok(response)
+                }
+            },
+        )
         .await?;
 
         let total_size = response.content_length();

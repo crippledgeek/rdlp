@@ -15,10 +15,13 @@ async fn byte_range_emits_http_range_header() {
         .create_async()
         .await;
 
-    // Catch-all 501 if Range header is missing or wrong.
+    // Catch-all if the Range header is missing or wrong. 418 rather than a
+    // 5xx because a canary's job is to fail the test *fast*: since #570 a
+    // 5xx is retryable, so a regression here would walk the whole backoff
+    // ladder before surfacing. `is_retryable_error` rejects 418.
     let _unmatched = server
         .mock("GET", Matcher::Any)
-        .with_status(501)
+        .with_status(418)
         .create_async()
         .await;
 
@@ -404,7 +407,9 @@ async fn fragment_progress_mid_stream_failure_returns_error_partial_file() {
         frag(format!("{}/f2", server.url())),
     ];
     let tmp = tempfile::NamedTempFile::new().expect("tmp");
-    let http = HttpDownloader::with_client(wreq::Client::new());
+    // Retries off: the 500 is retryable since #570, and the default backoff
+    // would spend minutes here proving something this test is not about.
+    let http = no_retry_http();
     let res =
         download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
             .await;
@@ -1007,7 +1012,7 @@ fn make_downloader_with_header(name: &str, value: &str) -> HttpDownloader {
 /// Two mockito servers = two origins (same loopback address, different ports).
 /// The fragment is served from `format_server` (same-origin) → must see Referer.
 /// The init segment is served from `init_server` (cross-origin) → must NOT see
-/// Referer. The catch-all 501 on `init_server` fires if the header leaks.
+/// Referer. The catch-all 418 on `init_server` fires if the header leaks.
 #[tokio::test]
 async fn cross_origin_init_url_does_not_forward_seed_headers() {
     let mut format_server = mockito::Server::new_async().await;
@@ -1031,10 +1036,10 @@ async fn cross_origin_init_url_does_not_forward_seed_headers() {
         .create_async()
         .await;
 
-    // Catch-all on init_server: 501 if Referer arrived unexpectedly.
+    // Catch-all on init_server: 418 if Referer arrived unexpectedly.
     let _init_catchall = init_server
         .mock("GET", Matcher::Any)
-        .with_status(501)
+        .with_status(418)
         .create_async()
         .await;
 
@@ -1071,7 +1076,7 @@ async fn cross_origin_init_url_does_not_forward_seed_headers() {
 /// Positive companion: same-origin init URL DOES forward `Format.http_headers`.
 ///
 /// Both fragment and init are on `format_server` (same-origin as `format_url`).
-/// Both must receive the Referer. The catch-all 501 fires if headers were
+/// Both must receive the Referer. The catch-all 418 fires if headers were
 /// stripped due to an over-aggressive same-origin check (always-strip regression).
 #[tokio::test]
 async fn same_origin_init_url_forwards_seed_headers() {
@@ -1093,10 +1098,10 @@ async fn same_origin_init_url_forwards_seed_headers() {
         .create_async()
         .await;
 
-    // Catch-all: 501 if Referer was NOT present (headers were stripped).
+    // Catch-all: 418 if Referer was NOT present (headers were stripped).
     let _catchall = format_server
         .mock("GET", Matcher::Any)
-        .with_status(501)
+        .with_status(418)
         .create_async()
         .await;
 
@@ -1133,7 +1138,7 @@ async fn same_origin_init_url_forwards_seed_headers() {
 /// Negative test: fragment URL on a different origin from `format_url` drops headers.
 ///
 /// `init_url` is `None`; only the fragment itself is cross-origin. The catch-all
-/// 501 on `cross_server` fires if the Referer was forwarded.
+/// 418 on `cross_server` fires if the Referer was forwarded.
 #[tokio::test]
 async fn cross_origin_fragment_url_does_not_forward_seed_headers() {
     let format_server = mockito::Server::new_async().await;
@@ -1148,10 +1153,10 @@ async fn cross_origin_fragment_url_does_not_forward_seed_headers() {
         .create_async()
         .await;
 
-    // Catch-all on cross_server: 501 if Referer arrived.
+    // Catch-all on cross_server: 418 if Referer arrived.
     let _catchall = cross_server
         .mock("GET", Matcher::Any)
-        .with_status(501)
+        .with_status(418)
         .create_async()
         .await;
 
@@ -1318,14 +1323,14 @@ async fn resume_is_byte_identical_and_skips_done_fragments() {
     tokio::fs::write(&output, &reference[..done]).await.unwrap();
 
     // Resume server: paths identical (so the path-only fingerprint matches),
-    // but the already-done fragments are 501 — if resume re-fetches them the
+    // but the already-done fragments are 418 — if resume re-fetches them the
     // download errors, proving they were skipped. Remaining fragments serve
     // their real bodies.
     let mut server = mockito::Server::new_async().await;
     for i in 0..done {
         server
             .mock("GET", format!("/seg-{i}.ts").as_str())
-            .with_status(501)
+            .with_status(418)
             .create_async()
             .await;
     }
@@ -1349,7 +1354,7 @@ async fn resume_is_byte_identical_and_skips_done_fragments() {
 
     download_pre_resolved_fragments(&http, &frags, None, None, None, &output, None, None)
         .await
-        .expect("resume must succeed without hitting the 501 done-fragments");
+        .expect("resume must succeed without hitting the 418 done-fragments");
 
     let written = tokio::fs::read(&output).await.unwrap();
     assert_eq!(written, reference, "resumed output must be byte-identical");
@@ -1407,7 +1412,7 @@ async fn extra_tail_is_truncated_to_byte_len_on_resume() {
     for i in 0..2 {
         server
             .mock("GET", format!("/seg-{i}.ts").as_str())
-            .with_status(501)
+            .with_status(418)
             .create_async()
             .await;
     }
@@ -1604,7 +1609,9 @@ async fn ranged_fragment_content_range_wrong_span_is_rejected() {
     let url = format!("{}/seg.m4s", server.url());
     let frags = vec![ranged_frag(url, 1024, 2048)];
 
-    let http = HttpDownloader::with_client(wreq::Client::new());
+    // Retries off: a wrong span is retryable (#570), and this test is about
+    // the rejection itself, not the retry loop.
+    let http = no_retry_http();
     let tmp = tempfile::NamedTempFile::new().unwrap();
     let res =
         download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
@@ -1730,4 +1737,367 @@ async fn unranged_fragment_plain_200_still_succeeds() {
         .expect("unranged fragment fetch must still succeed on a plain 200");
     let written = tokio::fs::read(tmp.path()).await.unwrap();
     assert_eq!(written, body);
+}
+
+// --- fragment retry (issue #570) ---
+//
+// The parallel-chunk path (`download_chunk_with_retry`) and the DASH segment
+// path (`dash/download.rs::download_one`) both retry transient failures; the
+// fragment path did not, so one bad edge node killed a whole multi-hundred-
+// fragment HLS download. These tests pin the retry semantics: retryable
+// failures are re-fetched, non-retryable ones fail on the first response.
+
+/// `HttpDownloader` with a millisecond retry backoff, so retry-path tests
+/// exercise the real loop without sleeping: `RetryConfig::default_config`
+/// starts at 1s and doubles to 60s, which would turn a millisecond test into
+/// a five-minute one.
+fn http_with_retries(max_retries: usize) -> HttpDownloader {
+    let config = crate::retry::test_retry_config(max_retries);
+    // Both policies: the fragment path reads `fragment_retry_config`, and the
+    // range request underneath it reads `retry_config`. Setting only one
+    // leaves the other at the 10-attempt / 60s-ceiling default, which is
+    // minutes per failing test.
+    HttpDownloader::with_client(wreq::Client::new())
+        .with_retry_config(config.clone())
+        .with_fragment_retry_config(config)
+}
+
+/// Retries enabled, concurrency pinned to 1 so retry accounting is
+/// deterministic across fragments.
+fn retrying_http(max_retries: usize) -> HttpDownloader {
+    http_with_retries(max_retries).with_concurrent_fragments(1)
+}
+
+/// Retries disabled, for the tests that assert a *failure* on a retryable
+/// error and are not themselves about the retry loop.
+fn no_retry_http() -> HttpDownloader {
+    http_with_retries(0)
+}
+
+#[tokio::test]
+async fn retryable_fragment_failure_is_retried_then_succeeds() {
+    let mut server = mockito::Server::new_async().await;
+    // Measured against mockito 1.7.2: mocks are matched in CREATION order and
+    // a mock is retired once its `expect(n)` count is met. So creating the 500
+    // first and the success second makes the response sequence exactly
+    // 500, then 200. (`assert_async` on both below proves each was consumed —
+    // without it a single-fetch success would pass this test vacuously.)
+    let body = vec![0x5A; 128];
+    let fail = server
+        .mock("GET", "/f1")
+        .with_status(500)
+        .expect(1)
+        .create_async()
+        .await;
+    let ok = server
+        .mock("GET", "/f1")
+        .with_body(body.clone())
+        .expect(1)
+        .create_async()
+        .await;
+
+    let frags = vec![frag(format!("{}/f1", server.url()))];
+    let http = retrying_http(3);
+    let tmp = tempfile::NamedTempFile::new().expect("tmp");
+    let stats =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+            .await
+            .expect("a transient 500 on one fragment must be retried, not fail the download");
+    assert_eq!(
+        stats.retries, 1,
+        "the reported retry count is what the operator sees; one 500 is one retry"
+    );
+
+    let written = tokio::fs::read(tmp.path()).await.expect("read output");
+    assert_eq!(
+        written, body,
+        "the retried fetch's bytes must be what lands in the output"
+    );
+    fail.assert_async().await;
+    ok.assert_async().await;
+}
+
+#[tokio::test]
+async fn non_retryable_fragment_status_fails_without_retrying() {
+    let mut server = mockito::Server::new_async().await;
+    // 404 is not retryable. `expect(1)` fails the assertion below if a second
+    // request arrives, which is the guard against a retry storm on a dead URL.
+    let mock = server
+        .mock("GET", "/f1")
+        .with_status(404)
+        .expect(1)
+        .create_async()
+        .await;
+
+    let frags = vec![frag(format!("{}/f1", server.url()))];
+    let http = retrying_http(3);
+    let tmp = tempfile::NamedTempFile::new().expect("tmp");
+    let err =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+            .await
+            .expect_err("a 404 fragment must fail the download");
+    assert!(
+        matches!(err, rdlp_core::RdlpError::Http { status: 404, .. }),
+        "unexpected err shape: {err:?}"
+    );
+    mock.assert_async().await;
+}
+
+#[tokio::test]
+async fn ranged_fragment_wrong_span_is_retried_then_succeeds() {
+    // #564 deliberately reports a wrong Content-Range span as a *retryable*
+    // `Network` error, reasoning that a retry against another CDN node
+    // plausibly gets the right bytes. That distinction was inert on this path
+    // until #570 — this test is what makes it load-bearing.
+    let mut server = mockito::Server::new_async().await;
+    let body = vec![0xEE; 1024];
+    // Creation order is match order (see the note in
+    // `retryable_fragment_failure_is_retried_then_succeeds`): wrong span first,
+    // correct span second.
+    let wrong_span = server
+        .mock("GET", "/seg.m4s")
+        .with_status(206)
+        .with_header("Content-Range", "bytes 0-1023/8192")
+        .with_body(vec![0xBB; 1024])
+        .expect(1)
+        .create_async()
+        .await;
+    let ok = server
+        .mock("GET", "/seg.m4s")
+        .with_status(206)
+        .with_header("Content-Range", "bytes 1024-2047/8192")
+        .with_body(body.clone())
+        .expect(1)
+        .create_async()
+        .await;
+
+    let frags = vec![ranged_frag(format!("{}/seg.m4s", server.url()), 1024, 2048)];
+    let http = retrying_http(3);
+    let tmp = tempfile::NamedTempFile::new().expect("tmp");
+    download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+        .await
+        .expect("a wrong-span 206 is retryable and the retry delivers the right span");
+
+    let written = tokio::fs::read(tmp.path()).await.expect("read output");
+    assert_eq!(
+        written, body,
+        "only the correctly-spanned body may land in the output"
+    );
+    wrong_span.assert_async().await;
+    ok.assert_async().await;
+}
+
+#[tokio::test]
+async fn retry_budget_bounds_cumulative_retries_across_the_fragment_list() {
+    // Per-fragment retries do not bound a *flaky* list: a fragment that fails
+    // and then succeeds never propagates an error, so nothing stops a long
+    // list from spending a backoff ladder on every one of its fragments. (A
+    // wholly broken origin is already bounded — the download returns on the
+    // first fragment to exhaust its allowance.) The list-wide budget caps the
+    // cumulative total.
+    //
+    // 20 fragments with `max_retries = 1` sizes the budget at
+    // 1 x (20 / RETRY_BUDGET_FRAGMENT_SHARE) = 2 retries for the whole list.
+    // Each fragment answers 500 once, then its real body. So fragments 1 and 2
+    // spend the budget and complete; fragment 3's failure finds it empty, is
+    // not retried, and fails the download.
+    const TOTAL: usize = 20;
+    let mut server = mockito::Server::new_async().await;
+    let body = vec![0x77; 32];
+    for i in 1..=TOTAL {
+        // Creation order is match order: the 500 first, the body second.
+        server
+            .mock("GET", format!("/f{i}").as_str())
+            .with_status(500)
+            .expect(1)
+            .create_async()
+            .await;
+        server
+            .mock("GET", format!("/f{i}").as_str())
+            .with_body(body.clone())
+            .create_async()
+            .await;
+    }
+
+    let frags: Vec<Fragment> = (1..=TOTAL)
+        .map(|i| frag(format!("{}/f{i}", server.url())))
+        .collect();
+    let http = retrying_http(1);
+    let tmp = tempfile::NamedTempFile::new().expect("tmp");
+    let err =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+            .await
+            .expect_err("the third fragment must find the retry budget spent");
+    assert!(
+        matches!(err, rdlp_core::RdlpError::Http { status: 500, .. }),
+        "unexpected err shape: {err:?}"
+    );
+
+    let written = tokio::fs::read(tmp.path()).await.expect("read output");
+    assert_eq!(
+        written.len(),
+        body.len() * 2,
+        "exactly two fragments may be rescued by a budget of two retries"
+    );
+}
+
+#[tokio::test]
+async fn a_stalled_fragment_fetch_times_out_rather_than_hanging() {
+    // The failure mode the fragment path could not see before it carried a
+    // request timeout: a CDN that accepts the connection and then sends
+    // nothing. No error is ever produced, so #570's retry cannot help — and
+    // without a cancellation token there is nothing else to end the wait.
+    // mockito cannot express this (it has no delay API), so this is a raw
+    // listener that accepts and holds.
+    // Bound but never accepted: the kernel completes the handshake into the
+    // backlog, so the client connects successfully and then waits forever for
+    // a response that no one will write. `listener` must stay in scope for the
+    // whole test — dropping it closes the port, and the connect would then
+    // fail fast instead of stalling, which is not what this test is about.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+
+    let http = http_with_retries(0).with_read_timeout(std::time::Duration::from_millis(100));
+    let frags = vec![frag(format!("http://{addr}/stalled.ts"))];
+    let tmp = tempfile::NamedTempFile::new().expect("tmp");
+
+    let started = Instant::now();
+    let err =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+            .await
+            .expect_err("a stalled fragment must fail, not hang");
+    let elapsed = started.elapsed();
+
+    assert!(
+        matches!(err, rdlp_core::RdlpError::Network { .. }),
+        "a timeout is a transient network failure, so it stays retryable: {err:?}"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "returned only after {elapsed:?}; the fetch was not bounded by read_timeout"
+    );
+}
+
+#[tokio::test]
+async fn a_slow_but_progressing_fragment_is_not_cut_off() {
+    // The case the first version of this timeout got wrong. wreq's
+    // `.timeout()` is a total request deadline whose timer never resets, so
+    // wiring the idle value to it aborts a large fragment on a slow link even
+    // while bytes are steadily arriving. `.read_timeout()` resets on every
+    // frame, so only genuine inactivity trips it.
+    //
+    // The body below arrives in six pieces 40ms apart: no single gap comes
+    // near the 400ms idle bound — a 10x margin, so a loaded machine cannot
+    // trip it spuriously — while the total (~240ms) still exceeds that bound
+    // comfortably. A total-timeout implementation fails this; an idle one
+    // must not.
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    const PIECES: usize = 6;
+    const PIECE: usize = 100;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept");
+        // Consume the request head so the client's write completes.
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf).await;
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n",
+            PIECES * PIECE
+        );
+        stream.write_all(head.as_bytes()).await.expect("head");
+        for _ in 0..PIECES {
+            tokio::time::sleep(std::time::Duration::from_millis(40)).await;
+            stream.write_all(&[0x7Eu8; PIECE]).await.expect("piece");
+            stream.flush().await.expect("flush");
+        }
+    });
+
+    let http = http_with_retries(0).with_read_timeout(std::time::Duration::from_millis(400));
+    let frags = vec![frag(format!("http://{addr}/slow.ts"))];
+    let tmp = tempfile::NamedTempFile::new().expect("tmp");
+
+    let stats =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+            .await
+            .expect("a slow but progressing transfer must not be aborted");
+
+    server.await.expect("server task");
+    assert_eq!(
+        stats.bytes_downloaded,
+        (PIECES * PIECE) as u64,
+        "every byte of the slow transfer must land"
+    );
+    assert_eq!(
+        stats.retries, 0,
+        "a successful slow transfer needs no retry"
+    );
+}
+
+#[tokio::test]
+async fn an_endless_dribble_is_cut_off_by_the_total_deadline() {
+    // The one case the idle timer cannot see. Every frame resets
+    // `read_timeout`, so a server that sends one byte just often enough would
+    // hold the fragment open forever; only the total deadline ends it.
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind");
+    let addr = listener.local_addr().expect("addr");
+    let server = tokio::spawn(async move {
+        let (mut stream, _) = listener.accept().await.expect("accept");
+        let mut buf = [0u8; 1024];
+        let _ = stream.read(&mut buf).await;
+        // A body far larger than we will ever send, dribbled indefinitely.
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100000000\r\n\r\n")
+            .await
+            .expect("head");
+        loop {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            if stream.write_all(b"x").await.is_err() {
+                return; // client gave up, which is the point
+            }
+        }
+    });
+
+    // Idle bound 100ms, never reached because a byte lands every 20ms.
+    // Total deadline is 10x that, so the dribble must end at about 1s.
+    let http = http_with_retries(0).with_read_timeout(std::time::Duration::from_millis(100));
+    let frags = vec![frag(format!("http://{addr}/dribble.ts"))];
+    let tmp = tempfile::NamedTempFile::new().expect("tmp");
+
+    let started = Instant::now();
+    let err =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+            .await
+            .expect_err("an endless dribble must be cut off, not served forever");
+    let elapsed = started.elapsed();
+    server.abort();
+
+    assert!(
+        matches!(err, rdlp_core::RdlpError::Network { .. }),
+        "a timeout is transient, so it stays retryable: {err:?}"
+    );
+    // Lower bound, and it is the load-bearing half. Without it a scheduling
+    // hiccup that stretched one 20ms gap past the 100ms idle bound would trip
+    // the *idle* timer at ~150ms, and this test would pass while demonstrating
+    // the opposite of its name. Only a repeatedly-reset idle timer can carry
+    // the request past 500ms, so reaching here that late means the total
+    // deadline is what ended it.
+    assert!(
+        elapsed >= std::time::Duration::from_millis(500),
+        "ended after only {elapsed:?}; the idle timer fired, so this proves \
+         nothing about the total deadline"
+    );
+    assert!(
+        elapsed < std::time::Duration::from_secs(10),
+        "returned only after {elapsed:?}; the total deadline did not bound the dribble"
+    );
 }

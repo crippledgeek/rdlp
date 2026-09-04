@@ -14,12 +14,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use backon::Retryable;
 use futures::StreamExt;
 use log::{debug, info, warn};
-use rdlp_core::{
-    DownloadStats, ProgressCallback, RdlpError, Result, RetryConfig, is_retryable_error,
-};
+use rdlp_core::{DownloadStats, ProgressCallback, RdlpError, Result, RetryConfig};
 use rdlp_ffmpeg::{FFmpegRunner, RemuxOptions};
 use tokio::fs::{self, OpenOptions};
 use tokio::io::{AsyncWriteExt, BufWriter};
@@ -34,6 +31,7 @@ use crate::dash::manifest;
 use crate::dash::segments::SegmentPlan;
 use crate::dash::state::DashDownloadState;
 use crate::http::HttpDownloader;
+use crate::retry::{RetryPolicy, with_retry_cancellable};
 
 /// Number of successful segment fetches between state-save flushes.
 const STATE_SAVE_BATCH: usize = 16;
@@ -455,8 +453,8 @@ async fn download_representation(
             // in-flight segment tasks from issuing further network round-trips.
             // The check below short-circuits a segment whose task starts after
             // cancel; an in-flight segment body is ALSO interrupted mid-read by
-            // the `biased` select! inside `download_one` (this PR — matches the
-            // fragment downloader's `fetch_with_optional_cancel` fidelity), so a
+            // the `biased` select! in `crate::retry::with_retry_cancellable`,
+            // which `download_one` and the fragment path both go through, so a
             // stalled CDN body no longer blocks until `read_timeout` fires.
             if cancel.as_ref().is_some_and(CancellationToken::is_cancelled) {
                 return Err(RdlpError::Cancelled);
@@ -652,37 +650,34 @@ async fn download_one(
     cancel: Option<&CancellationToken>,
 ) -> Result<Vec<u8>> {
     let client = http.client().clone();
-    // Same-origin header gate (issue #319). When the segment URL's origin
-    // differs from the MPD URL's origin (CDN-redirected media), strip the
-    // operator-set headers. `Origin::Opaque` compares not-equal — fails
-    // closed. Mirrors PR #273 for the modern per-Repr path.
-    let headers = if url.origin() == *mpd_origin {
-        http.headers()
-    } else {
-        wreq::header::HeaderMap::new()
-    };
-    let backoff = retry.to_backoff();
     let url_str = url.to_string();
-    // The retried fetch future (send + status check + body read, with backoff).
-    // All existing retry/backoff/header-gate/timeout logic is preserved inside
-    // it unchanged.
-    let fetch = (|| {
+    // Same-origin header gate (#319): a segment on a different origin from the
+    // MPD (CDN-redirected media) gets no operator headers. Shared with the
+    // fragment path — one implementation of the credential gate, not two.
+    let headers = crate::http::same_origin_headers(Some(mpd_origin), &url_str, &http.headers());
+    // The fetch itself: send + status check + body read. The retry policy,
+    // the backoff, and the cancel race all live in `crate::retry` — this
+    // closure is only the work that varies between callers.
+    let fetch = || {
         let client = client.clone();
         let headers = headers.clone();
         let url_str = url_str.clone();
         async move {
-            let resp = client
-                .get(&url_str)
-                .headers(headers)
-                // Item 8: was a hardcoded 60s; now uses the operator-tunable
-                // read (idle) timeout (DownloaderConfig default is also 60s).
-                .timeout(http.config.read_timeout)
-                .send()
-                .await
-                .map_err(|e| RdlpError::Network {
-                    message: format!("DASH segment fetch failed: {e}"),
-                    url: Some(rdlp_redact::RedactedUrlBuf::from(url_str.as_str())),
-                })?;
+            let resp = crate::http::with_transfer_timeouts(
+                client.get(&url_str),
+                // Item 8 replaced a hardcoded 60s with this operator-tunable
+                // value, but wired it to wreq's *total* timeout while calling
+                // it an idle one. Both axes are now bounded, each by the timer
+                // that actually implements it.
+                http.config.read_timeout,
+            )
+            .headers(headers)
+            .send()
+            .await
+            .map_err(|e| RdlpError::Network {
+                message: format!("DASH segment fetch failed: {e}"),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url_str.as_str())),
+            })?;
             if !resp.status().is_success() {
                 return Err(RdlpError::Http {
                     status: resp.status().as_u16(),
@@ -695,29 +690,18 @@ async fn download_one(
             })?;
             Ok(bytes.to_vec())
         }
-    })
-    .retry(backoff)
-    .when(is_retryable_error)
-    .notify(|err, dur| {
-        warn!("DASH segment fetch retry after {dur:?}: {err}");
-    });
+    };
 
-    // Mid-read cancel: race the retried fetch against the cancel token so an
-    // in-flight `send()`/`bytes()` (or a stalled CDN body) aborts immediately
-    // instead of blocking until `read_timeout` fires. Mirrors the fragment
-    // downloader's `fetch_with_optional_cancel` (fragments.rs:396) — `biased`
-    // gives the cancel arm priority. When no token is supplied, await the
-    // fetch directly.
-    match cancel {
-        Some(token) => {
-            tokio::select! {
-                biased;
-                () = token.cancelled() => Err(RdlpError::Cancelled),
-                res = fetch => res,
-            }
-        }
-        None => fetch.await,
-    }
+    // Mid-read cancel is part of the shared runner: it races the whole retry
+    // loop, so an in-flight `send()`/`bytes()`, a stalled CDN body, or a
+    // backoff sleep all abort immediately rather than blocking until
+    // `read_timeout` fires.
+    with_retry_cancellable(
+        RetryPolicy::new(retry, &"DASH segment fetch"),
+        cancel,
+        fetch,
+    )
+    .await
 }
 
 /// 0-retry `RetryConfig` so failing tests fail immediately rather than
@@ -725,10 +709,7 @@ async fn download_one(
 /// `same_origin_gate_tests` submodules (both reach it via `use super::*`).
 #[cfg(test)]
 fn fast_retry() -> Arc<RetryConfig> {
-    Arc::new(RetryConfig {
-        max_retries: 0,
-        ..RetryConfig::default()
-    })
+    Arc::new(crate::retry::test_retry_config(0))
 }
 
 #[cfg(test)]

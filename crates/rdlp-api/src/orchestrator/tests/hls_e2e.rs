@@ -353,7 +353,15 @@ async fn hls_failed_primary_with_fallback_never_emits_fragmentless_internal_erro
         "http://cdn-fallback.invalid/master.m3u8?token=s3cr3t".to_string(),
     ]);
 
-    let orch = orchestrator_with_config(Config::default());
+    // Retries off. #570 made the fragment path retry, and under the default
+    // policy this deliberately-500ing segment would walk ten attempts with a
+    // 60s ceiling — about five minutes to reach the fallback this test is
+    // actually about.
+    let orch = orchestrator_with_config(Config {
+        retries: 0,
+        fragment_retries: 0,
+        ..Config::default()
+    });
     let dir = TempDir::new().expect("tempdir");
     let out = dir.path().join("video.mp4");
 

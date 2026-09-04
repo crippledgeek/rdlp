@@ -17,6 +17,17 @@ use crate::subtitle_format::SubtitleFormat;
 /// only the ceiling for explicit overrides.
 pub const MAX_RECODE_THREADS: u32 = 64;
 
+/// Ceiling for `retries` and `fragment_retries`.
+///
+/// Not a physical limit — a bound so a typo in a config file cannot turn one
+/// failing chunk into thousands of requests. 100 is far above any useful
+/// setting (yt-dlp's default is 10) and far below the point where the nested
+/// chunk/range composition becomes pathological.
+const MAX_RETRIES: usize = 100;
+
+/// Ceiling for both retry delay settings: one hour.
+const MAX_RETRY_DELAY_MS: u64 = 60 * 60 * 1000;
+
 /// Errors from configuration validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigValidationError {
@@ -500,6 +511,50 @@ impl Config {
                 field: "recode_threads",
                 reason: "must be 1..=64 (bounds peak encoder RAM; 0 is invalid — \
                          leave unset for auto-detect)",
+            });
+        }
+        // Retry settings. Unvalidated until #570 made them live: before that
+        // `with_retry_config` had no production caller, so nothing read them.
+        // The ceilings matter because the chunk path composes two retry layers
+        // — its own (capped at 3) over the range request's — so total attempts
+        // for one chunk scale with `retries`, not with a constant.
+        if self.retries > MAX_RETRIES {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "retries",
+                reason: "must be 0..=100 (0 disables retrying; the chunk path composes \
+                         this with its own capped retry, so attempts scale with it)",
+            });
+        }
+        if self.fragment_retries > MAX_RETRIES {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "fragment_retries",
+                reason: "must be 0..=100 (0 disables retrying; applies per fragment, of \
+                         which one download may have thousands)",
+            });
+        }
+        if self.retry_initial_delay_ms == 0 || self.retry_initial_delay_ms > MAX_RETRY_DELAY_MS {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "retry_initial_delay_ms",
+                reason: "must be 1..=3_600_000 (a zero initial delay makes the backoff a \
+                         busy loop, since each step is a multiple of it)",
+            });
+        }
+        if self.retry_max_delay_ms < self.retry_initial_delay_ms
+            || self.retry_max_delay_ms > MAX_RETRY_DELAY_MS
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "retry_max_delay_ms",
+                reason: "must be >= retry_initial_delay_ms and <= 3_600_000 (a ceiling \
+                         below the first delay would cap every attempt at the ceiling)",
+            });
+        }
+        if !(1.0..=10.0).contains(&self.retry_backoff_multiplier) {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "retry_backoff_multiplier",
+                reason: "must be 1.0..=10.0 (below 1.0 shrinks each delay instead of \
+                         backing off; the upper bound keeps the f64 -> f32 narrowing at \
+                         the downloader boundary finite, since an out-of-range float \
+                         saturates to infinity)",
             });
         }
         if self.buffer_size == 0 {

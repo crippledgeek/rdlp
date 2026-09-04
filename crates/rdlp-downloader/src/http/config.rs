@@ -62,7 +62,17 @@ const DEFAULT_MERGE_TIMEOUT: Duration = Duration::from_secs(1800);
 #[derive(Clone)]
 pub struct DownloaderConfig {
     pub buffer_size: usize,
+    /// Retry policy for whole-resource requests: the plain GET, the F3 probe,
+    /// a resume, and each chunk's underlying range request. Operator-set via
+    /// `Config::retries` and the retry-delay settings.
     pub retry_config: RetryConfig,
+    /// Retry policy for one fragment or DASH segment — `Config::fragment_retries`.
+    ///
+    /// Separate from `retry_config` for the reason yt-dlp separates
+    /// `--fragment-retries` from `--retries`: a fragmented download issues
+    /// hundreds of independent requests, so the sensible per-request
+    /// allowance differs from the one for a single whole-file transfer.
+    pub fragment_retry_config: RetryConfig,
     pub concurrent_fragments: usize,
     pub chunk_strategy: ChunkSizeStrategy,
     /// Minimum file size at which `download_to_file` switches to parallel chunked
@@ -94,6 +104,7 @@ impl Default for DownloaderConfig {
         Self {
             buffer_size: DEFAULT_BUFFER_SIZE,
             retry_config: RetryConfig::default_config(),
+            fragment_retry_config: RetryConfig::default_config(),
             concurrent_fragments,
             chunk_strategy: ChunkSizeStrategy::Auto,
             parallel_threshold: DEFAULT_PARALLEL_THRESHOLD_BYTES,
