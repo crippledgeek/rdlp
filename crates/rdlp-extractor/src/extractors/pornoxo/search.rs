@@ -311,6 +311,44 @@ mod tests {
         );
     }
 
+    /// The documented fail-soft: a malformed tile costs that tile only.
+    ///
+    /// `parse_cards` skips a card with no href and a card with no title rather
+    /// than failing the page, "a single malformed tile must not cost the
+    /// operator the other 51 results". Every neighbouring property here has a
+    /// test and this one did not, so the sentence was an assertion nothing
+    /// checked — and the tempting simplification of the `filter_map` is a `?`
+    /// that propagates instead of skipping.
+    #[test]
+    fn a_tile_with_no_href_costs_only_itself() {
+        let stripped = TAG_PAGE.replacen(
+            r#"<a href="/videos/2939836/test-v-e-c-xfivefive-six-mosaic-removed/" class="mtile-x7__title""#,
+            r#"<a class="mtile-x7__title""#,
+            1,
+        );
+        assert_ne!(stripped, TAG_PAGE, "the href must actually be stripped");
+        assert_eq!(
+            parse_listing_page(&default_origin(), &stripped).results.len(),
+            51,
+            "one hrefless tile must cost one card, not the page"
+        );
+    }
+
+    /// The title half of the same branch, on a synthesised grid because the
+    /// capture has no untitled tile: both the `title` attribute and the anchor
+    /// text feed the fallback, so making a real tile titleless means emptying
+    /// both, and a two-tile grid states that far more plainly.
+    #[test]
+    fn a_tile_with_no_title_costs_only_itself() {
+        let grid = r#"<ul class="media-listing-grid main-listing-grid-offset">
+            <li><a href="/videos/1/untitled/" class="mtile-x7__title" title="">  </a></li>
+            <li><a href="/videos/2/real/" class="mtile-x7__title" title="Real">Real</a></li>
+        </ul>"#;
+        let results = parse_listing_page(&default_origin(), grid).results;
+        assert_eq!(results.len(), 1, "the titleless tile must be skipped");
+        assert_eq!(results[0].title, "Real");
+    }
+
     /// The tile's POSTER, not merely its first `img`.
     ///
     /// Neither committed fixture can discriminate here — measured, every
