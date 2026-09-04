@@ -23,7 +23,6 @@
 pub mod bus;
 /// Primary API client and builder.
 pub mod client;
-/// Stable error types for the public API.
 pub mod errors;
 pub mod events;
 /// Download handle and ID types.
