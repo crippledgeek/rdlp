@@ -581,6 +581,49 @@ mod paged_search_tests {
         );
     }
 
+    /// The DELIVERY pin for issue #658's acceptance criterion, one level above
+    /// `fetch_page`.
+    ///
+    /// Mapping the 403 is worthless if the scaffold then swallows it. Before
+    /// the `search_all_pages` fix this returned `Ok(vec![])` and the operator
+    /// saw "no results found" for a site that was merely gated, with the
+    /// guidance discarded into a `debug!` they had not enabled. Every site
+    /// wires `SearchExtractor::search` straight to `search_all_pages` as a
+    /// one-line delegation (see `xtits/search.rs`), so this pins the whole
+    /// delivery path bar that one line, which lands with the impl in G3.
+    #[tokio::test]
+    async fn the_cloudflare_guidance_survives_all_the_way_out_of_search() {
+        let (server, _m) = serving(403, "<title>Just a moment...</title>").await;
+        let origin = SearchOrigin::new(&server.url()).expect("mockito origin is well formed");
+
+        let err = PornoxoExtractor::with_origin(origin)
+            .search_all_pages(&query("creampie", &[]), &test_ctx())
+            .await
+            .expect_err("a gated search must not be reported as zero results");
+
+        let msg = err.to_string();
+        assert!(msg.contains("--cookies-from-browser"), "got: {msg}");
+        assert!(msg.contains("Cloudflare"), "got: {msg}");
+        assert!(msg.contains("route=tag"), "got: {msg}");
+    }
+
+    /// The 404-with-a-full-grid refusal must reach the operator too — the same
+    /// swallow hid it.
+    #[tokio::test]
+    async fn the_404_refusal_survives_all_the_way_out_of_search() {
+        let (server, _m) = serving(404, TAG_PAGE).await;
+        let origin = SearchOrigin::new(&server.url()).expect("mockito origin is well formed");
+
+        let err = PornoxoExtractor::with_origin(origin)
+            .search_all_pages(&query("creampie", &[]), &test_ctx())
+            .await
+            .expect_err("a 404 must not be reported as zero results");
+        assert!(
+            matches!(err, RdlpError::Http { status: 404, .. }),
+            "got: {err:?}"
+        );
+    }
+
     /// `search_all_pages` runs filters through `validate_search_filters`, so a
     /// typo is refused before any request is made.
     #[tokio::test]

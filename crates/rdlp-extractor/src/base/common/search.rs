@@ -475,6 +475,20 @@ pub(crate) trait PagedSearch: Send + Sync {
                 results, has_more, ..
             } = match self.fetch_page(query, page, ctx).await {
                 Ok(p) => p,
+                // Nothing collected yet on the very first page: the request
+                // never got off the ground, so there are no partial results to
+                // salvage and "return what we have" would report a hard
+                // failure as "no results found". Each site maps its own
+                // actionable error here (a Cloudflare challenge naming
+                // `--cookies-from-browser`, a refusal to parse a 404 that
+                // carries a full grid of filler); swallowing it into a
+                // `debug!` the operator has not enabled discards the only
+                // thing that tells them what to do. An empty-but-SUCCESSFUL
+                // first page is a different case and still returns `Ok`.
+                Err(e) if all_results.is_empty() && page == self.first_page_index() => {
+                    debug!(page; "{tag} First search page failed, no partial results to return: {e}");
+                    return Err(e);
+                }
                 Err(e) => {
                     debug!(page; "{tag} Failed to fetch search page, returning partial results: {e}");
                     break;
@@ -742,6 +756,42 @@ mod tests {
             .search_all_pages(&query(max_results), &test_ctx())
             .await
             .expect("scaffold returns partial results, never errors")
+    }
+
+    /// `run` unwraps, so a script whose FIRST page fails needs the raw result.
+    async fn run_result(script: Vec<Page>) -> Result<Vec<SearchResultPreview>> {
+        MockSearch::new(script)
+            .search_all_pages(&query(None), &test_ctx())
+            .await
+    }
+
+    /// A first-page failure must REACH THE OPERATOR, not become "no results".
+    ///
+    /// Every site wires `SearchExtractor::search` straight to this scaffold, so
+    /// swallowing here discards each site's carefully-mapped error: PornoXO's
+    /// Cloudflare guidance naming `--cookies-from-browser`, and its refusal to
+    /// parse a 404 that carries a full grid of filler. The operator saw "no
+    /// results found" for a site that was merely gated.
+    #[tokio::test]
+    async fn first_page_error_propagates_instead_of_reporting_no_results() {
+        let err = run_result(vec![Page::Fail])
+            .await
+            .expect_err("a first-page failure must not be reported as zero results");
+        assert!(
+            err.to_string().contains("mock fetch failure"),
+            "the site's own message must survive intact: {err}"
+        );
+    }
+
+    /// The case that must NOT change: a legitimately empty search returns a
+    /// successful, empty page and still yields `Ok(vec![])`. Only a genuine
+    /// fetch/HTTP error propagates.
+    #[tokio::test]
+    async fn an_empty_but_successful_first_page_is_still_ok() {
+        let out = run_result(vec![Page::Ok(Vec::new(), Termination::Pages(10))])
+            .await
+            .expect("an empty result set is not an error");
+        assert!(out.is_empty());
     }
 
     #[tokio::test]
