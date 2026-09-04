@@ -24,8 +24,9 @@ pub(crate) const MAX_REPS_PER_MPD: usize = 50;
 /// The gate itself — including the `cfg(test)` loopback exemption and its
 /// scope — lives in
 /// [`crate::base::common::manifest_url::validate_manifest_sourced_url`],
-/// shared with the HLS expander so the two protocols cannot drift apart. This
-/// function is only the mapping into DASH's error type.
+/// shared with the HLS expander and with `hls::variants` so all three call
+/// sites cannot drift apart. This function is only the mapping into DASH's
+/// error type.
 fn validate_resolved_url(url: &str) -> Result<(), DashExpandError> {
     crate::base::common::manifest_url::validate_manifest_sourced_url(url).map_err(|e| {
         DashExpandError::UrlRejected(format!("{}: {e}", rdlp_security::sanitize_for_logging(url)))

@@ -97,9 +97,10 @@ const MAX_PLAYLIST_BYTES: usize = 8 * 1024 * 1024;
 ///
 /// The gate itself — including the `cfg(test)` loopback exemption and its
 /// scope — lives in
-/// [`base::common::manifest_url::validate_manifest_sourced_url`], shared with
-/// the DASH expander so the two protocols cannot drift apart. This function is
-/// only the mapping into HLS's error type.
+/// [`crate::base::common::manifest_url::validate_manifest_sourced_url`],
+/// shared with the DASH expander and with `hls::variants` so all three call
+/// sites cannot drift apart. This function is only the mapping into HLS's
+/// error type.
 pub(crate) fn validate_resolved_url(url: &str) -> Result<(), HlsExpandError> {
     crate::base::common::manifest_url::validate_manifest_sourced_url(url)
         .map_err(|e| HlsExpandError::Network(format!("URI rejected: {e}")))

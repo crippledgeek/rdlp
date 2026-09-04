@@ -27,11 +27,15 @@ pub(crate) fn is_suitable(url: &str) -> bool {
 /// Production behavior: host-anchored via [`URL_PATTERN`], so a foreign or
 /// lookalike host yields `None`.
 ///
-/// Test behavior: additionally accepts the path shape on `127.0.0.1` /
-/// `localhost`, so the mockito-backed `extract` tests can drive a loopback
-/// origin. Mirrors — deliberately — the `#[cfg(test)]` loopback bypass in
-/// `hls/expand.rs`, including its scope: the exemption is for loopback only,
-/// never for arbitrary hosts, and production builds compile without it.
+/// Test behavior: additionally accepts the path shape when the URL is a
+/// loopback origin, so the mockito-backed `extract` tests can drive one.
+///
+/// What counts as a loopback origin is NOT decided here. This shares the one
+/// definition — `base::common::manifest_url::is_loopback_origin` — with the
+/// SSRF gate's own `cfg(test)` seam, so the two cannot come to disagree about
+/// which origins qualify. The scope is that predicate's: HTTP(S) on loopback
+/// only, never arbitrary hosts, and production builds compile without the seam
+/// at all.
 pub(crate) fn parse_video_id(url: &str) -> Option<String> {
     if let Some(id) = URL_PATTERN.captures(url).and_then(|c| c.get(1)) {
         return Some(id.as_str().to_owned());
@@ -95,15 +99,18 @@ mod tests {
 
     /// The path-only fallback is a TEST SEAM, scoped to loopback.
     ///
-    /// Mirrors the `#[cfg(test)]` bypass in `hls/expand.rs`: production stays
-    /// host-anchored, and only a loopback origin (which is what mockito binds)
-    /// takes the path-only route. This pins the SCOPE — a foreign host is
-    /// refused here exactly as in production, so the seam cannot silently
-    /// become a blanket widening of the parser.
+    /// Production stays host-anchored; only a loopback origin (which is what
+    /// mockito binds) takes the path-only route. This pins the SCOPE — a
+    /// foreign host is refused here exactly as in production, so the seam
+    /// cannot silently become a blanket widening of the parser.
     ///
-    /// The production-only half (loopback rejected when `cfg(test)` is off)
-    /// is not observable from a test binary, which is the same limitation the
-    /// `hls/expand.rs` bypass carries.
+    /// The predicate itself is shared with the SSRF gate's seam and is covered
+    /// directly in `base::common::manifest_url`; what this test adds is that
+    /// `parse_video_id` actually routes through it.
+    ///
+    /// The production-only half (loopback rejected when `cfg(test)` is off) is
+    /// not observable from a test binary — the same limitation every
+    /// `cfg(test)` seam built on that predicate carries.
     #[test]
     fn path_fallback_is_scoped_to_loopback() {
         // The seam itself: mockito's origin resolves.
