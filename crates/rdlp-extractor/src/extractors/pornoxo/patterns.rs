@@ -10,14 +10,22 @@ use lazy_regex::{Lazy, Regex, lazy_regex};
 pub(crate) static URL_PATTERN: Lazy<Regex> =
     lazy_regex!(r"^https?://(?:www\.)?pornoxo\.com/videos/(\d+)/[^/?#]+/?(?:[?#]|$)");
 
+/// The `/videos/{numeric-id}/{slug}` path shape, without the host.
+///
+/// Host gating belongs to [`URL_PATTERN`] / [`is_suitable`], which decide
+/// *which* extractor claims a URL. Once a URL has been claimed, reading its id
+/// is a pure path parse — so this pattern deliberately omits the host, which
+/// also lets the mockito-backed `extract` tests drive a loopback origin.
+static VIDEO_PATH_PATTERN: Lazy<Regex> = lazy_regex!(r"/videos/(\d+)/[^/?#]+");
+
 /// Whether this URL is a PornoXO video page.
 pub(crate) fn is_suitable(url: &str) -> bool {
     URL_PATTERN.is_match(url)
 }
 
-/// The numeric video id from a canonical video URL.
+/// The numeric video id from a video URL's path.
 pub(crate) fn parse_video_id(url: &str) -> Option<String> {
-    URL_PATTERN
+    VIDEO_PATH_PATTERN
         .captures(url)
         .and_then(|c| c.get(1))
         .map(|m| m.as_str().to_owned())
@@ -58,5 +66,20 @@ mod tests {
     #[test]
     fn rejects_non_numeric_id() {
         assert!(!is_suitable("https://www.pornoxo.com/videos/abc/slug/"));
+        assert_eq!(
+            parse_video_id("https://www.pornoxo.com/videos/abc/slug/"),
+            None
+        );
+    }
+
+    /// `parse_video_id` reads the path only; host gating is `is_suitable`'s job.
+    /// This split is what lets the mockito `extract` tests use a loopback origin.
+    #[test]
+    fn parses_id_from_path_on_any_host() {
+        assert_eq!(
+            parse_video_id("http://127.0.0.1:1234/videos/2928541/x/").as_deref(),
+            Some("2928541")
+        );
+        assert!(!is_suitable("http://127.0.0.1:1234/videos/2928541/x/"));
     }
 }

@@ -86,7 +86,13 @@ const MAX_INIT_SEGMENTS: usize = 50;
 /// Cap on raw playlist body size (master or media).
 const MAX_PLAYLIST_BYTES: usize = 8 * 1024 * 1024;
 
-/// Validate a resolved URL (variant URI or segment URI from a playlist body).
+/// Validate a playlist-sourced URL before it is fetched.
+///
+/// Covers both the variant/segment URIs resolved out of a playlist body and a
+/// master URL an extractor lifted out of page JavaScript — the same trust
+/// class (attacker-influenced content), so the same gate. `expand_hls_url`
+/// does NOT validate its own `seed.url`, so a caller that mints a master URL
+/// from page content must call this before handing it over.
 ///
 /// Production behavior: delegate to `rdlp_security::validate_url_security`,
 /// which rejects file://, javascript:, private hosts, and other SSRF-prone
@@ -97,7 +103,7 @@ const MAX_PLAYLIST_BYTES: usize = 8 * 1024 * 1024;
 /// All other URLs (other private hosts, non-http(s) schemes) still go
 /// through the real validator. The bypass is `cfg(test)`-gated so production
 /// builds compile without any loopback exemption.
-fn validate_resolved_url(url: &str) -> Result<(), HlsExpandError> {
+pub(crate) fn validate_resolved_url(url: &str) -> Result<(), HlsExpandError> {
     #[cfg(test)]
     {
         if let Ok(parsed) = url::Url::parse(url) {

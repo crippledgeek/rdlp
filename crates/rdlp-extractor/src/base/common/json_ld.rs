@@ -212,15 +212,54 @@ pub enum JsonLdInteractionStatistic {
     Multiple(Vec<JsonLdInteraction>),
 }
 
+/// The kind of interaction being counted.
+///
+/// schema.org permits `interactionType` to be either a URL/name string or an
+/// embedded Action object, and real sites emit both (PornoXO uses the object
+/// form). Accepting only one shape is not a cosmetic limitation: because
+/// `interactionStatistic` hangs off [`JsonLdVideo`], a deserialization failure
+/// here discards the whole `VideoObject` — title, duration and tags included —
+/// leaving the page looking as though it carried no JSON-LD at all.
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum JsonLdInteractionType {
+    /// URL or bare name, e.g. `"https://schema.org/WatchAction"`.
+    Url(String),
+    /// Embedded Action object, e.g. `{"@type": "WatchAction"}`.
+    Object(JsonLdInteractionTypeObject),
+}
+
+/// The embedded-object form of `interactionType`.
+#[derive(Debug, Deserialize)]
+pub struct JsonLdInteractionTypeObject {
+    /// `@type` naming the action, e.g. `"WatchAction"`.
+    #[serde(rename = "@type")]
+    pub json_type: Option<String>,
+}
+
+impl JsonLdInteractionType {
+    /// Whether this names `action_type` (e.g. `"WatchAction"`), in either shape.
+    #[must_use]
+    pub fn matches(&self, action_type: &str) -> bool {
+        match self {
+            Self::Url(url) => url.contains(action_type),
+            Self::Object(obj) => obj
+                .json_type
+                .as_deref()
+                .is_some_and(|t| t.contains(action_type)),
+        }
+    }
+}
+
 /// A single JSON-LD `InteractionCounter` entry.
 #[derive(Debug, Deserialize)]
 pub struct JsonLdInteraction {
     /// `@type` of this interaction (e.g. "InteractionCounter").
     #[serde(rename = "@type")]
     pub interaction_type: String,
-    /// Schema.org action URL identifying the interaction kind (e.g. "WatchAction").
+    /// The action this entry counts (e.g. "WatchAction"), as a URL or object.
     #[serde(rename = "interactionType")]
-    pub interaction_type_url: Option<String>,
+    pub interaction_type_ref: Option<JsonLdInteractionType>,
     /// Count of user interactions recorded for this entry.
     #[serde(rename = "userInteractionCount")]
     pub user_interaction_count: Option<u64>,
@@ -325,9 +364,9 @@ pub fn extract_interaction_count(json_ld: &JsonLdVideo, action_type: &str) -> Op
         for interaction in interactions {
             if interaction.interaction_type == action_type
                 || interaction
-                    .interaction_type_url
+                    .interaction_type_ref
                     .as_ref()
-                    .is_some_and(|url| url.contains(action_type))
+                    .is_some_and(|kind| kind.matches(action_type))
             {
                 return interaction.user_interaction_count;
             }
@@ -429,6 +468,38 @@ mod tests {
     fn thumbnail_empty_rejected() {
         let thumb = JsonLdThumbnail::Single(String::new());
         assert_eq!(thumb.first_url(), None);
+    }
+
+    /// schema.org allows `interactionType` to be either a URL string or an
+    /// embedded Action object. The object form must not break the parse:
+    /// because `interactionStatistic` sits on `JsonLdVideo`, a deserialization
+    /// failure there loses the ENTIRE `VideoObject` (title, duration, tags),
+    /// not merely the view count. PornoXO emits the object form.
+    #[test]
+    fn interaction_type_as_embedded_object() {
+        let html_str = r#"<html><head><script type="application/ld+json">
+        {"@graph": [{"@type": "VideoObject", "name": "Video", "duration": "PT15M30S",
+          "interactionStatistic": {"@type": "InteractionCounter",
+            "interactionType": {"@type": "WatchAction"}, "userInteractionCount": 21}}]}
+        </script></head></html>"#;
+        let html = Html::parse_document(html_str);
+        let video = extract_json_ld(&html).expect("object-form interactionType must still parse");
+        assert_eq!(video.name.as_deref(), Some("Video"));
+        assert_eq!(video.duration.as_deref(), Some("PT15M30S"));
+        assert_eq!(extract_view_count(&video), Some(21));
+    }
+
+    /// The string form stays supported — this is a widening, not a swap.
+    #[test]
+    fn interaction_type_as_url_string() {
+        let html_str = r#"<html><head><script type="application/ld+json">
+        {"@type": "VideoObject", "name": "Video",
+         "interactionStatistic": {"@type": "InteractionCounter",
+           "interactionType": "https://schema.org/WatchAction", "userInteractionCount": 7}}
+        </script></head></html>"#;
+        let html = Html::parse_document(html_str);
+        let video = extract_json_ld(&html).expect("string-form interactionType must parse");
+        assert_eq!(extract_view_count(&video), Some(7));
     }
 
     #[test]
