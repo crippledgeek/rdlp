@@ -175,10 +175,11 @@ fn tag_slug(query: &str) -> String {
 ///
 /// `route=tag` puts the query in the PATH as a tag slug (`/tags/<slug>/`);
 /// anything else uses the default full-text route (`/search/?q=`). Filters are
-/// emitted in [`URL_FILTER_KEYS`] order so the output is deterministic
-/// regardless of the order the caller supplied them in.
+/// emitted in [`URL_FILTER_PARAMS`] order, under the site parameter names that
+/// table maps them to, so the output is deterministic regardless of the order
+/// the caller supplied them in.
 ///
-/// [`URL_FILTER_KEYS`]: super::search_patterns::URL_FILTER_KEYS
+/// [`URL_FILTER_PARAMS`]: super::search_patterns::URL_FILTER_PARAMS
 pub(crate) fn build_listing_url(origin: &SearchOrigin, query: &SearchQuery, page: u32) -> String {
     let mut pairs: Vec<(&str, String)> = Vec::new();
 
@@ -192,10 +193,10 @@ pub(crate) fn build_listing_url(origin: &SearchOrigin, query: &SearchQuery, page
         "/search/".to_owned()
     };
 
-    for key in super::search_patterns::URL_FILTER_KEYS {
+    for (key, param) in super::search_patterns::URL_FILTER_PARAMS {
         if let Some(value) = filter_value(&query.filters, key) {
             pairs.push((
-                key,
+                param,
                 form_urlencoded::byte_serialize(value.as_bytes()).collect(),
             ));
         }
@@ -459,18 +460,15 @@ mod tests {
             &default_origin(),
             &q(
                 "x",
-                &[
-                    ("filter_length", "long"),
-                    ("sort", "lg"),
-                    ("filter_quality", "hd"),
-                ],
+                &[("length", "long"), ("sort", "lg"), ("quality", "hd")],
             ),
             1,
         );
         assert_eq!(
             u,
             "https://www.pornoxo.com/search/?q=x&sort=lg&filter_quality=hd&filter_length=long&page=1",
-            "filter order follows URL_FILTER_KEYS, not the caller's ordering"
+            "rdlp's quality/length keys are sent as the site's \
+             filter_quality/filter_length, in URL_FILTER_PARAMS order"
         );
     }
 

@@ -39,18 +39,17 @@ pub(crate) fn supported_filters() -> Vec<SearchFilterDescriptor> {
             Some("re"),
         ),
         SearchFilterDescriptor::new(
-            "filter_quality",
+            "quality",
             "Quality",
-            // Read off the site's own Quality control, which offers exactly
-            // three buttons and pre-selects `videos` ("All"). The key is the
-            // site's `filter_quality`, not a normalised `quality`, matching
-            // its sibling `filter_length` and keeping URL building a
-            // pass-through with no key-translation layer to drift.
+            // Values read off the site's own Quality control, which offers
+            // exactly three buttons and pre-selects `videos` ("All"). The KEY
+            // is rdlp's `quality` (xhamster precedent); the site's
+            // `filter_quality` spelling lives in `URL_FILTER_PARAMS`.
             SearchFilterValue::list([("videos", "All"), ("hd", "HD"), ("vr", "VR")]),
             Some("videos"),
         ),
         SearchFilterDescriptor::new(
-            "filter_length",
+            "length",
             "Duration",
             SearchFilterValue::list([
                 ("all", "Any length"),
@@ -63,15 +62,25 @@ pub(crate) fn supported_filters() -> Vec<SearchFilterDescriptor> {
     ]
 }
 
-/// The filter keys that are forwarded verbatim as listing query parameters,
-/// in the order they appear in a built URL.
+/// Maps each filter key to the site query parameter it is sent as, in the
+/// order the parameters appear in a built URL.
+///
+/// The filter key is rdlp's user-facing vocabulary; the site's raw parameter
+/// name is an internal detail that stops here. PornoXO spells two of these
+/// `filter_quality` / `filter_length`, and leaking that spelling into the CLI
+/// would make one site's URL schema part of rdlp's surface. `sort` happens to
+/// coincide.
 ///
 /// `route` is deliberately absent: it selects the PATH (`/tags/` vs
 /// `/search/`) and is rdlp's own concept, so emitting it as a parameter would
 /// put a meaningless `route=` on every request. Every other descriptor key
 /// belongs here, and `every_non_route_filter_is_forwarded_to_the_url` fails if
-/// a future descriptor is added without one.
-pub(crate) const URL_FILTER_KEYS: [&str; 3] = ["sort", "filter_quality", "filter_length"];
+/// a future descriptor is added without an entry.
+pub(crate) const URL_FILTER_PARAMS: [(&str, &str); 3] = [
+    ("sort", "sort"),
+    ("quality", "filter_quality"),
+    ("length", "filter_length"),
+];
 
 /// Reject any filter key or value PornoXO does not understand.
 ///
@@ -146,31 +155,37 @@ mod tests {
     /// The values here are the ones the site's own listing controls emit, not
     /// a plausible-looking set: `videos` ("All") is a real quality value and
     /// omitting it would leave an operator unable to ask for non-VR videos.
+    /// The VALUES are the ones the site's own listing controls emit -- `videos`
+    /// ("All") is a real third quality value and omitting it would leave an
+    /// operator unable to ask for non-VR videos. The KEYS are rdlp's, not the
+    /// site's: `quality` (xhamster precedent) and `length`, mapped to the
+    /// site's `filter_quality` / `filter_length` inside the URL builder.
     #[test]
     fn accepts_quality_and_length_vocabularies() {
         for v in ["videos", "hd", "vr"] {
-            assert!(validate(&[f("filter_quality", v)]).is_ok(), "quality={v}");
+            assert!(validate(&[f("quality", v)]).is_ok(), "quality={v}");
         }
-        assert!(validate(&[f("filter_quality", "4k")]).is_err());
-        // The site names this key `filter_quality`; the un-prefixed spelling
-        // is not a filter and must be refused rather than silently ignored.
-        assert!(validate(&[f("quality", "hd")]).is_err());
+        assert!(validate(&[f("quality", "4k")]).is_err());
         for v in ["all", "short", "normal", "long"] {
-            assert!(validate(&[f("filter_length", v)]).is_ok(), "length={v}");
+            assert!(validate(&[f("length", v)]).is_ok(), "length={v}");
         }
-        assert!(validate(&[f("filter_length", "medium")]).is_err());
+        assert!(validate(&[f("length", "medium")]).is_err());
+    }
+
+    /// The site's raw parameter names are an internal mapping, not part of the
+    /// CLI surface. Accepting them too would leak one site's URL schema into
+    /// rdlp's vocabulary and give every filter two spellings.
+    #[test]
+    fn the_sites_raw_parameter_names_are_not_filter_keys() {
+        assert!(validate(&[f("filter_quality", "hd")]).is_err());
+        assert!(validate(&[f("filter_length", "long")]).is_err());
     }
 
     #[test]
     fn accepts_an_empty_filter_set_and_a_valid_combination() {
         assert!(validate(&[]).is_ok());
         assert!(
-            validate(&[
-                f("route", "tag"),
-                f("sort", "lg"),
-                f("filter_quality", "hd")
-            ])
-            .is_ok(),
+            validate(&[f("route", "tag"), f("sort", "lg"), f("quality", "hd")]).is_ok(),
             "filters must be independent, not mutually exclusive"
         );
     }
@@ -181,7 +196,7 @@ mod tests {
     #[test]
     fn descriptors_cover_every_validated_key() {
         let keys: Vec<_> = supported_filters().into_iter().map(|d| d.key).collect();
-        for k in ["route", "sort", "filter_quality", "filter_length"] {
+        for k in ["route", "sort", "quality", "length"] {
             assert!(keys.iter().any(|d| d == k), "descriptor missing for {k}");
         }
         assert_eq!(keys.len(), 4, "no undocumented filter keys");
@@ -198,12 +213,12 @@ mod tests {
                 continue;
             }
             assert!(
-                URL_FILTER_KEYS.contains(&d.key.as_str()),
+                URL_FILTER_PARAMS.iter().any(|(k, _)| *k == d.key),
                 "descriptor {} is validated but never reaches the URL",
                 d.key
             );
         }
-        for key in URL_FILTER_KEYS {
+        for (key, _) in URL_FILTER_PARAMS {
             assert!(
                 supported_filters().iter().any(|d| d.key == key),
                 "{key} is forwarded to the URL but is not a declared filter"
