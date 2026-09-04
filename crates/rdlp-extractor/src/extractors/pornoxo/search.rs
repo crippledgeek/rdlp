@@ -328,7 +328,9 @@ mod tests {
         );
         assert_ne!(stripped, TAG_PAGE, "the href must actually be stripped");
         assert_eq!(
-            parse_listing_page(&default_origin(), &stripped).results.len(),
+            parse_listing_page(&default_origin(), &stripped)
+                .results
+                .len(),
             51,
             "one hrefless tile must cost one card, not the page"
         );
@@ -661,14 +663,14 @@ mod tests {
             &default_origin(),
             &q(
                 "x",
-                &[("length", "long"), ("sort", "lg"), ("quality", "hd")],
+                &[("duration", "long"), ("sort", "lg"), ("quality", "hd")],
             ),
             1,
         );
         assert_eq!(
             u,
             "https://www.pornoxo.com/search/?q=x&sort=lg&filter_quality=hd&filter_length=long&page=1",
-            "rdlp's quality/length keys are sent as the site's \
+            "rdlp's quality/duration keys are sent as the site's \
              filter_quality/filter_length, in URL_FILTER_PARAMS order"
         );
     }

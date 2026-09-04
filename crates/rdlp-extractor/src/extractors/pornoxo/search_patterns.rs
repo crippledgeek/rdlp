@@ -49,7 +49,14 @@ pub(crate) fn supported_filters() -> Vec<SearchFilterDescriptor> {
             Some("videos"),
         ),
         SearchFilterDescriptor::new(
-            "length",
+            // The KEY is the user-facing vocabulary and the LABEL is what it
+            // means; they must not disagree. An operator reading "Duration"
+            // reaches for `--search-filter duration=long` first. R23 already
+            // ruled the site's own `filter_length` spelling out of the CLI
+            // surface; it stays inside `URL_FILTER_PARAMS`. xhamster's
+            // `min-duration`/`max-duration` are numeric bounds, so a bucketed
+            // `duration` here does not collide with them.
+            "duration",
             "Duration",
             SearchFilterValue::list([
                 ("all", "Any length"),
@@ -79,7 +86,7 @@ pub(crate) fn supported_filters() -> Vec<SearchFilterDescriptor> {
 pub(crate) const URL_FILTER_PARAMS: [(&str, &str); 3] = [
     ("sort", "sort"),
     ("quality", "filter_quality"),
-    ("length", "filter_length"),
+    ("duration", "filter_length"),
 ];
 
 /// Reject any filter key or value PornoXO does not understand.
@@ -155,18 +162,18 @@ mod tests {
     /// The VALUES are the ones the site's own listing controls emit -- `videos`
     /// ("All") is a real third quality value and omitting it would leave an
     /// operator unable to ask for non-VR videos. The KEYS are rdlp's, not the
-    /// site's: `quality` (xhamster precedent) and `length`, mapped to the
+    /// site's: `quality` (xhamster precedent) and `duration`, mapped to the
     /// site's `filter_quality` / `filter_length` inside the URL builder.
     #[test]
-    fn accepts_quality_and_length_vocabularies() {
+    fn accepts_quality_and_duration_vocabularies() {
         for v in ["videos", "hd", "vr"] {
             assert!(validate(&[f("quality", v)]).is_ok(), "quality={v}");
         }
         assert!(validate(&[f("quality", "4k")]).is_err());
         for v in ["all", "short", "normal", "long"] {
-            assert!(validate(&[f("length", v)]).is_ok(), "length={v}");
+            assert!(validate(&[f("duration", v)]).is_ok(), "duration={v}");
         }
-        assert!(validate(&[f("length", "medium")]).is_err());
+        assert!(validate(&[f("duration", "medium")]).is_err());
     }
 
     /// The site's raw parameter names are an internal mapping, not part of the
@@ -193,7 +200,7 @@ mod tests {
     #[test]
     fn descriptors_cover_every_validated_key() {
         let keys: Vec<_> = supported_filters().into_iter().map(|d| d.key).collect();
-        for k in ["route", "sort", "quality", "length"] {
+        for k in ["route", "sort", "quality", "duration"] {
             assert!(keys.iter().any(|d| d == k), "descriptor missing for {k}");
         }
         assert_eq!(keys.len(), 4, "no undocumented filter keys");
