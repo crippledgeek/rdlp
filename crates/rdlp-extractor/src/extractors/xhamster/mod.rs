@@ -194,7 +194,7 @@ impl XHamsterExtractor {
         // Complements `uploader` which carries the per-user submitter name
         // from videoModel.author. Only set when the page actually exposes
         // a channel chip; otherwise leave untouched.
-        if let Some((name, url)) = utils::extract_channel(&webpage) {
+        if let Some((name, url)) = utils::extract_channel(&webpage, &url) {
             info.channel = Some(name);
             info.channel_url = Some(url);
         }

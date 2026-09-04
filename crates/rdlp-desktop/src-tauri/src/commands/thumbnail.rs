@@ -88,7 +88,7 @@ fn derive_referer(url: &str) -> Option<String> {
 ///
 /// Returns [`AppError::InvalidInput`] if the URL is not HTTPS.
 /// Returns [`AppError::Internal`] on network failures, timeouts, or
-/// if the response exceeds [`MAX_BODY_SIZE`].
+/// if the response exceeds `MAX_BODY_SIZE`.
 #[tauri::command]
 pub async fn proxy_thumbnail(url: String) -> Result<Response, AppError> {
     // Validate HTTPS

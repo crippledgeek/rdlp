@@ -196,7 +196,7 @@ impl AppSettings {
     /// parses but one or more fields fail security validation (see
     /// [`Self::validate_security`]), only the offending field(s) reset to
     /// their default (`None`) — every other field is preserved. See
-    /// [`Self::parse_and_validate`] for why: a whole-record fallback would
+    /// `Self::parse_and_validate` for why: a whole-record fallback would
     /// clobber the user's `output_dir`, cookies, proxy, and every other
     /// setting over one out-of-range field.
     ///

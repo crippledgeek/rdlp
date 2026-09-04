@@ -3,15 +3,13 @@
 //! Each submodule groups related commands that are registered with
 //! [`tauri::generate_handler!`] in [`crate::run`].
 
-/// Video codec availability command.
+// No outer `///` on the submodules below: each already carries its own `//!`
+// doc, and an outer doc merged with it makes rustdoc resolve the inner
+// doc's intra-doc links against THIS module's scope instead of the
+// submodule's own — "no item named `get_formats` in scope" (#661).
 pub mod codecs;
-/// Download lifecycle commands (start, cancel, queue).
 pub mod download;
-/// Format listing commands.
 pub mod formats;
-/// URL and site search commands.
 pub mod search;
-/// Application settings commands.
 pub mod settings;
-/// Thumbnail proxy command.
 pub mod thumbnail;

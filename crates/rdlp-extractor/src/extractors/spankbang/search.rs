@@ -51,12 +51,8 @@ pub(crate) fn build_search_url(query: &SearchQuery, page: u32) -> String {
         .map(|c| if c == ' ' { '+' } else { c })
         .collect();
 
-    let ordering = query
-        .filters
-        .iter()
-        .find(|f| f.key == "ordering")
-        .map(|f| f.value.as_str())
-        .filter(|v| !v.is_empty());
+    let ordering =
+        crate::base::common::filter_value(&query.filters, "ordering").filter(|v| !v.is_empty());
 
     let path_page = if page == 0 {
         String::new()

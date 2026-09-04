@@ -516,3 +516,29 @@ async fn fetch_webpage_with_retry_recovers_after_a_transient_timeout() {
     assert_eq!(body, "recovered!!");
     server.await.expect("server task must not panic");
 }
+
+// ========================================================================
+// Duration Parsing Tests
+// ========================================================================
+
+/// The colon vocabulary (`H:MM:SS` / `M:SS`) that listing-card labels use.
+/// `parse_duration` had no coverage at all before PornoXO's grid parser began
+/// depending on it; without this, a regression here would surface only as a
+/// wrong duration in one site's search results.
+#[test]
+fn test_parse_duration_colon_formats() {
+    assert_eq!(BaseExtractor::parse_duration("1:43:11"), Some(6191.0));
+    assert_eq!(BaseExtractor::parse_duration("15:30"), Some(930.0));
+    assert_eq!(BaseExtractor::parse_duration("0:07"), Some(7.0));
+    // Surrounding whitespace is normal: the label is pretty-printed HTML text.
+    assert_eq!(BaseExtractor::parse_duration("\n  15:30  \n"), Some(930.0));
+}
+
+#[test]
+fn test_parse_duration_rejects_non_durations() {
+    assert_eq!(BaseExtractor::parse_duration(""), None);
+    assert_eq!(BaseExtractor::parse_duration("soon"), None);
+    // Four components is not a time; it must not be read as the leading three.
+    assert_eq!(BaseExtractor::parse_duration("1:2:3:4"), None);
+    assert_eq!(BaseExtractor::parse_duration("1:xx"), None);
+}

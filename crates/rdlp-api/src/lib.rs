@@ -15,17 +15,18 @@
 //!
 //! - `serde` — Enables [`dto::EventDto`] for JSON serialization of events.
 
-/// Optional event fan-out for multi-subscriber scenarios.
+// No outer `///` here: `bus` carries its own `//!` doc, and an outer doc
+// merged with it causes rustdoc to resolve the inner doc's intra-doc links
+// (e.g. [`EventBus`]) against THIS module's scope instead of `bus`'s own —
+// "no item named `EventBus` in scope" (#661). Same for every module below
+// that already has a `//!` header.
 pub mod bus;
 /// Primary API client and builder.
 pub mod client;
-/// Stable error types for the public API.
 pub mod errors;
-/// Download lifecycle events.
 pub mod events;
 /// Download handle and ID types.
 pub mod handle;
-/// Pure-data option registry (config↔GUI axis).
 pub mod options;
 /// Download request types.
 pub mod request;

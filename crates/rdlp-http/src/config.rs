@@ -63,7 +63,7 @@ pub struct HttpClientConfig {
 
     /// Idle connection timeout in seconds. `None` disables idle eviction
     /// entirely (wired to `wreq::ClientBuilder::pool_idle_timeout(None)`).
-    /// Defaults to [`DEFAULT_POOL_IDLE_TIMEOUT_SECS`] (60s) — see that const for
+    /// Defaults to `DEFAULT_POOL_IDLE_TIMEOUT_SECS` (60s) — see that const for
     /// why it sits below typical server keep-alive timeouts.
     pub pool_idle_timeout_secs: Option<u64>,
 

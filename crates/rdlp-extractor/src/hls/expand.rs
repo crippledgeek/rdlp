@@ -87,33 +87,24 @@ const MAX_INIT_SEGMENTS: usize = 50;
 const MAX_PLAYLIST_BYTES: usize = 8 * 1024 * 1024;
 
 /// Validate a URL that came out of attacker-influenceable content before it is
-/// fetched — a variant or segment URI resolved out of a playlist body, or the
-/// master URL an extractor lifted out of page JavaScript and handed in as
-/// `seed.url`. Same trust class, so the same gate (issue #660).
+/// fetched, as an [`HlsExpandError`].
 ///
-/// Production behavior: delegate to `rdlp_security::validate_url_security`,
-/// which rejects file://, javascript:, private hosts, and other SSRF-prone
-/// targets.
+/// Covers every URL in the chain: the `seed.url` master an extractor lifted out
+/// of page JavaScript, and the variant and segment URIs resolved out of a
+/// playlist body. One trust class, so one gate (issue #660).
 ///
-/// Test behavior: allow http/https on `127.0.0.1` / `localhost` so mockito
-/// servers (which bind to loopback by default) can drive integration tests.
-/// All other URLs (other private hosts, non-http(s) schemes) still go
-/// through the real validator. The bypass is `cfg(test)`-gated so production
-/// builds compile without any loopback exemption.
-fn validate_resolved_url(url: &str) -> Result<(), HlsExpandError> {
-    #[cfg(test)]
-    {
-        if let Ok(parsed) = url::Url::parse(url) {
-            let scheme_ok = matches!(parsed.scheme(), "http" | "https");
-            let host_loopback = parsed.host_str().is_some_and(|h| {
-                h == "127.0.0.1" || h == "localhost" || h == "[::1]" || h == "::1"
-            });
-            if scheme_ok && host_loopback {
-                return Ok(());
-            }
-        }
-    }
-    rdlp_security::validate_url_security(url)
+/// `expand_hls_url` applies this to its own seed as its first statement, so a
+/// caller cannot forget it — which is the point, since six of seven callers had
+/// not opted in while this was call-site validation.
+///
+/// The gate itself — including the `cfg(test)` loopback exemption and its
+/// scope — lives in
+/// [`crate::base::common::manifest_url::validate_manifest_sourced_url`],
+/// shared with the DASH expander and with `hls::variants` so all three call
+/// sites cannot drift apart. This function is only the mapping into HLS's
+/// error type.
+pub(crate) fn validate_resolved_url(url: &str) -> Result<(), HlsExpandError> {
+    crate::base::common::manifest_url::validate_manifest_sourced_url(url)
         .map_err(|e| HlsExpandError::Network(format!("URI rejected: {e}")))
 }
 

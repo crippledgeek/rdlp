@@ -35,7 +35,7 @@ pub trait Downloader: Send + Sync {
     /// # Returns
     /// Download statistics (bytes downloaded, duration, average speed)
     ///
-    /// # Box<dyn Trait> Pattern
+    /// # `Box<dyn Trait>` Pattern
     ///
     /// The progress callback uses `Box<dyn ProgressCallback>` for:
     /// - **Runtime polymorphism:** Different callback implementations (CLI progress bar, GUI, silent)
@@ -47,7 +47,7 @@ pub trait Downloader: Send + Sync {
     /// - No need for shared ownership (Arc would add unnecessary atomic overhead)
     /// - Box is simpler and slightly cheaper than Arc for single-owner scenarios
     ///
-    /// **Why Option<Box<...>>?**
+    /// **Why `Option<Box<...>>`?**
     /// - Allows downloads without progress tracking (headless/batch mode)
     /// - Caller can pass `None` to skip callback overhead
     async fn download_to_file(

@@ -338,6 +338,10 @@ mod tests {
                 include_str!("../extractors/pornhub/mod.rs"),
             ),
             (
+                "extractors/pornoxo/mod.rs",
+                include_str!("../extractors/pornoxo/mod.rs"),
+            ),
+            (
                 "extractors/redtube/mod.rs",
                 include_str!("../extractors/redtube/mod.rs"),
             ),

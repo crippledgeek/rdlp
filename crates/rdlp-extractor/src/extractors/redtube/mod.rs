@@ -1,9 +1,9 @@
 //! RedTube extractor
 //!
 //! Supports URLs like:
-//! - https://www.redtube.com/123456
-//! - https://www.redtube.com.br/123456
-//! - https://embed.redtube.com/?id=123456
+//! - `https://www.redtube.com/123456`
+//! - `https://www.redtube.com.br/123456`
+//! - `https://embed.redtube.com/?id=123456`
 //!
 //! Uses the RedTube public API (`api.redtube.com`) as the primary source for
 //! video metadata, with HTML scraping as a fallback. Video format URLs are

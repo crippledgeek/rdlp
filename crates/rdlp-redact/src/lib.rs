@@ -130,7 +130,7 @@ static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 22]> = LazyLock::new(|| {
 
 /// Redact credential-bearing query parameters and userinfo from a URL string.
 ///
-/// Applies all patterns in [`SANITIZE_PATTERNS`] in order. Non-sensitive
+/// Applies all patterns in `SANITIZE_PATTERNS` in order. Non-sensitive
 /// parameters (e.g. `range`, `quality`, `X-Amz-Date`) are left untouched.
 ///
 /// # Examples

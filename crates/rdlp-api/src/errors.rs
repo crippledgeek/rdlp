@@ -44,7 +44,7 @@ pub enum RdlpApiError {
         /// What went wrong.
         message: String,
         /// The URL being extracted. Credentials are redacted in all
-        /// Display / Debug output. Use [`RedactedUrlBuf::from("")`]
+        /// Display / Debug output. Use `RedactedUrlBuf::from("")`
         /// when no URL is available.
         source_url: RedactedUrlBuf,
     },

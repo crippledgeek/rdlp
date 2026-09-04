@@ -13,7 +13,7 @@ use rdlp_types::{
     SearchFilter, SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchResultPreview,
 };
 use std::time::Duration;
-use url::form_urlencoded;
+use url::{Url, form_urlencoded};
 
 use super::MAX_PLAYLIST_SIZE;
 use crate::base::common::BaseExtractor;
@@ -21,6 +21,7 @@ use crate::base::common::BaseExtractor;
 /// One parsed search page: the rows, whether another page exists, and an
 /// optional total-result estimate. Produced by a site's `parse` hook in a
 /// single pass (no re-scan of the body).
+#[derive(Debug)]
 pub(crate) struct SearchPage {
     pub results: Vec<SearchResultPreview>,
     pub has_more: bool,
@@ -233,6 +234,99 @@ pub(crate) fn validate_against_descriptors(
     Ok(())
 }
 
+/// The value of the filter named `key`, or `None` when it was not supplied.
+///
+/// Borrows from `filters` rather than cloning: every caller either compares the
+/// value or feeds it to a URL builder that takes `&str`.
+///
+/// Shared because looking a filter up by key is the same knowledge everywhere:
+/// nine of the sixteen `PagedSearch` extractors resolve an `ordering` /
+/// `period` / `category` / `browse` / `sort` / `route` filter this way, over
+/// twelve call sites in ten files. Counted, not estimated: `impl PagedSearch
+/// for` appears seventeen times, of which one is this module's own
+/// `MockSearch`.
+///
+/// **First match wins, and duplicates are reachable.** `rdlp-cli` pushes every
+/// `--search-filter key=value` verbatim with no de-duplication
+/// (`crates/rdlp-cli/src/main.rs`), so `--search-filter sort=x --search-filter
+/// sort=top` yields two `sort` filters. This returns the first, which is why
+/// the `.any(|f| f.key == K && f.value == V)` predicates in xvideos/xnxx/abxxx
+/// are deliberately NOT written in terms of this helper — they ask a different
+/// question ("is there any such filter") and would change behaviour.
+pub(crate) fn filter_value<'a>(filters: &'a [SearchFilter], key: &str) -> Option<&'a str> {
+    filters
+        .iter()
+        .find(|f| f.key == key)
+        .map(|f| f.value.as_str())
+}
+
+/// Resolve a listing card's `href` against the origin that served the listing,
+/// dropping the card when the result would leave that origin.
+///
+/// **The mechanism this replaces is `format!("{origin}{href}")`.** `href` is
+/// page content and a bare origin has no trailing slash, so nothing required
+/// the href to start with `/` — concatenation let page content pick the
+/// authority. Measured against `https://www.pornoxo.com`:
+///
+/// ```text
+/// href                              concatenated authority
+/// "@evil.test/videos/1/x/"       ->  evil.test                 (userinfo)
+/// ".evil.test/videos/1/x/"       ->  www.pornoxo.com.evil.test (lookalike)
+/// "https://evil.test/x/"         ->  www.pornoxo.comhttps      (malformed)
+/// ```
+///
+/// The two-arm variant (`href.starts_with("http") ? verbatim : concat`) is not
+/// safer: its first arm accepts any absolute URL the page supplies verbatim,
+/// and its second arm is the concatenation above.
+///
+/// RFC 3986 reference resolution ([`Url::join`]) fixes the first two by
+/// construction — a relative-path reference cannot introduce an authority, so
+/// they resolve to `/@evil.test/…` and `/.evil.test/…` ON the origin. The
+/// remaining vector is a reference that CAN carry an authority (an absolute
+/// URL, or a protocol-relative `//evil.test/…`), which is what the origin
+/// comparison rejects. Comparing [`Url::origin`] rather than the host also
+/// refuses an `https` → `http` downgrade on the same host.
+///
+/// The in-tree precedent is hqporner, which reaches the same place with a
+/// path-prefix guard (`Some(h) if h.starts_with("/hdporn/")`,
+/// `extractors/hqporner/search.rs:43`) and is deliberately left alone.
+///
+/// `origin` may be a bare `scheme://authority` OR a full page URL with a path
+/// and query — xhamster passes the page's own URL so a mirror domain resolves
+/// against itself. Only [`Url::origin`] is compared, which is path- and
+/// query-insensitive, so both forms behave identically for admission; the path
+/// still participates in RFC 3986 resolution of a relative reference, which is
+/// what makes a full page URL the more correct base of the two.
+///
+/// Returns `None` when the card must be dropped; callers use `?` inside their
+/// per-card `filter_map`, so one poisoned tile costs that tile and no more.
+pub(crate) fn resolve_card_url(origin: &str, href: &str) -> Option<String> {
+    let (base, resolved) = resolve_reference(origin, href)?;
+    (resolved.origin() == base.origin()).then(|| resolved.into())
+}
+
+/// Resolve a media reference (an `img src`) against the origin that served it,
+/// keeping only `http(s)`.
+///
+/// Deliberately NOT [`resolve_card_url`]: a poster legitimately lives on a
+/// different host from the listing (PornoXO's are on `cdn77-t.pornoxo.com`),
+/// so an origin comparison would drop every real thumbnail. What must not
+/// survive is a non-http(s) reference — a `data:` or `javascript:` value
+/// reaching the desktop's `<img src>` — and a relative `src` that would
+/// otherwise be handed to the UI unresolved.
+pub(crate) fn resolve_media_url(origin: &str, src: &str) -> Option<String> {
+    let (_, resolved) = resolve_reference(origin, src)?;
+    matches!(resolved.scheme(), "http" | "https").then(|| resolved.into())
+}
+
+/// The parse-and-join shared by [`resolve_card_url`] and [`resolve_media_url`],
+/// returning `(base, resolved)` so each can apply its own admission policy.
+fn resolve_reference(origin: &str, reference: &str) -> Option<(Url, Url)> {
+    let base = Url::parse(origin).ok()?;
+    let resolved = base.join(reference).ok()?;
+    Some((base, resolved))
+}
+
 /// Format a [`FilterValidationError`] into an `RdlpError::Extraction` using the
 /// shared "Family-1" wording, where the site name is the **only** per-site
 /// variant. Used by PornHub / RedTube / XHamster, whose three validator error
@@ -353,8 +447,11 @@ pub(crate) fn append_search_filters(url: &mut String, filters: &[SearchFilter]) 
 /// Sites whose search fetches page N and learns whether another page exists
 /// from the same response share one pagination loop: fetch pages in order,
 /// accumulate previews, and stop at the first of — `max_results` reached, an
-/// empty page, `!has_more`, or a fetch error (returning the partial results
-/// gathered so far). Implementors supply only the per-site pieces (a single
+/// empty page, `!has_more`, or a fetch error. A fetch error on the FIRST page
+/// is returned to the caller, because there is nothing collected to salvage
+/// and reporting a hard failure as "no results" hides each site's actionable
+/// message; a later-page error returns the results gathered so far.
+/// Implementors supply only the per-site pieces (a single
 /// [`fetch_page`](Self::fetch_page), a log tag, filter validation);
 /// [`search_all_pages`](Self::search_all_pages) is the shared default and
 /// should not be overridden.
@@ -432,8 +529,16 @@ pub(crate) trait PagedSearch: Send + Sync {
         MAX_PLAYLIST_SIZE
     }
 
-    /// Collect results across pages until `max_results` / an empty page / `!has_more`
-    /// / a fetch error (returning partials). Shared scaffold — do not override.
+    /// Collect results across pages until `max_results` / an empty page /
+    /// `!has_more` / a fetch error. Shared scaffold — do not override.
+    ///
+    /// Error handling is deliberately asymmetric, and a new site wiring itself
+    /// onto this scaffold should not re-introduce the swallow it replaced: a
+    /// failure on the FIRST page propagates as `Err`, so the site's own mapped
+    /// error (a Cloudflare challenge, a refused status) reaches the operator
+    /// instead of being reported as zero results. A failure on a later page
+    /// returns the partial results already gathered. An empty-but-SUCCESSFUL
+    /// first page is not an error and yields `Ok(vec![])`.
     async fn search_all_pages(
         &self,
         query: &SearchQuery,
@@ -451,6 +556,28 @@ pub(crate) trait PagedSearch: Send + Sync {
                 results, has_more, ..
             } = match self.fetch_page(query, page, ctx).await {
                 Ok(p) => p,
+                // Nothing collected yet on the very first page: the request
+                // never got off the ground, so there are no partial results to
+                // salvage and "return what we have" would report a hard
+                // failure as "no results found". Each site maps its own
+                // actionable error here (a Cloudflare challenge naming
+                // `--cookies-from-browser`, a refusal to parse a 404 that
+                // carries a full grid of filler); swallowing it into a
+                // `debug!` the operator has not enabled discards the only
+                // thing that tells them what to do. An empty-but-SUCCESSFUL
+                // first page is a different case and still returns `Ok`.
+                // The conjunct is deliberate redundancy, kept because it is
+                // cheap and a gap here is not. `all_results.is_empty()` is the
+                // half that carries the meaning — "nothing salvageable" is the
+                // reason to propagate rather than break. The page check only
+                // restates it: the loop breaks on the first empty page, so
+                // past the first page `all_results` cannot be empty. The
+                // page check is not load-bearing alone; do not "simplify" by
+                // dropping the emptiness check.
+                Err(e) if all_results.is_empty() && page == self.first_page_index() => {
+                    debug!(page; "{tag} First search page failed, no partial results to return: {e}");
+                    return Err(e);
+                }
                 Err(e) => {
                     debug!(page; "{tag} Failed to fetch search page, returning partial results: {e}");
                     break;
@@ -529,6 +656,27 @@ mod tests {
         let mut url = String::from("https://x.test/?output=json");
         append_search_filters(&mut url, filters);
         url
+    }
+
+    #[test]
+    fn filter_value_reads_a_present_key_and_reports_an_absent_one() {
+        let filters = [filter("ordering", "newest"), filter("period", "weekly")];
+        assert_eq!(filter_value(&filters, "ordering"), Some("newest"));
+        assert_eq!(filter_value(&filters, "period"), Some("weekly"));
+        assert_eq!(filter_value(&filters, "category"), None);
+        assert_eq!(filter_value(&[], "ordering"), None);
+    }
+
+    /// First match wins. This is not academic: `rdlp-cli` pushes every
+    /// `--search-filter key=value` verbatim with no de-duplication, so a
+    /// duplicated key reaches this helper. Nine extractors resolve their
+    /// filters through it, and they previously hand-rolled `.find(...)` —
+    /// which is first-match. Anything else here would silently change all of
+    /// them.
+    #[test]
+    fn filter_value_returns_the_first_of_duplicate_keys() {
+        let filters = [filter("sort", "first"), filter("sort", "second")];
+        assert_eq!(filter_value(&filters, "sort"), Some("first"));
     }
 
     #[test]
@@ -696,7 +844,46 @@ mod tests {
         MockSearch::new(script)
             .search_all_pages(&query(max_results), &test_ctx())
             .await
-            .expect("scaffold returns partial results, never errors")
+            // True of every script `run` is called with (all succeed on page 1),
+            // NOT of the scaffold in general — a first-page failure returns `Err`.
+            // Use `run_result` for scripts that fail on page 1.
+            .expect("these scripts all succeed on page 1, so partials are returned")
+    }
+
+    /// `run` unwraps, so a script whose FIRST page fails needs the raw result.
+    async fn run_result(script: Vec<Page>) -> Result<Vec<SearchResultPreview>> {
+        MockSearch::new(script)
+            .search_all_pages(&query(None), &test_ctx())
+            .await
+    }
+
+    /// A first-page failure must REACH THE OPERATOR, not become "no results".
+    ///
+    /// Every site wires `SearchExtractor::search` straight to this scaffold, so
+    /// swallowing here discards each site's carefully-mapped error: PornoXO's
+    /// Cloudflare guidance naming `--cookies-from-browser`, and its refusal to
+    /// parse a 404 that carries a full grid of filler. The operator saw "no
+    /// results found" for a site that was merely gated.
+    #[tokio::test]
+    async fn first_page_error_propagates_instead_of_reporting_no_results() {
+        let err = run_result(vec![Page::Fail])
+            .await
+            .expect_err("a first-page failure must not be reported as zero results");
+        assert!(
+            err.to_string().contains("mock fetch failure"),
+            "the site's own message must survive intact: {err}"
+        );
+    }
+
+    /// The case that must NOT change: a legitimately empty search returns a
+    /// successful, empty page and still yields `Ok(vec![])`. Only a genuine
+    /// fetch/HTTP error propagates.
+    #[tokio::test]
+    async fn an_empty_but_successful_first_page_is_still_ok() {
+        let out = run_result(vec![Page::Ok(Vec::new(), Termination::Pages(10))])
+            .await
+            .expect("an empty result set is not an error");
+        assert!(out.is_empty());
     }
 
     #[tokio::test]
@@ -773,8 +960,9 @@ mod tests {
 
     #[tokio::test]
     async fn validation_error_returns_err_without_fetching() {
-        // The only scaffold path that returns Err (not partial results): a
-        // failed filter validation must short-circuit BEFORE any page fetch.
+        // One of the scaffold's two Err paths (the other is a first-page
+        // fetch failure): a failed filter validation must short-circuit
+        // BEFORE any page fetch.
         let mock = MockSearch {
             script: vec![Page::Ok(previews(3), Termination::Pages(10))],
             validation_fails: true,
@@ -968,6 +1156,92 @@ mod tests {
             0,
             "must not fetch when validation fails"
         );
+    }
+
+    // ---- resolve_card_url / resolve_media_url ----
+
+    const ORIGIN: &str = "https://www.pornoxo.com";
+
+    /// The whole point of the helper: what the old `format!("{origin}{href}")`
+    /// produced for each of these is recorded beside the expectation, because
+    /// three of the four were a well-formed URL with an authority the PAGE
+    /// chose, and one of those (`@evil.test`) is invisible to a `starts_with`
+    /// assertion.
+    #[test]
+    fn resolve_card_url_never_lets_the_reference_choose_the_authority() {
+        // concatenated -> authority evil.test
+        assert_eq!(
+            resolve_card_url(ORIGIN, "@evil.test/videos/1/x/").as_deref(),
+            Some("https://www.pornoxo.com/@evil.test/videos/1/x/")
+        );
+        // concatenated -> authority www.pornoxo.com.evil.test
+        assert_eq!(
+            resolve_card_url(ORIGIN, ".evil.test/videos/1/x/").as_deref(),
+            Some("https://www.pornoxo.com/.evil.test/videos/1/x/")
+        );
+        // taken verbatim by the two-arm variant
+        assert_eq!(resolve_card_url(ORIGIN, "https://evil.test/x/"), None);
+        // protocol-relative: concatenated, and NOT caught by starts_with("http")
+        assert_eq!(resolve_card_url(ORIGIN, "//evil.test/x/"), None);
+    }
+
+    #[test]
+    fn resolve_card_url_keeps_on_origin_references() {
+        assert_eq!(
+            resolve_card_url(ORIGIN, "/videos/1/x/").as_deref(),
+            Some("https://www.pornoxo.com/videos/1/x/")
+        );
+        assert_eq!(
+            resolve_card_url(ORIGIN, "videos/1/x/").as_deref(),
+            Some("https://www.pornoxo.com/videos/1/x/")
+        );
+        assert_eq!(
+            resolve_card_url(ORIGIN, "https://www.pornoxo.com/videos/1/x/").as_deref(),
+            Some("https://www.pornoxo.com/videos/1/x/")
+        );
+    }
+
+    /// The comparison is [`Url::origin`], not the host, so a same-host
+    /// downgrade to cleartext is refused along with a foreign host. A
+    /// different port is a different origin for the same reason.
+    #[test]
+    fn resolve_card_url_refuses_a_scheme_or_port_change_on_the_same_host() {
+        assert_eq!(resolve_card_url(ORIGIN, "http://www.pornoxo.com/x/"), None);
+        assert_eq!(
+            resolve_card_url(ORIGIN, "https://www.pornoxo.com:8443/x/"),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_card_url_refuses_non_http_schemes() {
+        assert_eq!(resolve_card_url(ORIGIN, "javascript:alert(1)"), None);
+        assert_eq!(resolve_card_url(ORIGIN, "data:text/html,x"), None);
+    }
+
+    /// A poster legitimately lives off-origin, so the media resolver checks the
+    /// SCHEME and not the origin — swapping the two helpers would drop every
+    /// real thumbnail on this site.
+    #[test]
+    fn resolve_media_url_keeps_off_origin_http_and_drops_everything_else() {
+        assert_eq!(
+            resolve_media_url(ORIGIN, "https://cdn77-t.pornoxo.com/t.jpg").as_deref(),
+            Some("https://cdn77-t.pornoxo.com/t.jpg")
+        );
+        assert_eq!(
+            resolve_media_url(ORIGIN, "/thumbs/t.jpg").as_deref(),
+            Some("https://www.pornoxo.com/thumbs/t.jpg")
+        );
+        assert_eq!(resolve_media_url(ORIGIN, "data:text/html,x"), None);
+        assert_eq!(resolve_media_url(ORIGIN, "javascript:alert(1)"), None);
+    }
+
+    /// Both resolvers take the origin as a `&str`, so a caller that hands over
+    /// something that is not a URL must get `None` rather than a panic.
+    #[test]
+    fn both_resolvers_reject_an_unparseable_origin() {
+        assert_eq!(resolve_card_url("not a url", "/x/"), None);
+        assert_eq!(resolve_media_url("not a url", "/x.jpg"), None);
     }
 
     // ---- SearchOrigin ----

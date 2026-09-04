@@ -13,7 +13,7 @@
 //! 2. `GET /api/json/video/{lifetime}/{e6}/{e3}/{id}.json` — rich per-video
 //!    metadata (real title, description, structured models + categories,
 //!    statistics, post date, full-resolution thumbnails). See
-//!    [`crate::base::kvs::api::video_lookup_endpoint`].
+//!    `base::kvs::api::video_lookup_endpoint`.
 //! 3. *Best-effort* `GET /api/videos2.php?…&s={slug-words}` — slug-based
 //!    search to pull the row with `file_dimensions` + `file_formats`,
 //!    which gives the playable variant's `width`/`height`/`filesize`.

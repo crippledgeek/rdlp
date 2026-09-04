@@ -201,6 +201,11 @@ If you used `bug-fix-requires-failing-test` patterns from a real reported issue,
 | `xvideos` / `xnxx` | Shared `WgczNetworkBase` | … is on the WGCZ Holding network |
 | `tnaflix` / `empflix` / `moviefap` | Shared `TnaFlixNetworkBase` | … is on the TNAFlix network |
 | `abxxx` | Client-side SPA + obfuscated XHR (Cyrillic homoglyph + comma-split base64) | … exposes nothing in initial HTML and the format URL is encoded |
+| `hqporner` | Two-layer iframe resolver (mydaddy.cc embed → direct MP4) | … proxies through a separate embed host for the real media URL |
+| `nine_anime` | AJAX server-list API + Megacloud/Rapid-Cloud embed decryption | … resolves episodes through a third-party embed-decryption service |
+| `koreanpornmovie` | WordPress/RetroTube `player-x.php?q=<base64>` iframe, decodes to direct MP4 or an external embed | … wraps content behind a base64-encoded plugin iframe |
+| `spankbang` | Inline `stream_data = {...}` Python-dict parse, POST formats-API fallback; Cloudflare-fronted (requires TLS impersonation) | … is Cloudflare-fronted and embeds a Python-literal (not JSON) data blob |
+| `pornoxo` | Signed HLS ladder in an inline `playerConfig` block, minted per page load (never cached); search is Cloudflare-gated behind a cookie-free tag-listing fallback | … signs its HLS master URL per page load, or gates search but not video pages |
 | `generic` | 12-strategy fallback | … is none of the above (first try generic before writing new code) |
 
 ---

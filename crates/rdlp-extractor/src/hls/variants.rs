@@ -5,7 +5,6 @@
 
 use super::detector::HlsSizeDetector;
 use super::types::{HlsInfo, HlsVariantInfo};
-use crate::base::common::BaseExtractor;
 use log::debug;
 use rdlp_core::{RdlpError, Result};
 use rdlp_types::CodecName;
@@ -24,29 +23,27 @@ use rdlp_types::CodecName;
 // refactor.
 const MP4A: CodecName = CodecName::from_static("mp4a");
 
-/// Validate an HLS playlist/segment URL before fetching.
+/// Validate an HLS playlist/segment URL before fetching, as an [`RdlpError`].
 ///
-/// Test behavior: allow http/https on `127.0.0.1` / `localhost` so mockito
-/// servers (which bind to loopback) can drive `detect_hls_variants` /
-/// `detect_hls_metadata` in tests — without this exemption the SSRF gate
-/// rejects every loopback URL, so those probes silently no-op (the gap the
-/// research flagged in `test_helper_pair_contract_shape`). Mirrors
-/// `expand::validate_resolved_url`. Production builds compile without any
-/// loopback exemption — every URL goes through `validate_url_security`.
+/// The `cfg(test)` loopback exemption matters here beyond convenience: without
+/// it the SSRF gate rejects every mockito URL, so `detect_hls_variants` /
+/// `detect_hls_metadata` silently no-op in tests rather than failing (the gap
+/// `test_helper_pair_contract_shape` was written for).
+///
+/// The gate itself lives in
+/// [`crate::base::common::manifest_url::validate_manifest_sourced_url`],
+/// shared with the HLS expander and the DASH expander so the three cannot
+/// drift apart. This function is only the mapping into `RdlpError`; it
+/// deliberately mirrors `BaseExtractor::validate_url_security`'s mapping,
+/// which cannot be reused directly because that one must NOT carry a loopback
+/// exemption (it also gates operator-supplied URLs).
 fn validate_hls_url(url: &str) -> Result<()> {
-    #[cfg(test)]
-    {
-        if let Ok(parsed) = url::Url::parse(url) {
-            let scheme_ok = matches!(parsed.scheme(), "http" | "https");
-            let host_loopback = parsed.host_str().is_some_and(|h| {
-                h == "127.0.0.1" || h == "localhost" || h == "[::1]" || h == "::1"
-            });
-            if scheme_ok && host_loopback {
-                return Ok(());
-            }
+    crate::base::common::manifest_url::validate_manifest_sourced_url(url).map_err(|e| {
+        RdlpError::Extraction {
+            message: e.to_string(),
+            url: Some(url.to_string().into()),
         }
-    }
-    BaseExtractor::validate_url_security(url)
+    })
 }
 
 /// Expand a parsed HLS master playlist into per-variant `HlsVariantInfo`

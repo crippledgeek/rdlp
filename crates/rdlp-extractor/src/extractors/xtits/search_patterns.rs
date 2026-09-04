@@ -41,12 +41,8 @@ pub(crate) fn build_search_url(query: &SearchQuery, page: u32) -> String {
 /// - `ordering=rating` + `period=monthly` → `rating_month`
 /// - `ordering=mostviewed` + `period=today` → `video_viewed_today`
 fn resolve_sort_by(query: &SearchQuery) -> String {
-    let ordering = query
-        .filters
-        .iter()
-        .find(|f| f.key == "ordering")
-        .map(|f| f.value.as_str())
-        .unwrap_or("relevance");
+    let ordering =
+        crate::base::common::filter_value(&query.filters, "ordering").unwrap_or("relevance");
 
     let base = match ordering {
         "newest" => "post_date",
@@ -60,12 +56,7 @@ fn resolve_sort_by(query: &SearchQuery) -> String {
         return base.to_string();
     }
 
-    let period = query
-        .filters
-        .iter()
-        .find(|f| f.key == "period")
-        .map(|f| f.value.as_str())
-        .unwrap_or("alltime");
+    let period = crate::base::common::filter_value(&query.filters, "period").unwrap_or("alltime");
 
     match period {
         "monthly" => format!("{base}_month"),
