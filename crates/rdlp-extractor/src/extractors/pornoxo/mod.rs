@@ -6,6 +6,7 @@
 
 mod patterns;
 mod player;
+mod search;
 
 use async_trait::async_trait;
 use lazy_regex::Regex;
