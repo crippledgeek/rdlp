@@ -32,11 +32,11 @@ impl TNAFlixSearchExtractor {
     /// * `query` - The search query with optional filters.
     /// * `page` - 1-based page number.
     pub(super) fn build_page_url(query: &rdlp_types::SearchQuery, page: usize) -> String {
-        if let Some(cat) = query.filters.iter().find(|f| f.key == "category") {
+        if let Some(cat) = crate::base::common::filter_value(&query.filters, "category") {
             if page <= 1 {
-                search_patterns::build_browse_url(&cat.value)
+                search_patterns::build_browse_url(cat)
             } else {
-                search_patterns::build_browse_url_page(&cat.value, page)
+                search_patterns::build_browse_url_page(cat, page)
             }
         } else {
             search_patterns::build_search_url_page(query, page)

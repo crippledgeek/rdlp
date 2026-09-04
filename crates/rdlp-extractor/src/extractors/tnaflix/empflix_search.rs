@@ -26,11 +26,11 @@ impl EMPFlixSearchExtractor {
 
     /// Build the URL for a given page, dispatching to browse or search URL builders.
     pub(super) fn build_page_url(query: &rdlp_types::SearchQuery, page: usize) -> String {
-        if let Some(cat) = query.filters.iter().find(|f| f.key == "category") {
+        if let Some(cat) = crate::base::common::filter_value(&query.filters, "category") {
             if page <= 1 {
-                search_patterns::build_browse_url_for(Self::BASE_URL, &cat.value)
+                search_patterns::build_browse_url_for(Self::BASE_URL, cat)
             } else {
-                search_patterns::build_browse_url_page_for(Self::BASE_URL, &cat.value, page)
+                search_patterns::build_browse_url_page_for(Self::BASE_URL, cat, page)
             }
         } else {
             search_patterns::build_search_url_page_for(Self::BASE_URL, query, page)

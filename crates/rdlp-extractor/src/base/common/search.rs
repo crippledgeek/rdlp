@@ -233,6 +233,22 @@ pub(crate) fn validate_against_descriptors(
     Ok(())
 }
 
+/// The value of the filter named `key`, or `None` when it was not supplied.
+///
+/// Borrows from `filters` rather than cloning: every caller either compares the
+/// value or feeds it to a URL builder that takes `&str`.
+///
+/// Shared because looking a filter up by key is the same knowledge everywhere —
+/// TNAFlix and EMPFlix each dispatch browse-vs-search on `category`, and
+/// PornoXO dispatches tag-vs-search on `route`. Only the first match is
+/// returned; the CLI produces at most one filter per key.
+pub(crate) fn filter_value<'a>(filters: &'a [SearchFilter], key: &str) -> Option<&'a str> {
+    filters
+        .iter()
+        .find(|f| f.key == key)
+        .map(|f| f.value.as_str())
+}
+
 /// Format a [`FilterValidationError`] into an `RdlpError::Extraction` using the
 /// shared "Family-1" wording, where the site name is the **only** per-site
 /// variant. Used by PornHub / RedTube / XHamster, whose three validator error
