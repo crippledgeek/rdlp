@@ -57,6 +57,24 @@ fn build_search_url(query: &SearchQuery, page: u32) -> String {
     }
 }
 
+/// The usable poster reference on an eporner card `img`.
+///
+/// 101 of the 125 cards in the committed capture are lazy-loaded:
+/// `<img class="lazyimg" src="data:image/gif;base64,…1x1…"
+/// data-src="https://static-eu-cdn.eporner.com/thumbs/…">`. Reading `src`
+/// alone therefore yielded a blank transparent pixel for 81% of results —
+/// and a `data:` URI is precisely what must not reach the desktop's
+/// `<img src>`. So the placeholder is skipped in favour of `data-src`, which
+/// is where the real poster lives; the 24 eagerly-loaded cards still answer
+/// from `src`.
+fn card_poster_src(img: scraper::ElementRef<'_>) -> Option<&str> {
+    img.value()
+        .attr("src")
+        .filter(|s| !s.is_empty() && !s.starts_with("data:"))
+        .or_else(|| img.value().attr("data-src"))
+        .filter(|s| !s.is_empty())
+}
+
 /// Parse EPorner search/tag results.
 ///
 /// Each card is a `div.mbcontent` (thumbnail + cover anchor) immediately
@@ -103,8 +121,7 @@ fn parse_results(html: &str) -> Vec<SearchResultPreview> {
         let thumbnail_url = cover_a
             .select(&MBIMG_SEL)
             .next()
-            .and_then(|i| i.value().attr("src"))
-            .filter(|s| !s.is_empty())
+            .and_then(card_poster_src)
             .and_then(|src| resolve_media_url(EPORNER_ROOT, src));
 
         // Find the matching mbunder by scanning forward from the parent of
@@ -197,8 +214,7 @@ fn parse_results(html: &str) -> Vec<SearchResultPreview> {
         let thumbnail_url = link
             .select(&MBIMG_SEL)
             .next()
-            .and_then(|i| i.value().attr("src"))
-            .filter(|s| !s.is_empty())
+            .and_then(card_poster_src)
             .and_then(|src| resolve_media_url(EPORNER_ROOT, src));
         let Some(video_url) = resolve_card_url(EPORNER_ROOT, href) else {
             continue;
@@ -326,7 +342,17 @@ mod tests {
                     <div class="mbcontent"><a href="/video-1/real/"><img src="/r.jpg" alt="Real"></a></div>
                 </body></html>"#
             );
-            for r in parse_results(&html) {
+            let results = parse_results(&html);
+            // Without this the test also passes when `parse_results` returns
+            // NOTHING — a resolution regression that empties the page would
+            // read as a green guard. The hostile anchor is never selected, so
+            // exactly the one legitimate card must come back.
+            assert_eq!(
+                results.len(),
+                1,
+                "href {hostile:?}: the legitimate card must still be parsed"
+            );
+            for r in results {
                 let host = url::Url::parse(&r.video_url)
                     .expect("every emitted result URL must parse")
                     .host_str()
@@ -356,6 +382,53 @@ mod tests {
             Some("https://www.eporner.com/r.jpg")
         );
         assert_eq!(results[1].thumbnail_url, None);
+    }
+
+    /// A lazy-loaded card takes its poster from `data-src`, not from the
+    /// 1x1 `data:` placeholder sitting in `src`. Both attributes are present
+    /// on the same element, so this pins WHICH one wins rather than merely
+    /// that something came out.
+    #[test]
+    fn a_lazy_loaded_card_reads_its_poster_from_data_src() {
+        let html = r#"<html><body>
+            <div class="mbcontent"><a href="/video-1/lazy/"><img class="lazyimg"
+                src="data:image/gif;base64,R0lGODlhAQABAIAAAP///wAAACH5BAEAAAAALAAAAAABAAEAAAICRAEAOw=="
+                data-src="https://static-eu-cdn.eporner.com/thumbs/static4/1/x_240.jpg" alt="Lazy"></a></div>
+        </body></html>"#;
+        let results = parse_results(html);
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].thumbnail_url.as_deref(),
+            Some("https://static-eu-cdn.eporner.com/thumbs/static4/1/x_240.jpg"),
+            "the data: placeholder must never win over data-src"
+        );
+    }
+
+    /// The synthetic thumbnail test above cannot see a `src` SHAPE that the
+    /// real site emits and `resolve_media_url` rejects — if the capture's
+    /// posters were, say, lazy-loaded `data:` placeholders, every eporner
+    /// thumbnail would vanish with the suite green. This is the eporner
+    /// analogue of pornoxo's `every_card_on_both_captures_has_a_cdn_thumbnail`.
+    ///
+    /// Measured on the committed capture: the cards inside `div.mbcontent`
+    /// carry real `https://static-eu-cdn.eporner.com/thumbs/...` srcs. The
+    /// `data:image/gif;base64` 1x1 placeholders elsewhere in that file sit
+    /// OUTSIDE the card anchors, so `MBIMG_SEL` never reaches them.
+    #[test]
+    fn every_card_in_the_real_capture_still_yields_a_cdn_thumbnail() {
+        let results = parse_results(FIXTURE);
+        assert!(!results.is_empty(), "the capture must parse to some cards");
+        assert!(
+            results.iter().all(|r| r
+                .thumbnail_url
+                .as_deref()
+                .is_some_and(|t| t.starts_with("https://") && t.contains("/thumbs/"))),
+            "every card must keep a CDN poster: {:?}",
+            results
+                .iter()
+                .find(|r| r.thumbnail_url.is_none())
+                .map(|r| &r.video_url)
+        );
     }
 
     #[test]

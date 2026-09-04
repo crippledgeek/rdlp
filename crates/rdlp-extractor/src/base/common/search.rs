@@ -565,8 +565,8 @@ pub(crate) trait PagedSearch: Send + Sync {
                 // reason to propagate rather than break. The page check only
                 // restates it: the loop breaks on the first empty page, so
                 // past the first page `all_results` cannot be empty. Neither
-                // is load-bearing alone; do not "simplify" by dropping the
-                // first one.
+                // The page check is not load-bearing alone; do not
+                // "simplify" by dropping the emptiness check.
                 Err(e) if all_results.is_empty() && page == self.first_page_index() => {
                     debug!(page; "{tag} First search page failed, no partial results to return: {e}");
                     return Err(e);

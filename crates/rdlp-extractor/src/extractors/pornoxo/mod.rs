@@ -583,22 +583,39 @@ mod paged_search_tests {
     /// in-tree precedent (`abxxx/search.rs`). `rdlp-cli` currently hardcodes
     /// `page: Some(1)`, but `SearchQuery` is a public API type and a desktop
     /// or embedder call can supply `Some(0)`.
+    /// BOTH sides, and the second one is not optional: pinning only `0 -> 1`
+    /// leaves `fn clamp_page(&self, _) -> 1` passing the whole suite while
+    /// silently forcing every request to page 1.
+    /// `accepts_the_last_page_and_refuses_the_one_after_it` cannot cover this —
+    /// it goes through `fetch_page`, which never calls `clamp_page`.
     #[tokio::test]
-    async fn page_zero_is_clamped_to_the_first_page_not_echoed_back() {
+    async fn page_zero_is_clamped_to_the_first_page_and_a_real_page_is_preserved() {
         let (server, _m) = serving(200, TAG_PAGE).await;
         let origin = SearchOrigin::new(&server.url()).expect("mockito origin is well formed");
-        let mut q = query("creampie", &[]);
-        q.page = Some(0);
 
-        let resp = PornoxoExtractor::with_origin(origin)
-            .search_page_response(&q, &test_ctx())
-            .await
-            .expect("page 0 must be served, not refused");
+        let clamped = page_response_for(&origin, Some(0)).await;
         assert_eq!(
-            resp.page, 1,
+            clamped.page, 1,
             "page 0 must be reported as the page actually served"
         );
-        assert_eq!(resp.results.len(), 52);
+        assert_eq!(clamped.results.len(), 52);
+
+        let preserved = page_response_for(&origin, Some(2)).await;
+        assert_eq!(
+            preserved.page, 2,
+            "a legitimate page must pass through the floor untouched"
+        );
+    }
+
+    /// `search_page_response` — the only path that applies `clamp_page` — for
+    /// `query.page = page`.
+    async fn page_response_for(origin: &SearchOrigin, page: Option<u32>) -> SearchPageResponse {
+        let mut q = query("creampie", &[]);
+        q.page = page;
+        PornoxoExtractor::with_origin(origin.clone())
+            .search_page_response(&q, &test_ctx())
+            .await
+            .expect("the page must be served, not refused")
     }
 
     /// Behaviour 3, route-specific. The search route is Cloudflare-gated and a
