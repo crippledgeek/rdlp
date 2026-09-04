@@ -39,10 +39,15 @@ pub(crate) fn supported_filters() -> Vec<SearchFilterDescriptor> {
             Some("re"),
         ),
         SearchFilterDescriptor::new(
-            "quality",
+            "filter_quality",
             "Quality",
-            SearchFilterValue::list([("hd", "HD"), ("vr", "VR")]),
-            None,
+            // Read off the site's own Quality control, which offers exactly
+            // three buttons and pre-selects `videos` ("All"). The key is the
+            // site's `filter_quality`, not a normalised `quality`, matching
+            // its sibling `filter_length` and keeping URL building a
+            // pass-through with no key-translation layer to drift.
+            SearchFilterValue::list([("videos", "All"), ("hd", "HD"), ("vr", "VR")]),
+            Some("videos"),
         ),
         SearchFilterDescriptor::new(
             "filter_length",
@@ -128,11 +133,18 @@ mod tests {
         assert!(validate(&[f("route", "tags")]).is_err());
     }
 
+    /// The values here are the ones the site's own listing controls emit, not
+    /// a plausible-looking set: `videos` ("All") is a real quality value and
+    /// omitting it would leave an operator unable to ask for non-VR videos.
     #[test]
     fn accepts_quality_and_length_vocabularies() {
-        assert!(validate(&[f("quality", "hd")]).is_ok());
-        assert!(validate(&[f("quality", "vr")]).is_ok());
-        assert!(validate(&[f("quality", "4k")]).is_err());
+        for v in ["videos", "hd", "vr"] {
+            assert!(validate(&[f("filter_quality", v)]).is_ok(), "quality={v}");
+        }
+        assert!(validate(&[f("filter_quality", "4k")]).is_err());
+        // The site names this key `filter_quality`; the un-prefixed spelling
+        // is not a filter and must be refused rather than silently ignored.
+        assert!(validate(&[f("quality", "hd")]).is_err());
         for v in ["all", "short", "normal", "long"] {
             assert!(validate(&[f("filter_length", v)]).is_ok(), "length={v}");
         }
@@ -143,7 +155,12 @@ mod tests {
     fn accepts_an_empty_filter_set_and_a_valid_combination() {
         assert!(validate(&[]).is_ok());
         assert!(
-            validate(&[f("route", "tag"), f("sort", "lg"), f("quality", "hd")]).is_ok(),
+            validate(&[
+                f("route", "tag"),
+                f("sort", "lg"),
+                f("filter_quality", "hd")
+            ])
+            .is_ok(),
             "filters must be independent, not mutually exclusive"
         );
     }
@@ -154,7 +171,7 @@ mod tests {
     #[test]
     fn descriptors_cover_every_validated_key() {
         let keys: Vec<_> = supported_filters().into_iter().map(|d| d.key).collect();
-        for k in ["route", "sort", "quality", "filter_length"] {
+        for k in ["route", "sort", "filter_quality", "filter_length"] {
             assert!(keys.iter().any(|d| d == k), "descriptor missing for {k}");
         }
         assert_eq!(keys.len(), 4, "no undocumented filter keys");
