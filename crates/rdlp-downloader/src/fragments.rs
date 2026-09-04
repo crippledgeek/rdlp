@@ -18,7 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use futures::StreamExt as _;
-use rdlp_core::{DownloadProgress, DownloadStats, ProgressCallback, Result, RetryConfig};
+use rdlp_core::{DownloadProgress, DownloadStats, ProgressCallback, Result};
 use rdlp_types::Fragment;
 use tokio::io::{AsyncSeekExt as _, AsyncWriteExt as _};
 use tokio_util::sync::CancellationToken;
@@ -27,7 +27,7 @@ use crate::adaptive::{AdaptiveConfig, AdaptiveController, ControllerMode};
 use crate::atomic::{SIDECAR_SAVE_FAILURE_THRESHOLD, SaveFailureTracker};
 use crate::http::{HttpDownloader, RequestedSpan, validate_range_response};
 use crate::progress::SpeedMeter;
-use crate::retry::{RetryPolicy, with_retry_cancellable};
+use crate::retry::{LazyLabel, RetryPolicy, with_retry_cancellable};
 use rdlp_security;
 
 /// Extrapolate the total download size for a fragmented stream.
@@ -255,7 +255,9 @@ pub async fn download_pre_resolved_fragments(
     let sem = controller.semaphore().clone();
 
     // One retry pool for the whole list (issue #570). Per-fragment retries
-    // bound a single bad fragment; this bounds a systematically bad playlist.
+    // already bound a broken origin — the loop below returns on the first
+    // fragment to exhaust its allowance. This bounds the case they miss: a
+    // flaky list whose fragments keep failing and then succeeding.
     let budget = Arc::new(budget::FragmentRetryBudget::for_list(
         http.config.fragment_retry_config.max_retries,
         fragments.len(),
@@ -314,7 +316,6 @@ pub async fn download_pre_resolved_fragments(
                 http,
                 format_origin: task_origin,
                 cancel,
-                retry_config: &http.config.fragment_retry_config,
                 budget,
                 retries,
             };
@@ -501,8 +502,9 @@ pub(crate) fn resolve_fragment_url(fragment_url: &str, base_url: Option<&str>) -
 }
 
 /// Everything a fragment fetch needs that is fixed for the whole fragment
-/// list: the HTTP client, the format origin behind the same-origin header
-/// gate, the cancellation token, and the list-wide retry budget.
+/// list: the HTTP client (which carries the operator's fragment retry policy),
+/// the format origin behind the same-origin header gate, the cancellation
+/// token, the list-wide retry budget, and the shared retry counter.
 ///
 /// Each parallel task builds its own from cheap clones, so the two fetch call
 /// sites in the task body pass only what actually varies — the URL and the
@@ -513,31 +515,10 @@ struct FragmentFetchCtx<'a> {
     /// headers are forwarded to any target.
     format_origin: Option<url::Origin>,
     cancel: Option<CancellationToken>,
-    /// The operator's fragment retry policy (`--fragment-retries` and the
-    /// retry-delay settings), wired through `DownloaderConfig`.
-    retry_config: &'a RetryConfig,
     budget: Arc<budget::FragmentRetryBudget>,
     /// Retries actually taken, shared across every task so the finished
     /// `DownloadStats` can report them.
     retries: Arc<AtomicU64>,
-}
-
-/// Names a fragment fetch in a retry log line.
-///
-/// A `Display` shim rather than a pre-built `String` because
-/// `sanitize_for_logging` sweeps a regex set and allocates, while the
-/// overwhelming majority of fragment fetches never retry and so never need
-/// the label at all.
-struct FragmentFetchLabel<'a>(&'a str);
-
-impl std::fmt::Display for FragmentFetchLabel<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "fragment fetch {}",
-            rdlp_security::sanitize_for_logging(self.0)
-        )
-    }
 }
 
 impl FragmentFetchCtx<'_> {
@@ -562,8 +543,14 @@ impl FragmentFetchCtx<'_> {
         // budget is shared by every fragment task.
         let budget = &self.budget;
         let gate = move || budget.try_consume();
-        let label = FragmentFetchLabel(url);
-        let policy = RetryPolicy::new(self.retry_config, &label)
+        let label = LazyLabel(|f| {
+            write!(
+                f,
+                "fragment fetch {}",
+                rdlp_security::sanitize_for_logging(url)
+            )
+        });
+        let policy = RetryPolicy::new(&self.http.config.fragment_retry_config, &label)
             .gated_by(&gate)
             .counting_into(&self.retries);
 

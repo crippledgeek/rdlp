@@ -5,6 +5,15 @@
 use super::*;
 use rdlp_core::Downloader;
 use rdlp_core::is_retryable_error;
+
+/// Downloader for the chunk-retry tests: retries are real but instant.
+///
+/// `chunk_retry_policy` derives the chunk layer's attempt count from this, so
+/// a config of 0 — which every one of these tests used to carry — silently
+/// turns a retry test into a single-request test.
+fn chunk_test_downloader(max_retries: usize) -> HttpDownloader {
+    HttpDownloader::new().with_retry_config(crate::retry::test_retry_config(max_retries))
+}
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
@@ -262,10 +271,22 @@ async fn test_chunk_retry_succeeds_on_second_attempt() {
     let temp_dir = TempDir::new().unwrap();
     let chunk_path = temp_dir.path().join("chunk_0");
 
-    // Mockito matches in LIFO order (last-created matched first).
-    // Create success mock FIRST so it's matched SECOND.
+    // Mockito matches in CREATION order and retires a mock once its `expect(n)`
+    // is met (`mockito-1.7.2/src/server.rs`: `matching_mocks ...
+    // find(is_missing_hits)`), so the failing mock below is created first and
+    // answers first, and the good one answers the retry. `assert_async` on both
+    // is what stops a no-retry regression from passing this test silently.
     let body = vec![0xABu8; 1024];
-    let _mock_ok = server
+    let mock_fail = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(500)
+        .with_body("error")
+        .expect(1)
+        .create_async()
+        .await;
+
+    let mock_ok = server
         .mock("GET", "/video.mp4")
         .match_header("Range", mockito::Matcher::Any)
         .with_status(206)
@@ -278,22 +299,7 @@ async fn test_chunk_retry_succeeds_on_second_attempt() {
         .create_async()
         .await;
 
-    // Create fail mock LAST so it's matched FIRST (LIFO).
-    let _mock_fail = server
-        .mock("GET", "/video.mp4")
-        .match_header("Range", mockito::Matcher::Any)
-        .with_status(500)
-        .with_body("error")
-        .expect(1)
-        .create_async()
-        .await;
-
-    let downloader = HttpDownloader::new().with_retry_config(RetryConfig::new(
-        0,
-        Duration::from_millis(1),
-        Duration::from_millis(10),
-        2.0,
-    ));
+    let downloader = chunk_test_downloader(3);
 
     let url = format!("{}/video.mp4", server.url());
     let progress = Arc::new(AtomicU64::new(0));
@@ -314,6 +320,11 @@ async fn test_chunk_retry_succeeds_on_second_attempt() {
 
     assert!(result.is_ok());
     assert_eq!(result.unwrap(), 1024);
+
+    // Every mock must have been consumed: without this an accidental
+    // single-request run would satisfy the assertions above.
+    mock_fail.assert_async().await;
+    mock_ok.assert_async().await;
 }
 
 #[tokio::test]
@@ -326,7 +337,7 @@ async fn test_chunk_retry_exhausted_returns_error() {
     let chunk_path = temp_dir.path().join("chunk_0");
 
     // All requests fail with 500
-    let _mock = server
+    let mock = server
         .mock("GET", "/video.mp4")
         .match_header("Range", mockito::Matcher::Any)
         .with_status(500)
@@ -335,12 +346,7 @@ async fn test_chunk_retry_exhausted_returns_error() {
         .create_async()
         .await;
 
-    let downloader = HttpDownloader::new().with_retry_config(RetryConfig::new(
-        0,
-        Duration::from_millis(1),
-        Duration::from_millis(10),
-        2.0,
-    ));
+    let downloader = chunk_test_downloader(3);
 
     let url = format!("{}/video.mp4", server.url());
     let progress = Arc::new(AtomicU64::new(0));
@@ -360,6 +366,10 @@ async fn test_chunk_retry_exhausted_returns_error() {
     .await;
 
     assert!(result.is_err());
+
+    // Every mock must have been consumed: without this an accidental
+    // single-request run would satisfy the assertions above.
+    mock.assert_async().await;
 }
 
 #[tokio::test]
@@ -372,7 +382,7 @@ async fn test_chunk_retry_non_retryable_fails_immediately() {
     let chunk_path = temp_dir.path().join("chunk_0");
 
     // 403 is not retryable — should fail immediately, not retry
-    let _mock = server
+    let mock = server
         .mock("GET", "/video.mp4")
         .match_header("Range", mockito::Matcher::Any)
         .with_status(403)
@@ -381,12 +391,7 @@ async fn test_chunk_retry_non_retryable_fails_immediately() {
         .create_async()
         .await;
 
-    let downloader = HttpDownloader::new().with_retry_config(RetryConfig::new(
-        0,
-        Duration::from_millis(1),
-        Duration::from_millis(10),
-        2.0,
-    ));
+    let downloader = chunk_test_downloader(3);
 
     let url = format!("{}/video.mp4", server.url());
     let progress = Arc::new(AtomicU64::new(0));
@@ -407,6 +412,10 @@ async fn test_chunk_retry_non_retryable_fails_immediately() {
 
     assert!(result.is_err());
     // mockito's expect(1) will panic on Drop if more than 1 request was made
+
+    // Every mock must have been consumed: without this an accidental
+    // single-request run would satisfy the assertions above.
+    mock.assert_async().await;
 }
 
 #[tokio::test]
@@ -424,9 +433,22 @@ async fn test_chunk_retry_cleans_partial_file() {
         .unwrap();
     assert!(chunk_path.exists());
 
-    // Mockito matches in LIFO order. Create success mock FIRST (matched second).
+    // Mockito matches in CREATION order and retires a mock once its `expect(n)`
+    // is met (`mockito-1.7.2/src/server.rs`: `matching_mocks ...
+    // find(is_missing_hits)`), so the failing mock below is created first and
+    // answers first, and the good one answers the retry. `assert_async` on both
+    // is what stops a no-retry regression from passing this test silently.
     let body = vec![0xCDu8; 512];
-    let _mock_ok = server
+    let mock_fail = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(500)
+        .with_body("error")
+        .expect(1)
+        .create_async()
+        .await;
+
+    let mock_ok = server
         .mock("GET", "/video.mp4")
         .match_header("Range", mockito::Matcher::Any)
         .with_status(206)
@@ -439,22 +461,7 @@ async fn test_chunk_retry_cleans_partial_file() {
         .create_async()
         .await;
 
-    // Create fail mock LAST (matched first — LIFO).
-    let _mock_fail = server
-        .mock("GET", "/video.mp4")
-        .match_header("Range", mockito::Matcher::Any)
-        .with_status(500)
-        .with_body("error")
-        .expect(1)
-        .create_async()
-        .await;
-
-    let downloader = HttpDownloader::new().with_retry_config(RetryConfig::new(
-        0,
-        Duration::from_millis(1),
-        Duration::from_millis(10),
-        2.0,
-    ));
+    let downloader = chunk_test_downloader(3);
 
     let url = format!("{}/video.mp4", server.url());
     let progress = Arc::new(AtomicU64::new(0));
@@ -478,6 +485,11 @@ async fn test_chunk_retry_cleans_partial_file() {
     let contents = tokio::fs::read(&chunk_path).await.unwrap();
     assert_eq!(contents.len(), 512);
     assert!(contents.iter().all(|&b| b == 0xCD));
+
+    // Every mock must have been consumed: without this an accidental
+    // single-request run would satisfy the assertions above.
+    mock_fail.assert_async().await;
+    mock_ok.assert_async().await;
 }
 
 #[tokio::test]
@@ -1658,19 +1670,13 @@ async fn chunk_retry_recovers_from_wrong_span_response() {
     let temp_dir = TempDir::new().unwrap();
     let chunk_path = temp_dir.path().join("chunk_0");
 
-    // Mockito matches LIFO: create the success mock FIRST so it answers SECOND.
-    let _mock_ok = server
-        .mock("GET", "/video.mp4")
-        .match_header("Range", mockito::Matcher::Any)
-        .with_status(206)
-        .with_header("content-range", "bytes 0-1023/1048576")
-        .with_body(vec![0x11u8; 1024])
-        .expect(1)
-        .create_async()
-        .await;
-
-    // Answers FIRST: right length, WRONG span — the #526 signature.
-    let _mock_wrong_span = server
+    // Mockito matches in CREATION order and retires a mock once its `expect(n)`
+    // is met (`mockito-1.7.2/src/server.rs`: `matching_mocks ...
+    // find(is_missing_hits)`), so the failing mock below is created first and
+    // answers first, and the good one answers the retry. `assert_async` on both
+    // is what stops a no-retry regression from passing this test silently.
+    // Right length, WRONG span — the #526 signature.
+    let mock_wrong_span = server
         .mock("GET", "/video.mp4")
         .match_header("Range", mockito::Matcher::Any)
         .with_status(206)
@@ -1680,12 +1686,17 @@ async fn chunk_retry_recovers_from_wrong_span_response() {
         .create_async()
         .await;
 
-    let downloader = HttpDownloader::new().with_retry_config(RetryConfig::new(
-        0,
-        Duration::from_millis(1),
-        Duration::from_millis(10),
-        2.0,
-    ));
+    let mock_ok = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(206)
+        .with_header("content-range", "bytes 0-1023/1048576")
+        .with_body(vec![0x11u8; 1024])
+        .expect(1)
+        .create_async()
+        .await;
+
+    let downloader = chunk_test_downloader(3);
 
     let url = format!("{}/video.mp4", server.url());
     let result = download_chunk_with_retry(
@@ -1715,6 +1726,11 @@ async fn chunk_retry_recovers_from_wrong_span_response() {
         contents.iter().all(|&b| b == 0x11),
         "chunk must hold the RETRY's bytes, not the rejected wrong-span response"
     );
+
+    // Every mock must have been consumed: without this an accidental
+    // single-request run would satisfy the assertions above.
+    mock_wrong_span.assert_async().await;
+    mock_ok.assert_async().await;
 }
 
 /// Same guarantee for a truncated body.
@@ -1727,18 +1743,8 @@ async fn chunk_retry_recovers_from_short_body() {
     let temp_dir = TempDir::new().unwrap();
     let chunk_path = temp_dir.path().join("chunk_0");
 
-    let _mock_ok = server
-        .mock("GET", "/video.mp4")
-        .match_header("Range", mockito::Matcher::Any)
-        .with_status(206)
-        .with_header("content-range", "bytes 0-1023/1048576")
-        .with_body(vec![0x22u8; 1024])
-        .expect(1)
-        .create_async()
-        .await;
-
     // Answers FIRST: conformant headers, truncated body.
-    let _mock_short = server
+    let mock_short = server
         .mock("GET", "/video.mp4")
         .match_header("Range", mockito::Matcher::Any)
         .with_status(206)
@@ -1748,12 +1754,17 @@ async fn chunk_retry_recovers_from_short_body() {
         .create_async()
         .await;
 
-    let downloader = HttpDownloader::new().with_retry_config(RetryConfig::new(
-        0,
-        Duration::from_millis(1),
-        Duration::from_millis(10),
-        2.0,
-    ));
+    let mock_ok = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(206)
+        .with_header("content-range", "bytes 0-1023/1048576")
+        .with_body(vec![0x22u8; 1024])
+        .expect(1)
+        .create_async()
+        .await;
+
+    let downloader = chunk_test_downloader(3);
 
     let url = format!("{}/video.mp4", server.url());
     let result = download_chunk_with_retry(
@@ -1782,6 +1793,11 @@ async fn chunk_retry_recovers_from_short_body() {
         "the truncated attempt must be discarded, not appended to"
     );
     assert!(contents.iter().all(|&b| b == 0x22));
+
+    // Every mock must have been consumed: without this an accidental
+    // single-request run would satisfy the assertions above.
+    mock_short.assert_async().await;
+    mock_ok.assert_async().await;
 }
 
 /// A server that ignores Range (answers 200) is stating a capability, not
@@ -1805,12 +1821,7 @@ async fn chunk_retry_does_not_retry_range_ignoring_server() {
         .create_async()
         .await;
 
-    let downloader = HttpDownloader::new().with_retry_config(RetryConfig::new(
-        0,
-        Duration::from_millis(1),
-        Duration::from_millis(10),
-        2.0,
-    ));
+    let downloader = chunk_test_downloader(3);
 
     let url = format!("{}/video.mp4", server.url());
     let result = download_chunk_with_retry(
@@ -1831,6 +1842,10 @@ async fn chunk_retry_does_not_retry_range_ignoring_server() {
         result.is_err(),
         "a Range-ignoring server must fail the chunk"
     );
+    mock_200.assert_async().await;
+
+    // Every mock must have been consumed: without this an accidental
+    // single-request run would satisfy the assertions above.
     mock_200.assert_async().await;
 }
 
@@ -1930,12 +1945,7 @@ async fn resume_rejects_response_starting_at_wrong_offset() {
         .create_async()
         .await;
 
-    let downloader = HttpDownloader::new().with_retry_config(RetryConfig::new(
-        0,
-        Duration::from_millis(1),
-        Duration::from_millis(10),
-        2.0,
-    ));
+    let downloader = chunk_test_downloader(3);
 
     let temp_file = NamedTempFile::new().unwrap();
     let path = temp_file.path();

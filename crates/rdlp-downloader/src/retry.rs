@@ -24,8 +24,8 @@ use tokio_util::sync::CancellationToken;
 /// How one operation retries: which backoff to walk, what to call it in logs,
 /// and what must hold beyond the error simply being transient.
 ///
-/// Copy rather than move-only so [`with_retry_cancellable`] can hand the same
-/// policy to either arm of its `select!` — every field is a shared reference.
+/// `Copy` because every field is a shared reference, so callers can pass one
+/// policy to several operations without ceremony.
 #[derive(Clone, Copy)]
 pub(crate) struct RetryPolicy<'a> {
     config: &'a RetryConfig,
@@ -71,6 +71,46 @@ impl<'a> RetryPolicy<'a> {
         self.counter = Some(counter);
         self
     }
+}
+
+/// A retry label built only if a retry actually happens.
+///
+/// [`RetryPolicy`]'s context is a `Display` so a label that costs something to
+/// produce — a sanitized URL, a formatted id — is not paid for by the
+/// overwhelming majority of operations, which never retry. This wraps that
+/// pattern so each caller supplies just the formatting closure.
+///
+/// ```ignore
+/// let label = LazyLabel(|f| write!(f, "fragment fetch {}", sanitize(url)));
+/// ```
+pub(crate) struct LazyLabel<F>(pub(crate) F)
+where
+    F: Fn(&mut std::fmt::Formatter<'_>) -> std::fmt::Result;
+
+impl<F> Display for LazyLabel<F>
+where
+    F: Fn(&mut std::fmt::Formatter<'_>) -> std::fmt::Result,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        (self.0)(f)
+    }
+}
+
+/// Retry config with millisecond delays, for tests that need the real loop
+/// without the real waiting.
+///
+/// One definition because three test modules had grown their own — a
+/// `fast_retry` in DASH, a `fast` here, and an inline literal in the fragment
+/// tests — which is three places for the same "don't actually sleep" decision
+/// to drift.
+#[cfg(test)]
+pub(crate) const fn test_retry_config(max_retries: usize) -> RetryConfig {
+    RetryConfig::new(
+        max_retries,
+        std::time::Duration::from_millis(1),
+        std::time::Duration::from_millis(5),
+        2.0,
+    )
 }
 
 /// Run `operation` under `policy`, retrying transient failures.
@@ -128,16 +168,6 @@ mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::time::Duration;
 
-    /// Millisecond backoff so tests exercise the real loop without sleeping.
-    fn fast(max_retries: usize) -> RetryConfig {
-        RetryConfig::new(
-            max_retries,
-            Duration::from_millis(1),
-            Duration::from_millis(5),
-            2.0,
-        )
-    }
-
     fn transient() -> RdlpError {
         RdlpError::Network {
             message: "transient".to_string(),
@@ -148,7 +178,7 @@ mod tests {
     #[tokio::test]
     async fn retries_a_transient_failure_until_it_succeeds() {
         let attempts = AtomicUsize::new(0);
-        let config = fast(3);
+        let config = test_retry_config(3);
         let out: u32 = with_retry(RetryPolicy::new(&config, &"test"), || async {
             if attempts.fetch_add(1, Ordering::SeqCst) < 2 {
                 return Err(transient());
@@ -165,7 +195,7 @@ mod tests {
     async fn stops_at_the_configured_attempt_ceiling() {
         // Both sides of the bound: 2 retries means 3 attempts, not 2 and not 4.
         let attempts = AtomicUsize::new(0);
-        let config = fast(2);
+        let config = test_retry_config(2);
         let err = with_retry(RetryPolicy::new(&config, &"test"), || async {
             attempts.fetch_add(1, Ordering::SeqCst);
             Err::<(), _>(transient())
@@ -179,7 +209,7 @@ mod tests {
     #[tokio::test]
     async fn non_retryable_error_is_returned_on_the_first_attempt() {
         let attempts = AtomicUsize::new(0);
-        let config = fast(5);
+        let config = test_retry_config(5);
         let err = with_retry(RetryPolicy::new(&config, &"test"), || async {
             attempts.fetch_add(1, Ordering::SeqCst);
             Err::<(), _>(RdlpError::Http {
@@ -200,7 +230,7 @@ mod tests {
     #[tokio::test]
     async fn a_closed_gate_prevents_retrying_an_otherwise_retryable_error() {
         let attempts = AtomicUsize::new(0);
-        let config = fast(5);
+        let config = test_retry_config(5);
         let closed = || false;
         let err = with_retry(
             RetryPolicy::new(&config, &"test").gated_by(&closed),
@@ -220,7 +250,7 @@ mod tests {
         // The `&&` short-circuit is load-bearing: the fragment path's gate
         // spends a budget token, and a 404 must not cost one.
         let consulted = AtomicUsize::new(0);
-        let config = fast(5);
+        let config = test_retry_config(5);
         let gate = || {
             consulted.fetch_add(1, Ordering::SeqCst);
             true
@@ -242,7 +272,7 @@ mod tests {
     async fn retries_taken_are_counted() {
         let counter = AtomicU64::new(0);
         let attempts = AtomicUsize::new(0);
-        let config = fast(5);
+        let config = test_retry_config(5);
         with_retry(
             RetryPolicy::new(&config, &"test").counting_into(&counter),
             || async {
@@ -264,7 +294,7 @@ mod tests {
     #[tokio::test]
     async fn an_already_cancelled_token_skips_the_operation_entirely() {
         let attempts = AtomicUsize::new(0);
-        let config = fast(3);
+        let config = test_retry_config(3);
         let token = CancellationToken::new();
         token.cancel();
         let err =
@@ -281,8 +311,8 @@ mod tests {
     #[tokio::test]
     async fn a_cancel_during_backoff_returns_without_waiting_out_the_sleep() {
         // The guarantee this whole wrapper exists for: the operation always
-        // fails, and the backoff between attempts is a minute, so anything
-        // that waits for a sleep cannot finish inside the assertion below.
+        // fails, and the backoff between attempts is 30s, so anything that
+        // waits out a sleep cannot finish inside the assertion below.
         // 30s between attempts: far longer than the assertion below tolerates,
         // so a wrapper that waited for the sleep could not pass.
         let config = RetryConfig::new(5, Duration::from_secs(30), Duration::from_secs(30), 2.0);
@@ -303,7 +333,7 @@ mod tests {
         assert!(matches!(err, RdlpError::Cancelled));
         assert!(
             started.elapsed() < Duration::from_secs(5),
-            "returned only after {:?}; the 60s backoff sleep was not interrupted",
+            "returned only after {:?}; the 30s backoff sleep was not interrupted",
             started.elapsed()
         );
     }

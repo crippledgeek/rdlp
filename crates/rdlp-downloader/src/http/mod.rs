@@ -514,6 +514,12 @@ impl HttpDownloader {
         let url = url.to_string();
         let hdrs = self.headers();
 
+        // NOTE: plain `with_retry`, not the cancellable form — this loop's
+        // backoff sleeps are not themselves raced against `cancel`. That is
+        // safe only because the sole caller (`download_chunk_with_retry`)
+        // wraps this whole call in `with_retry_cancellable`. A future caller
+        // invoking this directly and expecting a cancel to interrupt a backoff
+        // would not get one.
         let response = with_retry(
             RetryPolicy::new(&self.config.retry_config, &"HTTP GET (range)"),
             || {

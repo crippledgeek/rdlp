@@ -383,7 +383,9 @@ impl HttpDownloader {
             let url_string: Arc<str> = Arc::from(url);
             let hdrs = self.headers();
 
-            let response = with_retry(RetryPolicy::new(&self.config.retry_config, &"HTTP GET (resume)"), || {
+            let response = with_retry(
+                RetryPolicy::new(&self.config.retry_config, &"HTTP GET (resume)"),
+                || {
                 let client = client.clone();
                 let url = Arc::clone(&url_string);
                 let hdrs = hdrs.clone();

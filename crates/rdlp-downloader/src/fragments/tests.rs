@@ -1752,12 +1752,7 @@ async fn unranged_fragment_plain_200_still_succeeds() {
 /// starts at 1s and doubles to 60s, which would turn a millisecond test into
 /// a five-minute one.
 fn http_with_retries(max_retries: usize) -> HttpDownloader {
-    let config = rdlp_core::RetryConfig::new(
-        max_retries,
-        std::time::Duration::from_millis(1),
-        std::time::Duration::from_millis(5),
-        2.0,
-    );
+    let config = crate::retry::test_retry_config(max_retries);
     // Both policies: the fragment path reads `fragment_retry_config`, and the
     // range request underneath it reads `retry_config`. Setting only one
     // leaves the other at the 10-attempt / 60s-ceiling default, which is
@@ -1804,9 +1799,14 @@ async fn retryable_fragment_failure_is_retried_then_succeeds() {
     let frags = vec![frag(format!("{}/f1", server.url()))];
     let http = retrying_http(3);
     let tmp = tempfile::NamedTempFile::new().expect("tmp");
-    download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
-        .await
-        .expect("a transient 500 on one fragment must be retried, not fail the download");
+    let stats =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+            .await
+            .expect("a transient 500 on one fragment must be retried, not fail the download");
+    assert_eq!(
+        stats.retries, 1,
+        "the reported retry count is what the operator sees; one 500 is one retry"
+    );
 
     let written = tokio::fs::read(tmp.path()).await.expect("read output");
     assert_eq!(
@@ -1889,9 +1889,12 @@ async fn ranged_fragment_wrong_span_is_retried_then_succeeds() {
 
 #[tokio::test]
 async fn retry_budget_bounds_cumulative_retries_across_the_fragment_list() {
-    // Per-fragment retries alone do not bound a systematically failing
-    // playlist: every fragment would burn its full allowance before the
-    // download gave up. The list-wide budget caps the total.
+    // Per-fragment retries do not bound a *flaky* list: a fragment that fails
+    // and then succeeds never propagates an error, so nothing stops a long
+    // list from spending a backoff ladder on every one of its fragments. (A
+    // wholly broken origin is already bounded — the download returns on the
+    // first fragment to exhaust its allowance.) The list-wide budget caps the
+    // cumulative total.
     //
     // 20 fragments with `max_retries = 1` sizes the budget at
     // 1 x (20 / RETRY_BUDGET_FRAGMENT_SHARE) = 2 retries for the whole list.

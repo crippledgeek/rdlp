@@ -706,3 +706,163 @@ fn test_validate_buffer_size_rejects_above_1_gib() {
         }
     ));
 }
+
+// --- retry settings (issue #570) ---
+//
+// These five fields were unvalidated for as long as they were dead: nothing
+// read them until #570 wired them through to the downloader. Each test below
+// pins one side of a boundary the validator now enforces.
+
+#[test]
+fn test_validate_accepts_default_retry_settings() {
+    assert!(
+        Config::default().validate().is_ok(),
+        "the shipped defaults must satisfy the bounds they are defaulted to"
+    );
+}
+
+#[test]
+fn test_validate_retries_accepts_zero_and_the_ceiling() {
+    // Both ends of the allowed range: 0 is "never retry", 100 is the ceiling.
+    let mut config = Config::default();
+    config.retries = 0;
+    config.fragment_retries = 0;
+    assert!(
+        config.validate().is_ok(),
+        "0 disables retrying and is valid"
+    );
+
+    config.retries = 100;
+    config.fragment_retries = 100;
+    assert!(config.validate().is_ok(), "100 is the inclusive ceiling");
+}
+
+#[test]
+fn test_validate_rejects_retries_above_the_ceiling() {
+    let mut config = Config::default();
+    config.retries = 101;
+    let err = config.validate().unwrap_err();
+    assert!(matches!(
+        err,
+        ConfigValidationError::OutOfRange {
+            field: "retries",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_validate_rejects_fragment_retries_above_the_ceiling() {
+    let mut config = Config::default();
+    config.fragment_retries = 101;
+    let err = config.validate().unwrap_err();
+    assert!(matches!(
+        err,
+        ConfigValidationError::OutOfRange {
+            field: "fragment_retries",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_validate_rejects_zero_initial_retry_delay() {
+    // Every backoff step is a multiple of the initial delay, so zero makes the
+    // whole ladder zero — a busy loop rather than a backoff.
+    let mut config = Config::default();
+    config.retry_initial_delay_ms = 0;
+    let err = config.validate().unwrap_err();
+    assert!(matches!(
+        err,
+        ConfigValidationError::OutOfRange {
+            field: "retry_initial_delay_ms",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_validate_retry_delays_accept_one_millisecond_and_one_hour() {
+    let mut config = Config::default();
+    config.retry_initial_delay_ms = 1;
+    config.retry_max_delay_ms = 1;
+    assert!(config.validate().is_ok(), "1ms is the inclusive floor");
+
+    config.retry_initial_delay_ms = 1;
+    config.retry_max_delay_ms = 60 * 60 * 1000;
+    assert!(
+        config.validate().is_ok(),
+        "one hour is the inclusive ceiling"
+    );
+}
+
+#[test]
+fn test_validate_rejects_retry_delay_above_one_hour() {
+    let mut config = Config::default();
+    config.retry_max_delay_ms = 60 * 60 * 1000 + 1;
+    let err = config.validate().unwrap_err();
+    assert!(matches!(
+        err,
+        ConfigValidationError::OutOfRange {
+            field: "retry_max_delay_ms",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_validate_rejects_max_retry_delay_below_the_initial_delay() {
+    // A ceiling under the first delay silently caps every attempt at the
+    // ceiling, which is not a backoff at all.
+    let mut config = Config::default();
+    config.retry_initial_delay_ms = 5_000;
+    config.retry_max_delay_ms = 4_999;
+    let err = config.validate().unwrap_err();
+    assert!(matches!(
+        err,
+        ConfigValidationError::OutOfRange {
+            field: "retry_max_delay_ms",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_validate_retry_multiplier_accepts_both_ends_of_its_range() {
+    let mut config = Config::default();
+    config.retry_backoff_multiplier = 1.0;
+    assert!(config.validate().is_ok(), "1.0 is a constant delay, valid");
+    config.retry_backoff_multiplier = 10.0;
+    assert!(config.validate().is_ok(), "10.0 is the inclusive ceiling");
+}
+
+#[test]
+fn test_validate_rejects_retry_multiplier_below_one() {
+    // Below 1.0 each delay is shorter than the last — the opposite of backoff.
+    let mut config = Config::default();
+    config.retry_backoff_multiplier = 0.5;
+    let err = config.validate().unwrap_err();
+    assert!(matches!(
+        err,
+        ConfigValidationError::OutOfRange {
+            field: "retry_backoff_multiplier",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_validate_rejects_retry_multiplier_that_would_not_narrow_to_f32() {
+    // The downloader casts this to f32; the validated range is what makes that
+    // narrowing exact, and is cited as such at the cast site.
+    let mut config = Config::default();
+    config.retry_backoff_multiplier = 1e40;
+    let err = config.validate().unwrap_err();
+    assert!(matches!(
+        err,
+        ConfigValidationError::OutOfRange {
+            field: "retry_backoff_multiplier",
+            ..
+        }
+    ));
+}

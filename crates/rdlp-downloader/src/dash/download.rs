@@ -453,8 +453,8 @@ async fn download_representation(
             // in-flight segment tasks from issuing further network round-trips.
             // The check below short-circuits a segment whose task starts after
             // cancel; an in-flight segment body is ALSO interrupted mid-read by
-            // the `biased` select! inside `download_one` (this PR — matches the
-            // fragment downloader's `FragmentFetchCtx::fetch` fidelity), so a
+            // the `biased` select! in `crate::retry::with_retry_cancellable`,
+            // which `download_one` and the fragment path both go through, so a
             // stalled CDN body no longer blocks until `read_timeout` fires.
             if cancel.as_ref().is_some_and(CancellationToken::is_cancelled) {
                 return Err(RdlpError::Cancelled);
@@ -711,10 +711,7 @@ async fn download_one(
 /// `same_origin_gate_tests` submodules (both reach it via `use super::*`).
 #[cfg(test)]
 fn fast_retry() -> Arc<RetryConfig> {
-    Arc::new(RetryConfig {
-        max_retries: 0,
-        ..RetryConfig::default()
-    })
+    Arc::new(crate::retry::test_retry_config(0))
 }
 
 #[cfg(test)]

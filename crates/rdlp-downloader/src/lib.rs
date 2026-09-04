@@ -344,7 +344,9 @@ pub struct DownloaderRegistry {
 /// `max_retries` supplied by the caller so the whole-resource and per-fragment
 /// policies can differ in attempt count while sharing one backoff shape.
 ///
-/// The delay fields are validated by `Config::validate()`.
+/// `Config::validate()` bounds every field read here — the attempt counts, both
+/// delays, and the multiplier's `1.0..=10.0` range. Until #570 it bounded none
+/// of them, because nothing read them.
 const fn retry_config_from(config: &Config, max_retries: usize) -> RetryConfig {
     RetryConfig::new(
         max_retries,
@@ -353,8 +355,10 @@ const fn retry_config_from(config: &Config, max_retries: usize) -> RetryConfig {
         #[allow(
             clippy::cast_possible_truncation,
             reason = "RetryConfig's multiplier is f32; Config carries f64 for TOML/serde \
-                      symmetry with the other numeric settings. Validated to a small \
-                      positive range, so the narrowing is exact in practice."
+                      symmetry with the other numeric settings. Config::validate rejects \
+                      anything outside 1.0..=10.0 (see its retry_backoff_multiplier arm \
+                      and test_validate_rejects_retry_multiplier_that_would_not_narrow_to_f32), \
+                      and every f64 in that range is exactly representable as f32."
         )]
         {
             config.retry_backoff_multiplier as f32
