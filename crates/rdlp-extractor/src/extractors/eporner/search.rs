@@ -40,7 +40,6 @@ fn keyword_to_tag(kw: &str) -> String {
         .join("-")
 }
 
-/// Look up the `sort` filter value from a `SearchQuery`.
 fn build_search_url(query: &SearchQuery, page: u32) -> String {
     let tag = keyword_to_tag(&query.query);
     let sort = crate::base::common::filter_value(&query.filters, "sort");

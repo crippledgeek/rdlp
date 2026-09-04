@@ -377,8 +377,11 @@ pub(crate) fn append_search_filters(url: &mut String, filters: &[SearchFilter]) 
 /// Sites whose search fetches page N and learns whether another page exists
 /// from the same response share one pagination loop: fetch pages in order,
 /// accumulate previews, and stop at the first of — `max_results` reached, an
-/// empty page, `!has_more`, or a fetch error (returning the partial results
-/// gathered so far). Implementors supply only the per-site pieces (a single
+/// empty page, `!has_more`, or a fetch error. A fetch error on the FIRST page
+/// is returned to the caller, because there is nothing collected to salvage
+/// and reporting a hard failure as "no results" hides each site's actionable
+/// message; a later-page error returns the results gathered so far.
+/// Implementors supply only the per-site pieces (a single
 /// [`fetch_page`](Self::fetch_page), a log tag, filter validation);
 /// [`search_all_pages`](Self::search_all_pages) is the shared default and
 /// should not be overridden.
@@ -456,8 +459,16 @@ pub(crate) trait PagedSearch: Send + Sync {
         MAX_PLAYLIST_SIZE
     }
 
-    /// Collect results across pages until `max_results` / an empty page / `!has_more`
-    /// / a fetch error (returning partials). Shared scaffold — do not override.
+    /// Collect results across pages until `max_results` / an empty page /
+    /// `!has_more` / a fetch error. Shared scaffold — do not override.
+    ///
+    /// Error handling is deliberately asymmetric, and a new site wiring itself
+    /// onto this scaffold should not re-introduce the swallow it replaced: a
+    /// failure on the FIRST page propagates as `Err`, so the site's own mapped
+    /// error (a Cloudflare challenge, a refused status) reaches the operator
+    /// instead of being reported as zero results. A failure on a later page
+    /// returns the partial results already gathered. An empty-but-SUCCESSFUL
+    /// first page is not an error and yields `Ok(vec![])`.
     async fn search_all_pages(
         &self,
         query: &SearchQuery,
@@ -755,7 +766,10 @@ mod tests {
         MockSearch::new(script)
             .search_all_pages(&query(max_results), &test_ctx())
             .await
-            .expect("scaffold returns partial results, never errors")
+            // True of every script `run` is called with (all succeed on page 1),
+            // NOT of the scaffold in general — a first-page failure returns `Err`.
+            // Use `run_result` for scripts that fail on page 1.
+            .expect("these scripts all succeed on page 1, so partials are returned")
     }
 
     /// `run` unwraps, so a script whose FIRST page fails needs the raw result.
@@ -868,8 +882,9 @@ mod tests {
 
     #[tokio::test]
     async fn validation_error_returns_err_without_fetching() {
-        // The only scaffold path that returns Err (not partial results): a
-        // failed filter validation must short-circuit BEFORE any page fetch.
+        // One of the scaffold's two Err paths (the other is a first-page
+        // fetch failure): a failed filter validation must short-circuit
+        // BEFORE any page fetch.
         let mock = MockSearch {
             script: vec![Page::Ok(previews(3), Termination::Pages(10))],
             validation_fails: true,

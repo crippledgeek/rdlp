@@ -152,9 +152,6 @@ mod tests {
         assert!(validate(&[f("route", "tags")]).is_err());
     }
 
-    /// The values here are the ones the site's own listing controls emit, not
-    /// a plausible-looking set: `videos` ("All") is a real quality value and
-    /// omitting it would leave an operator unable to ask for non-VR videos.
     /// The VALUES are the ones the site's own listing controls emit -- `videos`
     /// ("All") is a real third quality value and omitting it would leave an
     /// operator unable to ask for non-VR videos. The KEYS are rdlp's, not the
@@ -202,7 +199,7 @@ mod tests {
         assert_eq!(keys.len(), 4, "no undocumented filter keys");
     }
 
-    /// A descriptor added without a matching `URL_FILTER_KEYS` entry would
+    /// A descriptor added without a matching `URL_FILTER_PARAMS` entry would
     /// validate fine and then be silently dropped from every request — the
     /// same silent-ignore failure this vocabulary exists to prevent, moved
     /// one layer inward.
