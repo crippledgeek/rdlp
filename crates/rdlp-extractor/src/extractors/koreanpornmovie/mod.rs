@@ -279,12 +279,8 @@ impl PagedSearch for KoreanPornMovieExtractor {
         page: u32,
         ctx: &ExtractionContext,
     ) -> Result<SearchPage> {
-        let browse_mode = query
-            .filters
-            .iter()
-            .find(|f| f.key == "browse")
-            .map(|f| f.value.as_str())
-            .unwrap_or("search");
+        let browse_mode =
+            crate::base::common::filter_value(&query.filters, "browse").unwrap_or("search");
 
         debug!(
             "[KoreanPornMovie] {} '{}' (page {})",

@@ -41,17 +41,9 @@ fn keyword_to_tag(kw: &str) -> String {
 }
 
 /// Look up the `sort` filter value from a `SearchQuery`.
-fn get_sort(query: &SearchQuery) -> Option<&str> {
-    query
-        .filters
-        .iter()
-        .find(|f| f.key == "sort")
-        .map(|f| f.value.as_str())
-}
-
 fn build_search_url(query: &SearchQuery, page: u32) -> String {
     let tag = keyword_to_tag(&query.query);
-    let sort = get_sort(query);
+    let sort = crate::base::common::filter_value(&query.filters, "sort");
     let display_page = page + 1;
     match sort {
         Some("top-rated") => {

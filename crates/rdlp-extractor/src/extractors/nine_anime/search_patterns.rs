@@ -48,12 +48,8 @@ pub(crate) fn build_search_url(query: &SearchQuery, page: u32) -> String {
 
 /// Resolve the `sort` URL parameter from query filters.
 fn resolve_sort(query: &SearchQuery) -> &str {
-    let ordering = query
-        .filters
-        .iter()
-        .find(|f| f.key == "ordering")
-        .map(|f| f.value.as_str())
-        .unwrap_or("default");
+    let ordering =
+        crate::base::common::filter_value(&query.filters, "ordering").unwrap_or("default");
 
     match ordering {
         "updated" => "recently-updated",

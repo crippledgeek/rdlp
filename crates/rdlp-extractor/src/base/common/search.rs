@@ -239,10 +239,17 @@ pub(crate) fn validate_against_descriptors(
 /// Borrows from `filters` rather than cloning: every caller either compares the
 /// value or feeds it to a URL builder that takes `&str`.
 ///
-/// Shared because looking a filter up by key is the same knowledge everywhere —
-/// TNAFlix and EMPFlix each dispatch browse-vs-search on `category`, and
-/// PornoXO dispatches tag-vs-search on `route`. Only the first match is
-/// returned; the CLI produces at most one filter per key.
+/// Shared because looking a filter up by key is the same knowledge everywhere:
+/// nine of the ten `PagedSearch` sites resolve an `ordering` / `period` /
+/// `category` / `browse` / `sort` / `route` filter this way.
+///
+/// **First match wins, and duplicates are reachable.** `rdlp-cli` pushes every
+/// `--search-filter key=value` verbatim with no de-duplication
+/// (`crates/rdlp-cli/src/main.rs`), so `--search-filter sort=x --search-filter
+/// sort=top` yields two `sort` filters. This returns the first, which is why
+/// the `.any(|f| f.key == K && f.value == V)` predicates in xvideos/xnxx/abxxx
+/// are deliberately NOT written in terms of this helper — they ask a different
+/// question ("is there any such filter") and would change behaviour.
 pub(crate) fn filter_value<'a>(filters: &'a [SearchFilter], key: &str) -> Option<&'a str> {
     filters
         .iter()
@@ -546,6 +553,27 @@ mod tests {
         let mut url = String::from("https://x.test/?output=json");
         append_search_filters(&mut url, filters);
         url
+    }
+
+    #[test]
+    fn filter_value_reads_a_present_key_and_reports_an_absent_one() {
+        let filters = [filter("ordering", "newest"), filter("period", "weekly")];
+        assert_eq!(filter_value(&filters, "ordering"), Some("newest"));
+        assert_eq!(filter_value(&filters, "period"), Some("weekly"));
+        assert_eq!(filter_value(&filters, "category"), None);
+        assert_eq!(filter_value(&[], "ordering"), None);
+    }
+
+    /// First match wins. This is not academic: `rdlp-cli` pushes every
+    /// `--search-filter key=value` verbatim with no de-duplication, so a
+    /// duplicated key reaches this helper. Nine extractors resolve their
+    /// filters through it, and they previously hand-rolled `.find(...)` —
+    /// which is first-match. Anything else here would silently change all of
+    /// them.
+    #[test]
+    fn filter_value_returns_the_first_of_duplicate_keys() {
+        let filters = [filter("sort", "first"), filter("sort", "second")];
+        assert_eq!(filter_value(&filters, "sort"), Some("first"));
     }
 
     #[test]

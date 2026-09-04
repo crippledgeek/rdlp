@@ -19,12 +19,7 @@ pub const MOVIEFAP_BASE_URL: &str = "https://www.moviefap.com";
 pub fn build_search_url(query: &rdlp_types::SearchQuery, page: usize) -> String {
     let encoded_query = query.query.split_whitespace().collect::<Vec<_>>().join("+");
 
-    let sort = query
-        .filters
-        .iter()
-        .find(|f| f.key == "ordering")
-        .map(|f| f.value.as_str())
-        .unwrap_or("relevance");
+    let sort = crate::base::common::filter_value(&query.filters, "ordering").unwrap_or("relevance");
 
     format!("{MOVIEFAP_BASE_URL}/search/{encoded_query}/{sort}/{page}")
 }
