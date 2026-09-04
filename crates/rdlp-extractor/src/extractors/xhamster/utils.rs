@@ -459,9 +459,6 @@ pub fn extract_actors(webpage: &str) -> Vec<String> {
     actors
 }
 
-/// The origin every relative href on an XHamster page resolves against.
-const XHAMSTER_ROOT: &str = "https://xhamster.com";
-
 static MAIN_SELECTOR: LazyLock<scraper::Selector> = crate::static_selector!("main");
 
 // ============================================================================
@@ -485,7 +482,7 @@ static CHANNEL_LINK_SELECTOR_LEGACY: LazyLock<scraper::Selector> =
 /// skipping aggregate navigation links like `/channels/all` or
 /// `/channels/top-rated`. When no `<main>` is present (legacy layouts),
 /// falls back to an unscoped document-wide search.
-pub fn extract_channel(webpage: &str) -> Option<(String, String)> {
+pub fn extract_channel(webpage: &str, page_url: &str) -> Option<(String, String)> {
     let html = Html::parse_document(webpage);
     let has_main = html.select(&MAIN_SELECTOR).next().is_some();
     let selector: &scraper::Selector = if has_main {
@@ -509,13 +506,20 @@ pub fn extract_channel(webpage: &str) -> Option<(String, String)> {
         if name.is_empty() {
             continue;
         }
-        // Resolved against the site origin, and dropped if it lands off it.
-        // The selector is `a[href*="/channels/"]` — a CONTAINS match, so a
-        // page-supplied `https://evil.test/channels/x` was previously taken
-        // verbatim, and `@evil.test/channels/x` was concatenated into
+        // Resolved against the page's OWN URL, and dropped if it lands off
+        // that origin. The selector is `a[href*="/channels/"]` — a CONTAINS
+        // match, so a page-supplied `https://evil.test/channels/x` was once
+        // taken verbatim, and `@evil.test/channels/x` was concatenated into
         // `https://xhamster.com@evil.test/channels/x`, whose host is
         // `evil.test`. This URL becomes the channel/uploader link.
-        let Some(url) = resolve_card_url(XHAMSTER_ROOT, href) else {
+        //
+        // The base is `page_url` and NOT a fixed `https://xhamster.com`,
+        // because this extractor serves a mirror family (`.one`, `.desi`,
+        // `xhms.pro`, `xhamster\d+`, `<cc>.xhamster.com` — see `patterns.rs`).
+        // Against a fixed base a mirror page's self-absolute channel href is
+        // off-origin and gets skipped, losing the channel silently, and a
+        // relative href resolves onto the wrong host.
+        let Some(url) = resolve_card_url(page_url, href) else {
             continue;
         };
         return Some((name, url));
@@ -526,6 +530,11 @@ pub fn extract_channel(webpage: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod actor_tests {
     use super::*;
+
+    /// The page the fixture HTML is pretending to have been served from.
+    /// Every legacy test here uses `xhamster.com` markup, so the flagship
+    /// host keeps them meaning what they meant.
+    const PAGE_URL: &str = "https://xhamster.com/videos/some-video-123";
 
     #[test]
     fn extract_actors_from_html() {
@@ -605,7 +614,7 @@ mod actor_tests {
               <a href="/channels/julia-reaves-world">Julia Reaves world</a>
             </main>
         </body></html>"#;
-        let (name, url) = extract_channel(html).expect("channel should be found");
+        let (name, url) = extract_channel(html, PAGE_URL).expect("channel should be found");
         assert_eq!(name, "Julia Reaves world");
         assert_eq!(url, "https://xhamster.com/channels/julia-reaves-world");
     }
@@ -615,8 +624,58 @@ mod actor_tests {
         let html = r#"<html><body><main>
             <a href="https://xhamster.com/channels/acme-studio">Acme Studio</a>
         </main></body></html>"#;
-        let (_name, url) = extract_channel(html).expect("channel should be found");
+        let (_name, url) = extract_channel(html, PAGE_URL).expect("channel should be found");
         assert_eq!(url, "https://xhamster.com/channels/acme-studio");
+    }
+
+    /// The channel link resolves against the page's OWN host, not a hardcoded
+    /// `xhamster.com`.
+    ///
+    /// The extractor supports a mirror family — `.one`, `.desi`, `xhms.pro`,
+    /// `xhamster\d+.(com|desi)`, `xhday.com`, `xhvid.com`, `<cc>.xhamster.com`
+    /// (`patterns.rs`; `mod.rs` asserts `.one` and `2.com` are suitable). A
+    /// self-absolute channel href is the shape `channel_absolute_urls_are_preserved`
+    /// proves real pages emit, so on a mirror a fixed base fails the origin
+    /// comparison and the channel silently comes back `None`. Every committed
+    /// fixture is `xhamster.com`, which is exactly why nothing caught it.
+    ///
+    /// The relative case is the pre-existing half of the same bug: rooted at a
+    /// fixed base it produced a URL on the WRONG host, quietly.
+    #[test]
+    fn a_channel_link_resolves_against_the_mirror_that_served_the_page() {
+        let mirror = "https://xhamster.one/videos/some-video-123";
+        for (href, expected) in [
+            (
+                "https://xhamster.one/channels/acme-studio",
+                "https://xhamster.one/channels/acme-studio",
+            ),
+            (
+                "/channels/acme-studio",
+                "https://xhamster.one/channels/acme-studio",
+            ),
+        ] {
+            let html = format!(
+                r#"<html><body><main><a href="{href}">Acme Studio</a></main></body></html>"#
+            );
+            let (_name, url) = extract_channel(&html, mirror)
+                .expect("a mirror page's own channel link must survive");
+            assert_eq!(url, expected, "href {href:?} on a .one page");
+        }
+    }
+
+    /// A channel href from a DIFFERENT mirror is still off-origin and dropped.
+    /// The fix widens the base to the page's host; it does not open the guard
+    /// up to the whole mirror family.
+    #[test]
+    fn a_channel_href_on_another_mirror_is_still_refused() {
+        let html = r#"<html><body><main>
+            <a href="https://xhamster.desi/channels/other-studio">Other</a>
+            <a href="/channels/real-studio">Real</a>
+        </main></body></html>"#;
+        let (name, url) = extract_channel(html, "https://xhamster.one/videos/v-1")
+            .expect("the on-origin channel remains");
+        assert_eq!(name, "Real");
+        assert_eq!(url, "https://xhamster.one/channels/real-studio");
     }
 
     /// The selector is `a[href*="/channels/"]` — a CONTAINS match, so the page
@@ -625,9 +684,16 @@ mod actor_tests {
     /// Asserted on the parsed host rather than a prefix, because
     /// `https://xhamster.com@evil.test/channels/x` starts with the site root
     /// and is a well-formed URL whose host is `evil.test` — a prefix assertion
-    /// is blind to exactly the shape that makes this real. Each hostile link
-    /// is followed by a legitimate one, so the assertion also pins that a
-    /// poisoned link costs itself and not the whole extraction.
+    /// is blind to exactly the shape that makes this real.
+    ///
+    /// The four cases do NOT all behave alike, and the assertion is on the host
+    /// precisely because of that. `https://evil.test/…` and `//evil.test/…`
+    /// carry their own authority, so they are dropped and the following
+    /// legitimate anchor is returned. `@evil.test/…` and `.evil.test/…` are
+    /// relative-PATH references that cannot introduce an authority, so they
+    /// resolve onto the page's own origin and the *hostile* anchor is the one
+    /// returned — named `"Hostile"`, on the right host. Either way the page
+    /// never chooses the host, which is the property under test.
     #[test]
     fn a_channel_href_cannot_move_the_authority_off_xhamster() {
         for hostile in [
@@ -642,7 +708,8 @@ mod actor_tests {
                     <a href="/channels/real-studio">Real</a>
                 </main></body></html>"#
             );
-            let (_name, url) = extract_channel(&html).expect("the legitimate channel remains");
+            let (_name, url) =
+                extract_channel(&html, PAGE_URL).expect("the legitimate channel remains");
             let host = url::Url::parse(&url)
                 .expect("channel URL must parse")
                 .host_str()
@@ -662,13 +729,13 @@ mod actor_tests {
             <a href="/channels/top-rated">Top Rated</a>
             <a href="/channels/real-studio">Real Studio</a>
         </main></body></html>"#;
-        let (name, _url) = extract_channel(html).expect("should skip aggregates");
+        let (name, _url) = extract_channel(html, PAGE_URL).expect("should skip aggregates");
         assert_eq!(name, "Real Studio");
     }
 
     #[test]
     fn channel_returns_none_when_absent() {
         let html = r#"<html><body><main><p>no channels here</p></main></body></html>"#;
-        assert!(extract_channel(html).is_none());
+        assert!(extract_channel(html, PAGE_URL).is_none());
     }
 }
