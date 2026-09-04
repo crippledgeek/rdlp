@@ -25,28 +25,85 @@ use crate::base::common::{BaseExtractor, SearchOrigin, filter_value};
 static GRID_ITEM: LazyLock<Selector> =
     crate::static_selector!("ul.media-listing-grid.main-listing-grid-offset > li");
 static CARD_LINK: LazyLock<Selector> = crate::static_selector!("a.mtile-x7__title");
-static CARD_THUMB: LazyLock<Selector> = crate::static_selector!("img");
+/// The tile's poster: a direct child of the tile anchor, not merely the first
+/// `img` in the tile. Scoped like `CARD_LINK` and `CARD_LENGTH` so a badge or
+/// overlay icon added elsewhere in the tile cannot displace it. Neither
+/// fixture discriminates these selectors, so the guard is the synthetic
+/// `a_badge_image_does_not_displace_the_poster_thumbnail`. If the site ever
+/// wraps the poster, this fails CLOSED (no thumbnail) rather than silently
+/// reporting the wrong image.
+static CARD_THUMB: LazyLock<Selector> = crate::static_selector!("div.mtile-x7__inner > a > img");
 static CARD_LENGTH: LazyLock<Selector> = crate::static_selector!("span.mtile-x7__info-item-length");
 
-/// The `Next` pagination anchor, e.g. `href="/tags/creampie/?page=2"`.
-static NEXT_PAGE: Lazy<Regex> =
-    lazy_regex!(r#"<a class="rightKey" href="[^"]*"[^>]*>\s*Next\s*</a>"#);
-
-/// The `>>` (last page) anchor, e.g. `href="/tags/creampie/?page=37"`.
+/// Both pagination anchors: `Next` and `>>` (last page) each carry this class.
 ///
-/// The site emits the chevrons as literal `>>`, not the `&gt;&gt;` entity, and
-/// `page=` is reached via `?` on an unsorted listing and `&`/`&amp;` once a
-/// `sort` precedes it — hence all three spellings are accepted.
-static LAST_PAGE: Lazy<Regex> = lazy_regex!(
-    r#"<a class="rightKey" href="[^"]*[?&](?:amp;)?page=(\d+)"[^>]*>\s*(?:&gt;&gt;|>>)\s*</a>"#
-);
+/// Matched as a SELECTOR, not a regex over raw HTML. The previous regexes were
+/// anchored on the literal prefix `<a class="rightKey" href="`, so a reordered
+/// or inserted attribute made them miss — and they failed OPEN: pagination
+/// stopped after page 1 and, worse, `max_page` went `None`, which skips the
+/// clamp guard and would serve page 1's videos labelled as the requested page.
+/// CSS matching is order-insensitive and is the convention this file already
+/// uses for the grid.
+static PAGER_LINK: LazyLock<Selector> = crate::static_selector!("a.rightKey");
+
+/// The `page` parameter, read from a pager anchor's own `href`.
+///
+/// Scoped to one attribute value rather than the whole document, so it cannot
+/// be perturbed by markup around it. `?page=` on an unsorted listing and
+/// `&page=` once a filter precedes it; `&amp;` never reaches here because the
+/// HTML parser has already decoded the attribute.
+static PAGE_PARAM: Lazy<Regex> = lazy_regex!(r"[?&]page=(\d+)");
+
+/// One parsed listing page: the cards plus both pagination facts.
+///
+/// Returned together because `fetch_page` needs all three and the document is
+/// 250-315 KB — parsing it once per fetch rather than once per question.
+pub(crate) struct Listing {
+    pub results: Vec<SearchResultPreview>,
+    /// Whether a `Next` anchor is present.
+    ///
+    /// The ONLY safe `has_more` signal for this site: `?page=999` answers HTTP
+    /// 200 with page 1's videos, so "stop when the grid comes back empty"
+    /// never terminates.
+    pub has_next: bool,
+    /// The highest page number, from the `>>` anchor. `None` on the last page
+    /// and on any page whose pager the site did not render.
+    pub max_page: Option<u32>,
+}
+
+/// Parse a listing page: cards resolved against `origin`, plus its pager.
+pub(crate) fn parse_listing_page(origin: &SearchOrigin, html: &str) -> Listing {
+    let document = Html::parse_document(html);
+    let mut has_next = false;
+    let mut max_page = None;
+    for anchor in document.select(&PAGER_LINK) {
+        // Compared as decoded TEXT, so the literal `>>` this site emits and the
+        // `&gt;&gt;` entity form both arrive here identically.
+        match anchor.text().collect::<String>().trim() {
+            "Next" => has_next = true,
+            ">>" => {
+                max_page = anchor
+                    .value()
+                    .attr("href")
+                    .and_then(|href| PAGE_PARAM.captures(href))
+                    .and_then(|c| c.get(1))
+                    .and_then(|m| m.as_str().parse().ok());
+            }
+            _ => {}
+        }
+    }
+    Listing {
+        results: parse_cards(&document, origin),
+        has_next,
+        max_page,
+    }
+}
 
 /// Parse the results grid into previews, resolving each card against `origin`.
 ///
 /// Cards with no href or no title are skipped rather than failing the page: a
 /// single malformed tile must not cost the operator the other 51 results.
-pub(crate) fn parse_listing(origin: &SearchOrigin, html: &str) -> Vec<SearchResultPreview> {
-    let document = Html::parse_document(html);
+fn parse_cards(document: &Html, origin: &SearchOrigin) -> Vec<SearchResultPreview> {
     document
         .select(&GRID_ITEM)
         .filter_map(|li| {
@@ -153,21 +210,6 @@ pub(crate) fn build_listing_url(origin: &SearchOrigin, query: &SearchQuery, page
     format!("{origin}{path}?{query_string}")
 }
 
-/// Whether a `Next` pagination anchor is present.
-///
-/// This is the ONLY safe `has_more` signal for this site: `?page=999` answers
-/// HTTP 200 with page 1's videos, so "stop when the grid comes back empty"
-/// never terminates.
-pub(crate) fn has_next_page(html: &str) -> bool {
-    NEXT_PAGE.is_match(html)
-}
-
-/// The highest page number, read from the `>>` anchor. `None` on the last page,
-/// and on any page whose pager the site did not render.
-pub(crate) fn max_page(html: &str) -> Option<u32> {
-    LAST_PAGE.captures(html)?.get(1)?.as_str().parse().ok()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,7 +233,7 @@ mod tests {
     /// Verified by mutation, not assumed.
     #[test]
     fn parses_the_results_grid_not_the_recommendation_grids() {
-        let results = parse_listing(&default_origin(), TAG_PAGE_RECOMMENDATIONS);
+        let results = parse_listing_page(&default_origin(), TAG_PAGE_RECOMMENDATIONS).results;
         assert_eq!(
             results.len(),
             52,
@@ -203,12 +245,17 @@ mod tests {
     /// the same 52 rows.
     #[test]
     fn parses_a_page_that_carries_only_the_results_grid() {
-        assert_eq!(parse_listing(&default_origin(), TAG_PAGE).len(), 52);
+        assert_eq!(
+            parse_listing_page(&default_origin(), TAG_PAGE)
+                .results
+                .len(),
+            52
+        );
     }
 
     #[test]
     fn parses_first_card_fields() {
-        let listing = parse_listing(&default_origin(), TAG_PAGE);
+        let listing = parse_listing_page(&default_origin(), TAG_PAGE).results;
         let r = &listing[0];
         assert_eq!(r.title, "Test V*E*C*XFiveFive Six Mosaic Removed");
         assert_eq!(
@@ -229,7 +276,7 @@ mod tests {
 
     #[test]
     fn every_card_has_an_absolute_video_url_and_a_duration() {
-        let listing = parse_listing(&default_origin(), TAG_PAGE);
+        let listing = parse_listing_page(&default_origin(), TAG_PAGE).results;
         assert!(
             listing
                 .iter()
@@ -242,12 +289,58 @@ mod tests {
         );
     }
 
+    /// The tile's POSTER, not merely its first `img`.
+    ///
+    /// Neither committed fixture can discriminate here — measured, every
+    /// candidate selector (`img`, `.mtile-x7__inner img`, `.mtile-x7__inner >
+    /// a > img`) returns the poster for all 52 tiles on both captures. So the
+    /// discriminating case is synthesised: a badge or overlay icon added ahead
+    /// of the poster would silently replace every thumbnail URL, and an
+    /// unqualified `img` takes whichever comes first.
+    #[test]
+    fn a_badge_image_does_not_displace_the_poster_thumbnail() {
+        let with_badge = TAG_PAGE.replace(
+            r#"<li class="js-pop mtile-x7 ">"#,
+            r#"<li class="js-pop mtile-x7 "><img src="https://badge.example/new.png" alt="new">"#,
+        );
+        assert_ne!(with_badge, TAG_PAGE, "the badge must actually be injected");
+
+        let listing = parse_listing_page(&default_origin(), &with_badge).results;
+        assert_eq!(listing.len(), 52, "the badge must not change tile parsing");
+        assert!(
+            listing.iter().all(|r| r
+                .thumbnail_url
+                .as_deref()
+                .is_some_and(|t| !t.contains("badge.example"))),
+            "a badge img must never be taken as the poster: {:?}",
+            listing[0].thumbnail_url
+        );
+    }
+
+    /// Every card on both captures carries a real poster — `parses_first_card_fields`
+    /// checks one card on one fixture, which would not notice a selector that
+    /// works only for the first tile.
+    #[test]
+    fn every_card_on_both_captures_has_a_cdn_thumbnail() {
+        for html in [TAG_PAGE, TAG_PAGE_RECOMMENDATIONS] {
+            let listing = parse_listing_page(&default_origin(), html).results;
+            assert_eq!(listing.len(), 52);
+            assert!(
+                listing.iter().all(|r| r
+                    .thumbnail_url
+                    .as_deref()
+                    .is_some_and(|t| t.starts_with("https://") && t.contains("/thumbs/"))),
+                "every tile must resolve a CDN poster"
+            );
+        }
+    }
+
     /// The origin is threaded in rather than hardcoded, so a listing served by
     /// one host never yields card URLs pointing at another.
     #[test]
     fn resolves_cards_against_the_supplied_origin() {
         let origin = SearchOrigin::new("http://127.0.0.1:1234").unwrap();
-        let listing = parse_listing(&origin, TAG_PAGE);
+        let listing = parse_listing_page(&origin, TAG_PAGE).results;
         assert!(
             listing[0]
                 .video_url
@@ -257,13 +350,38 @@ mod tests {
 
     #[test]
     fn reads_pagination_bounds() {
-        assert!(has_next_page(TAG_PAGE));
+        let page = parse_listing_page(&default_origin(), TAG_PAGE);
+        assert!(page.has_next);
         // Both captures are page 1 of `/tags/creampie/`; the site's own `>>`
         // anchor reported a different last page on each (37 vs 159), so these
         // are per-capture observations, not an invariant of the tag.
-        assert_eq!(max_page(TAG_PAGE), Some(37));
-        assert!(has_next_page(TAG_PAGE_RECOMMENDATIONS));
-        assert_eq!(max_page(TAG_PAGE_RECOMMENDATIONS), Some(159));
+        assert_eq!(page.max_page, Some(37));
+        let recs = parse_listing_page(&default_origin(), TAG_PAGE_RECOMMENDATIONS);
+        assert!(recs.has_next);
+        assert_eq!(recs.max_page, Some(159));
+    }
+
+    /// Attribute ORDER is not part of the contract. Both pagination anchors
+    /// were matched by regexes anchored on the literal prefix
+    /// `<a class="rightKey" href="`, so a reordered or extra attribute made
+    /// `has_next_page` false and `max_page` None — silently, and the second is
+    /// the dangerous one: `None` skips the clamp guard entirely, so an
+    /// explicit `--page 999` would be served page 1's videos labelled 999.
+    #[test]
+    fn pagination_survives_reordered_attributes() {
+        let reordered = TAG_PAGE
+            .replace(
+                r#"<a class="rightKey" href="/tags/creampie/?page=2">Next</a>"#,
+                r#"<a href="/tags/creampie/?page=2" rel="next" class="rightKey">Next</a>"#,
+            )
+            .replace(
+                r#"<a class="rightKey" href="/tags/creampie/?page=37">>></a>"#,
+                r#"<a href="/tags/creampie/?page=37" rel="last" class="rightKey">>></a>"#,
+            );
+        assert_ne!(reordered, TAG_PAGE, "the replacements must actually apply");
+        let page = parse_listing_page(&default_origin(), &reordered);
+        assert!(page.has_next, "Next anchor must still be found");
+        assert_eq!(page.max_page, Some(37), "clamp bound must survive");
     }
 
     #[test]
@@ -271,8 +389,9 @@ mod tests {
         // On the final page the site emits neither the `Next` nor the `>>`
         // anchor; both hang off `class="rightKey"`, so renaming it models that.
         let last = TAG_PAGE.replace(r#"<a class="rightKey""#, r#"<a class="notrightKey""#);
-        assert!(!has_next_page(&last));
-        assert_eq!(max_page(&last), None);
+        let page = parse_listing_page(&default_origin(), &last);
+        assert!(!page.has_next);
+        assert_eq!(page.max_page, None);
     }
 
     fn q(query: &str, filters: &[(&str, &str)]) -> SearchQuery {
@@ -370,6 +489,10 @@ mod tests {
 
     #[test]
     fn empty_page_yields_no_results() {
-        assert!(parse_listing(&default_origin(), "<html><body></body></html>").is_empty());
+        assert!(
+            parse_listing_page(&default_origin(), "<html><body></body></html>")
+                .results
+                .is_empty()
+        );
     }
 }

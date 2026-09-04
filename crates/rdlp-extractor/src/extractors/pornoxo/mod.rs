@@ -201,11 +201,13 @@ impl PagedSearch for PornoxoExtractor {
             Err(e) => return Err(e),
         };
 
+        let listing = search::parse_listing_page(&self.origin, &body);
+
         // An out-of-range page answers HTTP 200 with page 1's videos rather
         // than an error or an empty grid, so the bound has to come from the
         // pager on the page, never from the response status or row count.
         // Returning page 1 labelled as page 999 would be confidently wrong.
-        if let Some(max) = search::max_page(&body)
+        if let Some(max) = listing.max_page
             && page > max
         {
             return Err(RdlpError::Extraction {
@@ -218,11 +220,11 @@ impl PagedSearch for PornoxoExtractor {
         }
 
         Ok(SearchPage {
-            results: search::parse_listing(&self.origin, &body),
+            results: listing.results,
             // `?page=999` returning HTTP 200 with page 1's content means an
             // empty-grid stop condition never fires; the `Next` anchor is the
             // only signal that terminates.
-            has_more: search::has_next_page(&body),
+            has_more: listing.has_next,
             // The site publishes no result count on either route.
             total_estimate: None,
         })
