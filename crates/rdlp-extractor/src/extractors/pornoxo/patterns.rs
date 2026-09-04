@@ -12,10 +12,9 @@ pub(crate) static URL_PATTERN: Lazy<Regex> =
 
 /// The `/videos/{numeric-id}/{slug}` path shape, without the host.
 ///
-/// Host gating belongs to [`URL_PATTERN`] / [`is_suitable`], which decide
-/// *which* extractor claims a URL. Once a URL has been claimed, reading its id
-/// is a pure path parse — so this pattern deliberately omits the host, which
-/// also lets the mockito-backed `extract` tests drive a loopback origin.
+/// Used ONLY by the `#[cfg(test)]` loopback seam in [`parse_video_id`], never
+/// in production — see that function.
+#[cfg(test)]
 static VIDEO_PATH_PATTERN: Lazy<Regex> = lazy_regex!(r"/videos/(\d+)/[^/?#]+");
 
 /// Whether this URL is a PornoXO video page.
@@ -23,12 +22,38 @@ pub(crate) fn is_suitable(url: &str) -> bool {
     URL_PATTERN.is_match(url)
 }
 
-/// The numeric video id from a video URL's path.
+/// The numeric video id from a canonical PornoXO video URL.
+///
+/// Production behavior: host-anchored via [`URL_PATTERN`], so a foreign or
+/// lookalike host yields `None`.
+///
+/// Test behavior: additionally accepts the path shape on `127.0.0.1` /
+/// `localhost`, so the mockito-backed `extract` tests can drive a loopback
+/// origin. Mirrors — deliberately — the `#[cfg(test)]` loopback bypass in
+/// `hls/expand.rs`, including its scope: the exemption is for loopback only,
+/// never for arbitrary hosts, and production builds compile without it.
 pub(crate) fn parse_video_id(url: &str) -> Option<String> {
-    VIDEO_PATH_PATTERN
-        .captures(url)
-        .and_then(|c| c.get(1))
-        .map(|m| m.as_str().to_owned())
+    if let Some(id) = URL_PATTERN.captures(url).and_then(|c| c.get(1)) {
+        return Some(id.as_str().to_owned());
+    }
+
+    #[cfg(test)]
+    {
+        if let Ok(parsed) = url::Url::parse(url) {
+            let scheme_ok = matches!(parsed.scheme(), "http" | "https");
+            let host_loopback = parsed.host_str().is_some_and(|h| {
+                h == "127.0.0.1" || h == "localhost" || h == "[::1]" || h == "::1"
+            });
+            if scheme_ok && host_loopback {
+                return VIDEO_PATH_PATTERN
+                    .captures(url)
+                    .and_then(|c| c.get(1))
+                    .map(|m| m.as_str().to_owned());
+            }
+        }
+    }
+
+    None
 }
 
 #[cfg(test)]
@@ -72,14 +97,38 @@ mod tests {
         );
     }
 
-    /// `parse_video_id` reads the path only; host gating is `is_suitable`'s job.
-    /// This split is what lets the mockito `extract` tests use a loopback origin.
+    /// The path-only fallback is a TEST SEAM, scoped to loopback.
+    ///
+    /// Mirrors the `#[cfg(test)]` bypass in `hls/expand.rs`: production stays
+    /// host-anchored, and only a loopback origin (which is what mockito binds)
+    /// takes the path-only route. This pins the SCOPE — a foreign host is
+    /// refused here exactly as in production, so the seam cannot silently
+    /// become a blanket widening of the parser.
+    ///
+    /// The production-only half (loopback rejected when `cfg(test)` is off)
+    /// is not observable from a test binary, which is the same limitation the
+    /// `hls/expand.rs` bypass carries.
     #[test]
-    fn parses_id_from_path_on_any_host() {
+    fn path_fallback_is_scoped_to_loopback() {
+        // The seam itself: mockito's origin resolves.
         assert_eq!(
             parse_video_id("http://127.0.0.1:1234/videos/2928541/x/").as_deref(),
             Some("2928541")
         );
+        assert_eq!(
+            parse_video_id("http://localhost:1234/videos/2928541/x/").as_deref(),
+            Some("2928541")
+        );
+
+        // ...and it stops there. These are the hosts the widening must NOT reach.
+        assert_eq!(parse_video_id("https://evil.test/videos/2928541/x/"), None);
+        assert_eq!(
+            parse_video_id("https://pornoxo.com.evil.test/videos/1/x/"),
+            None
+        );
+        assert_eq!(parse_video_id("https://notpornoxo.com/videos/1/x/"), None);
+
+        // Routing is never affected by the seam.
         assert!(!is_suitable("http://127.0.0.1:1234/videos/2928541/x/"));
     }
 }

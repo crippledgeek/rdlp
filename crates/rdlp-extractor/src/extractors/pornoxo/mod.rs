@@ -81,8 +81,12 @@ impl InfoExtractor for PornoxoExtractor {
         let json_ld = extract_json_ld(&Html::parse_document(&webpage));
 
         // Explicit M3u8: the master URL ends in `.mp4`, so extension sniffing
-        // would misclassify it as progressive HTTP.
-        let seed = Format::new("hls", &master_url, "mp4", DownloadProtocol::M3u8);
+        // would misclassify it as progressive HTTP. That `.mp4` suffix belongs
+        // to the protocol's disguise and stops there — `ext` is `m3u8`, as
+        // every other HLS extractor seeds it, because `expand_hls_url` copies
+        // the seed's `ext` onto every expanded rendition and it feeds
+        // `%(ext)s` and the container/remux decisions downstream.
+        let seed = Format::new("hls", &master_url, "m3u8", DownloadProtocol::M3u8);
 
         // MUST run before `detect_format_sizes_lazy` (issue #269 / #279).
         let formats = crate::hls::expand_hls_in_place(vec![seed], ctx.http_client.clone()).await;
@@ -133,6 +137,13 @@ mod tests {
 
     const VIDEO_PAGE: &str = include_str!("tests/pornoxo_video_page.html");
 
+    /// A WIRING check, not a pattern check: it asserts that
+    /// `InfoExtractor::suitable` delegates to `patterns::is_suitable`, which is
+    /// what decides whether this extractor claims an operator-supplied URL.
+    /// The assertions duplicate `patterns::tests` on purpose — those exercise
+    /// the regex directly and would still pass if the trait method were wired
+    /// to the wrong predicate, or to `valid_url` alone. Do not delete this as
+    /// redundant.
     #[test]
     fn suitable_matches_only_video_urls() {
         let x = PornoxoExtractor::new();
@@ -221,10 +232,44 @@ mod tests {
                 .iter()
                 .all(|f| f.protocol == DownloadProtocol::M3u8)
         );
+        // `expand_hls_url` inherits the seed's `ext` onto every expanded
+        // variant, and `ext` feeds `%(ext)s` in output templates plus the
+        // downstream container/remux decisions. The `.mp4` suffix on the
+        // signed master describes the PROTOCOL's disguise, not the container
+        // the renditions are in — every other HLS extractor seeds `m3u8`.
+        assert!(
+            info.formats.iter().all(|f| f.ext == "m3u8"),
+            "expanded HLS renditions must carry ext=m3u8, got: {:?}",
+            info.formats.iter().map(|f| &f.ext).collect::<Vec<_>>()
+        );
         assert!(
             info.tags
                 .as_ref()
                 .is_some_and(|t| t.iter().any(|k| k == "Creampie"))
+        );
+
+        // Every metadata field `extract` populates is asserted, with the values
+        // the committed fixture carries. Populating five fields and asserting
+        // two lets a wiring slip on the rest ship green — and `view_count` is
+        // the field whose loss motivated the json_ld cascade fix.
+        assert_eq!(
+            info.thumbnail.as_deref(),
+            Some(
+                "https://cdn77-t.pornoxo.com/b-pornoxo/thumbs/pxo-full/2026-08/91/\
+                 ab16fa3919a1c1b5aeb6df569c0f938ff.mp4-full-7.jpg"
+            )
+        );
+        // Pins `parse_iso8601_date`'s output SHAPE (YYYYMMDD), which nothing
+        // else in this diff exercises — the fixture carries the ISO-8601
+        // timestamp "2026-08-07T18:29:02+00:00".
+        assert_eq!(info.upload_date.as_deref(), Some("20260807"));
+        assert_eq!(info.view_count, Some(21));
+        assert!(
+            info.description
+                .as_deref()
+                .is_some_and(|d| d.starts_with("Big Tits, Amateur, Creampie")),
+            "description: {:?}",
+            info.description
         );
     }
 

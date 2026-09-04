@@ -9,8 +9,23 @@ use lazy_regex::{Lazy, Regex, lazy_regex};
 use serde::Deserialize;
 
 /// The `sources:` object literal inside `var playerConfig = { ... }`.
-/// Non-greedy to the first `}` — `sources` has no nested objects.
-static SOURCES_PATTERN: Lazy<Regex> = lazy_regex!(r"sources:\s*(\{[^}]*\})");
+///
+/// The match is ANCHORED on the `playerConfig` occurrence and spans forward to
+/// the nearest following `sources:`. An unanchored `sources:` search would take
+/// the first one anywhere in the document — an ad script, a comment, a second
+/// player, a user-controlled field — and `hlsAuto` decides what we fetch, so
+/// page text placed before the player block would choose our target.
+///
+/// `(?s)` so the window crosses newlines; `{0,4096}?` is non-greedy, so the
+/// FIRST `sources:` after the anchor wins rather than a later one. The 4096
+/// bound keeps the window inside the player block: in the captured fixture
+/// `sources:` follows `playerConfig` by ~30 characters, so this is ~2 orders of
+/// magnitude of headroom while still stopping the scan from running on into
+/// unrelated script further down the page.
+///
+/// `[^}]*` is safe because `sources` has no nested objects.
+static SOURCES_PATTERN: Lazy<Regex> =
+    lazy_regex!(r"(?s)playerConfig.{0,4096}?sources:\s*(\{[^}]*\})");
 
 #[derive(Deserialize)]
 struct Sources {
@@ -23,12 +38,16 @@ struct Sources {
 /// The signature is minted per load and expires (~132 min observed), so the
 /// returned URL must be used immediately and never cached across extractions.
 pub(crate) fn extract_master_url(html: &str) -> Result<String> {
+    // `SOURCES_PATTERN` already requires the `playerConfig` anchor, so this
+    // check does not narrow the search — it only separates "no player on this
+    // page" (login wall, removed video) from "player present but reshaped",
+    // which are different things for whoever reads the log.
     if !html.contains("playerConfig") {
         bail!("no playerConfig found on page");
     }
     let captures = SOURCES_PATTERN
         .captures(html)
-        .context("playerConfig present but no `sources:` object literal")?;
+        .context("playerConfig present but no `sources:` object literal within reach of it")?;
     let raw = captures
         .get(1)
         .context("playerConfig `sources` capture group missing")?
@@ -54,11 +73,30 @@ mod tests {
         assert!(url.ends_with("_TPL_.mp4"));
     }
 
+    /// Guards the CHOICE of `serde_json` over a hand-rolled unescape, not any
+    /// logic of ours: it cannot fail while the parse goes through serde. It
+    /// earns its place by failing the day someone replaces that with manual
+    /// string surgery, which is the tempting shortcut here.
     #[test]
     fn unescapes_json_slashes() {
         // The page embeds "https:\/\/cdn..." — serde_json must un-escape it.
         let url = extract_master_url(VIDEO_PAGE).expect("fixture has a playerConfig");
         assert!(!url.contains(r"\/"), "escaped slashes survived: {url}");
+    }
+
+    /// The match must be anchored to the `playerConfig` block, not merely
+    /// gated on the word appearing somewhere. A `sources:` literal placed
+    /// EARLIER in the document — an ad script, a second player, a UGC field —
+    /// must not win: `hlsAuto` decides what we fetch, so letting page text
+    /// before the player choose it hands an attacker the target.
+    #[test]
+    fn decoy_sources_before_the_player_block_is_ignored() {
+        let html = concat!(
+            r#"<script>var adConfig = { sources: {"hlsAuto":"https://decoy.test/x.mp4"}, };</script>"#,
+            r#"<script>var playerConfig = { sources: {"hlsAuto":"https://real.test/y.mp4"}, };</script>"#
+        );
+        let url = extract_master_url(html).expect("must find the real player block");
+        assert_eq!(url, "https://real.test/y.mp4");
     }
 
     #[test]
