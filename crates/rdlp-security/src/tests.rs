@@ -139,11 +139,21 @@ fn ipv6_multicast_is_private() {
 }
 
 #[test]
-fn ipv6_v4_mapped_loopback_is_private() {
-    // ::ffff:127.0.0.1 — IPv4-mapped form must not bypass the v4 gate.
+fn ipv6_v4_mapped_form_is_judged_by_its_inner_address() {
+    // ::ffff:0:0/96 — the mapped form must not bypass the v4 gate, and it is
+    // judged by the SAME predicate as a bare IPv4, so a range added there
+    // reaches this path too.
     assert!(is_private_host("::ffff:127.0.0.1"));
     assert!(is_private_host("::ffff:10.0.0.1"));
     assert!(is_private_host("::ffff:192.168.1.1"));
+    assert!(
+        is_private_host("::ffff:100.64.0.1"),
+        "CGNAT via the mapped form"
+    );
+    assert!(
+        !is_private_host("::ffff:8.8.8.8"),
+        "a public v4 stays fetchable"
+    );
 }
 
 #[test]
@@ -413,7 +423,8 @@ fn alternate_ipv4_encodings_are_rejected_through_validate_url_security() {
     // than of this crate: special-scheme hosts ending in a number are run
     // through `parse_ipv4addr`, which accepts decimal, octal and hex forms
     // and re-serialises them as a dotted quad, so `is_private_host` sees
-    // "127.0.0.1". Nothing in this repo would notice if that stopped.
+    // "127.0.0.1". This test is the only thing that would notice if that
+    // stopped.
     //
     // 2130706433 == 0x7f000001 == 127.0.0.1
     for url in [
@@ -427,4 +438,165 @@ fn alternate_ipv4_encodings_are_rejected_through_validate_url_security() {
             "{url} must be rejected as loopback"
         );
     }
+}
+
+// ── The rest of the IANA special-purpose registry (#663 review) ──
+//
+// The predicate is a longest-prefix match over the registry, so these pin
+// the two things a table can get wrong: a row that should block, and a row
+// that must NOT block because the registry marks it globally reachable.
+
+#[test]
+fn this_network_range_is_private() {
+    // RFC 791 s3.2: 0.0.0.0/8. Only 0.0.0.0 itself used to be covered, yet
+    // 0.x.y.z reaches the local host on several stacks.
+    assert!(is_private_host("0.0.0.0"), "first address in the range");
+    assert!(
+        is_private_host("0.255.255.255"),
+        "last address in the range"
+    );
+}
+
+#[test]
+fn addresses_bracketing_the_this_network_range_stay_public() {
+    assert!(!is_private_host("1.0.0.0"), "one above the range");
+}
+
+#[test]
+fn reserved_class_e_range_is_private() {
+    // RFC 1112 s4: 240.0.0.0/4, which also swallows the limited broadcast
+    // address at its top.
+    assert!(is_private_host("240.0.0.0"), "first address in the range");
+    assert!(
+        is_private_host("255.255.255.255"),
+        "last address in the range"
+    );
+}
+
+#[test]
+fn addresses_bracketing_the_reserved_class_e_range_stay_public() {
+    // The address one below 240.0.0.0 is 239.255.255.255, which is multicast
+    // and private for that reason — the two ranges abut, so the nearest
+    // genuinely public address is the one below multicast.
+    assert!(
+        !is_private_host("223.255.255.255"),
+        "below multicast, public"
+    );
+}
+
+#[test]
+fn documentation_ranges_are_private() {
+    // RFC 5737 TEST-NET-1/2/3, each pinned at both ends.
+    assert!(is_private_host("192.0.2.0"));
+    assert!(is_private_host("192.0.2.255"));
+    assert!(is_private_host("198.51.100.0"));
+    assert!(is_private_host("198.51.100.255"));
+    assert!(is_private_host("203.0.113.0"));
+    assert!(is_private_host("203.0.113.255"));
+}
+
+#[test]
+fn addresses_bracketing_the_documentation_ranges_stay_public() {
+    assert!(!is_private_host("192.0.1.255"));
+    assert!(!is_private_host("192.0.3.0"));
+    assert!(!is_private_host("198.51.99.255"));
+    assert!(!is_private_host("198.51.101.0"));
+    assert!(!is_private_host("203.0.112.255"));
+    assert!(!is_private_host("203.0.114.0"));
+}
+
+#[test]
+fn globally_reachable_rows_inside_a_blocked_parent_stay_public() {
+    // The load-bearing case for longest-prefix match. 192.0.0.0/24 is
+    // blocked, but the registry marks these two /32s Globally Reachable, so
+    // the more specific row must win. A first-match-wins table gets this
+    // wrong in whichever order it happens to be written.
+    assert!(!is_private_host("192.0.0.9"), "PCP anycast, RFC 7723");
+    assert!(!is_private_host("192.0.0.10"), "TURN anycast, RFC 8155");
+    // Their immediate neighbours have no carve-out and stay blocked.
+    assert!(is_private_host("192.0.0.8"), "IPv4 dummy address, RFC 7600");
+    assert!(is_private_host("192.0.0.11"));
+}
+
+#[test]
+fn globally_reachable_special_purpose_ranges_stay_public() {
+    // Present in the registry but marked Globally Reachable, so blocking
+    // them would be a false positive on real routable space.
+    assert!(!is_private_host("192.31.196.1"), "AS112-v4, RFC 7535");
+    assert!(!is_private_host("192.52.193.1"), "AMT, RFC 7450");
+    assert!(
+        !is_private_host("192.175.48.1"),
+        "AS112 delegation, RFC 7534"
+    );
+}
+
+// ── 6to4 and Teredo: IPv6 forms that tunnel to an embedded IPv4 ──
+
+#[test]
+fn six_to_four_wrapping_a_private_v4_is_private() {
+    // RFC 3056 s2 puts V4ADDR in bits 16..=47, and s5.3 encapsulates toward
+    // it — so 2002:7f00:1:: IS 127.0.0.1. The commit that added the NAT64
+    // unwrap blocked the 6to4 RELAY range (192.88.99.0/24) while leaving
+    // this, the prefix that uses the relay, wide open.
+    assert!(is_private_host("2002:7f00:1::"), "127.0.0.1");
+    assert!(
+        is_private_host("2002:a9fe:a9fe::"),
+        "169.254.169.254 metadata"
+    );
+    assert!(is_private_host("2002:c0a8:101::"), "192.168.1.1");
+}
+
+#[test]
+fn six_to_four_wrapping_a_public_v4_stays_public() {
+    // The legitimate use of the prefix; blocking it outright would be wrong.
+    assert!(!is_private_host("2002:808:808::"), "8.8.8.8");
+}
+
+#[test]
+fn a_prefix_resembling_six_to_four_is_not_unwrapped() {
+    // Only 2002::/16. A neighbouring prefix carrying the same trailing bits
+    // must not inherit the check.
+    assert!(!is_private_host("2003:7f00:1::"));
+    assert!(!is_private_host("2001:7f00:1::1"));
+}
+
+#[test]
+fn teredo_wrapping_a_private_server_or_client_is_private() {
+    // RFC 4380 s4: prefix | server IPv4 | flags | obf port | obf client IPv4.
+    // The server sits at bits 32..=63 unobfuscated; the client at 96..=127
+    // XORed with 0xFFFFFFFF, so 127.0.0.1 (0x7f000001) is written 80ff:fffe.
+    assert!(
+        is_private_host("2001:0:7f00:1:0:0:f7f7:fbfb"),
+        "server 127.0.0.1, client 8.8.4.4"
+    );
+    assert!(
+        is_private_host("2001:0:808:808:0:0:80ff:fffe"),
+        "server 8.8.8.8, client 127.0.0.1 (de-obfuscated)"
+    );
+}
+
+#[test]
+fn teredo_wrapping_public_addresses_stays_public() {
+    assert!(
+        !is_private_host("2001:0:808:808:0:0:f7f7:fbfb"),
+        "server 8.8.8.8, client 8.8.4.4 — both public"
+    );
+}
+
+#[test]
+fn a_prefix_resembling_teredo_is_not_unwrapped() {
+    // The Teredo prefix is 2001:0000::/32 — segment 1 must be zero. Without
+    // that, every 2001::/16 address would have its segments misread as an
+    // embedded IPv4.
+    assert!(!is_private_host("2001:1:7f00:1:0:0:f7f7:fbfb"));
+}
+
+#[test]
+fn rfc8215_local_use_nat64_prefix_is_not_the_well_known_prefix() {
+    // RFC 8215: "64:ff9b:1::/48 ... is distinct from the WKP 64:ff9b::/96.
+    // Therefore, the restrictions on the use of the WKP described in Section
+    // 3.1 of [RFC6052] do not apply". The middle-segment clause of the WKP
+    // match is the only thing keeping it out, and without this test deleting
+    // that clause leaves the suite green.
+    assert!(!is_private_host("64:ff9b:1:0:0:0:10.0.0.1"));
 }

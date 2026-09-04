@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 rdlp-redact = { workspace = true }
+ipnet = { workspace = true }
 url = "2.5"
 thiserror = "2.0"
 log = { workspace = true }

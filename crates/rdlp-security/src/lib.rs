@@ -49,6 +49,7 @@
 #![warn(missing_docs)]
 #![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 
+use ipnet::Ipv4Net;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use thiserror::Error;
 
@@ -161,13 +162,14 @@ pub fn validate_url_security(url: &str) -> Result<()> {
 /// This function detects various private/internal address patterns:
 /// - Localhost variants: `localhost`, `127.0.0.1`, `::1`
 /// - Internal hostnames: `*.local`, `*.internal`
-/// - Private IPv4 ranges: `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`
-/// - Loopback, link-local, unspecified, broadcast and multicast addresses
-/// - Reserved IPv4 ranges `std` has no stable predicate for: `100.64.0.0/10`
-///   (CGNAT), `192.0.0.0/24` (IETF), `192.88.99.0/24` (6to4 relay),
-///   `198.18.0.0/15` (benchmarking)
-/// - IPv6 forms wrapping a private IPv4: mapped (`::ffff:`), the deprecated
-///   compatible form (`::`), and the NAT64 Well-Known Prefix (`64:ff9b::`)
+/// - Every IPv4 prefix the IANA Special-Purpose Address Registry marks as not
+///   globally reachable — RFC 1918 private space, loopback, link-local, CGNAT,
+///   benchmarking, documentation, `240.0.0.0/4` and the rest — plus multicast
+/// - IPv6 loopback, unspecified, unique-local, link-local and multicast
+/// - Every IPv6 form that carries an IPv4 address inside it, judged by that
+///   inner address: mapped (`::ffff:0:0/96`), the deprecated compatible form
+///   (`::/96`), the NAT64 Well-Known Prefix (`64:ff9b::/96`), 6to4
+///   (`2002::/16`) and Teredo (`2001:0000::/32`)
 ///
 /// # What it does NOT do
 ///
@@ -175,7 +177,11 @@ pub fn validate_url_security(url: &str) -> Result<()> {
 /// resolves to a private address (`evil.example.com A 127.0.0.1`) passes,
 /// and always will under this design — closing DNS rebinding requires
 /// resolve → validate → connect-to-the-validated-IP, which the HTTP stack
-/// does not expose. Accepted residual risk; see #662, #663.
+/// does not expose. Accepted residual risk; tracked in #662.
+///
+/// It recognises only the NAT64 *Well-Known* Prefix. A Network-Specific
+/// Prefix is site-chosen and carries nothing that identifies it as NAT64, so
+/// an address using one is indistinguishable from ordinary IPv6 here.
 ///
 /// # Arguments
 /// * `host` - The hostname or IP address to check
@@ -228,98 +234,190 @@ pub fn is_private_host(host: &str) -> bool {
     if let Ok(ip) = host.parse::<IpAddr>() {
         return match ip {
             IpAddr::V4(ipv4) => is_private_ipv4(ipv4),
-            IpAddr::V6(ipv6) => {
-                ipv6.is_loopback()           // ::1
-                    || ipv6.is_unspecified() // ::
-                    || is_ipv6_link_local(&ipv6) // fe80::/10
-                    || is_ipv6_unique_local(&ipv6) // fc00::/7
-                    || is_ipv6_multicast(&ipv6)    // ff00::/8
-                    || is_ipv6_wrapping_private_v4(&ipv6) // ::ffff:/ ::/ 64:ff9b::
-            }
+            IpAddr::V6(ipv6) => is_private_ipv6(&ipv6),
         };
     }
 
     false
 }
 
+/// The registry's `Globally Reachable` column, named so each row says which
+/// it is at the point of writing rather than by the polarity of a bare bool.
+#[derive(Clone, Copy)]
+enum Reach {
+    /// Reachable from the public internet — an ordinary fetch target.
+    Public,
+    /// Not globally reachable: it resolves somewhere inside the network we
+    /// are running on, which is the whole SSRF concern.
+    Blocked,
+}
+
+/// The IANA IPv4 Special-Purpose Address Registry.
+///
+/// This table *is* the definition of "reserved IPv4" for this crate. Deriving
+/// the predicate from the registry rather than from a hand-picked list is what
+/// stops it drifting back into an arbitrary subset — the drift that let
+/// `2002::/16` stay open while its own relay range `192.88.99.0/24` was
+/// blocked.
+///
+/// Two kinds of registry row are deliberately absent, because neither can
+/// change an answer: a `Blocked` row wholly inside another `Blocked` row
+/// (`0.0.0.0/32`, `192.0.0.0/29`, `192.88.99.2/32`, and `255.255.255.255/32`
+/// inside `240.0.0.0/4`), and a `Public` row with no `Blocked` parent
+/// (`192.31.196.0/24` AS112-v4, `192.52.193.0/24` AMT, `192.175.48.0/24`
+/// AS112) — an address matching no row is allowed anyway. The `Public` rows
+/// that ARE here sit inside a `Blocked` parent, where they must win.
+const IPV4_SPECIAL_PURPOSE: &[(Ipv4Net, Reach)] = &[
+    // "This network" (RFC 791 §3.2). 0.x.y.z reaches the local host on
+    // several stacks, so the whole /8 goes, not just 0.0.0.0.
+    (
+        Ipv4Net::new_assert(Ipv4Addr::UNSPECIFIED, 8),
+        Reach::Blocked,
+    ),
+    // Private-Use (RFC 1918).
+    (
+        Ipv4Net::new_assert(Ipv4Addr::new(10, 0, 0, 0), 8),
+        Reach::Blocked,
+    ),
+    // Shared Address Space / CGNAT (RFC 6598). Routable inside a carrier
+    // network, so it reaches real hosts.
+    (
+        Ipv4Net::new_assert(Ipv4Addr::new(100, 64, 0, 0), 10),
+        Reach::Blocked,
+    ),
+    // Loopback (RFC 1122 §3.2.1.3).
+    (
+        Ipv4Net::new_assert(Ipv4Addr::new(127, 0, 0, 0), 8),
+        Reach::Blocked,
+    ),
+    // Link Local (RFC 3927) — the cloud metadata endpoint lives here.
+    (
+        Ipv4Net::new_assert(Ipv4Addr::new(169, 254, 0, 0), 16),
+        Reach::Blocked,
+    ),
+    // Private-Use (RFC 1918).
+    (
+        Ipv4Net::new_assert(Ipv4Addr::new(172, 16, 0, 0), 12),
+        Reach::Blocked,
+    ),
+    // IETF Protocol Assignments (RFC 6890 §2.1).
+    (
+        Ipv4Net::new_assert(Ipv4Addr::new(192, 0, 0, 0), 24),
+        Reach::Blocked,
+    ),
+    // Port Control Protocol Anycast (RFC 7723) — globally reachable, and
+    // inside the blocked /24 above, so it needs its own row to survive.
+    (
+        Ipv4Net::new_assert(Ipv4Addr::new(192, 0, 0, 9), 32),
+        Reach::Public,
+    ),
+    // TURN Anycast (RFC 8155) — same carve-out.
+    (
+        Ipv4Net::new_assert(Ipv4Addr::new(192, 0, 0, 10), 32),
+        Reach::Public,
+    ),
+    // Documentation, TEST-NET-1 (RFC 5737).
+    (
+        Ipv4Net::new_assert(Ipv4Addr::new(192, 0, 2, 0), 24),
+        Reach::Blocked,
+    ),
+    // 6to4 Relay Anycast, deprecated by RFC 7526 but still routed on some
+    // networks. Pairs with `six_to_four_ipv4` — blocking this range while
+    // passing `2002::/16` was the gap that motivated the table.
+    (
+        Ipv4Net::new_assert(Ipv4Addr::new(192, 88, 99, 0), 24),
+        Reach::Blocked,
+    ),
+    // Private-Use (RFC 1918).
+    (
+        Ipv4Net::new_assert(Ipv4Addr::new(192, 168, 0, 0), 16),
+        Reach::Blocked,
+    ),
+    // Benchmarking (RFC 2544).
+    (
+        Ipv4Net::new_assert(Ipv4Addr::new(198, 18, 0, 0), 15),
+        Reach::Blocked,
+    ),
+    // Documentation, TEST-NET-2 (RFC 5737).
+    (
+        Ipv4Net::new_assert(Ipv4Addr::new(198, 51, 100, 0), 24),
+        Reach::Blocked,
+    ),
+    // Documentation, TEST-NET-3 (RFC 5737).
+    (
+        Ipv4Net::new_assert(Ipv4Addr::new(203, 0, 113, 0), 24),
+        Reach::Blocked,
+    ),
+    // Reserved (RFC 1112 §4), and with it the limited broadcast address.
+    (
+        Ipv4Net::new_assert(Ipv4Addr::new(240, 0, 0, 0), 4),
+        Reach::Blocked,
+    ),
+];
+
 /// Whether an IPv4 address must not be fetched.
 ///
-/// The single definition of "private IPv4" for this crate. Three call sites
-/// need it — the bare-IPv4 host, an IPv4 wrapped in an IPv6 form, and the
-/// NAT64-embedded address — and they must not be able to disagree.
-const fn is_private_ipv4(ip: Ipv4Addr) -> bool {
-    ip.is_loopback()           // 127.0.0.0/8
-        || ip.is_private()     // 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16
-        || ip.is_link_local()  // 169.254.0.0/16
-        || ip.is_unspecified() // 0.0.0.0
-        || ip.is_broadcast()   // 255.255.255.255
-        || ip.is_multicast()   // 224.0.0.0/4
-        || is_reserved_ipv4(ip)
+/// The single definition of "private IPv4" for this crate. Two call sites need
+/// it — the bare-IPv4 host, and an IPv4 unwrapped from an IPv6 form — and they
+/// must not be able to disagree.
+fn is_private_ipv4(ip: Ipv4Addr) -> bool {
+    // Multicast is not in the special-purpose registry — it is its own
+    // assignment (RFC 5771) — so it is asked separately.
+    ip.is_multicast() || registry_blocks(ip)
 }
 
-/// Reserved IPv4 ranges that reach internal infrastructure but that `std`
-/// does not expose a predicate for on stable.
+/// Longest-prefix match against [`IPV4_SPECIAL_PURPOSE`].
 ///
-/// Matched on octets rather than by calling `std`: `Ipv4Addr::is_shared` and
-/// `Ipv4Addr::is_benchmarking` are unstable behind feature `ip`
-/// (rust-lang/rust#27709, verified against rustc 1.97.0), and no
-/// `is_ietf_protocol_assignment` exists on stable at all.
-const fn is_reserved_ipv4(ip: Ipv4Addr) -> bool {
-    let [a, b, c, _] = ip.octets();
-
-    // 100.64.0.0/10 — CGNAT shared address space (RFC 6598). Routable inside
-    // a carrier network, so it reaches real hosts.
-    (a == 100 && matches!(b, 64..=127))
-        // 192.0.0.0/24 — IETF protocol assignments (RFC 6890 §2.2.2).
-        || (a == 192 && b == 0 && c == 0)
-        // 192.88.99.0/24 — 6to4 relay anycast, deprecated by RFC 7526 but
-        // still routed on some networks.
-        || (a == 192 && b == 88 && c == 99)
-        // 198.18.0.0/15 — benchmarking (RFC 2544 §C.2.2).
-        || (a == 198 && matches!(b, 18 | 19))
+/// Most specific wins, which is what lets `192.0.0.9/32` stay reachable inside
+/// the blocked `192.0.0.0/24`. An address matching no row at all is ordinary
+/// public space.
+fn registry_blocks(ip: Ipv4Addr) -> bool {
+    IPV4_SPECIAL_PURPOSE
+        .iter()
+        .filter(|(net, _)| net.contains(&ip))
+        .max_by_key(|(net, _)| net.prefix_len())
+        .is_some_and(|(_, reach)| matches!(reach, Reach::Blocked))
 }
 
-/// IPv6 link-local: `fe80::/10`. First 10 bits == `1111111010`.
-#[inline]
-const fn is_ipv6_link_local(ip: &std::net::Ipv6Addr) -> bool {
-    (ip.segments()[0] & 0xffc0) == 0xfe80
-}
-
-/// IPv6 Unique Local Address: `fc00::/7`. First 7 bits == `1111110`.
-#[inline]
-const fn is_ipv6_unique_local(ip: &std::net::Ipv6Addr) -> bool {
-    (ip.segments()[0] & 0xfe00) == 0xfc00
-}
-
-/// IPv6 multicast: `ff00::/8`.
-#[inline]
-const fn is_ipv6_multicast(ip: &std::net::Ipv6Addr) -> bool {
-    (ip.segments()[0] & 0xff00) == 0xff00
-}
-
-/// An IPv6 address that carries an IPv4 address inside it, rejected when
-/// that inner address is one we would refuse on its own — otherwise an
-/// attacker writes `[::ffff:127.0.0.1]` and walks around the IPv4 gate.
+/// Whether an IPv6 address must not be fetched.
 ///
-/// Three forms carry one, and each needs its own extraction:
-///
-/// - `::ffff:0:0/96` IPv4-**mapped** (RFC 4291 §2.5.5.2)
-/// - `::/96` IPv4-**compatible** (RFC 4291 §2.5.5.1, deprecated). Distinct
-///   from the mapped form: `to_ipv4_mapped()` returns `None` for it, so it
-///   is invisible to a mapped-only check. `to_ipv4()` covers both.
-/// - `64:ff9b::/96` the NAT64 Well-Known Prefix (RFC 6052 §2.1)
-#[inline]
-fn is_ipv6_wrapping_private_v4(ip: &Ipv6Addr) -> bool {
-    ip.to_ipv4()
-        .or_else(|| nat64_embedded_ipv4(ip))
-        .is_some_and(is_private_ipv4)
+/// The four prefix families come from `std` (`is_unique_local` and
+/// `is_unicast_link_local` are stable since 1.84, below this crate's 1.85
+/// MSRV), so this crate hand-rolls no IPv6 prefix arithmetic at all.
+fn is_private_ipv6(ip: &Ipv6Addr) -> bool {
+    ip.is_loopback()                  // ::1
+        || ip.is_unspecified()        // ::
+        || ip.is_multicast()          // ff00::/8
+        || ip.is_unique_local()       // fc00::/7
+        || ip.is_unicast_link_local() // fe80::/10
+        || embedded_ipv4s(ip).any(is_private_ipv4)
 }
 
-/// The IPv4 address embedded in a `64:ff9b::/96` NAT64 address, if this is
-/// one.
+/// Every IPv4 address an IPv6 address carries inside it.
 ///
-/// Only the Well-Known Prefix is recognised; a Network-Specific Prefix is
-/// site-chosen and cannot be identified from the address alone.
+/// Each of these forms actually reaches its embedded address, so naming one
+/// names that address: `[2002:7f00:1::]` *is* 127.0.0.1. Judging the inner
+/// address is what stops all five walking around the IPv4 gate.
+///
+/// Teredo carries two — the server's and the client's; every other form
+/// carries one.
+fn embedded_ipv4s(ip: &Ipv6Addr) -> impl Iterator<Item = Ipv4Addr> {
+    [
+        // `::ffff:0:0/96` IPv4-mapped (RFC 4291 §2.5.5.2) and `::/96`
+        // IPv4-compatible (§2.5.5.1, deprecated). `to_ipv4_mapped()` sees only
+        // the first, which would leave the compatible form invisible;
+        // `to_ipv4()` covers both.
+        ip.to_ipv4(),
+        nat64_well_known_ipv4(ip),
+        six_to_four_ipv4(ip),
+        teredo_server_ipv4(ip),
+        teredo_client_ipv4(ip),
+    ]
+    .into_iter()
+    .flatten()
+}
+
+/// The IPv4 address embedded in a `64:ff9b::/96` NAT64 address (RFC 6052 §2.1).
 ///
 /// RFC 6052 §3.1 is what makes rejecting a private inner address correct
 /// rather than merely cautious: "The Well-Known Prefix MUST NOT be used to
@@ -328,16 +426,69 @@ fn is_ipv6_wrapping_private_v4(ip: &Ipv6Addr) -> bool {
 /// wrapping a public IPv4 stays allowed — refusing those would break NAT64
 /// networks outright.
 #[inline]
-fn nat64_embedded_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
-    let segments = ip.segments();
-    // §2.2: for a /96 prefix the IPv4 address occupies bits 96..=127, i.e.
-    // the final two segments, with the first six forming the prefix.
-    let is_well_known =
-        segments[0] == 0x0064 && segments[1] == 0xff9b && segments[2..6] == [0, 0, 0, 0];
-    is_well_known.then(|| {
-        let embedded = (u32::from(segments[6]) << 16) | u32::from(segments[7]);
-        Ipv4Addr::from(embedded)
-    })
+fn nat64_well_known_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
+    /// A /96 prefix occupies the first six segments. All six must match:
+    /// RFC 8215's local-use `64:ff9b:1::/48` differs only in segment 2 and is
+    /// explicitly *not* the Well-Known Prefix, so RFC 6052 §3.1's guarantee
+    /// does not cover it.
+    const WELL_KNOWN_PREFIX: [u16; 6] = [0x0064, 0xff9b, 0, 0, 0, 0];
+
+    let s = ip.segments();
+    (s[..6] == WELL_KNOWN_PREFIX).then(|| ipv4_from_segments(s[6], s[7]))
+}
+
+/// The IPv4 address embedded in a 6to4 address (`2002::/16`, RFC 3056 §2).
+///
+/// §2's field table puts V4ADDR in bits 16..=47 — segments 1 and 2. §5.3 is
+/// what makes it reachable rather than decorative: a packet to a 6to4 address
+/// is encapsulated "with IPv4 destination address = the NLA value V4ADDR
+/// extracted from the next hop IPv6 address".
+#[inline]
+fn six_to_four_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
+    const PREFIX: u16 = 0x2002;
+
+    let s = ip.segments();
+    (s[0] == PREFIX).then(|| ipv4_from_segments(s[1], s[2]))
+}
+
+/// The Teredo *server*'s IPv4 address (RFC 4380 §4).
+///
+/// §4 lays a Teredo address out as prefix | server IPv4 | flags | obfuscated
+/// port | obfuscated client IPv4, putting the server at bits 32..=63 —
+/// segments 2 and 3, unobfuscated. RFC 5991 randomises bits within the flags
+/// field only; the prefix and both embedded addresses keep these positions.
+#[inline]
+fn teredo_server_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
+    let s = ip.segments();
+    is_teredo(ip).then(|| ipv4_from_segments(s[2], s[3]))
+}
+
+/// The Teredo *client*'s IPv4 address (bits 96..=127), de-obfuscated.
+///
+/// RFC 4380 §4: "Each bit in the address and port number is reversed; this can
+/// be done by an exclusive OR of the ... 32-bit address with the hexadecimal
+/// value 0xFFFFFFFF." Per segment, that exclusive OR is a bitwise NOT.
+#[inline]
+fn teredo_client_ipv4(ip: &Ipv6Addr) -> Option<Ipv4Addr> {
+    let s = ip.segments();
+    is_teredo(ip).then(|| ipv4_from_segments(!s[6], !s[7]))
+}
+
+/// Whether this is a Teredo address: prefix `2001:0000::/32` (RFC 4380 §2.6).
+#[inline]
+const fn is_teredo(ip: &Ipv6Addr) -> bool {
+    let s = ip.segments();
+    s[0] == 0x2001 && s[1] == 0x0000
+}
+
+/// The IPv4 address spelled by two consecutive IPv6 segments, high half first.
+///
+/// One definition for all four extractors above: assembling the halves by hand
+/// at each site is how an octet-order slip gets into one of them and not the
+/// others.
+#[inline]
+fn ipv4_from_segments(high: u16, low: u16) -> Ipv4Addr {
+    Ipv4Addr::from((u32::from(high) << 16) | u32::from(low))
 }
 
 /// Validate a proxy URL for security concerns.
