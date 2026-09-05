@@ -85,7 +85,18 @@ require_tool rg
 EXTRACTOR_TARGET="crates/rdlp-extractor/src"
 PIPELINE_TARGET="crates/rdlp-postprocess/src"
 API_TARGET="crates/rdlp-api/src"
-COOKIES_TARGET="crates/rdlp-cookies/src"
+
+# Every crate's sources, so a NEW crate is gated the day it is added rather
+# than the day someone remembers to list it here. The per-crate targets above
+# stay: they run extra, crate-specific patterns.
+ALL_TARGETS=(crates/*/src crates/rdlp-desktop/src-tauri/src)
+
+# The one documented exclusion. `io_diag.rs` dumps `AVFormatContext.url` for the
+# OUTPUT context, which is the local muxer output PATH, not a network URL —
+# verified at the call site, and the reason rdlp-ffmpeg is called out as
+# ungated in CLAUDE.md. Excluded by path so the rest of the crate stays gated.
+EXCLUDED_PATH="crates/rdlp-ffmpeg/src/ffmpeg/normalize/io_diag.rs"
+
 FAIL=0
 
 # Helper: run rg -U (multiline), filter out already-compliant lines and test files,
@@ -94,7 +105,15 @@ FAIL=0
 check() {
     local label="$1"
     local pattern="$2"
-    local target="${3:-$EXTRACTOR_TARGET}"
+    shift 2
+    # Multiple targets, passed as separate args: "${ALL_TARGETS[@]}" must reach
+    # rg as N paths. Joining them into one string ("${ALL_TARGETS[@]}") hands rg
+    # a single nonexistent path whose name is every directory concatenated —
+    # which rg reports on stderr, silently making the check pass on everything.
+    local targets=("$@")
+    if [[ ${#targets[@]} -eq 0 ]]; then
+        targets=("$EXTRACTOR_TARGET")
+    fi
     local hits
     # One alternation, not six chained greps: the exclusion set is then a single
     # auditable predicate rather than a conjunction the reader must assemble.
@@ -105,8 +124,17 @@ check() {
     # Dropped rather than repaired -- a comment containing a raw URL in a format
     # string is worth seeing, and the compliant-wrapper filters already cover
     # the real false positives.
-    hits=$(rg -U --type rust -n "$pattern" "$target" 2>/dev/null \
+    #
+    # `rg -U` reports EVERY line of a multi-line match, including the bare
+    # `debug!(` opener and any continuation. Such a line cannot itself leak a
+    # URL, and keeping it defeated the compliance filter whenever the wrapper
+    # sat on a different line than the one that matched — a correctly-wrapped
+    # call reported as a FAIL. Keep only lines carrying a url token, THEN drop
+    # the compliant ones.
+    hits=$(rg -U --type rust -n "$pattern" "${targets[@]}" 2>/dev/null \
+        | grep -E '[a-z_]*url' \
         | grep -Ev 'RedactedUrl|sanitize_for_logging|safe_url|/tests/|#\[cfg\(test\)\]' \
+        | grep -Fv "$EXCLUDED_PATH" \
         || true)
     if [[ -n "$hits" ]]; then
         echo "FAIL [$label] — raw URL interpolation(s) found:"
@@ -214,24 +242,50 @@ check "positional:url_eq_brace" \
     '(format!|anyhow!|bail!|error!|warn!|info!|debug!|trace!|panic!)\(\s*"(?:[^"\\]|\\.)*[a-z_]*url=\{\}' \
     "$API_TARGET"
 
-check "cookies:positional:url_eq_brace" \
-    '(format!|anyhow!|bail!|error!|warn!|info!|debug!|trace!|panic!)\(\s*"(?:[^"\\]|\\.)*[a-z_]*url=\{\}' \
-    "$COOKIES_TARGET"
-
 # ---------------------------------------------------------------------------
-# rdlp-cookies — cookie URLs and cookie-domain-derived URLs.
+# Workspace-wide sweep — every crate, both leak shapes.
 #
-# A cookie's URL is credential-adjacent by definition, and these are `debug!`
-# sites, which the desktop now emits to stdout, the devtools console and a log
-# file. Same P1 macro class as the pipeline; the crate is small and has no
-# `RedactedUrlBuf`-typed fields, so the class runs clean here.
+# The per-crate checks above predate this and stay (they carry patterns
+# specific to those crates). These three close the gap the crate-by-crate
+# approach leaves: a URL logged from rdlp-downloader, rdlp-plugin,
+# rdlp-jsinterp or a crate added tomorrow was gated by nobody.
 # ---------------------------------------------------------------------------
-check "cookies:macro:format_url" \
-    '(format!|anyhow!|bail!|error!|warn!|info!|debug!|trace!|panic!)\(\s*"(?:[^"\\]|\\.)*\{[a-z_]*url' \
-    "$COOKIES_TARGET"
+
+# The macro class here deliberately EXCLUDES bare `format!`. Workspace-wide,
+# `format!` is the URL *constructor* — `format!("{base_url}/{slug}")` appears
+# ~20 times across the extractors and is not a log at all. Including it made
+# the sweep report construction sites as leaks, which is how a gate teaches
+# people to ignore it. The error-surfacing `format!` shapes ARE still gated,
+# by the `message:`/`reason:` checks below, which anchor on the field name.
+#
+# `panic!` is excluded for a related reason: its in-production uses are absent
+# and its test uses (`panic!("... for {url}")`) are assertions, which the
+# `#[cfg(test)]` line filter cannot see from a non-adjacent line.
+check "workspace:log-macro:format_url" \
+    '(anyhow!|bail!|error!|warn!|info!|debug!|trace!)\(\s*"(?:[^"\\]|\\.)*\{[a-z_]*url' \
+    "${ALL_TARGETS[@]}"
+
+check "workspace:positional:url_eq_brace" \
+    '(anyhow!|bail!|error!|warn!|info!|debug!|trace!)\(\s*"(?:[^"\\]|\\.)*[a-z_]*url=\{\}' \
+    "${ALL_TARGETS[@]}"
+
+# The two error-surface field shapes, workspace-wide. These were gated in the
+# extractor only; a `message: format!("...{url}")` in any other crate reaches
+# an operator the same way.
+check "workspace:message:format" \
+    'message:\s*format!\(\s*"(?:[^"\\]|\\.)*\{[a-z_]*url' \
+    "${ALL_TARGETS[@]}"
+
+check "workspace:reason:format" \
+    'reason:\s*format!\(\s*"(?:[^"\\]|\\.)*\{[a-z_]*url' \
+    "${ALL_TARGETS[@]}"
+
+check "workspace:structured-kv:url_field" \
+    '[a-z_]*url[a-z_]*:[?%]\s*=' \
+    "${ALL_TARGETS[@]}"
 
 if [[ $FAIL -eq 0 ]]; then
-    echo "PASS — no raw URL interpolations found in $EXTRACTOR_TARGET, $PIPELINE_TARGET, $API_TARGET, or $COOKIES_TARGET"
+    echo "PASS — no raw URL interpolations found in any crate"
     exit 0
 else
     echo ""

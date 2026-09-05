@@ -90,9 +90,11 @@ impl From<RdlpApiError> for AppError {
                 field: "url".to_owned(),
                 message: message.clone(),
             },
-            RdlpApiError::UnsupportedUrl { url } => Self::InvalidInput {
+            // `url` is a `RedactedUrlBuf`, so Display already strips
+            // credentials; bound as `safe_url` to say so at the use site.
+            RdlpApiError::UnsupportedUrl { url: safe_url } => Self::InvalidInput {
                 field: "url".to_owned(),
-                message: format!("Unsupported URL: {url}"),
+                message: format!("Unsupported URL: {safe_url}"),
             },
             RdlpApiError::ExtractError { .. }
             | RdlpApiError::NetworkError {

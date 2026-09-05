@@ -313,8 +313,10 @@ impl From<OrchestratorError> for RdlpApiError {
             },
             OrchestratorError::InvalidFormatSelector(msg)
             | OrchestratorError::Configuration(msg) => Self::InvalidInput { message: msg },
-            OrchestratorError::NoDownloader { url } => Self::InvalidInput {
-                message: format!("No downloader for: {url}"),
+            // `url` is a `RedactedUrlBuf`, so Display already strips
+            // credentials; bound as `safe_url` to say so at the use site.
+            OrchestratorError::NoDownloader { url: safe_url } => Self::InvalidInput {
+                message: format!("No downloader for: {safe_url}"),
             },
             OrchestratorError::ResumeDetectionFailed(msg)
             | OrchestratorError::PathGenerationFailed(msg)
