@@ -24,7 +24,7 @@
 //! HLS mode skips chunk-level adjustments too (segments have fixed
 //! server-determined sizes), leaving it a pure fixed-concurrency gate.
 
-use log::info;
+use log::{debug, info};
 use rdlp_core::ProgressCallback;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -387,7 +387,7 @@ impl AdaptiveController {
                 "Adaptive [SlowStart]: initial ramp — chunk +2 (ewma={:.1} MB/s)",
                 current_ewma / 1024.0 / 1024.0,
             );
-            info!("{msg}");
+            debug!("{msg}");
             self.log(&msg);
             self.bump_chunk_level(state, 2);
             return;
@@ -400,7 +400,7 @@ impl AdaptiveController {
                 prev / 1024.0 / 1024.0,
                 current_ewma / 1024.0 / 1024.0,
             );
-            info!("{msg}");
+            debug!("{msg}");
             self.log(&msg);
             state.slow_start_plateaus = 0;
             self.bump_chunk_level(state, 2);
@@ -412,7 +412,7 @@ impl AdaptiveController {
                 prev / 1024.0 / 1024.0,
                 current_ewma / 1024.0 / 1024.0,
             );
-            info!("{msg}");
+            debug!("{msg}");
             self.log(&msg);
             state.phase = Phase::Steady;
             state.slow_start_plateaus = 0;
@@ -427,7 +427,7 @@ impl AdaptiveController {
                     SLOW_START_PLATEAU_LIMIT,
                     current_ewma / 1024.0 / 1024.0,
                 );
-                info!("{msg}");
+                debug!("{msg}");
                 self.log(&msg);
                 state.phase = Phase::Steady;
                 state.slow_start_plateaus = 0;
@@ -459,7 +459,7 @@ impl AdaptiveController {
                 prev / 1024.0 / 1024.0,
                 current_ewma / 1024.0 / 1024.0,
             );
-            info!("{msg}");
+            debug!("{msg}");
             self.log(&msg);
             self.apply_md(state);
         } else if ratio > NOISE_THRESHOLD {
@@ -470,7 +470,7 @@ impl AdaptiveController {
                 "Adaptive [Steady]: stable at {:.1} MB/s — chunk +1",
                 current_ewma / 1024.0 / 1024.0,
             );
-            info!("{msg}");
+            debug!("{msg}");
             self.log(&msg);
             self.bump_chunk_level(state, 1);
         }
@@ -491,7 +491,7 @@ impl AdaptiveController {
             state.current_chunk_level,
             CHUNK_LEVELS[state.current_chunk_level as usize] / 1024,
         );
-        info!("{msg}");
+        debug!("{msg}");
         self.log(&msg);
     }
 
@@ -514,7 +514,7 @@ impl AdaptiveController {
                 CHUNK_LEVELS[old_level as usize] / 1024,
                 CHUNK_LEVELS[new_level as usize] / 1024,
             );
-            info!("{msg}");
+            debug!("{msg}");
             self.log(&msg);
         }
     }

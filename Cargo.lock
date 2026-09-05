@@ -6408,6 +6408,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "testing_logger",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",

@@ -458,3 +458,45 @@ fn test_realtime_ratio_calculation() {
         "realtime_ratio should be 4.0, got {ratio}"
     );
 }
+
+/// The controller's per-adjustment chatter stays at DEBUG.
+///
+/// It ran at INFO, which produced 96 lines in a single 287-line session of the
+/// desktop's log file — with a 5 MiB rotation window, sustained downloading
+/// could rotate a genuine WARN out of the file before anyone read it. These
+/// messages are not lost: `log_callback` still receives every one of them
+/// through the dedicated channel the UI reads, so the `log::` record was a
+/// duplicate.
+///
+/// The startup summary (one line per download, naming mode/size/connections)
+/// stays at INFO deliberately — that one is operator-relevant.
+#[test]
+fn per_adjustment_messages_are_debug_not_info() {
+    testing_logger::setup();
+    let ctrl = make_controller(64 * 1024 * 1024);
+
+    // Enough completed chunks to drive `adjust` through a decision.
+    for _ in 0..8 {
+        ctrl.report_chunk_complete(1024 * 1024, std::time::Duration::from_millis(500));
+    }
+
+    testing_logger::validate(|captured| {
+        let infos: Vec<&String> = captured
+            .iter()
+            .filter(|l| l.level == log::Level::Info)
+            .map(|l| &l.body)
+            .collect();
+        // The one-per-download summary may appear; nothing else may.
+        for body in &infos {
+            assert!(
+                body.starts_with("Adaptive controller:"),
+                "only the startup summary belongs at INFO, got: {body}"
+            );
+        }
+        assert!(
+            infos.len() <= 1,
+            "expected at most the startup summary at INFO, got {} lines",
+            infos.len()
+        );
+    });
+}

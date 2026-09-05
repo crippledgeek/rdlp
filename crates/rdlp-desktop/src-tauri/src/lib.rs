@@ -140,6 +140,21 @@ pub fn run() {
                     }),
                 ])
                 .level(LOG_LEVEL)
+                // Third-party protocol chatter, measured rather than guessed:
+                // in a 287-line real session, zbus's D-Bus handshake produced
+                // 140 lines at INFO (including raw byte arrays of the protocol
+                // frames) and its `read_command` span another 28 — together
+                // 58% of the file, against 23 lines of actual signal. They
+                // became visible when the workspace enabled `tracing`'s `log`
+                // feature so rdlp-http would stop being invisible; that bridge
+                // carries third-party `tracing` events too.
+                //
+                // Filtered here rather than at the source because these are
+                // not our crates. Our own spans keep their module targets
+                // (`rdlp_api::orchestrator::…`) and are unaffected — verified
+                // against the same log file.
+                .level_for("zbus", log::LevelFilter::Warn)
+                .level_for("tracing::span", log::LevelFilter::Warn)
                 // The plugin's defaults are 40 KB with `KeepOne` — which
                 // DELETES the previous file on every rotation. The workspace
                 // has 426 `debug!` sites (172 in rdlp-extractor alone), so a
