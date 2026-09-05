@@ -15,12 +15,17 @@ export interface InvokeError {
 /**
  * Extract a human-readable message from a Tauri command rejection.
  *
+ * Exported because the UI needs it too: a rejection reaching a React error
+ * branch is an `InvokeError` plain object, not an `Error`, so `(err as
+ * Error).message` is a cast the type system cannot back. Views call this
+ * instead.
+ *
  * Tauri serializes Rust errors as plain JSON objects (no Error wrapper).
  * Our AppError uses `#[serde(tag = "kind", content = "data")]`, so the
  * JS rejection value looks like:
  *   `{ kind: "SearchFailed", data: { message: "...", retryable: true } }`
  */
-function extractErrorMessage(err: unknown): string {
+export function extractErrorMessage(err: unknown): string {
     if (err instanceof Error) return err.message;
     if (typeof err === "string") return err;
     if (typeof err === "object" && err !== null) {

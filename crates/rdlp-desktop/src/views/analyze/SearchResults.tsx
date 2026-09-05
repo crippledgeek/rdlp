@@ -19,6 +19,7 @@ import type { SortingState } from "@tanstack/react-table";
 import { useTable } from "@/hooks/useTable";
 import { searchStore } from "@/stores/searchStore";
 import { enrichSearchResultQueryOptions, searchInfiniteQueryOptions } from "@/api/search";
+import { extractErrorMessage } from "@/api/invokeClient";
 import { setAnalyzeUrl } from "@/stores/uiStore";
 import { SearchFilterBar } from "./SearchFilterBar";
 import { searchResultColumns } from "./searchResultColumns";
@@ -162,6 +163,7 @@ export function SearchResults({ query, site }: SearchResultsProps) {
         data,
         isLoading,
         isError,
+        error,
         isFetchingNextPage,
         fetchNextPage,
         hasNextPage,
@@ -245,6 +247,12 @@ export function SearchResults({ query, site }: SearchResultsProps) {
                 {filterBar}
                 <div className="flex flex-col items-center justify-center flex-1 gap-3 p-8">
                     <p className="text-[13px] text-[#e85858]">Search failed</p>
+                    {/* The backend's message is the actionable half — a
+                        Cloudflare-gated site names the cookie flag and the
+                        alternate route here, and Retry alone cannot clear it. */}
+                    <p className="max-w-[46ch] text-center text-[12px] text-[var(--text-muted)] whitespace-pre-wrap">
+                        {extractErrorMessage(error)}
+                    </p>
                     <button
                         onClick={() => void refetch()}
                         className="px-3 py-1 rounded-[4px] bg-[#4a9eff] text-white text-[12px] font-medium hover:bg-[#3a8ef0] transition-colors"
