@@ -4,14 +4,13 @@
 
 import { useStore } from "@tanstack/react-store";
 import { toast } from "@/components/ui/sonner";
-import { errorMessage } from "@/lib/errorMessage";
 import { X, RotateCcw, FolderOpen } from "lucide-react";
 import { Button as AriaButton } from "react-aria-components";
 import { uiStore, setSelectedJob } from "@/stores/uiStore";
 import { cancelDownload, removeJob, startDownload } from "@/api/downloads";
 import { StatusBadge } from "@/components/StatusBadge";
 import { isTerminal as isTerminalStatus, isInFlight, jobSubLabel } from "@/lib/jobStatus";
-import { invokeTyped } from "@/api/invokeClient";
+import { invokeTyped, extractErrorMessage } from "@/api/invokeClient";
 import { cn, displayTitle, progressPercentLabel } from "@/lib/utils";
 import { formatSize } from "@/components/utils/formatUtils";
 import type { DownloadJob } from "@/types";
@@ -52,7 +51,7 @@ export function JobCard({ job, compact = false }: JobCardProps) {
         try {
             await invokeTyped<void>("reveal_in_folder", { path: job.output_path });
         } catch (e: unknown) {
-            toast.error(errorMessage(e, "Failed to reveal the file"));
+            toast.error(extractErrorMessage(e) || "Failed to reveal the file");
         }
     }
 

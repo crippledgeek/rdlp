@@ -23,9 +23,21 @@
 # or plugin post-processor) could inline one.  Gating rdlp-postprocess closes that
 # regression window at the authoring surface.  The classifier itself lives in
 # rdlp-api but cannot introduce a URL (it only formats `{e:#}` + a static string),
-# so it needs no separate gate.  rdlp-ffmpeg is intentionally NOT gated: its only
-# `url` token is `AVFormatContext.url`, which for a file muxer is the local output
-# path (not a network URL) and appears only in diagnostic logs.
+# so it needs no separate gate.
+#
+# Every crate is now swept (see ALL_TARGETS), rdlp-ffmpeg included; only the
+# single file named by EXCLUDED_PATH is skipped, and the reason is recorded
+# there. This paragraph used to say rdlp-ffmpeg was ungated outright, which
+# stopped being true when the sweep widened.
+#
+# WHAT THIS GATE DOES NOT MODEL. It matches a url-NAMED value interpolated into
+# a log or error string. It cannot see a URL that is already embedded inside
+# some other value's Display and is logged as `{e}` -- a third-party error
+# carrying `user:pass@host` or a tokened query string, for instance. That shape
+# is defended by TYPES, not by this grep: our own error variants hold
+# `RedactedUrlBuf` (see rdlp-api/src/errors.rs), so their Display is redacted
+# by construction. The grep is defence-in-depth over that, not a replacement,
+# and a green run here is not evidence about a foreign error's Display.
 
 set -euo pipefail
 
@@ -91,7 +103,19 @@ API_TARGET="crates/rdlp-api/src"
 # Every crate's sources, so a NEW crate is gated the day it is added rather
 # than the day someone remembers to list it here. The per-crate targets above
 # stay: they run extra, crate-specific patterns.
+# `nullglob` so an unmatched glob yields NOTHING rather than the literal
+# string `crates/*/src`, which rg would report as a bad path. Paired with the
+# emptiness check below, an unexpanded glob now aborts instead of silently
+# scanning zero files and reporting PASS.
+shopt -s nullglob
 ALL_TARGETS=(crates/*/src crates/rdlp-desktop/src-tauri/src)
+shopt -u nullglob
+if [[ ${#ALL_TARGETS[@]} -lt 2 ]]; then
+    printf 'CANNOT RUN: expected the crate source globs to match; got %s target(s).\n' \
+        "${#ALL_TARGETS[@]}" >&2
+    printf '       Run this from the repo root (the cd above should guarantee it).\n' >&2
+    exit 2
+fi
 
 # The one documented exclusion. `io_diag.rs` dumps `AVFormatContext.url` for the
 # OUTPUT context, which is the local muxer output PATH, not a network URL —
@@ -152,7 +176,23 @@ check() {
     # first and interpolate that, which is what the FIX line tells authors and
     # what the rest of the tree already does. The self-test pins the convention
     # (st:safe_url-binding) so it stays a decision rather than a surprise.
-    hits=$(rg -U --type rust -n "$pattern" "${targets[@]}" 2>/dev/null \
+    # rg's exit status is CHECKED, not swallowed. Discarding it (the previous
+    # `2>/dev/null | ... || true`) cannot distinguish "no matches" (rg exits 1)
+    # from "bad path" (exit 2) -- so a mistyped or unmatched target produced
+    # empty output and a cheerful PASS having scanned nothing. That is the same
+    # fail-open class as the joined-targets bug, left behind by its fix.
+    local raw rg_status=0 rg_err
+    rg_err=$(mktemp)
+    raw=$(rg -U --type rust -n "$pattern" "${targets[@]}" 2>"$rg_err") || rg_status=$?
+    if [[ $rg_status -ge 2 ]]; then
+        printf 'CANNOT RUN [%s] — rg failed (exit %s):\n' "$label" "$rg_status" >&2
+        sed 's/^/    /' "$rg_err" >&2
+        rm -f "$rg_err"
+        exit 2
+    fi
+    rm -f "$rg_err"
+
+    hits=$(printf '%s\n' "$raw" \
         | grep -E '[a-z_]*url' \
         | grep -Ev 'RedactedUrl|sanitize_for_logging|safe_url|/tests/|#\[cfg\(test\)\]' \
         | grep -Fv "$EXCLUDED_PATH" \
@@ -198,6 +238,13 @@ fn build(base_url: &str, slug: &str) -> String {
 fn log_it(u: &str) {
     let safe_url = rdlp_redact::RedactedUrl::new(u);
     log::debug!("fetching url={safe_url}");
+    // Each line below MATCHES its pattern in raw rg terms and is compliant
+    // only because of the exclusion alternation -- so deleting `safe_url`
+    // from that alternation turns the corresponding case red. Written this
+    // way after review found the earlier fixture produced ZERO raw matches
+    // for two patterns, making both cases pass no matter what they claimed.
+    log::debug!("positional url={}", safe_url);
+    log::debug!(safe_url:? = safe_url; "structured");
 }
 FIXTURE
 
@@ -223,7 +270,9 @@ FIXTURE
     # 2. URL construction is not a leak.
     st_expect clean "st:construction-not-a-leak" "$PAT_LOG_MACRO" "$tmp/one/src"
 
-    # 3. The `safe_url` convention passes both url-shaped patterns.
+    # 3. The `safe_url` convention passes both url-shaped patterns. Each
+    #    fixture line genuinely matches its pattern before filtering, so these
+    #    cases go red if the compliance alternation loses `safe_url`.
     st_expect clean "st:safe_url-binding" "$PAT_POSITIONAL" "$tmp/one/src"
     st_expect clean "st:safe_url-binding-kv" "$PAT_STRUCT_KV" "$tmp/one/src"
 

@@ -1,13 +1,14 @@
 // Tests for views/queue/JobCard — display-layer progress rendering.
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen, fireEvent } from "@testing-library/react";
+import { screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { render } from "@/test/test-utils";
 import { JobCard } from "./JobCard";
 import { uiStore, setSelectedJob } from "@/stores/uiStore";
 import { cancelDownload, removeJob, startDownload } from "@/api/downloads";
 import { invokeTyped } from "@/api/invokeClient";
+import { toast } from "@/components/ui/sonner";
 import type { DownloadJob } from "@/types";
 
 // Stub Tauri stores and IPC — JobCard reads uiStore + calls Tauri commands.
@@ -23,9 +24,13 @@ vi.mock("@/api/downloads", () => ({
     removeJob: vi.fn(),
     startDownload: vi.fn(),
 }));
-vi.mock("@/api/invokeClient", () => ({
+vi.mock("@/api/invokeClient", async (importOriginal) => ({
+    // Only `invokeTyped` is faked. `extractErrorMessage` stays real so the
+    // toast assertions below exercise the actual unwrap the app ships.
+    ...(await importOriginal<typeof import("@/api/invokeClient")>()),
     invokeTyped: vi.fn(),
 }));
+vi.mock("@/components/ui/sonner", () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 
 function makeJob(overrides: Partial<DownloadJob> = {}): DownloadJob {
     return {
@@ -174,6 +179,32 @@ describe("JobCard — progress display", () => {
         render(<JobCard job={makeJob({ status: "completed", output_path: "/tmp/v.mp4" })} />);
         fireEvent.click(screen.getByLabelText("Reveal in folder"));
         expect(vi.mocked(invokeTyped)).toHaveBeenCalledWith("reveal_in_folder", { path: "/tmp/v.mp4" });
+    });
+
+    // The reveal command can fail for reasons the user can act on (the file
+    // moved or was deleted since the download). Before #693 this handler had
+    // no catch at all, so a failure was indistinguishable from success.
+    it("Reveal surfaces a failure as a toast", async () => {
+        vi.mocked(invokeTyped).mockRejectedValueOnce({
+            message: "File not found: /tmp/v.mp4",
+        });
+        render(<JobCard job={makeJob({ status: "completed", output_path: "/tmp/v.mp4" })} />);
+        fireEvent.click(screen.getByLabelText("Reveal in folder"));
+        await waitFor(() =>
+            expect(vi.mocked(toast.error)).toHaveBeenCalledWith("File not found: /tmp/v.mp4"),
+        );
+    });
+
+    // A rejection whose message is blank must still say something: an empty
+    // string is what the `|| fallback` guard is for (an empty *object* yields
+    // "{}" from extractErrorMessage, which is truthy and bypasses it).
+    it("Reveal falls back to a generic message when the error's message is empty", async () => {
+        vi.mocked(invokeTyped).mockRejectedValueOnce({ message: "" });
+        render(<JobCard job={makeJob({ status: "completed", output_path: "/tmp/v.mp4" })} />);
+        fireEvent.click(screen.getByLabelText("Reveal in folder"));
+        await waitFor(() =>
+            expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Failed to reveal the file"),
+        );
     });
 
     it("Reveal is hidden when completed with no output_path", () => {

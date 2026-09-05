@@ -148,7 +148,12 @@ pub async fn pick_directory(app: AppHandle) -> Result<Option<String>, AppError> 
     }
 }
 
-/// Run a blocking operation without occupying an async-runtime worker thread.
+/// Run the blocking reveal without occupying an async-runtime worker thread.
+///
+/// Generic over the closure so the test can drive the same mechanism with a
+/// synthetic blocking call, but named — and its error message phrased — for
+/// the one operation it serves. A second caller would inherit "Reveal task
+/// failed", so give this a parameterised message before adding one.
 ///
 /// `tauri-plugin-opener`'s Linux reveal is blocking: it opens a zbus session
 /// connection, which calls `block_on` internally. Invoked directly from an
@@ -159,9 +164,10 @@ pub async fn pick_directory(app: AppHandle) -> Result<Option<String>, AppError> 
 ///
 /// Upstream has the same defect in the plugin's own command
 /// (tauri-apps/plugins-workspace#3552); its fix PR #3565 was still unmerged as
-/// of 2026-09-05 and crates.io 2.5.5 predates it, so bumping the dependency
-/// does not remove the need for this wrapper.
-async fn off_runtime<F, R>(f: F) -> Result<R, AppError>
+/// of 2026-09-05. We pin 2.5.3, and the newest release then published (2.5.5)
+/// also predates the fix — so bumping the dependency does not remove the need
+/// for this wrapper.
+async fn reveal_off_runtime<F, R>(f: F) -> Result<R, AppError>
 where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
@@ -176,8 +182,9 @@ where
 /// Reveal a file or directory in the system file manager.
 ///
 /// Uses `tauri-plugin-opener` to invoke the OS-native "reveal in folder"
-/// action for the given path. Requires the `opener:allow-reveal-item-in-dir`
-/// capability.
+/// action for the given path. No `opener:` capability is involved: Tauri
+/// capabilities gate JS-to-command IPC, and this calls the plugin's Rust
+/// function directly.
 ///
 /// # Arguments
 ///
@@ -207,7 +214,7 @@ pub async fn reveal_in_folder(path: String) -> Result<(), AppError> {
 
     info!("reveal_in_folder: revealing {path}");
 
-    off_runtime(move || tauri_plugin_opener::reveal_item_in_dir(&path_buf))
+    reveal_off_runtime(move || tauri_plugin_opener::reveal_item_in_dir(&path_buf))
         .await?
         .map_err(|e| AppError::Internal {
             message: format!("Failed to reveal path in folder: {e}"),
@@ -217,7 +224,7 @@ pub async fn reveal_in_folder(path: String) -> Result<(), AppError> {
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
-    use super::off_runtime;
+    use super::reveal_off_runtime;
 
     /// A blocking closure that itself starts a runtime must survive.
     ///
@@ -229,7 +236,7 @@ mod tests {
     /// is exactly what the command used to do.
     #[tokio::test]
     async fn runs_a_blocking_call_that_starts_its_own_runtime() {
-        let out = off_runtime(|| {
+        let out = reveal_off_runtime(|| {
             tokio::runtime::Runtime::new()
                 .expect("runtime")
                 .block_on(async { 7 })
