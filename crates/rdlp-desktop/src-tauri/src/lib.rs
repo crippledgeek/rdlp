@@ -14,7 +14,6 @@
 pub mod commands;
 pub mod error;
 pub mod events;
-pub mod panic_hook;
 pub mod state;
 
 use rdlp_postprocess::TempRegistry;
@@ -32,15 +31,45 @@ use tauri::Manager;
 /// `tauri.conf.json`) or if the main webview window cannot be opened.
 /// These are unrecoverable startup failures.
 pub fn run() {
-    // Install the global panic hook before any Tauri or Tokio code
-    // runs so panics in async command handlers are captured to the log
-    // rather than dying silently. See `panic_hook` module docs.
-    panic_hook::install_panic_hook();
+    // Route panics through `log` so they reach the same targets as every other
+    // record. Panics in async command handlers are the reason this matters: a
+    // panicking Tauri command never sends an IPC response, so the caller's
+    // promise hangs with no error anywhere — how #693 stayed invisible.
+    log_panics::init();
 
     // SAFETY (expect): startup-time fatal; tauri.conf.json is validated at
     // build time and the application cannot function without the webview.
     #[allow(clippy::expect_used)]
     let app = tauri::Builder::default()
+        // Registered first: it installs the global `log` backend, and every
+        // other plugin and command logs through the `log` facade. The crate
+        // depended on `log` with no backend at all, so every `info!`/`warn!`
+        // in the desktop crate was discarded.
+        //
+        // `Stdout` covers `pnpm tauri dev`; `LogDir` gives a file to attach to
+        // a bug report, at `$XDG_DATA_HOME/com.rdlp.desktop/logs` on Linux,
+        // rotated by the plugin's own `max_file_size` handling. `Webview` is
+        // deliberately omitted: it only emits an event, which shows nothing
+        // unless the frontend also calls `attachConsole()` from
+        // `@tauri-apps/plugin-log`.
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: None,
+                    }),
+                ])
+                // Debug while developing, Info in a release build: the debug
+                // level carries per-fragment download detail that would churn
+                // a user's log file for no diagnostic gain.
+                .level(if cfg!(debug_assertions) {
+                    log::LevelFilter::Debug
+                } else {
+                    log::LevelFilter::Info
+                })
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::new())
