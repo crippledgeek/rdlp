@@ -269,3 +269,36 @@ async fn test_validate_urls_auth_reason_on_403() {
     assert!(validated.tracks.is_empty());
     assert!(validated.reasons.contains(&SubtitleReason::RequiresAuth));
 }
+
+/// The vector this branch exists to close, at the one place reachable without
+/// a live server.
+///
+/// Measured against wreq 6.0.0-rc.28: its `Error` Display renders
+/// `error sending request for uri (<uri>)`, and it STRIPS userinfo from that
+/// uri — but keeps the query string intact. So `admin:hunter2@` is not the
+/// leak here; `?token=…` is, and that is how signed CDN URLs actually carry
+/// credentials. A first version of this test used userinfo and passed with the
+/// redaction removed, proving nothing.
+///
+/// Port 1 refuses immediately, so the error is real with no mock and no
+/// network. `validate_single_url` is a plain private async fn taking a
+/// `&wreq::Client` — the seam I had wrongly reported as absent.
+#[tokio::test(flavor = "current_thread")]
+async fn a_network_error_carries_no_credentials_from_the_url() {
+    let client = wreq::Client::builder().build().expect("client builds");
+    let outcome = super::validate_single_url(
+        "http://127.0.0.1:1/subs.vtt?token=hunter2&expires=1",
+        &client,
+    )
+    .await;
+
+    let super::UrlValidation::NetworkError(message) = outcome else {
+        panic!("a refused connection must produce NetworkError");
+    };
+    assert!(
+        !message.contains("hunter2"),
+        "signed-URL token survived into the diagnostic/log string: {message}"
+    );
+    // The host and path must survive, or the diagnostic stops saying where.
+    assert!(message.contains("127.0.0.1"), "over-redacted: {message}");
+}

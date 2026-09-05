@@ -15,9 +15,11 @@ use regex::Regex;
 /// Ordered set of `(pattern, replacement)` pairs applied left-to-right by [`redact_str`].
 ///
 /// **Ordering rules:**
-/// - Exact case-sensitive AWS SigV4 patterns come first since they have
-///   upper-case letters that would be clobbered by the generic case-insensitive
-///   `signature` / `sig` patterns.
+/// - Exact case-sensitive AWS SigV4 patterns come first. Like the ordering
+///   bullet below, this is now belt-and-braces rather than load-bearing: the
+///   character before `Signature` in `X-Amz-Signature` is `-`, which is not in
+///   the boundary set, so the generic `signature=` pattern cannot match it
+///   whatever the order. Kept as a convention, not as a guarantee.
 /// - Longer param names precede shorter ones. With the boundary anchor this is
 ///   now belt-and-braces rather than load-bearing: `_` and `-` are not in the
 ///   boundary set, so `token=` cannot match inside `access_token=` regardless
@@ -30,7 +32,8 @@ use regex::Regex;
 ///   `X-Amz-Signature`).
 ///   The `^` alternative also matches bare credential fragments with no leading
 ///   separator (e.g. `token=secret` as a standalone log string).
-/// - The userinfo (`//user:pass@host`) pattern is a standalone structural rule.
+/// - Userinfo (`//user:pass@host`) is NOT in this array; it has no name=value
+///   shape and lives in [`USERINFO_PATTERN`], which carries its own rationale.
 ///
 /// Each entry pairs a pattern with the parameter NAME to re-emit. Every
 /// pattern exposes group 1 = the optional boundary character and group 2 = the
@@ -314,4 +317,30 @@ macro_rules! redacted_debug_tuple {
             .field(&$crate::redact_str($text))
             .finish()
     };
+}
+
+/// Serialize a free-text field with credentials stripped.
+///
+/// For a type that derives `Serialize`: the derive reads each field directly,
+/// so redacting its `Display` and `Debug` does nothing for the serialized form.
+/// This guards that form, on the field, so it applies to every construction
+/// site rather than to whichever ones a reader remembers to check.
+///
+/// ```
+/// # #[derive(serde::Serialize)]
+/// struct Payload {
+///     #[serde(serialize_with = "rdlp_redact::serialize_redacted")]
+///     message: String,
+/// }
+/// ```
+///
+/// # Errors
+///
+/// Propagates the serializer's own error.
+#[cfg(feature = "serde")]
+pub fn serialize_redacted<S>(value: &str, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&redact_str(value))
 }

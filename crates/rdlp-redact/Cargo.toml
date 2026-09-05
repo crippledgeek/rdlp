@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 regex = { workspace = true }
 log = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 tracing = { workspace = true }
@@ -13,3 +14,6 @@ tracing-subscriber = { workspace = true }
 
 [features]
 log-kv = ["dep:log"]
+# Provides `serialize_redacted`, the serde field serializer shared by every
+# `Serialize` type carrying operator-assembled free text.
+serde = ["dep:serde"]

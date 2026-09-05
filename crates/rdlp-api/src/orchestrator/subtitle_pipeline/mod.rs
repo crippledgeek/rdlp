@@ -88,6 +88,14 @@ pub(super) async fn validate_subtitle_urls(
 enum UrlValidation {
     Reachable,
     Unreachable(u16),
+    /// The transport error's text, ALREADY REDACTED.
+    ///
+    /// Both consumers — the `warn!` and the stored `SubtitleDiagnostic` — rely
+    /// on that, and the invariant is held by the two construction sites below
+    /// agreeing rather than by the type. A newtype would make it a compiler
+    /// fact; with two private construction sites in one file it is a judgement
+    /// call, recorded here so the next site added knows it is joining a
+    /// contract.
     NetworkError(String),
 }
 

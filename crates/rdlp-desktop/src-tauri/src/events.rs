@@ -61,7 +61,7 @@ pub struct DownloadErrorPayload {
     /// its own source; the serializer is belt-and-braces, and keeps the rule
     /// uniform — every free-text `String` on a `Serialize` type carries it, so
     /// a reader never has to trace provenance to know whether one is missing.
-    #[serde(serialize_with = "crate::error::serialize_redacted")]
+    #[serde(serialize_with = "rdlp_redact::serialize_redacted")]
     pub(crate) error: String,
     /// Whether the frontend should offer a retry button.
     pub(crate) retryable: bool,
@@ -132,7 +132,7 @@ pub struct DownloadLogPayload {
     /// [`crate::error::AppError`]'s message fields: this text is assembled by
     /// `format!("…: {e}")` at its producers, and a stringified transport error
     /// renders the request URI verbatim.
-    #[serde(serialize_with = "crate::error::serialize_redacted")]
+    #[serde(serialize_with = "rdlp_redact::serialize_redacted")]
     pub(crate) message: String,
 }
 

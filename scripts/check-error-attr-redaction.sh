@@ -173,18 +173,33 @@ scan_serde_file() {
     }
     awk -v exempt="$SERDE_EXEMPT_RE" '
         /^[ \t]*\/\// { next }
-        # Must BE the attribute, not merely contain its text: a trailing comment
-        # mentioning it is not a guard. Same defect this gate closed for
-        # `redact(` one function above.
-        /^[ \t]*#\[serde\(/ && /serialize_with[ \t]*=[ \t]*"([A-Za-z_]+::)*serialize_redacted"/ {
-            guarded = 1; next
+        # Accumulate the attribute — rustfmt wraps long ones — and test the
+        # ACCUMULATION, mirroring what scan_file does for #[error(...)]. An
+        # earlier version set the guard on the closing `)]` of any wrapped
+        # attribute without checking its contents, so `#[serde(\n rename =
+        # "msg"\n)]` granted it. Its canary passed for the wrong reason.
+        #
+        # It must also BE the attribute rather than merely contain its text: a
+        # trailing comment naming the serializer is not a guard. Same defect
+        # this gate closed for `redact(` one function above.
+        /^[ \t]*#\[serde\(/ {
+            attr_acc = $0
+            in_attr = 1
+            if ($0 ~ /\)\]/) { close_serde_attr() }
+            next
         }
-        # A rustfmt-wrapped attribute spans lines; keep the guard alive across
-        # its continuation rather than letting the closing `)]` clear it.
-        guarded_open && /\)\]/ { guarded_open = 0; guarded = 1; next }
-        guarded_open { next }
-        /^[ \t]*#\[serde\(/ && !/\)\]/ { guarded_open = 1; next }
-        /^[ \t]*(pub(\([a-z]+\))?[ \t]+)?[a-z_]+[ \t]*:[ \t]*(Option<)?String[,>]/ {
+        in_attr {
+            attr_acc = attr_acc $0
+            if ($0 ~ /\)\]/) { close_serde_attr() }
+            next
+        }
+
+        # Collections of free text count: Vec<String>, Box<str> and a
+        # borrowed-or-owned Cow of str reach a serializer exactly as a bare
+        # String does, and an earlier version of this rule matched none of
+        # them — no flag, no exemption, silently invisible. (No apostrophe in
+        # this comment: it sits inside a single-quoted awk program.)
+        /^[ \t]*(pub(\([a-z]+\))?[ \t]+)?[a-z_]+[ \t]*:[ \t]*(Option<|Vec<|Box<|Cow<[^,]*, *)*(String|str)[,>]/ {
             name = $0
             sub(/^[ \t]*(pub(\([a-z]+\))?[ \t]+)?/, "", name)
             sub(/[ \t]*:.*$/, "", name)
@@ -197,6 +212,13 @@ scan_serde_file() {
         }
         # Any other non-blank line clears a pending attribute.
         /[^ \t]/ { guarded = 0 }
+
+        function close_serde_attr() {
+            in_attr = 0
+            if (attr_acc ~ /serialize_with[ \t]*=[ \t]*"([A-Za-z_]+::)*serialize_redacted"/) {
+                guarded = 1
+            }
+        }
     ' "$file"
 }
 
@@ -267,8 +289,18 @@ if [ "${1:-}" = "--self-test" ]; then
         fi
     }
     serde_flags "unguarded String field" '    pub(crate) message: String,'
+    serde_flags "unguarded Vec<String> field" '    pub(crate) leaks: Vec<String>,'
+    serde_flags "unguarded Box<str> field" '    pub(crate) leak: Box<str>,'
     serde_flags "unguarded Option<String> field" '    pub(crate) reason: Option<String>,'
     serde_flags "serialize_with only in a trailing comment" '    pub(crate) leak: String, // serialize_with = "serialize_redacted"'
+    serde_flags "wrapped serde attribute WITHOUT the serializer" '    #[serde(
+        rename = "msg"
+    )]
+    pub(crate) message: String,'
+    serde_flags "wrapped skip_serializing_if, no serializer" '    #[serde(
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub(crate) reason: Option<String>,'
     serde_clean "rustfmt-wrapped serde attribute" '    #[serde(
         serialize_with = "serialize_redacted"
     )]
