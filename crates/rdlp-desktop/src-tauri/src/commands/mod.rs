@@ -10,6 +10,7 @@
 pub mod codecs;
 pub mod download;
 pub mod formats;
+pub mod network;
 pub mod search;
 pub mod settings;
 pub mod thumbnail;

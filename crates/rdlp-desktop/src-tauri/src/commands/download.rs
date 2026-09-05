@@ -216,15 +216,18 @@ fn build_network_options(
     options: &DownloadOptions,
     settings: &crate::state::AppSettings,
 ) -> NetworkOptions {
-    // Merge cookies: per-download overrides settings default.
+    // Merge cookies: per-download overrides settings default. The settings
+    // half comes from the shared helper search also uses, so the two paths
+    // cannot disagree about which settings fields are the cookie source.
+    let from_settings = crate::commands::network::cookies_network_options(settings);
     let cookies_from_browser = options
         .cookies_from_browser
-        .or(settings.cookies_from_browser);
+        .or(from_settings.cookies_from_browser);
     let cookies_file: Option<PathBuf> = options
         .cookies_file
         .as_deref()
         .map(PathBuf::from)
-        .or_else(|| settings.cookies_file.clone());
+        .or(from_settings.cookies_file);
 
     // Merge proxy: per-download overrides settings default.
     let proxy = options.proxy.clone().or_else(|| settings.proxy.clone());

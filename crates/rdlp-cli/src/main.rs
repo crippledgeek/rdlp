@@ -274,7 +274,17 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
             page: Some(1),
         };
 
-        match client.search_page(site, &search_query).await {
+        // The CLI's client is built from the fully-merged config (flags
+        // included), so it already carries the cookie source: no per-call
+        // override is needed here.
+        match client
+            .search_page(
+                site,
+                &search_query,
+                &rdlp_api::request::NetworkOptions::default(),
+            )
+            .await
+        {
             Ok(response) => {
                 if response.results.is_empty() {
                     eprintln!("No results found for '{query_text}'.");

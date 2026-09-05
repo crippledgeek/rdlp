@@ -10,6 +10,7 @@ use rdlp_api::{
     SearchSiteInfo,
 };
 
+use crate::commands::network::cookies_network_options;
 use crate::error::AppError;
 use crate::state::AppState;
 
@@ -70,6 +71,18 @@ pub async fn search_content(
         });
     }
 
+    // The shared client was built once from `config.toml`; the GUI's cookie
+    // setting lives in `AppSettings`, so it can only reach search as a
+    // per-call override (#691). Clone out of the guard: it must not be held
+    // across the `.await` below.
+    let network = {
+        let settings = state
+            .settings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cookies_network_options(&settings)
+    };
+
     if let Some(p) = page {
         // Paginated mode: fetch a single page
         let search_query = SearchQuery {
@@ -81,7 +94,7 @@ pub async fn search_content(
 
         state
             .client
-            .search_page(&site, &search_query)
+            .search_page(&site, &search_query, &network)
             .await
             .map_err(|e| AppError::SearchFailed {
                 message: e.to_string(),
@@ -98,7 +111,7 @@ pub async fn search_content(
 
         let results = state
             .client
-            .search(&site, &search_query)
+            .search(&site, &search_query, &network)
             .await
             .map_err(|e| AppError::SearchFailed {
                 message: e.to_string(),
@@ -136,9 +149,17 @@ pub async fn enrich_search_result(
     preview: SearchResultPreview,
     state: State<'_, AppState>,
 ) -> Result<SearchResultPreview, AppError> {
+    let network = {
+        let settings = state
+            .settings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        cookies_network_options(&settings)
+    };
+
     state
         .client
-        .enrich_search_result(&site, preview)
+        .enrich_search_result(&site, preview, &network)
         .await
         .map_err(|e| AppError::SearchFailed {
             message: e.to_string(),

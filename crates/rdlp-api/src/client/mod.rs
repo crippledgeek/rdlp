@@ -356,13 +356,22 @@ impl RdlpClient {
     /// The event receiver is dropped immediately: these paths return their
     /// result directly and emit no progress, so sends are best-effort by
     /// construction.
+    ///
+    /// `network` carries per-call overrides on top of the client's base
+    /// `Config`, mirroring what `build_config` does for a download. A frontend
+    /// whose cookie source lives outside the config file — the desktop's
+    /// `AppSettings` — has no other way to reach these paths, because the
+    /// client is built once at startup and never rebuilt (#691).
     async fn one_shot_orchestrator(
         &self,
         interactive: Option<Arc<dyn InteractiveCallback>>,
+        network: &crate::request::NetworkOptions,
     ) -> Result<Orchestrator, RdlpApiError> {
         let (tx, _rx) = mpsc::channel::<Event>(ONE_SHOT_EVENT_CAPACITY);
+        let mut config = (*self.config).clone();
+        network.merge_into(&mut config);
         let orchestrator = Orchestrator::new_with_registry(
-            Arc::clone(&self.config),
+            Arc::new(config),
             tx,
             DownloadId::next(),
             CancellationToken::new(),
@@ -387,7 +396,7 @@ impl RdlpClient {
     ///
     /// Returns an error if extraction fails or no extractor matches.
     pub async fn extract_info(&self, url: &str) -> Result<Vec<InfoDict>, RdlpApiError> {
-        self.one_shot_orchestrator(None)
+        self.one_shot_orchestrator(None, &crate::request::NetworkOptions::default())
             .await?
             .extract_info(url)
             .await
@@ -415,11 +424,14 @@ impl RdlpClient {
         &self,
         info: &InfoDict,
     ) -> Result<Option<Vec<std::path::PathBuf>>, RdlpApiError> {
-        self.one_shot_orchestrator(self.interactive.clone())
-            .await?
-            .download_subtitles_only(info)
-            .await
-            .map_err(Into::into)
+        self.one_shot_orchestrator(
+            self.interactive.clone(),
+            &crate::request::NetworkOptions::default(),
+        )
+        .await?
+        .download_subtitles_only(info)
+        .await
+        .map_err(Into::into)
     }
 
     /// List available extractors.
@@ -498,6 +510,9 @@ impl RdlpClient {
     /// # Arguments
     /// * `site` - Site name (e.g., "xhamster").
     /// * `query` - Search query with optional filters.
+    /// * `network` - Per-call network overrides (cookie source, proxy, …)
+    ///   layered on top of the client's base config. Pass
+    ///   `&NetworkOptions::default()` to use the base config unchanged.
     ///
     /// # Returns
     /// Lightweight result previews. Call `extract_info()` on each
@@ -509,8 +524,9 @@ impl RdlpClient {
         &self,
         site: &str,
         query: &rdlp_types::SearchQuery,
+        network: &crate::request::NetworkOptions,
     ) -> Result<Vec<rdlp_types::SearchResultPreview>, RdlpApiError> {
-        self.one_shot_orchestrator(None)
+        self.one_shot_orchestrator(None, network)
             .await?
             .search(site, query)
             .await
@@ -522,6 +538,9 @@ impl RdlpClient {
     /// # Arguments
     /// * `site` - Site name (e.g., "xhamster").
     /// * `query` - Search query with page number set.
+    /// * `network` - Per-call network overrides (cookie source, proxy, …)
+    ///   layered on top of the client's base config. Pass
+    ///   `&NetworkOptions::default()` to use the base config unchanged.
     ///
     /// # Returns
     /// A single page of results with pagination metadata.
@@ -532,8 +551,9 @@ impl RdlpClient {
         &self,
         site: &str,
         query: &rdlp_types::SearchQuery,
+        network: &crate::request::NetworkOptions,
     ) -> Result<rdlp_types::SearchPageResponse, RdlpApiError> {
-        self.one_shot_orchestrator(None)
+        self.one_shot_orchestrator(None, network)
             .await?
             .search_page(site, query)
             .await
@@ -552,8 +572,9 @@ impl RdlpClient {
         &self,
         site: &str,
         query: &rdlp_types::SearchQuery,
+        network: &crate::request::NetworkOptions,
     ) -> Result<Vec<rdlp_types::SearchResultPreview>, RdlpApiError> {
-        self.search(site, query).await
+        self.search(site, query, network).await
     }
 
     /// Lazily enrich a single previously-returned `SearchResultPreview`.
@@ -569,8 +590,9 @@ impl RdlpClient {
         &self,
         site: &str,
         preview: rdlp_types::SearchResultPreview,
+        network: &crate::request::NetworkOptions,
     ) -> Result<rdlp_types::SearchResultPreview, RdlpApiError> {
-        self.one_shot_orchestrator(None)
+        self.one_shot_orchestrator(None, network)
             .await?
             .enrich_search_result(site, preview)
             .await
@@ -1098,7 +1120,11 @@ mod search_cookie_tests {
     async fn search_page_loads_cookies_before_fetching() {
         let client = crate::RdlpClient::new(config_with_missing_cookie_file()).unwrap();
         let err = client
-            .search_page("no-such-site", &query())
+            .search_page(
+                "no-such-site",
+                &query(),
+                &crate::request::NetworkOptions::default(),
+            )
             .await
             .expect_err("missing cookie file must fail the search");
         let msg = err.to_string();
@@ -1114,7 +1140,11 @@ mod search_cookie_tests {
     async fn search_loads_cookies_before_fetching() {
         let client = crate::RdlpClient::new(config_with_missing_cookie_file()).unwrap();
         let err = client
-            .search("no-such-site", &query())
+            .search(
+                "no-such-site",
+                &query(),
+                &crate::request::NetworkOptions::default(),
+            )
             .await
             .expect_err("missing cookie file must fail the search");
         let msg = err.to_string();
@@ -1141,7 +1171,11 @@ mod search_cookie_tests {
             upload_date: None,
         };
         let err = client
-            .enrich_search_result("no-such-site", preview)
+            .enrich_search_result(
+                "no-such-site",
+                preview,
+                &crate::request::NetworkOptions::default(),
+            )
             .await
             .expect_err("missing cookie file must fail the enrichment");
         let msg = err.to_string();
@@ -1150,6 +1184,54 @@ mod search_cookie_tests {
         // "--cookies-from-browser", so a loose match passes on a live 403
         // and proves nothing. Verified — the loose form was green before
         // the fix.
+        assert!(msg.contains("Failed to load cookies"), "got: {msg}");
+    }
+
+    /// A per-call cookie source reaches the loader even when the client's
+    /// base `Config` carries none.
+    ///
+    /// This is the desktop's case: the shared client is built once from
+    /// `config.toml`, while the GUI's cookie setting lives in `AppSettings`
+    /// and can only reach search as a per-call override. Downloads already
+    /// had that override; search did not, so the setting changed nothing
+    /// (#691).
+    ///
+    /// Same probe as above — a cookie file that does not exist — but supplied
+    /// through the override rather than the base config, so a green result
+    /// proves the override reached `load_cookies()` rather than that the
+    /// config did. Verified by mutation: stubbing out the `merge_into` call
+    /// in `one_shot_orchestrator` fails this test and only this one.
+    #[tokio::test]
+    async fn search_page_honors_per_call_cookie_override() {
+        let client = crate::RdlpClient::new(Config::default()).unwrap();
+        let network = crate::request::NetworkOptions {
+            cookies_file: Some(std::path::PathBuf::from(
+                "/nonexistent/rdlp-test-cookies.txt",
+            )),
+            ..crate::request::NetworkOptions::default()
+        };
+        let err = client
+            .search_page("no-such-site", &query(), &network)
+            .await
+            .expect_err("missing cookie file must fail the search");
+        let msg = err.to_string();
+        assert!(msg.contains("Failed to load cookies"), "got: {msg}");
+    }
+
+    /// The base config's cookie source still reaches search when the
+    /// per-call override carries none — the override must not clobber it.
+    #[tokio::test]
+    async fn search_page_falls_back_to_config_cookie_source() {
+        let client = crate::RdlpClient::new(config_with_missing_cookie_file()).unwrap();
+        let err = client
+            .search_page(
+                "no-such-site",
+                &query(),
+                &crate::request::NetworkOptions::default(),
+            )
+            .await
+            .expect_err("missing cookie file must fail the search");
+        let msg = err.to_string();
         assert!(msg.contains("Failed to load cookies"), "got: {msg}");
     }
 }
