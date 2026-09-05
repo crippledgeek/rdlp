@@ -63,7 +63,7 @@ fn request_interrupt(disposition: &CancelDisposition, token: &CancellationToken)
 /// Reporting that as `outcome=panicked` at ERROR would make a clean shutdown
 /// read as an internal bug, so the two are told apart here.
 ///
-/// The panic payload is redacted before it is logged. `JoinError`'s `Display`
+/// The panic payload is redacted before it is logged OR returned. `JoinError`'s `Display`
 /// embeds the raw payload string when it downcasts to `String`/`&str`
 /// (tokio's `panic_payload_as_str`), and these records now persist to disk, so
 /// a future `panic!` written with a URL in its message would put that URL in
@@ -74,12 +74,10 @@ fn request_interrupt(disposition: &CancelDisposition, token: &CancellationToken)
 fn task_join_error(join_err: &tokio::task::JoinError) -> RdlpApiError {
     if join_err.is_panic() {
         // ERROR: a panicking task is an internal bug.
-        log::error!(
-            "download: action=download outcome=panicked reason={}",
-            rdlp_redact::redact_str(&join_err.to_string())
-        );
+        let reason = rdlp_redact::redact_str(&join_err.to_string());
+        log::error!("download: action=download outcome=panicked reason={reason}");
         RdlpApiError::IoError {
-            message: format!("Download task panicked: {join_err}"),
+            message: format!("Download task panicked: {reason}"),
         }
     } else {
         // DEBUG: an aborted task or a runtime shutting down mid-download is
@@ -322,6 +320,7 @@ mod tests {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod join_error_tests {
     use super::task_join_error;
+    use crate::errors::RdlpApiError;
 
     /// A panic is reported as a panic — and its payload is redacted.
     ///
@@ -341,7 +340,27 @@ mod join_error_tests {
         let msg = format!("{mapped}");
         assert!(msg.contains("panicked"), "got: {msg}");
 
-        // What the LOG would carry: the same redaction applied at the call.
+        // Assert on the STORED FIELD, not on `Display`. `RdlpApiError`'s
+        // Display is `#[error("I/O error: {}", redact(message))]`, so the
+        // rendered form is clean whether or not the field is — asserting
+        // against `format!("{mapped}")` passes even when the raw payload is
+        // stored, i.e. it is a tautology. Verified by mutation: putting
+        // `{join_err}` back in the constructor leaves a Display assertion
+        // green and turns this one red. The field matters because a future
+        // path could read it without going through Display.
+        let RdlpApiError::IoError { message: stored } = &mapped else {
+            panic!("expected IoError, got: {mapped:?}");
+        };
+        assert!(
+            !stored.contains("secret"),
+            "stored token must not survive: {stored}"
+        );
+        assert!(
+            !stored.contains("user:pw"),
+            "stored userinfo must not survive: {stored}"
+        );
+
+        // And the same value reaches the log.
         let logged = rdlp_redact::redact_str(&join_err.to_string());
         assert!(
             !logged.contains("secret"),
@@ -362,8 +381,11 @@ mod join_error_tests {
     #[tokio::test]
     async fn a_cancelled_task_is_not_reported_as_a_panic() {
         let handle = tokio::spawn(async {
-            // Long enough that the abort below always wins.
-            tokio::time::sleep(std::time::Duration::from_hours(1)).await;
+            // Never completes, so the abort below always wins. A timer would
+            // work too, but every round duration trips
+            // `clippy::duration_suboptimal_units` toward a constructor newer
+            // than our MSRV (`from_hours`/`from_mins` are 1.91; MSRV is 1.88).
+            std::future::pending::<()>().await;
         });
         handle.abort();
         let join_err = handle.await.expect_err("the task was aborted");

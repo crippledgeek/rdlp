@@ -331,10 +331,11 @@ mod tests {
     ///
     /// Both guards return before the reveal, which is what keeps this module's
     /// tests hermetic: a positive case would pop a real file-manager window, so
-    /// the OS call itself is verified manually (and by `off_runtime`'s test for
+    /// the OS call itself is verified manually (and by `reveal_off_runtime`'s test for
     /// the part that actually broke).
     #[tokio::test]
     async fn missing_path_reports_the_path() {
+        testing_logger::setup();
         let err = super::reveal_in_folder("/nonexistent/rdlp-test-reveal.mkv".to_owned())
             .await
             .expect_err("missing path must fail");
@@ -343,5 +344,18 @@ mod tests {
             msg.contains("/nonexistent/rdlp-test-reveal.mkv"),
             "got: {msg}"
         );
+
+        // End-to-end: this branch must ROUTE THROUGH `reveal_failed`, not just
+        // return a similar message. Without this the test passes against a
+        // hand-rolled `AppError` that logs nothing.
+        testing_logger::validate(|captured| {
+            let warns: Vec<_> = captured
+                .iter()
+                .filter(|l| l.level == log::Level::Warn)
+                .collect();
+            assert_eq!(warns.len(), 1, "the branch logs exactly once");
+            let body = warns.first().map_or("", |l| l.body.as_str());
+            assert!(body.contains("outcome=failed"), "got: {body}");
+        });
     }
 }
