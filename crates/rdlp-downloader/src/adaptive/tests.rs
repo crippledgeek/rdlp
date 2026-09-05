@@ -463,10 +463,15 @@ fn test_realtime_ratio_calculation() {
 ///
 /// It ran at INFO, which produced 96 lines in a single 287-line session of the
 /// desktop's log file — with a 5 MiB rotation window, sustained downloading
-/// could rotate a genuine WARN out of the file before anyone read it. These
-/// messages are not lost: `log_callback` still receives every one of them
-/// through the dedicated channel the UI reads, so the `log::` record was a
-/// duplicate.
+/// could rotate a genuine WARN out of the file before anyone read it.
+///
+/// The messages are not lost. Every one still goes to `log_callback`, the
+/// channel the UI reads, so the `log::` record was a duplicate wherever a
+/// caller supplies a progress callback — which is all three controller
+/// construction sites (`http/parallel.rs`, `dash/download.rs`, and
+/// `fragments.rs`, the last of which passed `None` until this change and so
+/// was the one path where the demotion would genuinely have lost them).
+/// On the CLI they also remain reachable with `-v`, whose filter admits DEBUG.
 ///
 /// The startup summary (one line per download, naming mode/size/connections)
 /// stays at INFO deliberately — that one is operator-relevant.
@@ -475,8 +480,12 @@ fn per_adjustment_messages_are_debug_not_info() {
     testing_logger::setup();
     let ctrl = make_controller(64 * 1024 * 1024);
 
-    // Enough completed chunks to drive `adjust` through a decision.
-    for _ in 0..8 {
+    // Twice `AdaptiveConfig::default().decision_interval` (4), so `adjust`
+    // runs at least once however the samples fall. If that default is raised
+    // past this count the DEBUG assertion below fails loudly, rather than the
+    // test quietly passing while exercising nothing.
+    let chunks = 2 * AdaptiveConfig::default().decision_interval;
+    for _ in 0..chunks {
         ctrl.report_chunk_complete(1024 * 1024, std::time::Duration::from_millis(500));
     }
 
@@ -497,6 +506,20 @@ fn per_adjustment_messages_are_debug_not_info() {
             infos.len() <= 1,
             "expected at most the startup summary at INFO, got {} lines",
             infos.len()
+        );
+
+        // The positive half. Without it the upper bound above is satisfied
+        // just as well by an adjust path that logged nothing at all — by the
+        // call sites being deleted, or by `adjust` never being reached — so
+        // the test would keep passing while covering nothing.
+        let debugs = captured
+            .iter()
+            .filter(|l| l.level == log::Level::Debug)
+            .count();
+        assert!(
+            debugs >= 1,
+            "the adjust path must have logged at DEBUG; without a record here \
+             the INFO bound above proves nothing"
         );
     });
 }

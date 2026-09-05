@@ -93,6 +93,19 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SuspendingWriter {
     }
 }
 
+/// Build the default filter at `level`, quieting the third-party targets that
+/// would otherwise bury it.
+///
+/// Only [`rdlp_types::log_targets::ZBUS`] applies here. The desktop
+/// additionally filters [`rdlp_types::log_targets::TRACING_SPAN_LIFECYCLE`],
+/// which is a `log`-bridge artifact:
+/// this binary installs a `tracing` subscriber, so zbus's instrumentation
+/// arrives as real spans under their own `zbus::…` target and the directive
+/// below already covers them.
+fn default_filter(level: &str) -> EnvFilter {
+    EnvFilter::new(format!("{level},{}=warn", rdlp_types::log_targets::ZBUS))
+}
+
 fn main() -> Result<()> {
     // Create optimized multi-threaded runtime for I/O-heavy workloads
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -147,10 +160,13 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
     let multi_progress = Arc::new(MultiProgress::new());
 
     if !config.quiet {
+        // `RUST_LOG`, when set, is the operator's explicit choice and is used
+        // verbatim — including if it turns the noisy targets back up. The
+        // quieting below applies only to the filters we synthesize ourselves.
         let filter = if config.verbose {
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug"))
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| default_filter("debug"))
         } else {
-            EnvFilter::new("info")
+            default_filter("info")
         };
 
         let writer = SuspendingWriter {

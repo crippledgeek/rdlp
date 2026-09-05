@@ -132,7 +132,7 @@ impl Downloader for DashDownloader {
                 fragments,
                 base,
                 format.filesize,
-                progress.as_deref(),
+                progress.map(Arc::from),
                 output,
                 Some(&format.url),
                 cancel,

@@ -12,6 +12,7 @@
 #![allow(clippy::duration_suboptimal_units)]
 
 use std::path::Path;
+use std::sync::Arc;
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -185,7 +186,7 @@ impl Downloader for HlsDownloader {
             fragments,
             format.fragment_base_url.as_deref(),
             format.filesize,
-            progress.as_deref(),
+            progress.map(Arc::from),
             output,
             Some(&format.url),
             cancel,

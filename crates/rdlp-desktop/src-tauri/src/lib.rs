@@ -22,10 +22,14 @@ use tauri::Manager;
 
 /// Level for the desktop's log targets.
 ///
-/// `Info` even in a debug build: the workspace's 426 `debug!` sites (172 in
+/// `Info` even in a debug build: the workspace's ~436 `debug!` sites (172 in
 /// rdlp-extractor) are per-fragment detail that drowns the record you are
 /// actually reading. Raise a single noisy module with `.level_for(...)` while
 /// debugging it rather than turning the whole tree up.
+///
+/// That volume is also why rotation is sized the way it is below; the figure
+/// is stated here only, since two copies of it drifted independently once
+/// already.
 const LOG_LEVEL: log::LevelFilter = log::LevelFilter::Info;
 
 /// Bytes per log file before rotation. The plugin's own default is `40_000`,
@@ -140,27 +144,36 @@ pub fn run() {
                     }),
                 ])
                 .level(LOG_LEVEL)
-                // Third-party protocol chatter, measured rather than guessed:
-                // in a 287-line real session, zbus's D-Bus handshake produced
-                // 140 lines at INFO (including raw byte arrays of the protocol
-                // frames) and its `read_command` span another 28 — together
+                // Third-party chatter, measured rather than guessed: in a
+                // 287-line real session zbus's D-Bus handshake produced 140
+                // lines at INFO and its span lifecycle another 28 — together
                 // 58% of the file, against 23 lines of actual signal. They
                 // became visible when the workspace enabled `tracing`'s `log`
                 // feature so rdlp-http would stop being invisible; that bridge
                 // carries third-party `tracing` events too.
                 //
-                // Filtered here rather than at the source because these are
-                // not our crates. Our own spans keep their module targets
-                // (`rdlp_api::orchestrator::…`) and are unaffected — verified
-                // against the same log file.
-                .level_for("zbus", log::LevelFilter::Warn)
-                .level_for("tracing::span", log::LevelFilter::Warn)
+                // Filtered at this sink rather than at the source because
+                // these are not our crates. Our own records reach the facade
+                // as `log` records under their module targets and are
+                // unaffected. The span filter is the one to be careful with:
+                // it is not zbus-specific and cannot be narrowed — see the
+                // constant's own documentation for why, before widening or
+                // trusting it.
+                //
+                // `rdlp-cli` filters the same zbus target through its own
+                // `EnvFilter`; the shared constants are what keep the two
+                // sinks from drifting apart.
+                .level_for(rdlp_types::log_targets::ZBUS, log::LevelFilter::Warn)
+                .level_for(
+                    rdlp_types::log_targets::TRACING_SPAN_LIFECYCLE,
+                    log::LevelFilter::Warn,
+                )
                 // The plugin's defaults are 40 KB with `KeepOne` — which
-                // DELETES the previous file on every rotation. The workspace
-                // has 426 `debug!` sites (172 in rdlp-extractor alone), so a
-                // single download would rotate several times over and leave a
-                // file holding only its last seconds: useless for the
-                // post-mortem this target exists to serve.
+                // DELETES the previous file on every rotation. At the `debug!`
+                // volume noted on `LOG_LEVEL`, a single download would rotate
+                // several times over and leave a file holding only its last
+                // seconds: useless for the post-mortem this target exists to
+                // serve.
                 .max_file_size(LOG_MAX_FILE_SIZE)
                 .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(LOG_FILES_KEPT))
                 .build(),
