@@ -329,14 +329,20 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
 
     // --list-subs-only: show subtitle menu, download subs, exit (no video)
     if args.list_subs_only {
-        let infos = match client.extract_info(&url).await {
+        let infos = match client
+            .extract_info(&url, &rdlp_api::request::NetworkOptions::default())
+            .await
+        {
             Ok(infos) => infos,
             Err(e) => fail_with(&e, verbose),
         };
 
         // Use the first video's metadata for subtitle selection
         if let Some(info) = infos.first() {
-            match client.download_subtitles_only(info).await {
+            match client
+                .download_subtitles_only(info, &rdlp_api::request::NetworkOptions::default())
+                .await
+            {
                 Ok(Some(paths)) => {
                     if paths.is_empty() {
                         debug!("No subtitles downloaded");
@@ -358,7 +364,10 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
 
     // Metadata-only modes: --dump-json, --print, --list-formats, --simulate
     if args.dump_json || args.print.is_some() || args.list_formats || args.simulate {
-        let infos = match client.extract_info(&url).await {
+        let infos = match client
+            .extract_info(&url, &rdlp_api::request::NetworkOptions::default())
+            .await
+        {
             Ok(infos) => infos,
             Err(e) => fail_with(&e, verbose),
         };

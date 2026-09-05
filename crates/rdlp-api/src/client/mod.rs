@@ -190,7 +190,15 @@ impl RdlpClient {
 
         let cancel_disposition = crate::cancel::CancelDisposition::new();
         let shared_http = self.shared_http_for(&request);
-        let config = Arc::new(self.build_config(&request));
+        // An out-of-range override fails the download the same way a cookie
+        // failure does — reported through the handle's event stream, because
+        // `download` hands back a handle rather than a `Result`.
+        let config = match self.build_config(&request) {
+            Ok(config) => Arc::new(config),
+            Err(api_err) => {
+                return Self::failed_handle(id, tx, rx, cancel_token, cancel_disposition, api_err);
+            }
+        };
         let interactive_flag = request.format.interactive;
         let url = request.url;
         let interactive_cb = self.interactive.clone();
@@ -198,11 +206,6 @@ impl RdlpClient {
         let disposition_for_task = cancel_disposition.clone();
         let registry = Arc::clone(&self.temp_registry);
         let extractor_registry = Arc::clone(&self.extractor_registry);
-
-        // Capture whether the user explicitly requested cookies.
-        // When explicit, cookie loading failure must be fatal.
-        let cookies_explicitly_requested =
-            config.cookies_from_browser.is_some() || config.cookies_file.is_some();
 
         let join_handle = tokio::spawn(async move {
             let orchestrator = Orchestrator::new_with_shared(
@@ -217,37 +220,19 @@ impl RdlpClient {
                 disposition_for_task,
             );
 
-            // Load cookies: fatal when explicitly requested, non-fatal otherwise
-            if let Err(e) = orchestrator.load_cookies().await {
-                if cookies_explicitly_requested {
-                    // Sanitize the error message to avoid leaking DPAPI
-                    // errors, decryption keys, or raw cookie values.
-                    // On Windows, Chrome locks its cookie DB exclusively
-                    // via LockFileEx — the file cannot be copied while
-                    // Chrome is running (see yt-dlp/yt-dlp#7271).
-                    let safe_msg = "Failed to load cookies: browser cookie extraction \
-                         failed. Close the browser completely (including background \
-                         processes), then retry. Alternatively, export cookies to a \
-                         Netscape file and use --cookies instead."
-                        .to_string();
-                    error!("Cookie loading failed (explicit request): {e}");
-                    let api_err = RdlpApiError::IoError { message: safe_msg };
-                    // intentional: receiver may have disconnected
-                    let _ = tx
-                        .send(Event::Failed {
-                            id,
-                            error: api_err.clone(),
-                        })
-                        .await;
-                    return Err(api_err);
-                }
+            // A cookie failure is always fatal here: `load_cookies` only
+            // touches a source the operator configured, so it cannot fail
+            // unless one was asked for. (The former non-fatal branch was
+            // therefore unreachable.)
+            if let Err(api_err) = load_cookies_sanitized(&orchestrator).await {
                 // intentional: receiver may have disconnected
                 let _ = tx
-                    .send(Event::Warning {
+                    .send(Event::Failed {
                         id,
-                        message: format!("Cookie loading failed: {e}"),
+                        error: api_err.clone(),
                     })
                     .await;
+                return Err(api_err);
             }
 
             let mut last_err: Option<RdlpApiError> = None;
@@ -368,8 +353,7 @@ impl RdlpClient {
         network: &crate::request::NetworkOptions,
     ) -> Result<Orchestrator, RdlpApiError> {
         let (tx, _rx) = mpsc::channel::<Event>(ONE_SHOT_EVENT_CAPACITY);
-        let mut config = (*self.config).clone();
-        network.merge_into(&mut config);
+        let config = validated_merge(&self.config, |config| network.merge_into(config))?;
         let orchestrator = Orchestrator::new_with_registry(
             Arc::new(config),
             tx,
@@ -379,10 +363,7 @@ impl RdlpClient {
             None,
             Some(Arc::clone(&self.extractor_registry)),
         );
-        orchestrator
-            .load_cookies()
-            .await
-            .map_err(RdlpApiError::from)?;
+        load_cookies_sanitized(&orchestrator).await?;
         Ok(orchestrator)
     }
 
@@ -391,12 +372,19 @@ impl RdlpClient {
     /// # Arguments
     ///
     /// * `url` - URL to extract metadata from.
+    /// * `network` - Per-call network overrides (cookie source, proxy, …)
+    ///   layered on top of the client's base config. Pass
+    ///   `&NetworkOptions::default()` to use the base config unchanged.
     ///
     /// # Errors
     ///
     /// Returns an error if extraction fails or no extractor matches.
-    pub async fn extract_info(&self, url: &str) -> Result<Vec<InfoDict>, RdlpApiError> {
-        self.one_shot_orchestrator(None, &crate::request::NetworkOptions::default())
+    pub async fn extract_info(
+        &self,
+        url: &str,
+        network: &crate::request::NetworkOptions,
+    ) -> Result<Vec<InfoDict>, RdlpApiError> {
+        self.one_shot_orchestrator(None, network)
             .await?
             .extract_info(url)
             .await
@@ -411,6 +399,9 @@ impl RdlpClient {
     /// # Arguments
     ///
     /// * `info` - Pre-extracted video metadata.
+    /// * `network` - Per-call network overrides (cookie source, proxy, …)
+    ///   layered on top of the client's base config. Pass
+    ///   `&NetworkOptions::default()` to use the base config unchanged.
     ///
     /// # Returns
     ///
@@ -423,15 +414,13 @@ impl RdlpClient {
     pub async fn download_subtitles_only(
         &self,
         info: &InfoDict,
+        network: &crate::request::NetworkOptions,
     ) -> Result<Option<Vec<std::path::PathBuf>>, RdlpApiError> {
-        self.one_shot_orchestrator(
-            self.interactive.clone(),
-            &crate::request::NetworkOptions::default(),
-        )
-        .await?
-        .download_subtitles_only(info)
-        .await
-        .map_err(Into::into)
+        self.one_shot_orchestrator(self.interactive.clone(), network)
+            .await?
+            .download_subtitles_only(info)
+            .await
+            .map_err(Into::into)
     }
 
     /// List available extractors.
@@ -729,6 +718,32 @@ impl RdlpClient {
         )
     }
 
+    /// A handle for a download that failed before it could start.
+    ///
+    /// The failure still arrives as a terminal [`Event::Failed`] on the event
+    /// stream and as the join handle's `Err`, so a caller that only watches
+    /// events sees the same shape it would for a mid-download failure.
+    fn failed_handle(
+        id: DownloadId,
+        tx: mpsc::Sender<Event>,
+        rx: mpsc::Receiver<Event>,
+        cancel_token: CancellationToken,
+        cancel_disposition: crate::cancel::CancelDisposition,
+        error: RdlpApiError,
+    ) -> DownloadHandle {
+        let join_handle = tokio::spawn(async move {
+            // intentional: receiver may have disconnected
+            let _ = tx
+                .send(Event::Failed {
+                    id,
+                    error: error.clone(),
+                })
+                .await;
+            Err(error)
+        });
+        DownloadHandle::new(id, rx, cancel_token, cancel_disposition, join_handle)
+    }
+
     /// Returns the shared client+jar to reuse for `request`, or `None` if it
     /// overrides a client-level network field and needs its own client.
     fn shared_http_for(&self, request: &DownloadRequest) -> Option<SharedHttpClient> {
@@ -743,18 +758,97 @@ impl RdlpClient {
     }
 
     /// Merge request options into a Config, applying overrides from the request.
-    fn build_config(&self, request: &DownloadRequest) -> Config {
-        let mut config = (*self.config).clone();
-        request.output.merge_into(&mut config);
-        request.format.merge_into(&mut config);
-        request.subtitles.merge_into(&mut config);
-        request.postprocess.merge_into(&mut config);
-        request.network.merge_into(&mut config);
-        if let Some(v) = request.verbose {
-            config.verbose = v;
-        }
-        config
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RdlpApiError::InvalidInput`] if the merged config is out of
+    /// range — see [`validated_merge`].
+    fn build_config(&self, request: &DownloadRequest) -> Result<Config, RdlpApiError> {
+        validated_merge(&self.config, |config| {
+            request.output.merge_into(config);
+            request.format.merge_into(config);
+            request.subtitles.merge_into(config);
+            request.postprocess.merge_into(config);
+            request.network.merge_into(config);
+            if let Some(v) = request.verbose {
+                config.verbose = v;
+            }
+        })
     }
+}
+
+/// Clone the base config, apply `overrides`, and validate the result.
+///
+/// Every per-request override in this crate goes through here, so a merge can
+/// no longer produce a config that `Config::validate()` would have rejected:
+/// the merge sites bypassed validation entirely, which meant a caller could
+/// reach a downloader with, say, `concurrent_fragments = 0` — a value the
+/// same struct is rejected for when it comes from a config file.
+///
+/// # Errors
+///
+/// Returns [`RdlpApiError::InvalidInput`] naming the offending field.
+fn validated_merge(
+    base: &Config,
+    overrides: impl FnOnce(&mut Config),
+) -> Result<Config, RdlpApiError> {
+    let mut config = base.clone();
+    overrides(&mut config);
+    config.validate().map_err(|e| RdlpApiError::InvalidInput {
+        message: format!("invalid configuration after applying request overrides: {e}"),
+    })?;
+    Ok(config)
+}
+
+/// Load the configured cookie source, replacing any failure with an
+/// operator-safe message.
+///
+/// The loader's own error text can carry a DPAPI failure, a decryption-key
+/// detail, or a raw cookie value, so it is logged and never returned to the
+/// caller. What IS returned names the source the operator configured
+/// themselves — the path or the browser — because that is what makes the
+/// message actionable, and it is not a secret the caller did not already
+/// supply.
+///
+/// Both the download path and the one-shot paths (`extract_info`, the search
+/// entry points, …) go through here. They did not: the download path
+/// sanitized and the one-shot paths propagated the loader's raw error, so
+/// whether a cookie failure leaked its internals depended on which entry
+/// point the frontend happened to call.
+async fn load_cookies_sanitized(orchestrator: &Orchestrator) -> Result<(), RdlpApiError> {
+    let Err(e) = orchestrator.load_cookies().await else {
+        return Ok(());
+    };
+    error!("Cookie loading failed: {e}");
+
+    let config = &orchestrator.config;
+    // On Windows, Chrome locks its cookie DB exclusively via LockFileEx, so
+    // the file cannot be copied while Chrome is running (yt-dlp/yt-dlp#7271)
+    // — hence the "including background processes" in the browser advice.
+    let message = match (config.cookies_file.as_ref(), config.cookies_from_browser) {
+        (Some(path), None) => format!(
+            "Failed to load cookies from {}: the file could not be read. Check the \
+             path and that it is a valid Netscape cookie file.",
+            path.display()
+        ),
+        (None, Some(browser)) => format!(
+            "Failed to load cookies from {browser}: browser cookie extraction failed. \
+             Close the browser completely (including background processes), then \
+             retry, or export the cookies to a Netscape file instead."
+        ),
+        // Both configured: `load_cookies` reads the file first, so either can
+        // be the one that failed and the message must not claim to know which.
+        (Some(path), Some(browser)) => format!(
+            "Failed to load cookies from {} or {browser}: check that the file is a \
+             valid Netscape cookie file, and that the browser is fully closed \
+             (including background processes).",
+            path.display()
+        ),
+        // `load_cookies` only touches a configured source, so it cannot fail
+        // with neither set.
+        (None, None) => format!("Failed to load cookies: {e}"),
+    };
+    Err(RdlpApiError::IoError { message })
 }
 
 /// Builder for [`RdlpClient`].
@@ -1080,6 +1174,90 @@ mod terminal_event_tests {
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
+mod merge_validation_tests {
+    use rdlp_types::{Config, SearchQuery};
+
+    use crate::request::{DownloadRequest, NetworkOptions};
+
+    fn query() -> SearchQuery {
+        SearchQuery {
+            query: "probe".to_owned(),
+            filters: Vec::new(),
+            max_results: None,
+            page: Some(1),
+        }
+    }
+
+    /// Drive a one-shot path with a `concurrent_fragments` override and
+    /// return the error text.
+    ///
+    /// Both merge sites used to skip `Config::validate()`, so a request could
+    /// put a value into the config that the same struct is rejected for when
+    /// it arrives from a config file. `concurrent_fragments` is the probe:
+    /// `validate()` bounds it to 1..=64. The site is unknown either way, so
+    /// the question the assertions ask is HOW the call failed.
+    async fn search_with_fragments(v: u32) -> String {
+        let client = crate::RdlpClient::new(Config::default()).unwrap();
+        let network = NetworkOptions {
+            concurrent_fragments: Some(v),
+            ..NetworkOptions::default()
+        };
+        client
+            .search_page("no-such-site", &query(), &network)
+            .await
+            .expect_err("unknown site always fails; the question is how")
+            .to_string()
+    }
+
+    /// The limit itself is accepted: the request reaches the unknown-site
+    /// rejection rather than being turned away by validation.
+    #[tokio::test]
+    async fn one_shot_accepts_concurrent_fragments_at_the_limit() {
+        let msg = search_with_fragments(64).await;
+        assert!(
+            !msg.contains("invalid configuration"),
+            "64 is in range and must pass validation; got: {msg}"
+        );
+    }
+
+    /// One past the limit is rejected. Paired with the test above this pins
+    /// the boundary itself: a `>` for `>=` slip cannot pass both.
+    #[tokio::test]
+    async fn one_shot_rejects_concurrent_fragments_past_the_limit() {
+        let msg = search_with_fragments(65).await;
+        assert!(msg.contains("invalid configuration"), "got: {msg}");
+    }
+
+    /// Zero is rejected too — the other end of the same range.
+    #[tokio::test]
+    async fn one_shot_rejects_zero_concurrent_fragments() {
+        let msg = search_with_fragments(0).await;
+        assert!(msg.contains("invalid configuration"), "got: {msg}");
+    }
+
+    /// The download path reports an invalid merge as a terminal `Failed`
+    /// event rather than starting the download: `download` hands back a
+    /// handle and has no `Result` to fail through.
+    #[tokio::test]
+    async fn download_reports_an_invalid_merge_as_a_failed_event() {
+        let client = crate::RdlpClient::new(Config::default()).unwrap();
+        let mut request = DownloadRequest::new("https://example.com/video");
+        request.network.concurrent_fragments = Some(0);
+
+        let mut handle = client.download(request);
+        let event = handle.events().recv().await.expect("a terminal event");
+        match event {
+            crate::events::Event::Failed { error, .. } => {
+                let msg = error.to_string();
+                assert!(msg.contains("invalid configuration"), "got: {msg}");
+            }
+            other => panic!("expected Failed, got: {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod search_cookie_tests {
     use rdlp_types::{Config, SearchQuery};
 
@@ -1218,10 +1396,17 @@ mod search_cookie_tests {
         assert!(msg.contains("Failed to load cookies"), "got: {msg}");
     }
 
-    /// The base config's cookie source still reaches search when the
-    /// per-call override carries none — the override must not clobber it.
+    /// A cookie failure reaching a frontend names the configured source and
+    /// carries advice — but not the loader's own error text.
+    ///
+    /// The loader's message for a missing file ends in the OS error
+    /// ("No such file or directory (os error 2)"); for a browser source it
+    /// can carry a DPAPI failure or a decryption-key detail. Asserting the
+    /// ABSENCE of "os error" is the discriminating half: it fails against the
+    /// raw `map_err(RdlpApiError::from)` these one-shot paths used to do,
+    /// which is exactly the download-vs-search asymmetry being closed.
     #[tokio::test]
-    async fn search_page_falls_back_to_config_cookie_source() {
+    async fn cookie_failure_is_sanitized_on_the_one_shot_path() {
         let client = crate::RdlpClient::new(config_with_missing_cookie_file()).unwrap();
         let err = client
             .search_page(
@@ -1232,6 +1417,54 @@ mod search_cookie_tests {
             .await
             .expect_err("missing cookie file must fail the search");
         let msg = err.to_string();
-        assert!(msg.contains("Failed to load cookies"), "got: {msg}");
+        assert!(
+            msg.contains("/nonexistent/rdlp-test-cookies.txt"),
+            "must name the configured source; got: {msg}"
+        );
+        assert!(
+            msg.contains("Netscape cookie file"),
+            "must give the file-source advice, not the browser advice; got: {msg}"
+        );
+        assert!(
+            !msg.contains("os error"),
+            "must not leak the loader's own error text; got: {msg}"
+        );
+    }
+
+    /// An override that sets a DIFFERENT cookie field must not drop the one
+    /// the base config carries.
+    ///
+    /// The mixed case is the only shape where clobbering is observable: with
+    /// an all-`None` override, an unconditional-assignment `merge_into` would
+    /// look identical to the correct one. Here the config supplies
+    /// `cookies_file` and the override supplies `cookies_from_browser`, so a
+    /// merge that overwrote the whole field set would lose the file.
+    ///
+    /// Asserted on the file PATH, not on "Failed to load cookies": the
+    /// browser load would fail with that same prefix, so the loose form
+    /// passes whether or not the file survived. `load_cookies` tries the file
+    /// first, so the path appearing proves it is still configured.
+    ///
+    /// The per-field merge semantics themselves are covered exhaustively one
+    /// layer down — `merge/tests_postprocess_network.rs` has a preserve and
+    /// an override case for `cookies_from_browser` and `cookies_file` each.
+    /// What is pinned HERE is that `one_shot_orchestrator` applies that merge
+    /// at all, which no merge-layer test can see.
+    #[tokio::test]
+    async fn search_page_override_does_not_drop_a_config_cookie_source() {
+        let client = crate::RdlpClient::new(config_with_missing_cookie_file()).unwrap();
+        let network = crate::request::NetworkOptions {
+            cookies_from_browser: Some(rdlp_types::BrowserType::Firefox),
+            ..crate::request::NetworkOptions::default()
+        };
+        let err = client
+            .search_page("no-such-site", &query(), &network)
+            .await
+            .expect_err("missing cookie file must fail the search");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("/nonexistent/rdlp-test-cookies.txt"),
+            "got: {msg}"
+        );
     }
 }

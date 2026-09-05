@@ -216,44 +216,35 @@ fn build_network_options(
     options: &DownloadOptions,
     settings: &crate::state::AppSettings,
 ) -> NetworkOptions {
-    // Merge cookies: per-download overrides settings default. The settings
-    // half comes from the shared helper search also uses, so the two paths
-    // cannot disagree about which settings fields are the cookie source.
-    let from_settings = crate::commands::network::cookies_network_options(settings);
-    let cookies_from_browser = options
-        .cookies_from_browser
-        .or(from_settings.cookies_from_browser);
-    let cookies_file: Option<PathBuf> = options
-        .cookies_file
-        .as_deref()
-        .map(PathBuf::from)
-        .or(from_settings.cookies_file);
+    // The settings half is the same overlay every other command applies
+    // (`settings_network_options`); this function adds only the per-download
+    // overrides on top of it, so no field can be honoured here and forgotten
+    // there — search honoured none of them (#691).
+    let from_settings = crate::commands::network::settings_network_options(settings);
 
-    // Merge proxy: per-download overrides settings default.
-    let proxy = options.proxy.clone().or_else(|| settings.proxy.clone());
-
-    // Rate limit: per-download overrides settings default, then parse string
-    // like "500K" to bytes per second.
-    let rate_limit_str = options
-        .rate_limit
-        .clone()
-        .or_else(|| settings.rate_limit.clone());
+    // Rate limit: choose between the two *strings* before parsing. Parsing
+    // first and then falling back would let an unparseable per-download value
+    // silently inherit the settings rate instead of overriding it.
+    let rate_limit = match options.rate_limit.as_deref() {
+        Some(per_download) => parse_rate_limit(per_download),
+        None => from_settings.rate_limit,
+    };
 
     NetworkOptions {
-        cookies_from_browser,
-        cookies_file,
-        rate_limit: rate_limit_str.as_deref().and_then(parse_rate_limit),
-        proxy,
-        timeout_secs: settings.socket_timeout,
-        read_timeout_secs: settings.read_timeout,
-        pool_idle_timeout_secs: settings.pool_idle_timeout,
-        download_timeout_secs: settings.download_timeout,
-        merge_timeout_secs: settings.merge_timeout,
-        concurrent_fragments: settings.concurrent_fragments,
-        buffer_size: settings.buffer_size,
-        parallel_threshold: settings.parallel_threshold,
-        hls_head_probe_timeout: settings.hls_head_probe_timeout,
-        ..NetworkOptions::default()
+        cookies_from_browser: options
+            .cookies_from_browser
+            .or(from_settings.cookies_from_browser),
+        cookies_file: options
+            .cookies_file
+            .as_deref()
+            .map(PathBuf::from)
+            .or_else(|| from_settings.cookies_file.clone()),
+        proxy: options
+            .proxy
+            .clone()
+            .or_else(|| from_settings.proxy.clone()),
+        rate_limit,
+        ..from_settings
     }
 }
 
@@ -1453,7 +1444,7 @@ pub async fn job_options(
 /// Bare integers are treated as bytes per second.
 ///
 /// Returns `None` on parse error.
-fn parse_rate_limit(s: &str) -> Option<u64> {
+pub(super) fn parse_rate_limit(s: &str) -> Option<u64> {
     let s = s.trim();
     if s.is_empty() {
         return None;

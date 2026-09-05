@@ -10,7 +10,7 @@ use rdlp_api::{
     SearchSiteInfo,
 };
 
-use crate::commands::network::cookies_network_options;
+use crate::commands::network::settings_network_options;
 use crate::error::AppError;
 use crate::state::AppState;
 
@@ -71,8 +71,8 @@ pub async fn search_content(
         });
     }
 
-    // The shared client was built once from `config.toml`; the GUI's cookie
-    // setting lives in `AppSettings`, so it can only reach search as a
+    // The shared client was built once from `config.toml`; the GUI's network
+    // settings live in `AppSettings`, so they can only reach search as a
     // per-call override (#691). Clone out of the guard: it must not be held
     // across the `.await` below.
     let network = {
@@ -80,7 +80,7 @@ pub async fn search_content(
             .settings
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cookies_network_options(&settings)
+        settings_network_options(&settings)
     };
 
     if let Some(p) = page {
@@ -154,7 +154,7 @@ pub async fn enrich_search_result(
             .settings
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        cookies_network_options(&settings)
+        settings_network_options(&settings)
     };
 
     state
