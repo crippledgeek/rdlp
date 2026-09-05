@@ -65,12 +65,12 @@ describe("JobDetails — Reveal in Folder", () => {
     // build, so a failed reveal looked exactly like a successful one.
     it("surfaces a failure as a toast", async () => {
         vi.mocked(invokeTyped).mockRejectedValueOnce({
-            message: "File not found: /tmp/v.mp4",
+            message: "Failed to reveal /tmp/v.mp4: file not found",
         });
         renderDetails();
         await userEvent.click(screen.getByRole("button", { name: /Reveal in Folder/i }));
         await waitFor(() =>
-            expect(vi.mocked(toast.error)).toHaveBeenCalledWith("File not found: /tmp/v.mp4"),
+            expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Failed to reveal /tmp/v.mp4: file not found"),
         );
     });
 

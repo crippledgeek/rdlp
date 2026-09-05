@@ -48,6 +48,11 @@ tauri-build = { version = "2", features = [] }
 
 [dev-dependencies]
 mockito = { workspace = true }
+# Captures `log` records so a test can assert a failure was RECORDED, not just
+# returned (#696). Unmaintained since 2019 but inert: dev-only, one dependency
+# (`log`), never linked into the shipped binary. Note `setup()` panics if
+# another logger is already installed in the same test binary — no other test
+# here installs one.
 testing_logger = "0.1.1"
 
 [lints.rust]

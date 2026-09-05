@@ -186,12 +186,12 @@ describe("JobCard — progress display", () => {
     // no catch at all, so a failure was indistinguishable from success.
     it("Reveal surfaces a failure as a toast", async () => {
         vi.mocked(invokeTyped).mockRejectedValueOnce({
-            message: "File not found: /tmp/v.mp4",
+            message: "Failed to reveal /tmp/v.mp4: file not found",
         });
         render(<JobCard job={makeJob({ status: "completed", output_path: "/tmp/v.mp4" })} />);
         fireEvent.click(screen.getByLabelText("Reveal in folder"));
         await waitFor(() =>
-            expect(vi.mocked(toast.error)).toHaveBeenCalledWith("File not found: /tmp/v.mp4"),
+            expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Failed to reveal /tmp/v.mp4: file not found"),
         );
     });
 

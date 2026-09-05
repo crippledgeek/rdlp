@@ -55,6 +55,42 @@ fn request_interrupt(disposition: &CancelDisposition, token: &CancellationToken)
     token.cancel();
 }
 
+/// Record why a download task failed to join, then map it for the caller.
+///
+/// A `JoinError` is NOT always a panic. The other shape — cancellation —
+/// arises when the task is aborted OR when the runtime shuts down with a
+/// download still in flight, which is what a normal app quit looks like.
+/// Reporting that as `outcome=panicked` at ERROR would make a clean shutdown
+/// read as an internal bug, so the two are told apart here.
+///
+/// The panic payload is redacted before it is logged. `JoinError`'s `Display`
+/// embeds the raw payload string when it downcasts to `String`/`&str`
+/// (tokio's `panic_payload_as_str`), and these records now persist to disk, so
+/// a future `panic!` written with a URL in its message would put that URL in
+/// the log file. `scripts/check-url-redaction.sh` cannot see this — its
+/// patterns match url-NAMED values, not a value embedded in a foreign type's
+/// `Display` (the documented non-goal in that gate's header; #684). The
+/// defence has to be the call, not the grep.
+fn task_join_error(join_err: &tokio::task::JoinError) -> RdlpApiError {
+    if join_err.is_panic() {
+        // ERROR: a panicking task is an internal bug.
+        log::error!(
+            "download: action=download outcome=panicked reason={}",
+            rdlp_redact::redact_str(&join_err.to_string())
+        );
+        RdlpApiError::IoError {
+            message: format!("Download task panicked: {join_err}"),
+        }
+    } else {
+        // DEBUG: an aborted task or a runtime shutting down mid-download is
+        // ordinary, and was previously reported to the caller as a panic.
+        log::debug!("download: action=download outcome=cancelled reason={join_err}");
+        RdlpApiError::IoError {
+            message: format!("Download task cancelled: {join_err}"),
+        }
+    }
+}
+
 /// Handle to a running download.
 ///
 /// Provides access to the event stream, cancellation, and final result.
@@ -149,18 +185,7 @@ impl DownloadHandle {
     pub async fn wait(self) -> Result<DownloadResult, RdlpApiError> {
         match self.join_handle.await {
             Ok(result) => result,
-            Err(join_err) => {
-                // A panicked download task left no trace: the caller got an
-                // error, the log got nothing. That is the failure mode #693
-                // existed to remove, so the panic is recorded here — at the
-                // boundary that owns it — before being handed back (#696).
-                // ERROR, not WARN: a panicking task is an internal bug, not an
-                // environmental failure the operator can act on.
-                log::error!("download: action=download outcome=panicked reason={join_err}");
-                Err(RdlpApiError::IoError {
-                    message: format!("Download task panicked: {join_err}"),
-                })
-            }
+            Err(join_err) => Err(task_join_error(&join_err)),
         }
     }
 }
@@ -290,5 +315,65 @@ mod tests {
             !disposition.should_keep(),
             "cancel() keeps the Discard default"
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod join_error_tests {
+    use super::task_join_error;
+
+    /// A panic is reported as a panic — and its payload is redacted.
+    ///
+    /// `JoinError`'s Display embeds the payload string, so a `panic!` written
+    /// with a credential-bearing URL would otherwise put it in a log file that
+    /// now persists. The probe panics with exactly that shape.
+    #[tokio::test]
+    async fn a_panicking_task_is_reported_as_a_panic() {
+        let join_err = tokio::spawn(async {
+            panic!("boom https://user:pw@example.com/v?token=secret");
+        })
+        .await
+        .expect_err("the task panicked");
+        assert!(join_err.is_panic());
+
+        let mapped = task_join_error(&join_err);
+        let msg = format!("{mapped}");
+        assert!(msg.contains("panicked"), "got: {msg}");
+
+        // What the LOG would carry: the same redaction applied at the call.
+        let logged = rdlp_redact::redact_str(&join_err.to_string());
+        assert!(
+            !logged.contains("secret"),
+            "payload token must not survive: {logged}"
+        );
+        assert!(
+            !logged.contains("user:pw"),
+            "payload userinfo must not survive: {logged}"
+        );
+    }
+
+    /// An aborted task is NOT a panic, and must not be reported as one.
+    ///
+    /// The same shape occurs when the runtime shuts down with a download in
+    /// flight — an ordinary app quit. Before this split it produced
+    /// "Download task panicked" and, once logged, an ERROR claiming an
+    /// internal bug.
+    #[tokio::test]
+    async fn a_cancelled_task_is_not_reported_as_a_panic() {
+        let handle = tokio::spawn(async {
+            // Long enough that the abort below always wins.
+            tokio::time::sleep(std::time::Duration::from_hours(1)).await;
+        });
+        handle.abort();
+        let join_err = handle.await.expect_err("the task was aborted");
+        assert!(
+            join_err.is_cancelled(),
+            "precondition: this is the cancel shape"
+        );
+
+        let msg = format!("{}", task_join_error(&join_err));
+        assert!(msg.contains("cancelled"), "got: {msg}");
+        assert!(!msg.contains("panicked"), "must not claim a panic: {msg}");
     }
 }

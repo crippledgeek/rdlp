@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use log::{debug, warn};
+use log::warn;
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
@@ -188,10 +188,16 @@ where
 /// branch that forgets.
 ///
 /// The action, outcome and reason live in the MESSAGE, not in structured kv,
-/// because `tauri-plugin-log`'s formatter renders only target/level/message —
-/// kv fields are emitted and then dropped, so a structured field would be
-/// invisible in the log file. That is a property of our sink, not a
-/// preference; see #695 before adopting kv anywhere.
+/// because the formatter this app installs renders only
+/// timestamp/target/level/message — kv fields are constructed and then
+/// dropped, so a structured field would be invisible in the log file.
+///
+/// That is the plugin's DEFAULT formatter, which we have chosen not to
+/// override, not an immutable property of the sink: `Builder::format` would
+/// let a dozen-line closure render `record.key_values()` and make real kv
+/// work. #695 has to make that call before this shape is copied to ~25 sites,
+/// because OpenTelemetry guidance (quoted in that issue) puts the variable parts in
+/// fields, not in the message.
 ///
 /// WARN rather than ERROR: a reveal failure is user-facing and usually
 /// environmental (no file manager, D-Bus unavailable), not an internal bug.
@@ -199,7 +205,7 @@ where
 /// The path is a local filesystem path, not a URL, so it needs no redaction —
 /// a path in the operator's own log is not a credential.
 fn reveal_failed(path: &str, reason: impl std::fmt::Display) -> AppError {
-    warn!("reveal_in_folder: action=reveal outcome=failed path={path} reason={reason}");
+    warn!("reveal: action=reveal outcome=failed path={path} reason={reason}");
     AppError::Internal {
         message: format!("Failed to reveal {path}: {reason}"),
     }
@@ -235,10 +241,12 @@ pub async fn reveal_in_folder(path: String) -> Result<(), AppError> {
         return Err(reveal_failed(&path, "file not found"));
     }
 
-    // DEBUG, not INFO: an always-on "attempting" record is not an attested
-    // convention, and at INFO it is the noise an operator has to read past to
-    // find the outcome. The outcome is the signal (#695).
-    debug!("reveal_in_folder: action=reveal path={path}");
+    // No "attempting" record. It was `info!` before; demoting it to `debug!`
+    // would have been a deletion in disguise, since `LOG_LEVEL` (lib.rs) is
+    // Info in every build — so the honest version is to remove it. Nothing is
+    // lost: the failure record below carries the same `path=`, and an
+    // always-on attempt line is not an attested convention (#695). Raise the
+    // module with `.level_for(...)` when tracing a specific reveal.
 
     reveal_off_runtime(move || tauri_plugin_opener::reveal_item_in_dir(&path_buf))
         .await?
