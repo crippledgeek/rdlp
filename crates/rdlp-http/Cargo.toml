@@ -7,6 +7,7 @@ license.workspace = true
 
 [dependencies]
 rdlp-types = { path = "../rdlp-types" }
+rdlp-redact = { workspace = true }
 rdlp-security = { path = "../rdlp-security" }
 wreq = { workspace = true }
 wreq-util = { workspace = true }

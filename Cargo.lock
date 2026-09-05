@@ -6215,6 +6215,7 @@ version = "0.1.0"
 dependencies = [
  "mockito",
  "openssl-sys",
+ "rdlp-redact",
  "rdlp-security",
  "rdlp-types",
  "serde_json",

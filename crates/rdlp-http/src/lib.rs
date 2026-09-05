@@ -33,6 +33,7 @@
 mod client;
 mod config;
 pub mod probe;
+mod redirect;
 
 pub use client::HttpClientFactory;
 pub use config::HttpClientConfig;
