@@ -257,8 +257,9 @@ enum Reach {
 ///
 /// This table *is* the definition of "reserved IPv4" for this crate. Deriving
 /// the predicate from the registry rather than from a hand-picked list is what
-/// stops it drifting back into an arbitrary subset: the four ranges it
-/// replaced were chosen one at a time, and left all of `0.0.0.0/8` but
+/// stops it drifting back into an arbitrary subset: the four hand-picked
+/// reserved ranges it replaced were chosen one at a time, and left all of
+/// `0.0.0.0/8` but
 /// `0.0.0.0`, and all of `240.0.0.0/4` but the broadcast address, reachable —
 /// those two were covered only because `std` happened to have a predicate for
 /// each.
