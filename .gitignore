@@ -100,3 +100,10 @@ bun.lock
 # graphify knowledge graph output (per-machine artifact)
 graphify-out/
 .graphifyignore
+
+# cargo-mutants writes its report tree into the repo root; regenerated on every
+# run. Note it also copies the whole worktree to $TMPDIR — point that at real
+# disk, because /tmp here is a RAM-backed tmpfs and the copy includes the
+# nested target/ under examples/plugins/.
+mutants.out/
+mutants.out.old/

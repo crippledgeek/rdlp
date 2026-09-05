@@ -75,6 +75,7 @@ pub struct SubtitleDiagnostic {
     /// Diagnostic key (e.g., "extractor", "`field_checked`")
     pub key: String,
     /// Diagnostic value
+    #[serde(serialize_with = "rdlp_redact::serialize_redacted")]
     pub value: String,
 }
 
@@ -396,5 +397,38 @@ mod tests {
         );
         assert_eq!(err.status, SubtitleStatus::ErrorSoft);
         assert_eq!(err.diagnostics.len(), 1);
+    }
+
+    /// `SubtitleDiagnostic.value` carries a serde guard, and this file is
+    /// deliberately outside `check-error-attr-redaction.sh`'s serde scope —
+    /// `SubtitleTrack.url` beside it is functional fetch input, and the gate's
+    /// rule would have it redacted. So this test is the ONLY thing holding
+    /// that attribute: delete it and nothing else fires.
+    #[test]
+    fn diagnostic_value_is_redacted_on_serialization() {
+        let d = SubtitleDiagnostic {
+            key: "unreachable_en".to_string(),
+            value: "HTTP 403: https://admin:hunter2@cdn.example.com/s.vtt?token=abc".to_string(),
+        };
+        let json = serde_json::to_string(&d).expect("must serialize");
+        assert!(!json.contains("hunter2"), "password serialized: {json}");
+        assert!(!json.contains("token=abc"), "token serialized: {json}");
+        assert!(
+            json.contains("cdn.example.com"),
+            "over-redacted, diagnostic no longer says where: {json}"
+        );
+    }
+
+    #[test]
+    fn the_diagnostic_key_is_not_redacted() {
+        // Pins the boundary: `key` is a fixed label, not free text, and is
+        // deliberately unguarded. If a future change redacts everything, this
+        // fails and says why.
+        let d = SubtitleDiagnostic {
+            key: "code=en".to_string(),
+            value: String::new(),
+        };
+        let json = serde_json::to_string(&d).expect("must serialize");
+        assert!(json.contains("code=en"), "key was redacted: {json}");
     }
 }

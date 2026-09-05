@@ -2,10 +2,10 @@ use rdlp_redact::RedactedUrlBuf;
 use thiserror::Error;
 
 /// Core error types for rdlp
-#[derive(Error, Debug)]
+#[derive(Error)]
 pub enum RdlpError {
     /// HTTP/Network related errors
-    #[error("Network error: {message}")]
+    #[error("Network error: {}", redact(message))]
     Network {
         /// Human-readable description of the error
         message: String,
@@ -14,7 +14,7 @@ pub enum RdlpError {
     },
 
     /// HTTP response error with status code
-    #[error("HTTP error {status}: {reason}")]
+    #[error("HTTP error {status}: {}", redact(reason))]
     Http {
         /// HTTP status code
         status: u16,
@@ -23,7 +23,7 @@ pub enum RdlpError {
     },
 
     /// Extraction errors
-    #[error("Extraction failed: {message}")]
+    #[error("Extraction failed: {}", redact(message))]
     Extraction {
         /// Human-readable description of the error
         message: String,
@@ -32,15 +32,15 @@ pub enum RdlpError {
     },
 
     /// No suitable extractor found for URL
-    #[error("No extractor found for URL: {0}")]
+    #[error("No extractor found for URL: {}", redact(_0))]
     NoExtractor(String),
 
     /// Invalid URL format
-    #[error("Invalid URL: {0}")]
+    #[error("Invalid URL: {}", redact(_0))]
     InvalidUrl(String),
 
     /// Download errors
-    #[error("Download failed: {message}")]
+    #[error("Download failed: {}", redact(message))]
     Download {
         /// Human-readable description of the error
         message: String,
@@ -49,31 +49,31 @@ pub enum RdlpError {
     },
 
     /// Post-processing errors
-    #[error("Post-processing failed: {0}")]
+    #[error("Post-processing failed: {}", redact(_0))]
     PostProcess(String),
 
     /// `FFmpeg` related errors
-    #[error("FFmpeg error: {0}")]
+    #[error("FFmpeg error: {}", redact(_0))]
     FFmpeg(String),
 
     /// JavaScript execution errors
-    #[error("JavaScript execution failed: {0}")]
+    #[error("JavaScript execution failed: {}", redact(_0))]
     JavaScript(String),
 
     /// Cookie extraction errors
-    #[error("Cookie extraction failed: {0}")]
+    #[error("Cookie extraction failed: {}", redact(_0))]
     Cookie(String),
 
     /// Plugin loading errors
-    #[error("Plugin error: {0}")]
+    #[error("Plugin error: {}", redact(_0))]
     Plugin(String),
 
     /// Format selection errors
-    #[error("Format selection error: {0}")]
+    #[error("Format selection error: {}", redact(_0))]
     FormatSelection(String),
 
     /// Configuration errors
-    #[error("Configuration error: {0}")]
+    #[error("Configuration error: {}", redact(_0))]
     Config(String),
 
     /// I/O errors
@@ -93,16 +93,89 @@ pub enum RdlpError {
     Regex(#[from] regex::Error),
 
     /// Operation not supported by this component
-    #[error("Unsupported: {0}")]
+    #[error("Unsupported: {}", redact(_0))]
     Unsupported(String),
 
     /// Generic errors
-    #[error("{0}")]
+    #[error("{}", redact(_0))]
     Other(String),
 
     /// User cancelled the operation. Cooperative-cancellation typed signal.
     #[error("operation cancelled")]
     Cancelled,
+}
+
+/// Redact free text on its way to an operator.
+///
+/// These messages are assembled by `format!("…: {e}")` at hundreds of call
+/// sites, and an error stringified that way can carry a URL: `wreq::Error`'s
+/// Display prints the request URI verbatim, credentials included. The URL then
+/// sits inside an opaque string that no URL-shaped gate can see — which is why
+/// `scripts/check-url-redaction.sh` passes over call sites that leak, even
+/// inside the crates it scans.
+///
+/// Redacting where the text is rendered rather than where it is built covers
+/// every variant and every call site at once, including ones added later. The
+/// cost is 22 regex scans and an allocation or two, on an error path only.
+///
+/// It filters free text, not URLs specifically, so a message that merely
+/// starts with `key=` or `code=` is redacted too. That is a deliberate trade:
+/// over-redacting a diagnostic beats leaking a credential.
+use rdlp_redact::redact_str as redact;
+
+/// Debug redacts the free text while keeping the structure.
+///
+/// The derived Debug printed each field verbatim, so `{e:?}` — what a panic
+/// from `unwrap`/`expect` prints, and a good deal of logging — leaked
+/// precisely what Display redacts. Delegating Debug to Display is not the fix:
+/// it would also drop the `url` field, which is separately useful and already
+/// redacted by `RedactedUrlBuf`'s own Debug.
+///
+/// So this mirrors the derive, with the free-text fields passed through
+/// `redact`. Adding a variant means adding an arm — the compiler's
+/// exhaustiveness check enforces that, which is why this is a `match` rather
+/// than a catch-all.
+impl std::fmt::Debug for RdlpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        /// One arm's worth: a struct variant carrying `message` and `url`.
+        macro_rules! with_url {
+            ($name:literal, $message:expr, $url:expr) => {
+                f.debug_struct($name)
+                    .field("message", &redact($message))
+                    .field("url", $url)
+                    .finish()
+            };
+        }
+
+        match self {
+            Self::Network { message, url } => with_url!("Network", message, url),
+            Self::Extraction { message, url } => with_url!("Extraction", message, url),
+            Self::Download { message, url } => with_url!("Download", message, url),
+            Self::Http { status, reason } => f
+                .debug_struct("Http")
+                .field("status", status)
+                .field("reason", &redact(reason))
+                .finish(),
+            Self::NoExtractor(t) => rdlp_redact::redacted_debug_tuple!(f, "NoExtractor", t),
+            Self::InvalidUrl(t) => rdlp_redact::redacted_debug_tuple!(f, "InvalidUrl", t),
+            Self::PostProcess(t) => rdlp_redact::redacted_debug_tuple!(f, "PostProcess", t),
+            Self::FFmpeg(t) => rdlp_redact::redacted_debug_tuple!(f, "FFmpeg", t),
+            Self::JavaScript(t) => rdlp_redact::redacted_debug_tuple!(f, "JavaScript", t),
+            Self::Cookie(t) => rdlp_redact::redacted_debug_tuple!(f, "Cookie", t),
+            Self::Plugin(t) => rdlp_redact::redacted_debug_tuple!(f, "Plugin", t),
+            Self::FormatSelection(t) => rdlp_redact::redacted_debug_tuple!(f, "FormatSelection", t),
+            Self::Config(t) => rdlp_redact::redacted_debug_tuple!(f, "Config", t),
+            Self::Unsupported(t) => rdlp_redact::redacted_debug_tuple!(f, "Unsupported", t),
+            Self::Other(t) => rdlp_redact::redacted_debug_tuple!(f, "Other", t),
+            // Typed sources: their Display is the crate's own and carries no
+            // URL we assembled, so they keep the derive's shape.
+            Self::Io(e) => f.debug_tuple("Io").field(e).finish(),
+            Self::UrlParse(e) => f.debug_tuple("UrlParse").field(e).finish(),
+            Self::Json(e) => f.debug_tuple("Json").field(e).finish(),
+            Self::Regex(e) => f.debug_tuple("Regex").field(e).finish(),
+            Self::Cancelled => f.write_str("Cancelled"),
+        }
+    }
 }
 
 impl RdlpError {
@@ -284,6 +357,149 @@ mod redact_tests {
             rendered.contains("X-Amz-Signature=***"),
             "redacted form expected in message: {rendered}"
         );
+    }
+    /// A URL with credentials, arriving the way it really does: inside a
+    /// message some call site built with `format!("…: {e}")` over an error
+    /// whose Display printed the request URI verbatim.
+    const LEAKY: &str = "Failed to read response body: \
+error following redirect for uri (https://admin:hunter2@cdn.example.com/v.mp4)";
+
+    #[test]
+    fn display_redacts_credentials_carried_in_a_message() {
+        let e = RdlpError::Network {
+            message: LEAKY.to_string(),
+            url: None,
+        };
+        let shown = e.to_string();
+        assert!(!shown.contains("hunter2"), "password leaked: {shown}");
+        assert!(!shown.contains("admin"), "username leaked: {shown}");
+        // Still useful: the host survives, so the message still says where.
+        assert!(shown.contains("cdn.example.com"), "over-redacted: {shown}");
+    }
+
+    #[test]
+    fn debug_redacts_what_display_redacts() {
+        // The derived Debug printed fields verbatim, so `{e:?}` — what a panic
+        // from unwrap/expect prints, and much logging — leaked exactly what
+        // Display was stripping.
+        let e = RdlpError::Extraction {
+            message: LEAKY.to_string(),
+            url: None,
+        };
+        let shown = format!("{e:?}");
+        assert!(
+            !shown.contains("hunter2"),
+            "password leaked via Debug: {shown}"
+        );
+        // Positive assertions too: `cargo mutants` showed a Debug impl that
+        // returns `Ok(())` without writing anything passes an absence-only
+        // test — absence of a credential is satisfied by absence of output.
+        assert!(
+            shown.contains("Extraction"),
+            "variant name missing: {shown}"
+        );
+        assert!(shown.contains("message"), "field name missing: {shown}");
+        assert!(
+            shown.contains("cdn.example.com"),
+            "redacted text missing: {shown}"
+        );
+    }
+
+    #[test]
+    fn every_free_text_variant_is_redacted() {
+        // Redaction is per-variant in the `#[error]` attributes, so one
+        // covered variant says nothing about the rest.
+        let variants: Vec<RdlpError> = vec![
+            RdlpError::Network {
+                message: LEAKY.into(),
+                url: None,
+            },
+            RdlpError::Extraction {
+                message: LEAKY.into(),
+                url: None,
+            },
+            RdlpError::Download {
+                message: LEAKY.into(),
+                url: None,
+            },
+            RdlpError::Http {
+                status: 500,
+                reason: LEAKY.into(),
+            },
+            RdlpError::NoExtractor(LEAKY.into()),
+            RdlpError::InvalidUrl(LEAKY.into()),
+            RdlpError::PostProcess(LEAKY.into()),
+            RdlpError::FFmpeg(LEAKY.into()),
+            RdlpError::JavaScript(LEAKY.into()),
+            RdlpError::Cookie(LEAKY.into()),
+            RdlpError::Plugin(LEAKY.into()),
+            RdlpError::FormatSelection(LEAKY.into()),
+            RdlpError::Config(LEAKY.into()),
+            RdlpError::Unsupported(LEAKY.into()),
+            RdlpError::Other(LEAKY.into()),
+        ];
+        for e in variants {
+            let d = e.to_string();
+            assert!(!d.contains("hunter2"), "Display leaked: {d}");
+            let dbg = format!("{e:?}");
+            assert!(!dbg.contains("hunter2"), "Debug leaked: {dbg}");
+        }
+    }
+
+    // ── check_http_response ─────────────────────────────────────────────
+    //
+    // Added because `cargo mutants` reported both of its mutations MISSED:
+    // the whole function could be replaced with `Ok(())`, and the `!` in its
+    // status test deleted, with the entire suite still green. Nothing
+    // exercised it — it is the error gate for every HTTP response in the
+    // workspace.
+    //
+    // These are constructed rather than driven through a live client, because
+    // `wreq::Response` cannot be built directly; `http::Response` converts.
+
+    fn response_with_status(code: u16) -> wreq::Response {
+        wreq::Response::from(
+            http::Response::builder()
+                .status(code)
+                .body(wreq::Body::default())
+                .expect("valid response"),
+        )
+    }
+
+    #[test]
+    fn check_http_response_accepts_success_statuses() {
+        for code in [200_u16, 201, 204, 299] {
+            assert!(
+                check_http_response(&response_with_status(code)).is_ok(),
+                "{code} should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn check_http_response_rejects_non_success_statuses() {
+        // Kills "replace with Ok(())": a 404 must be an Err.
+        for code in [300_u16, 400, 404, 500] {
+            // `expect_err` takes a plain &str, so a `{code}` there would be
+            // literal rather than the status that failed.
+            let Err(err) = check_http_response(&response_with_status(code)) else {
+                panic!("{code} should be rejected");
+            };
+            match err {
+                RdlpError::Http { status, .. } => assert_eq!(status, code),
+                other => panic!("expected Http, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn check_http_response_reports_the_status_and_its_reason() {
+        // Kills "delete !": with the negation gone, 200 would error and 404
+        // would pass, so pinning BOTH directions is what makes the operator
+        // deletion detectable.
+        let err =
+            check_http_response(&response_with_status(404)).expect_err("404 should be rejected");
+        assert_eq!(err.to_string(), "HTTP error 404: Not Found");
     }
 }
 

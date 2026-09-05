@@ -52,8 +52,8 @@ cd rdlp
 # Build the project
 cargo build
 
-# Run tests
-cargo test
+# Run tests (--workspace is load-bearing; see "Feature-gated code" below)
+cargo test --workspace
 
 # Run clippy
 cargo clippy
@@ -124,14 +124,35 @@ git checkout -b fix/bug-description
 ### 3. Test Your Changes
 
 ```bash
-# Run all tests
-cargo test
+# Run all tests (--workspace is load-bearing; see below)
+cargo test --workspace
 
 # Run tests for a specific crate
 cargo test -p rdlp-extractor
 
 # Run tests with output
-cargo test -- --nocapture
+cargo test --workspace -- --nocapture
+
+# Feature-gated code: use --workspace
+#
+# The `dto` module is behind `rdlp-api`'s non-default `serde` feature. Nothing
+# among the default members' DEFAULT features enables it, so a plain
+# `cargo test` never compiles it — and `dto` carries every event payload to the
+# desktop UI. A test written for it does not run and reports nothing.
+#
+# Two things fix it, by different routes: `--workspace` pulls in rdlp-desktop,
+# which depends on rdlp-api with `features = ["serde"]`, and feature
+# unification does the rest; `--all-features` enables the feature directly on
+# rdlp-api, which IS a default member. Use `--workspace` — it also runs the
+# rdlp-cli, rdlp-desktop and rdlp-probe tests that `default-members` excludes.
+#
+# Verified by running the test, not by counting binaries: enabling a feature
+# adds tests inside an existing binary and cannot change the binary count, so
+# a count can never distinguish these cases.
+#
+#   cargo test free_text_event_payloads_are_redacted                 -> does not run
+#   cargo test --workspace free_text_event_payloads_are_redacted     -> runs
+#   cargo test --all-features free_text_event_payloads_are_redacted  -> runs
 
 # Run clippy
 cargo clippy -- -W clippy::all

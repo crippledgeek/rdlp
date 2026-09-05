@@ -50,7 +50,10 @@ pub(super) async fn validate_subtitle_urls(
                 }
                 diagnostics.push(SubtitleDiagnostic {
                     key: format!("unreachable_{}", track.language),
-                    value: format!("HTTP {status}: {}", track.url),
+                    value: format!(
+                        "HTTP {status}: {}",
+                        rdlp_redact::RedactedUrl::new(&track.url)
+                    ),
                 });
             }
             UrlValidation::NetworkError(e) => {
@@ -85,6 +88,14 @@ pub(super) async fn validate_subtitle_urls(
 enum UrlValidation {
     Reachable,
     Unreachable(u16),
+    /// The transport error's text, ALREADY REDACTED.
+    ///
+    /// Both consumers — the `warn!` and the stored `SubtitleDiagnostic` — rely
+    /// on that, and the invariant is held by the two construction sites below
+    /// agreeing rather than by the type. A newtype would make it a compiler
+    /// fact; with two private construction sites in one file it is a judgement
+    /// call, recorded here so the next site added knows it is joining a
+    /// contract.
     NetworkError(String),
 }
 
@@ -97,7 +108,7 @@ async fn validate_single_url(url: &str, client: &wreq::Client) -> UrlValidation 
             debug!("HEAD 405 for subtitle URL, falling back to ranged GET");
         }
         Ok(resp) => return UrlValidation::Unreachable(resp.status().as_u16()),
-        Err(e) => return UrlValidation::NetworkError(e.to_string()),
+        Err(e) => return UrlValidation::NetworkError(rdlp_redact::redact_str(&e.to_string())),
     }
 
     // Fallback: GET with range header (0-1KB)
@@ -112,7 +123,7 @@ async fn validate_single_url(url: &str, client: &wreq::Client) -> UrlValidation 
             UrlValidation::Reachable
         }
         Ok(resp) => UrlValidation::Unreachable(resp.status().as_u16()),
-        Err(e) => UrlValidation::NetworkError(e.to_string()),
+        Err(e) => UrlValidation::NetworkError(rdlp_redact::redact_str(&e.to_string())),
     }
 }
 

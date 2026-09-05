@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 regex = { workspace = true }
 log = { workspace = true, optional = true }
+serde = { workspace = true, optional = true }
 
 [dev-dependencies]
 tracing = { workspace = true }
@@ -13,3 +14,11 @@ tracing-subscriber = { workspace = true }
 
 [features]
 log-kv = ["dep:log"]
+# Provides `serialize_redacted`, the serde field serializer shared by every
+# `Serialize` type carrying operator-assembled free text.
+#
+# Nominally optional, effectively always on: rdlp-types enables it and is a
+# foundational dependency, so unification turns it on for essentially every
+# workspace build. A crate can therefore use `serialize_redacted` without
+# declaring the feature and still compile locally — declare it anyway.
+serde = ["dep:serde"]

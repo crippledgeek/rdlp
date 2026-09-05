@@ -167,7 +167,11 @@ impl Orchestrator {
         let response = match request.send().await {
             Ok(resp) => resp,
             Err(e) => {
-                warn!(url = RedactedUrl::new(thumbnail_url); "Failed to download thumbnail: {e}");
+                warn!(
+                    url = RedactedUrl::new(thumbnail_url);
+                    "Failed to download thumbnail: {}",
+                    rdlp_redact::redact_str(&e.to_string())
+                );
                 return None;
             }
         };
@@ -196,7 +200,10 @@ impl Orchestrator {
                     bytes.extend_from_slice(&chunk);
                 }
                 Some(Err(e)) => {
-                    warn!("Failed to read thumbnail response: {e}");
+                    warn!(
+                        "Failed to read thumbnail response: {}",
+                        rdlp_redact::redact_str(&e.to_string())
+                    );
                     return None;
                 }
                 None => break,

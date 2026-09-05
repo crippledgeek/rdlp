@@ -10,11 +10,12 @@
 
 use rdlp_core::RdlpError;
 use rdlp_redact::RedactedUrlBuf;
+use rdlp_redact::redact_str as redact;
 use std::path::PathBuf;
 use thiserror::Error;
 
 /// Errors that can occur during orchestration
-#[derive(Debug, Error)]
+#[derive(Error)]
 pub enum OrchestratorError {
     /// No extractor found for the given URL
     #[error("No extractor found for URL: {url}")]
@@ -36,7 +37,7 @@ pub enum OrchestratorError {
     NoFormat,
 
     /// Format selector parsing failed
-    #[error("Invalid format selector: {0}")]
+    #[error("Invalid format selector: {}", redact(_0))]
     InvalidFormatSelector(String),
 
     /// No downloader found for the URL
@@ -55,11 +56,11 @@ pub enum OrchestratorError {
     /// Propagated from [`run_postprocessing`] when the pipeline returns a
     /// non-[`PipelineError::Cancelled`] failure. The caller receives
     /// [`Event::Failed`] rather than a silent fallback to the unprocessed files.
-    #[error("Post-processing failed: {0}")]
+    #[error("Post-processing failed: {}", redact(_0))]
     PostProcessingFailed(String),
 
     /// Resume detection failed
-    #[error("Failed to detect resume point: {0}")]
+    #[error("Failed to detect resume point: {}", redact(_0))]
     ResumeDetectionFailed(String),
 
     /// Missing chunk file during merge
@@ -74,11 +75,11 @@ pub enum OrchestratorError {
     ChunkMergeFailed(#[source] std::io::Error),
 
     /// Failed to generate output path
-    #[error("Failed to generate output path: {0}")]
+    #[error("Failed to generate output path: {}", redact(_0))]
     PathGenerationFailed(String),
 
     /// I/O error with custom message
-    #[error("{0}")]
+    #[error("{}", redact(_0))]
     IoError(String),
 
     /// I/O error
@@ -91,7 +92,7 @@ pub enum OrchestratorError {
     /// and runtime rejections that depend on the selected format (e.g.
     /// "HLS not yet supported with stdout", "Merge downloads not supported
     /// with stdout").
-    #[error("{0}")]
+    #[error("{}", redact(_0))]
     Configuration(String),
 
     /// Interactive callback not configured but interactive mode was requested
@@ -99,8 +100,59 @@ pub enum OrchestratorError {
     InteractiveNotConfigured,
 
     /// Catch-all for errors with context chains from internal operations.
-    #[error(transparent)]
+    /// Catch-all for `anyhow`-carried failures.
+    ///
+    /// NOT `#[error(transparent)]`: `anyhow::Error` is a container whose text
+    /// is our own `.context(...)` strings, assembled by `format!` over values
+    /// that can include a URL — unlike `io::Error`, whose message is
+    /// OS-generated and inert. Rendering it explicitly is what lets it be
+    /// redacted.
+    #[error("{}", redact(&_0.to_string()))]
     Other(#[from] anyhow::Error),
+}
+
+/// Debug redacts the free text while keeping the structure.
+///
+/// The derived Debug printed each payload verbatim, so `{e:?}` leaked what
+/// Display now strips. `RdlpError` and `io::Error` keep the derive's shape —
+/// the first redacts in its own Debug, the second's message is OS-generated.
+/// `anyhow::Error` does NOT: its text is our own `.context(...)` strings, so
+/// it is redacted here like any other free text.
+impl std::fmt::Debug for OrchestratorError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoExtractor { url } => f.debug_struct("NoExtractor").field("url", url).finish(),
+            Self::NoDownloader { url } => f.debug_struct("NoDownloader").field("url", url).finish(),
+            Self::MissingChunk { path } => {
+                f.debug_struct("MissingChunk").field("path", path).finish()
+            }
+            Self::ExtractionFailed(e) => f.debug_tuple("ExtractionFailed").field(e).finish(),
+            Self::DownloadFailed(e) => f.debug_tuple("DownloadFailed").field(e).finish(),
+            Self::ChunkMergeFailed(e) => f.debug_tuple("ChunkMergeFailed").field(e).finish(),
+            Self::Io(e) => f.debug_tuple("Io").field(e).finish(),
+            Self::Other(e) => f
+                .debug_tuple("Other")
+                .field(&redact(&e.to_string()))
+                .finish(),
+            Self::InvalidFormatSelector(t) => {
+                rdlp_redact::redacted_debug_tuple!(f, "InvalidFormatSelector", t)
+            }
+            Self::PostProcessingFailed(t) => {
+                rdlp_redact::redacted_debug_tuple!(f, "PostProcessingFailed", t)
+            }
+            Self::ResumeDetectionFailed(t) => {
+                rdlp_redact::redacted_debug_tuple!(f, "ResumeDetectionFailed", t)
+            }
+            Self::PathGenerationFailed(t) => {
+                rdlp_redact::redacted_debug_tuple!(f, "PathGenerationFailed", t)
+            }
+            Self::IoError(t) => rdlp_redact::redacted_debug_tuple!(f, "IoError", t),
+            Self::Configuration(t) => rdlp_redact::redacted_debug_tuple!(f, "Configuration", t),
+            Self::UserCancelled => f.write_str("UserCancelled"),
+            Self::NoFormat => f.write_str("NoFormat"),
+            Self::InteractiveNotConfigured => f.write_str("InteractiveNotConfigured"),
+        }
+    }
 }
 
 /// Check if an error warrants re-extracting fresh URLs.
@@ -166,5 +218,44 @@ mod tests {
             display.contains("token=***"),
             "Display must contain redacted placeholder; got: {display}"
         );
+    }
+}
+
+#[cfg(test)]
+mod redact_tests {
+    use super::*;
+
+    const LEAKY: &str = "failed for uri (https://admin:hunter2@cdn.example.com/v.mp4)";
+
+    #[test]
+    fn display_and_debug_redact_free_text() {
+        let e = OrchestratorError::PostProcessingFailed(LEAKY.to_string());
+        let shown = e.to_string();
+        let dbg = format!("{e:?}");
+        assert!(!shown.contains("hunter2"), "Display leaked: {shown}");
+        assert!(!dbg.contains("hunter2"), "Debug leaked: {dbg}");
+        // Positive assertions: an impl that writes nothing passes the two
+        // above, which is how `cargo mutants` found this test missing.
+        assert!(
+            dbg.contains("PostProcessingFailed"),
+            "variant missing: {dbg}"
+        );
+        assert!(
+            dbg.contains("cdn.example.com"),
+            "redacted text missing: {dbg}"
+        );
+    }
+
+    #[test]
+    fn the_anyhow_catch_all_is_redacted_too() {
+        // `Other` was `#[error(transparent)]`, which forwarded anyhow's text —
+        // our own `.context(...)` strings — with no redaction and no
+        // placeholder for the gate to see.
+        let e = OrchestratorError::Other(anyhow::anyhow!("{LEAKY}"));
+        let shown = e.to_string();
+        let dbg = format!("{e:?}");
+        assert!(!shown.contains("hunter2"), "Display leaked: {shown}");
+        assert!(!dbg.contains("hunter2"), "Debug leaked: {dbg}");
+        assert!(shown.contains("cdn.example.com"), "over-redacted: {shown}");
     }
 }

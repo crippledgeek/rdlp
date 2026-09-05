@@ -13,10 +13,10 @@ use thiserror::Error;
 ///
 /// Internal implementation details (regex errors, JSON parse errors) are wrapped
 /// into the appropriate high-level variant with a user-friendly message.
-#[derive(Debug, Clone, Error)]
+#[derive(Clone, Error)]
 pub enum RdlpApiError {
     /// Invalid URL or request parameters.
-    #[error("Invalid input: {message}")]
+    #[error("Invalid input: {}", redact(message))]
     InvalidInput {
         /// Description of what's invalid.
         message: String,
@@ -39,7 +39,7 @@ pub enum RdlpApiError {
     /// `source_url` is stored as [`RedactedUrlBuf`] so that
     /// `#[error("…{source_url}")]` Display automatically strips credentials —
     /// the type system enforces this at every construction site.
-    #[error("Extraction failed for {source_url}: {message}")]
+    #[error("Extraction failed for {source_url}: {}", redact(message))]
     ExtractError {
         /// What went wrong.
         message: String,
@@ -50,7 +50,7 @@ pub enum RdlpApiError {
     },
 
     /// Network or HTTP failure.
-    #[error("Network error: {message}")]
+    #[error("Network error: {}", redact(message))]
     NetworkError {
         /// Description of the failure.
         message: String,
@@ -59,21 +59,21 @@ pub enum RdlpApiError {
     },
 
     /// Filesystem I/O error.
-    #[error("I/O error: {message}")]
+    #[error("I/O error: {}", redact(message))]
     IoError {
         /// Description of the I/O failure.
         message: String,
     },
 
     /// `FFmpeg` processing failed.
-    #[error("FFmpeg error: {message}")]
+    #[error("FFmpeg error: {}", redact(message))]
     FfmpegError {
         /// What went wrong during post-processing.
         message: String,
     },
 
     /// Feature not available on this platform.
-    #[error("Unsupported platform for feature: {feature}")]
+    #[error("Unsupported platform for feature: {}", redact(feature))]
     UnsupportedPlatform {
         /// The feature that is not available.
         feature: String,
@@ -84,24 +84,96 @@ pub enum RdlpApiError {
     UserCancelled,
 
     /// Non-fatal error (logged but not propagated as failure).
-    #[error("Soft error: {message}")]
+    #[error("Soft error: {}", redact(message))]
     Soft {
         /// Warning message.
         message: String,
     },
 
     /// Builder misconfiguration.
-    #[error("Builder error: {message}")]
+    #[error("Builder error: {}", redact(message))]
     BuilderError {
         /// What's wrong with the builder configuration.
         message: String,
     },
 }
 
+/// Redact free text on its way to an operator. See
+/// `rdlp_core::error`'s import of the same function for the why.
+use rdlp_redact::redact_str as redact;
+
+/// Debug redacts the free text while keeping the structure.
+///
+/// `{e:?}` must not leak what `{e}` strips. Delegating to Display is not the
+/// fix — it would drop fields Display omits, `NetworkError::status` among
+/// them — so this mirrors the derive with `message` passed through `redact`.
+/// The `RedactedUrlBuf` fields redact themselves. See
+/// `rdlp_core::error::RdlpError`'s Debug, which does the same for the same
+/// reason.
+impl std::fmt::Debug for RdlpApiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        /// One arm's worth: a struct variant whose only free text is `message`.
+        macro_rules! msg_only {
+            ($name:literal, $message:expr) => {
+                f.debug_struct($name)
+                    .field("message", &redact($message))
+                    .finish()
+            };
+        }
+
+        match self {
+            Self::InvalidInput { message } => msg_only!("InvalidInput", message),
+            Self::IoError { message } => msg_only!("IoError", message),
+            Self::FfmpegError { message } => msg_only!("FfmpegError", message),
+            Self::Soft { message } => msg_only!("Soft", message),
+            Self::BuilderError { message } => msg_only!("BuilderError", message),
+            Self::UnsupportedUrl { url } => {
+                f.debug_struct("UnsupportedUrl").field("url", url).finish()
+            }
+            Self::ExtractError {
+                message,
+                source_url,
+            } => f
+                .debug_struct("ExtractError")
+                .field("message", &redact(message))
+                .field("source_url", source_url)
+                .finish(),
+            Self::NetworkError { message, status } => f
+                .debug_struct("NetworkError")
+                .field("message", &redact(message))
+                .field("status", status)
+                .finish(),
+            Self::UnsupportedPlatform { feature } => f
+                .debug_struct("UnsupportedPlatform")
+                .field("feature", &redact(feature))
+                .finish(),
+            Self::UserCancelled => f.write_str("UserCancelled"),
+        }
+    }
+}
+
 impl RdlpApiError {
-    /// Human-friendly message suitable for UI display.
+    /// Human-friendly message suitable for UI display, with credentials
+    /// stripped.
+    ///
+    /// This is a SEPARATE rendering from `Display`, and it is the one the
+    /// desktop actually ships to the frontend: the `download-error` Tauri
+    /// event and `DownloadJob.error` both take their text from here, and
+    /// neither is an `AppError`, so neither is covered by that type's
+    /// `#[serde(serialize_with)]` guard. Redacting at this choke point covers
+    /// all of them — and `rdlp_api::dto::EventDto` — rather than at each
+    /// call site, where the next new sink would miss it.
     #[must_use]
     pub fn user_message(&self) -> Cow<'static, str> {
+        // Always owned: `redact` returns a `String`, and the borrowed arms are
+        // fixed strings with nothing to strip. Costs the `format!` below plus
+        // `redact`'s own allocations, on an error path only.
+        Cow::Owned(redact(&self.user_message_unredacted()))
+    }
+
+    /// The raw message, before redaction. Private: every caller wants
+    /// [`Self::user_message`].
+    fn user_message_unredacted(&self) -> Cow<'static, str> {
         match self {
             Self::InvalidInput { message } => Cow::Owned(format!("Invalid input: {message}")),
             Self::UnsupportedUrl { url } => Cow::Owned(format!("This URL is not supported: {url}")),
@@ -712,5 +784,59 @@ mod tests {
         for v in variants {
             let _api: RdlpApiError = v.into();
         }
+    }
+
+    const LEAKY_API: &str = "Failed for uri (https://admin:hunter2@cdn.example.com/v.mp4)";
+
+    #[test]
+    fn api_error_display_and_debug_redact_credentials() {
+        let e = RdlpApiError::NetworkError {
+            message: LEAKY_API.to_string(),
+            status: None,
+        };
+        let shown = e.to_string();
+        let dbg = format!("{e:?}");
+        assert!(!shown.contains("hunter2"), "Display leaked: {shown}");
+        assert!(!dbg.contains("hunter2"), "Debug leaked: {dbg}");
+        assert!(shown.contains("cdn.example.com"), "over-redacted: {shown}");
+        // An empty Debug satisfies the absence assertion above, so pin the
+        // structure as well — `cargo mutants` caught exactly that.
+        assert!(dbg.contains("NetworkError"), "variant name missing: {dbg}");
+        assert!(dbg.contains("status"), "field Display omits missing: {dbg}");
+        assert!(
+            dbg.contains("cdn.example.com"),
+            "redacted text missing: {dbg}"
+        );
+    }
+
+    #[test]
+    fn credentials_do_not_survive_the_conversion_from_rdlp_error() {
+        // The path a real leak takes: built in rdlp-core, carried across.
+        let converted: RdlpApiError = RdlpError::Network {
+            message: LEAKY_API.to_string(),
+            url: None,
+        }
+        .into();
+        let shown = converted.to_string();
+        assert!(
+            !shown.contains("hunter2"),
+            "leaked across the boundary: {shown}"
+        );
+    }
+
+    #[test]
+    fn user_message_redacts_credentials() {
+        // `user_message()` builds its own text and does NOT go through the
+        // `#[error]` attributes, so the Display redaction says nothing about
+        // it. It is the text the desktop ships to the frontend for a failed
+        // download, via the `download-error` event and `DownloadJob.error`.
+        let e = RdlpApiError::NetworkError {
+            message: "failed for uri (https://admin:hunter2@cdn.example.com/v.mp4)".into(),
+            status: None,
+        };
+        let msg = e.user_message();
+        assert!(!msg.contains("hunter2"), "password leaked to the UI: {msg}");
+        assert!(!msg.contains("admin"), "username leaked to the UI: {msg}");
+        assert!(msg.contains("cdn.example.com"), "over-redacted: {msg}");
     }
 }

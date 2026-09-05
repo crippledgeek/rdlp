@@ -6066,6 +6066,7 @@ dependencies = [
  "async-trait",
  "backon",
  "dirs",
+ "http",
  "log",
  "rdlp-redact",
  "rdlp-types",
@@ -6344,6 +6345,7 @@ version = "0.1.0"
 dependencies = [
  "log",
  "regex",
+ "serde",
  "tracing",
  "tracing-subscriber",
 ]
@@ -6373,6 +6375,7 @@ dependencies = [
 name = "rdlp-types"
 version = "0.1.0"
 dependencies = [
+ "rdlp-redact",
  "regex",
  "serde",
  "serde_json",
