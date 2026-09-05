@@ -22,6 +22,13 @@ use rdlp_types::BrowserEmulation;
 /// item 3 / research §F-E.
 const DEFAULT_POOL_IDLE_TIMEOUT_SECS: u64 = 60;
 
+/// Maximum redirect hops followed before a request fails.
+///
+/// Matches `wreq::redirect::Policy::default()`, which is `limited(10)`, so
+/// replacing that policy with the SSRF-guarded one leaves chain-length
+/// behaviour unchanged.
+const DEFAULT_MAX_REDIRECTS: usize = 10;
+
 /// Compile-time regression guard for the stale-connection race: the default
 /// MUST stay below nginx's default `keepalive_timeout` (75s) so the pool evicts
 /// an idle socket before the server closes it. Bumping the default past a server
@@ -75,6 +82,13 @@ pub struct HttpClientConfig {
 
     /// Optional HTTP/HTTPS proxy URL
     pub proxy: Option<String>,
+
+    /// Maximum redirect hops followed before a request fails.
+    ///
+    /// Bounds chain length only. It is not what stops a redirect reaching a
+    /// private host — every hop is re-validated against
+    /// `rdlp_security::validate_url_security` (see `client.rs`).
+    pub max_redirects: usize,
 }
 
 impl Default for HttpClientConfig {
@@ -89,6 +103,7 @@ impl Default for HttpClientConfig {
             tcp_keepalive_secs: 60,
             tcp_nodelay: true,
             proxy: None,
+            max_redirects: DEFAULT_MAX_REDIRECTS,
         }
     }
 }
