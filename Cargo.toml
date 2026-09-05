@@ -45,7 +45,7 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.85"
+rust-version = "1.88"
 authors = ["rdlp contributors"]
 license = "MIT OR Apache-2.0"
 
@@ -142,6 +142,15 @@ inventory = "0.3"
 # Cookie extraction
 aes = "0.8"
 aes-gcm = "0.10"
+# Linux Chrome cookie decryption (rdlp-cookies): AES-128-CBC + PBKDF2-SHA1 key
+# derivation, matching Chromium's os_crypt_linux.cc. Windows keeps AES-256-GCM.
+cbc = "0.1"
+pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+sha1 = "0.10"
+# Secret Service (org.freedesktop.secrets) client for the Chrome v11 keyring key
+# on Linux. Pure-Rust over D-Bus (no C libsecret, no OpenSSL) to preserve the
+# single-binary, library-first principle; Tokio flavour to match the runtime.
+secret-service = { version = "5.2", default-features = false, features = ["rt-tokio-crypto-rust"] }
 base64 = "0.22"
 rusqlite = { version = "0.32", features = ["bundled"] }
 

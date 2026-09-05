@@ -8,6 +8,16 @@ use wreq::Uri;
 use wreq::cookie::CookieStore;
 use wreq::header::HeaderValue;
 
+/// Permission mode for the private temp directory holding a cookie DB copy:
+/// owner read/write/execute only, so no other local user can read the copy.
+#[cfg(unix)]
+const PRIVATE_DIR_MODE: u32 = 0o700;
+
+/// Attempts to find an unused unique name before giving up. Each attempt uses a
+/// fresh counter + timestamp, so a collision is only possible under pathological
+/// clock/pid reuse; the bound exists so a persistent failure cannot spin.
+const MAX_PRIVATE_DIR_ATTEMPTS: u32 = 100;
+
 /// Build a URL and `Set-Cookie` header from cookie fields, then insert into the jar.
 ///
 /// Returns `true` if the cookie was successfully inserted.
@@ -72,62 +82,113 @@ pub(crate) fn with_temp_db_copy<F, T>(
 where
     F: FnOnce(&Path) -> Result<T, std::io::Error>,
 {
-    let temp_db = std::env::temp_dir().join(temp_name);
+    // A cookie DB copy is credential-bearing, so it is placed in a private,
+    // uniquely-named directory rather than at a predictable path in the shared
+    // temp dir: a fixed name lets another local user pre-create or read the
+    // copy. The directory is created 0700 on Unix (see `create_private_temp_dir`).
+    let temp_root = create_private_temp_dir()?;
+    // The guard removes the whole private directory (DB copy + sidecars) on
+    // every exit — normal return AND a panic in `f`, closing the window where a
+    // credential-bearing copy could otherwise be left on disk by an unwind.
+    let _cleanup = TempDirGuard(&temp_root);
+    let temp_db = temp_root.join(temp_name);
 
     copy_db_file(db_path, &temp_db)?;
 
-    // Also copy WAL and SHM journal files if they exist. Chrome uses
-    // SQLite WAL mode, so recent cookies may live in the journal.
-    let wal_src = db_path.with_extension("db-wal");
-    let shm_src = db_path.with_extension("db-shm");
-    let wal_dst = temp_db.with_extension("db-wal");
-    let shm_dst = temp_db.with_extension("db-shm");
-
-    // Chrome's cookie DB doesn't have a .db extension, so use suffix
-    // approach: Cookies-wal, Cookies-shm
-    let wal_src2 = db_path.with_file_name(format!(
-        "{}-wal",
-        db_path.file_name().unwrap_or_default().to_string_lossy()
-    ));
-    let shm_src2 = db_path.with_file_name(format!(
-        "{}-shm",
-        db_path.file_name().unwrap_or_default().to_string_lossy()
-    ));
-    let wal_dst2 = temp_db.with_file_name(format!("{temp_name}-wal"));
-    let shm_dst2 = temp_db.with_file_name(format!("{temp_name}-shm"));
-
-    // Try both naming patterns; ignore errors (files may not exist)
-    for (src, dst) in [
-        (&wal_src, &wal_dst),
-        (&shm_src, &shm_dst),
-        (&wal_src2, &wal_dst2),
-        (&shm_src2, &shm_dst2),
-    ] {
-        if src.exists() {
-            let _ = copy_db_file(src, dst);
+    // Browsers use SQLite WAL mode, so recent cookies may live in the -wal/-shm
+    // sidecars. The source DB may carry a `.db` extension or none (Chrome's
+    // "Cookies" has none), so try both the extension and suffix forms; the
+    // destination is always "<temp_name>-wal"/"-shm" beside the copy.
+    for suffix in ["wal", "shm"] {
+        let dst = temp_root.join(format!("{temp_name}-{suffix}"));
+        for src in sidecar_sources(db_path, suffix) {
+            if src.exists() {
+                let _ = copy_db_file(&src, &dst);
+                break;
+            }
         }
     }
 
-    let result = f(&temp_db);
+    f(&temp_db)
+}
 
-    // Clean up all temp files
-    // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
-    #[allow(clippy::disallowed_methods)]
-    let _ = std::fs::remove_file(&temp_db);
-    // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
-    #[allow(clippy::disallowed_methods)]
-    let _ = std::fs::remove_file(&wal_dst);
-    // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
-    #[allow(clippy::disallowed_methods)]
-    let _ = std::fs::remove_file(&shm_dst);
-    // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
-    #[allow(clippy::disallowed_methods)]
-    let _ = std::fs::remove_file(&wal_dst2);
-    // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
-    #[allow(clippy::disallowed_methods)]
-    let _ = std::fs::remove_file(&shm_dst2);
+/// Removes a directory tree on drop, so the private temp directory holding a
+/// cookie DB copy is cleaned up on any exit from `with_temp_db_copy` — normal
+/// return, `?` propagation, or a panic while the callback runs.
+struct TempDirGuard<'a>(&'a Path);
 
-    result
+impl Drop for TempDirGuard<'_> {
+    fn drop(&mut self) {
+        // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
+        #[allow(clippy::disallowed_methods)]
+        let _ = std::fs::remove_dir_all(self.0);
+    }
+}
+
+/// The two candidate source paths for a `SQLite` `-wal`/`-shm` sidecar of
+/// `db_path`: the `.db-<suffix>` extension form and the `<name>-<suffix>`
+/// suffix form (Chrome's `Cookies` has no extension).
+fn sidecar_sources(db_path: &Path, suffix: &str) -> [std::path::PathBuf; 2] {
+    [
+        db_path.with_extension(format!("db-{suffix}")),
+        db_path.with_file_name(format!(
+            "{}-{suffix}",
+            db_path.file_name().unwrap_or_default().to_string_lossy()
+        )),
+    ]
+}
+
+/// Create a uniquely-named, owner-only directory under the system temp dir.
+///
+/// The name is unpredictable (pid + counter + timestamp) and creation is
+/// exclusive: `create_new_dir` fails with `AlreadyExists` if the path is
+/// present, so a successful create proves this process owns a fresh directory —
+/// closing the symlink/pre-creation window a fixed temp name would open.
+fn create_private_temp_dir() -> Result<std::path::PathBuf, std::io::Error> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let base = std::env::temp_dir();
+    let pid = std::process::id();
+    for _ in 0..MAX_PRIVATE_DIR_ATTEMPTS {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos());
+        let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let candidate = base.join(format!("rdlp-cookies-{pid}-{seq}-{nanos}"));
+        match create_new_dir(&candidate) {
+            Ok(()) => return Ok(candidate),
+            // Name taken (extremely unlikely): fall through to the next attempt.
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not create a unique temp directory for the cookie DB copy",
+    ))
+}
+
+/// Create a single new directory, owner-only on Unix, failing if it exists.
+#[cfg(unix)]
+fn create_new_dir(path: &Path) -> Result<(), std::io::Error> {
+    use std::os::unix::fs::DirBuilderExt;
+    // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
+    #[allow(clippy::disallowed_methods)]
+    std::fs::DirBuilder::new()
+        .mode(PRIVATE_DIR_MODE)
+        .create(path)
+}
+
+/// Create a single new directory, failing if it exists. On Windows the system
+/// temp dir is already per-user, so no explicit mode is set.
+#[cfg(not(unix))]
+fn create_new_dir(path: &Path) -> Result<(), std::io::Error> {
+    // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
+    #[allow(clippy::disallowed_methods)]
+    std::fs::DirBuilder::new().create(path)
 }
 
 /// Copy a database file, with a Windows-specific fallback for locked files.

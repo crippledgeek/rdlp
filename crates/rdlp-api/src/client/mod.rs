@@ -55,8 +55,8 @@ const REEXTRACT_DELAYS_SECS: [u64; 2] = [5, 15];
 ///
 /// These paths drop the receiver before doing any work and return their
 /// result directly, so nothing ever reads the channel and the figure only
-/// bounds a buffer no consumer drains. Kept at the value the paths already
-/// used rather than tuned.
+/// bounds a buffer no consumer drains. Kept at the capacity most of these paths
+/// already used (`enrich_search_result` used 1) rather than tuned.
 const ONE_SHOT_EVENT_CAPACITY: usize = 16;
 
 #[cfg(test)]
