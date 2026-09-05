@@ -6,7 +6,8 @@
 //! `tauri-plugin-dialog`, and [`reveal_in_folder`] uses
 //! `tauri-plugin-opener` to show a file in the system file manager.
 
-// `Duration::from_mins` (lint's suggested replacement) needs Rust 1.95; MSRV is 1.85.
+// `Duration::from_mins` (lint's suggested replacement) is stable since Rust
+// 1.91 (`duration_constructors_lite`); the workspace MSRV is 1.88.
 #![allow(clippy::duration_suboptimal_units)]
 
 use std::path::PathBuf;
@@ -263,10 +264,9 @@ mod tests {
     /// The failure used to be mapped into `AppError` and handed back with no
     /// log at all, so the file showed the attempt and then nothing while only
     /// the toast knew why (#696). The record carries action, outcome and
-    /// reason in the MESSAGE rather than in structured kv, because
-    /// `tauri-plugin-log`'s formatter renders only target/level/message — kv
-    /// fields are emitted and then dropped, so they would be invisible in the
-    /// very log file this exists to populate.
+    /// reason in the MESSAGE rather than in structured kv — see
+    /// `reveal_failed`'s doc for why, and for the fact that this is the
+    /// formatter we install rather than a fixed property of the sink.
     #[test]
     fn a_reveal_failure_is_logged_once_at_warn() {
         testing_logger::setup();
@@ -284,6 +284,7 @@ mod tests {
                 body.contains("d-bus unavailable"),
                 "names the reason: {body}"
             );
+            assert!(body.contains("action=reveal"), "names the action: {body}");
             assert!(
                 body.contains("outcome=failed"),
                 "states the outcome: {body}"

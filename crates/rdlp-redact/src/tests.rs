@@ -221,3 +221,32 @@ fn a_message_with_no_credential_is_left_alone() {
         "for uri (https://cdn.example.com/v.mp4)"
     );
 }
+
+/// `redact_str` is idempotent: redacting twice equals redacting once.
+///
+/// Load-bearing, not academic. `RdlpApiError` variants redact at construction
+/// AND again at render (`#[error("…", redact(message))]`, `user_message()`,
+/// the custom `Debug`), and `AppError` fields redact a third time at serde
+/// serialization — the project stacks independent layers rather than trusting
+/// one renderer. That is only safe if a second pass is a no-op.
+///
+/// It holds because every replacement is a FIXED TEMPLATE that its own pattern
+/// re-matches and re-emits unchanged: `***` satisfies the value class, `*:*`
+/// satisfies the userinfo class, and the closure never derives output from the
+/// previous match's value.
+#[test]
+fn redacting_twice_is_the_same_as_redacting_once() {
+    for input in [
+        "https://user:pw@example.com/v?token=secret",
+        "boom https://a:b@h/p?api_key=k&access_token=t",
+        "token=secret)",
+        "?token=secret",
+        "for uri (https://cdn.example.com/v.mp4)",
+        "Download task panicked: task 3 panicked with message \"boom\"",
+        "",
+    ] {
+        let once = redact_str(input);
+        let twice = redact_str(&once);
+        assert_eq!(once, twice, "not a fixed point for input: {input}");
+    }
+}
