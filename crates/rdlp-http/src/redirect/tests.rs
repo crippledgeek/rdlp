@@ -11,6 +11,29 @@ use tokio::net::TcpListener;
 /// body. (`pedantic`/`nursery` are enabled crate-wide in `lib.rs`.)
 const ALLOW_ANYTHING: fn(&str) -> Result<(), std::convert::Infallible> = |_| Ok(());
 
+/// Serve a relative-`Location` 302 for `/redir`, then `body` for the hop it
+/// redirects to. Two connections, then done.
+fn serve_redirect_then(listener: TcpListener, body: &'static str) {
+    tokio::spawn(async move {
+        for _ in 0..2 {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 1024];
+            let _ = sock.read(&mut buf).await;
+            let redirecting = String::from_utf8_lossy(&buf).contains("GET /redir");
+            let response = if redirecting {
+                "HTTP/1.1 302 Found\r\nLocation: /dest\r\nContent-Length: 0\r\n\r\n".to_string()
+            } else {
+                format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                    body.len()
+                )
+            };
+            let _ = sock.write_all(response.as_bytes()).await;
+            let _ = sock.shutdown().await;
+        }
+    });
+}
+
 /// Serve one canned response per accepted connection, forever.
 fn serve(listener: TcpListener, response: &'static str, hits: Option<Arc<AtomicUsize>>) {
     tokio::spawn(async move {
@@ -72,7 +95,10 @@ async fn a_redirect_to_a_private_host_is_refused() {
                 msg.contains("refused by SSRF validation"),
                 "must be the SSRF refusal, not another redirect error: {msg}"
             );
-            assert!(!msg.contains("secret"), "must not echo the target: {msg}");
+            assert!(
+                !msg.contains("secret"),
+                "must not echo the private response: {msg}"
+            );
         }
         Ok(resp) => {
             let status = resp.status().as_u16();
@@ -90,21 +116,7 @@ async fn a_redirect_to_a_private_host_is_refused() {
 async fn the_guarded_policy_still_follows_302_redirects() {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        for _ in 0..2 {
-            let (mut sock, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 1024];
-            let _ = sock.read(&mut buf).await;
-            let req = String::from_utf8_lossy(&buf).to_string();
-            let response = if req.contains("GET /redir") {
-                "HTTP/1.1 302 Found\r\nLocation: /dest\r\nContent-Length: 0\r\n\r\n"
-            } else {
-                "HTTP/1.1 200 OK\r\nContent-Length: 9\r\n\r\nfollowed!"
-            };
-            let _ = sock.write_all(response.as_bytes()).await;
-            let _ = sock.shutdown().await;
-        }
-    });
+    serve_redirect_then(listener, "followed!");
 
     let resp = HttpClientFactory::default()
         .build_with_validator(None, ALLOW_ANYTHING)
@@ -130,21 +142,7 @@ async fn a_relative_location_reaches_the_policy_already_resolved() {
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    tokio::spawn(async move {
-        for _ in 0..2 {
-            let (mut sock, _) = listener.accept().await.unwrap();
-            let mut buf = [0u8; 1024];
-            let _ = sock.read(&mut buf).await;
-            let req = String::from_utf8_lossy(&buf).to_string();
-            let response = if req.contains("GET /redir") {
-                "HTTP/1.1 302 Found\r\nLocation: /dest\r\nContent-Length: 0\r\n\r\n"
-            } else {
-                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"
-            };
-            let _ = sock.write_all(response.as_bytes()).await;
-            let _ = sock.shutdown().await;
-        }
-    });
+    serve_redirect_then(listener, "ok");
 
     let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
     let recorder = {

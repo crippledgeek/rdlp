@@ -75,11 +75,9 @@ impl HttpClientFactory {
     /// Shared construction path, taking the redirect validator rather than a
     /// whole policy.
     ///
-    /// Tests inject a permissive validator to exercise following, the hop
-    /// limit and Location resolution against a loopback server, which the
-    /// production validator refuses by design. Passing the validator rather
-    /// than the policy keeps the SSRF guard structural: every client this
-    /// builds has one, and a caller can only widen what it accepts.
+    /// This is the crate's only production caller of the guarded policy, and
+    /// it passes the real validator. See [`crate::redirect`] for why the
+    /// validator is injectable at all and what actually confines it.
     pub(crate) fn build_with_validator<V, E>(
         &self,
         cookie_jar: Option<Arc<wreq::cookie::Jar>>,
@@ -98,8 +96,7 @@ impl HttpClientFactory {
         // wreq disables redirect-following by default (unlike reqwest). Many
         // CDN-backed extractors (e.g. ABXXX `get_file` → signed CDN) depend
         // on 302 redirects, so a following policy is installed — the guarded
-        // one, because the URL a caller validated is not the URL that gets
-        // fetched once a hop intervenes (#662).
+        // one; see [`crate::redirect`] for why following needs a guard.
         let mut builder = wreq::Client::builder()
             .emulation(self.config.emulation.resolve())
             .redirect(redirect)

@@ -32,9 +32,15 @@ pub struct RedirectRefused {
 ///
 /// `validate` is a parameter rather than a direct call so tests can drive the
 /// following, hop-limit and Location-resolution behaviour against a server on
-/// loopback, which the real validator refuses by design. The SSRF guard itself
-/// is not injectable — every policy this function returns has it — so a caller
-/// can only widen what counts as acceptable, never remove the check.
+/// loopback, which the real validator refuses by design.
+///
+/// The injected validator IS the guard — a permissive one removes the check
+/// entirely, which is exactly what this crate's tests do. What confines that
+/// is reachability, not the signature: `build_with_validator` is
+/// `pub(crate)`, so no consumer of this crate can reach it, and the only
+/// production caller (`HttpClientFactory::build_inner`) passes
+/// `rdlp_security::validate_url_security`. A second in-crate caller would be
+/// free to weaken it, and would need reviewing on that basis.
 ///
 /// A blanket `#[cfg(test)]` loopback exemption — the pattern used at the
 /// call-site gates in `rdlp-api` and `rdlp-extractor` — would be wrong here:
@@ -70,7 +76,7 @@ where
             let hop = attempt.previous.len();
             return attempt.error(RedirectRefused {
                 hop,
-                target: RedactedUrlBuf::from(target.as_str()),
+                target: RedactedUrlBuf::from(target),
                 reason: rdlp_security::sanitize_for_logging(&e.to_string()),
             });
         }

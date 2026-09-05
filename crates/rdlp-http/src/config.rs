@@ -87,7 +87,7 @@ pub struct HttpClientConfig {
     ///
     /// Bounds chain length only. It is not what stops a redirect reaching a
     /// private host — every hop is re-validated against
-    /// `rdlp_security::validate_url_security` (see `client.rs`).
+    /// `rdlp_security::validate_url_security` (see `crate::redirect`).
     pub max_redirects: usize,
 }
 
