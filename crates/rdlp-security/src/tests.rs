@@ -559,8 +559,10 @@ fn assert_agrees(ip: Ipv4Addr, context: &str) {
 #[test]
 fn every_registry_row_spans_the_addresses_it_claims_to() {
     // The literals and the prefix length are two encodings of one range;
-    // this is where they are made to agree. Without it, a wrong prefix length
-    // in EITHER table would still produce a self-consistent test run.
+    // this is where they are made to agree. A wrong prefix length in EITHER
+    // table alone is already caught by the endpoint pins below — this test
+    // earns its place on the co-ordinated edit of BOTH, which those pins
+    // cannot see because the model and the expectation then move together.
     for (cidr, first, last, _) in EXPECTED_REGISTRY {
         let net: ipnet::Ipv4Net = cidr.parse().expect("test CIDR must parse");
         assert_eq!(net.network().to_string(), *first, "first address of {cidr}");
