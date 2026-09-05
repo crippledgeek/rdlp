@@ -478,32 +478,39 @@ fn rfc8215_local_use_nat64_prefix_is_not_the_well_known_prefix() {
 // `IPV4_SPECIAL_PURPOSE` is hand-typed as `Ipv4Addr::new(a, b, c, d)` plus a
 // prefix length. Ranges that used to come from `Ipv4Addr::is_private()` and
 // friends are now among those rows, so a `/12` mistyped as `/16` on
-// 172.16.0.0 would silently unblock 172.32.0.0-172.31.255.255.
+// 172.16.0.0 would silently unblock 172.17.0.0-172.31.255.255.
 //
 // These tests are a differential check, not a restatement: the expectations
-// below are transcribed from the IANA registry independently, in CIDR
-// notation, so a slip in either transcription makes the two disagree. Reading
-// the expectation off the implementation's own table would prove nothing.
+// below are transcribed from the IANA registry independently, so a slip in
+// either transcription makes the two disagree. Reading the expectation off
+// the implementation's own table would prove nothing.
+//
+// Each row carries its first and last address as literals ALONGSIDE the CIDR,
+// and the two are asserted to agree. Deriving both ends from the CIDR alone
+// would tie the expectation to the same prefix length being checked, so a red
+// test could be "fixed" by editing this table to match the implementation.
+// The literals are a second encoding of the range itself, not just of the
+// prefix, and they are what the deleted per-range tests contributed.
 
 /// Every row of the registry the predicate is meant to implement.
 /// `true` = must be refused.
-const EXPECTED_REGISTRY: &[(&str, bool)] = &[
-    ("0.0.0.0/8", true),
-    ("10.0.0.0/8", true),
-    ("100.64.0.0/10", true),
-    ("127.0.0.0/8", true),
-    ("169.254.0.0/16", true),
-    ("172.16.0.0/12", true),
-    ("192.0.0.0/24", true),
-    ("192.0.0.9/32", false),
-    ("192.0.0.10/32", false),
-    ("192.0.2.0/24", true),
-    ("192.88.99.0/24", true),
-    ("192.168.0.0/16", true),
-    ("198.18.0.0/15", true),
-    ("198.51.100.0/24", true),
-    ("203.0.113.0/24", true),
-    ("240.0.0.0/4", true),
+const EXPECTED_REGISTRY: &[(&str, &str, &str, bool)] = &[
+    ("0.0.0.0/8", "0.0.0.0", "0.255.255.255", true),
+    ("10.0.0.0/8", "10.0.0.0", "10.255.255.255", true),
+    ("100.64.0.0/10", "100.64.0.0", "100.127.255.255", true),
+    ("127.0.0.0/8", "127.0.0.0", "127.255.255.255", true),
+    ("169.254.0.0/16", "169.254.0.0", "169.254.255.255", true),
+    ("172.16.0.0/12", "172.16.0.0", "172.31.255.255", true),
+    ("192.0.0.0/24", "192.0.0.0", "192.0.0.255", true),
+    ("192.0.0.9/32", "192.0.0.9", "192.0.0.9", false),
+    ("192.0.0.10/32", "192.0.0.10", "192.0.0.10", false),
+    ("192.0.2.0/24", "192.0.2.0", "192.0.2.255", true),
+    ("192.88.99.0/24", "192.88.99.0", "192.88.99.255", true),
+    ("192.168.0.0/16", "192.168.0.0", "192.168.255.255", true),
+    ("198.18.0.0/15", "198.18.0.0", "198.19.255.255", true),
+    ("198.51.100.0/24", "198.51.100.0", "198.51.100.255", true),
+    ("203.0.113.0/24", "203.0.113.0", "203.0.113.255", true),
+    ("240.0.0.0/4", "240.0.0.0", "255.255.255.255", true),
 ];
 
 /// Registry rows deliberately left out of `IPV4_SPECIAL_PURPOSE`, and how the
@@ -529,7 +536,7 @@ const OMITTED_ROWS: &[(&str, bool)] = &[
 fn model_refuses(ip: Ipv4Addr) -> bool {
     let matched = EXPECTED_REGISTRY
         .iter()
-        .filter_map(|(cidr, blocked)| {
+        .filter_map(|(cidr, _, _, blocked)| {
             let net: ipnet::Ipv4Net = cidr.parse().expect("test CIDR must parse");
             net.contains(&ip).then_some((net.prefix_len(), *blocked))
         })
@@ -550,11 +557,24 @@ fn assert_agrees(ip: Ipv4Addr, context: &str) {
 }
 
 #[test]
-fn every_registry_row_is_pinned_at_both_ends() {
-    for (cidr, _) in EXPECTED_REGISTRY {
+fn every_registry_row_spans_the_addresses_it_claims_to() {
+    // The literals and the prefix length are two encodings of one range;
+    // this is where they are made to agree. Without it, a wrong prefix length
+    // in EITHER table would still produce a self-consistent test run.
+    for (cidr, first, last, _) in EXPECTED_REGISTRY {
         let net: ipnet::Ipv4Net = cidr.parse().expect("test CIDR must parse");
-        assert_agrees(net.network(), &format!("first address of {cidr}"));
-        assert_agrees(net.broadcast(), &format!("last address of {cidr}"));
+        assert_eq!(net.network().to_string(), *first, "first address of {cidr}");
+        assert_eq!(net.broadcast().to_string(), *last, "last address of {cidr}");
+    }
+}
+
+#[test]
+fn every_registry_row_is_pinned_at_both_ends() {
+    for (cidr, first, last, _) in EXPECTED_REGISTRY {
+        for (literal, end) in [(first, "first"), (last, "last")] {
+            let ip: Ipv4Addr = literal.parse().expect("test address must parse");
+            assert_agrees(ip, &format!("{end} address of {cidr}"));
+        }
     }
 }
 
@@ -563,7 +583,7 @@ fn addresses_immediately_outside_every_row_agree_with_the_registry() {
     // The neighbours are checked against the model rather than asserted
     // public outright, because rows abut: the address below 240.0.0.0 is
     // 239.255.255.255, which is multicast and refused for its own reason.
-    for (cidr, _) in EXPECTED_REGISTRY {
+    for (cidr, _, _, _) in EXPECTED_REGISTRY {
         let net: ipnet::Ipv4Net = cidr.parse().expect("test CIDR must parse");
         if let Some(below) = u32::from(net.network()).checked_sub(1) {
             assert_agrees(Ipv4Addr::from(below), &format!("one below {cidr}"));
@@ -589,4 +609,14 @@ fn omitted_registry_rows_resolve_as_the_rule_claims() {
             );
         }
     }
+}
+
+#[test]
+fn the_multicast_lower_edge_is_pinned_from_both_sides() {
+    // 224.0.0.0/4 is the one refused range that is NOT a table row — it comes
+    // from `Ipv4Addr::is_multicast`. Its upper edge abuts 240.0.0.0/4, so the
+    // neighbour test can only reach it from below; without this, the boundary
+    // between public space and multicast is unpinned in both directions.
+    assert!(!is_private_host("223.255.255.255"), "one below multicast");
+    assert!(is_private_host("224.0.0.0"), "first multicast address");
 }

@@ -257,9 +257,9 @@ enum Reach {
 ///
 /// This table *is* the definition of "reserved IPv4" for this crate. Deriving
 /// the predicate from the registry rather than from a hand-picked list is what
-/// stops it drifting back into an arbitrary subset — the drift that let
-/// `2002::/16` stay open while its own relay range `192.88.99.0/24` was
-/// blocked.
+/// stops it drifting back into an arbitrary subset: the four ranges it
+/// replaced were chosen one at a time, and left `0.0.0.0/8` and
+/// `240.0.0.0/4` reachable simply because nobody had reached for them.
 ///
 /// Two kinds of registry row are deliberately absent, because neither can
 /// change an answer: a `Blocked` row wholly inside another `Blocked` row, and
@@ -267,9 +267,11 @@ enum Reach {
 /// allowed anyway. The `Public` rows that ARE here sit inside a `Blocked`
 /// parent, where they must win.
 ///
-/// That rule is asserted rather than asserted-in-prose: every omitted row is
+/// The rule is asserted rather than merely claimed here: each omitted row is
 /// listed in `omitted_registry_rows_resolve_as_the_rule_claims`, which fails
-/// if one of them ever stops resolving the way the rule says it does.
+/// if one of them ever stops resolving the way the rule says it does. That
+/// test proves the listed rows behave; it cannot prove the list still matches
+/// IANA, which stays a hand-maintained transcription.
 const IPV4_SPECIAL_PURPOSE: &[(Ipv4Net, Reach)] = &[
     // "This network" (RFC 791 §3.2). 0.x.y.z reaches the local host on
     // several stacks, so the whole /8 goes, not just 0.0.0.0.
@@ -384,11 +386,12 @@ fn registry_blocks(ip: Ipv4Addr) -> bool {
 
 /// Whether an IPv6 address must not be fetched.
 ///
-/// The five `std` predicates below replaced hand-rolled equivalents
-/// (`is_unique_local` and `is_unicast_link_local` are stable since 1.84,
-/// below this crate's 1.85 MSRV). The tunnel prefixes reached through
-/// `embedded_ipv4s` are still matched by hand, because `std` has no notion
-/// of them.
+/// Five `std` predicates decide the prefix families; three of them replaced
+/// hand-rolled equivalents (`is_unique_local` and `is_unicast_link_local` are
+/// stable since 1.84, below this crate's 1.85 MSRV, and `is_multicast` was
+/// always available). `is_loopback` and `is_unspecified` were already `std`.
+/// The tunnel prefixes reached through `embedded_ipv4s` are still matched by
+/// hand, because `std` has no notion of them.
 fn is_private_ipv6(ip: Ipv6Addr) -> bool {
     ip.is_loopback()                  // ::1
         || ip.is_unspecified()        // ::
@@ -398,11 +401,17 @@ fn is_private_ipv6(ip: Ipv6Addr) -> bool {
         || embedded_ipv4s(ip).any(is_private_ipv4)
 }
 
-/// Every IPv4 address an IPv6 address carries inside it.
+/// Every IPv4 address an IPv6 address carries under a prefix that identifies
+/// it as carrying one.
 ///
 /// Each of these forms actually reaches its embedded address, so naming one
 /// names that address: `[2002:7f00:1::]` *is* 127.0.0.1. Judging the inner
 /// address is what stops all five walking around the IPv4 gate.
+///
+/// A form whose prefix is site-chosen — ISATAP, 6rd, a NAT64
+/// Network-Specific Prefix — also carries an IPv4 and is deliberately not
+/// returned here: nothing in such an address distinguishes it from ordinary
+/// IPv6. See `is_private_host`'s "What it does NOT do".
 ///
 /// Teredo carries two — the server's and the client's; every other form
 /// carries one.
