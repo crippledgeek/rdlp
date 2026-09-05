@@ -166,8 +166,8 @@ impl RdlpApiError {
     #[must_use]
     pub fn user_message(&self) -> Cow<'static, str> {
         // Always owned: `redact` returns a `String`, and the borrowed arms are
-        // fixed strings with nothing to strip. The cost is an allocation on an
-        // error path.
+        // fixed strings with nothing to strip. Costs the `format!` below plus
+        // `redact`'s own allocations, on an error path only.
         Cow::Owned(redact(&self.user_message_unredacted()))
     }
 

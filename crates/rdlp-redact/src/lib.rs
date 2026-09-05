@@ -32,96 +32,107 @@ static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 22]> = LazyLock::new(|| {
     [
         // ── AWS SigV4 exact-case — no boundary group needed (unique prefix) ────
         (
-            Regex::new(r"X-Amz-Security-Token=[^&\s)]+").expect("valid regex"),
-            "X-Amz-Security-Token=***",
+            Regex::new(r"X-Amz-Security-Token=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "X-Amz-Security-Token=***${1}${2}",
         ),
         (
-            Regex::new(r"X-Amz-Signature=[^&\s)]+").expect("valid regex"),
-            "X-Amz-Signature=***",
+            Regex::new(r"X-Amz-Signature=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "X-Amz-Signature=***${1}${2}",
         ),
         (
-            Regex::new(r"X-Amz-Credential=[^&\s)]+").expect("valid regex"),
-            "X-Amz-Credential=***",
+            Regex::new(r"X-Amz-Credential=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "X-Amz-Credential=***${1}${2}",
         ),
         // ── Longer param names first (boundary-capturing group) ────────────────
-        // Pattern: `(^|[?&])name=[^&\s)]+`  →  replacement: `${1}name=***`
+        // Pattern: `(^|[?&])name=[^&\s]*?(\)?)([&\s]|$)`
+        //   →  replacement: `${1}name=***${2}${3}`
+        //
+        // The value class deliberately still ALLOWS `)`, because RFC 3986 §2.2
+        // makes it a legal unencoded sub-delim in a query value — excluding it
+        // would stop the match at the first `)` and leave the rest of a secret
+        // in the clear. Instead the trailing `)` is captured optionally and
+        // re-emitted: non-greedy matching prefers the short value when the
+        // paren closes a wrapper (`wreq::Error` renders `for uri (…)`), and
+        // expands past an embedded `)` when more value follows. `${3}` puts
+        // back the delimiter the match consumed, so an adjacent credential
+        // parameter still matches on its own pass.
         // The `(^|[?&])` captures the separator (or the empty start-of-string) and
         // re-emits it via `${1}`, so that:
         //   • bare fragments like `token=secret` (no leading `?`/`&`) are redacted, and
         //   • hyphenated names like `X-Amz-Signature` are NOT matched by the generic
         //     `signature=` pattern (the `-` before it is neither `^` nor `?`/`&`).
         (
-            Regex::new(r"(?i)(^|[?&])access_token=[^&\s)]+").expect("valid regex"),
-            "${1}access_token=***",
+            Regex::new(r"(?i)(^|[?&])access_token=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "${1}access_token=***${2}${3}",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])client_secret=[^&\s)]+").expect("valid regex"),
-            "${1}client_secret=***",
+            Regex::new(r"(?i)(^|[?&])client_secret=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "${1}client_secret=***${2}${3}",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])id_token=[^&\s)]+").expect("valid regex"),
-            "${1}id_token=***",
+            Regex::new(r"(?i)(^|[?&])id_token=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "${1}id_token=***${2}${3}",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])api_key=[^&\s)]+").expect("valid regex"),
-            "${1}api_key=***",
+            Regex::new(r"(?i)(^|[?&])api_key=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "${1}api_key=***${2}${3}",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])otp_code=[^&\s)]+").expect("valid regex"),
-            "${1}otp_code=***",
+            Regex::new(r"(?i)(^|[?&])otp_code=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "${1}otp_code=***${2}${3}",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])authorization=[^&\s)]+").expect("valid regex"),
-            "${1}authorization=***",
+            Regex::new(r"(?i)(^|[?&])authorization=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "${1}authorization=***${2}${3}",
         ),
         // ── Generic shorter names (boundary-capturing group) ───────────────────
         (
-            Regex::new(r"(?i)(^|[?&])token=[^&\s)]+").expect("valid regex"),
-            "${1}token=***",
+            Regex::new(r"(?i)(^|[?&])token=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "${1}token=***${2}${3}",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])key=[^&\s)]+").expect("valid regex"),
-            "${1}key=***",
+            Regex::new(r"(?i)(^|[?&])key=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "${1}key=***${2}${3}",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])password=[^&\s)]+").expect("valid regex"),
-            "${1}password=***",
+            Regex::new(r"(?i)(^|[?&])password=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "${1}password=***${2}${3}",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])secret=[^&\s)]+").expect("valid regex"),
-            "${1}secret=***",
+            Regex::new(r"(?i)(^|[?&])secret=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "${1}secret=***${2}${3}",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])bearer=[^&\s)]+").expect("valid regex"),
-            "${1}bearer=***",
+            Regex::new(r"(?i)(^|[?&])bearer=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "${1}bearer=***${2}${3}",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])signature=[^&\s)]+").expect("valid regex"),
-            "${1}signature=***",
+            Regex::new(r"(?i)(^|[?&])signature=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "${1}signature=***${2}${3}",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])sig=[^&\s)]+").expect("valid regex"),
-            "${1}sig=***",
+            Regex::new(r"(?i)(^|[?&])sig=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "${1}sig=***${2}${3}",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])hmac=[^&\s)]+").expect("valid regex"),
-            "${1}hmac=***",
+            Regex::new(r"(?i)(^|[?&])hmac=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "${1}hmac=***${2}${3}",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])auth=[^&\s)]+").expect("valid regex"),
-            "${1}auth=***",
+            Regex::new(r"(?i)(^|[?&])auth=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "${1}auth=***${2}${3}",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])session=[^&\s)]+").expect("valid regex"),
-            "${1}session=***",
+            Regex::new(r"(?i)(^|[?&])session=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "${1}session=***${2}${3}",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])code=[^&\s)]+").expect("valid regex"),
-            "${1}code=***",
+            Regex::new(r"(?i)(^|[?&])code=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "${1}code=***${2}${3}",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])otp=[^&\s)]+").expect("valid regex"),
-            "${1}otp=***",
+            Regex::new(r"(?i)(^|[?&])otp=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
+            "${1}otp=***${2}${3}",
         ),
         // ── Userinfo credentials in URL authority (`//user:pass@host`) ─────────
         (Regex::new(r"//[^@\s/]+@").expect("valid regex"), "//*:*@"),
@@ -241,25 +252,3 @@ impl_redacting_traits!(RedactedUrlBuf);
 
 #[cfg(test)]
 mod tests;
-
-#[cfg(test)]
-mod paren_bounded_tests {
-    use super::redact_str;
-
-    #[test]
-    fn a_credential_parameter_inside_parentheses_keeps_its_closing_paren() {
-        // `wreq::Error`'s Display renders `for uri (<url>)`, so a credential
-        // in the LAST query parameter sits immediately before `)`. With the
-        // value class unbounded on the right the match swallowed the paren,
-        // truncating the message. Redaction was still correct; the output was
-        // malformed.
-        let out = redact_str("for uri (https://cdn.example.com/v.mp4?token=abc123)");
-        assert_eq!(out, "for uri (https://cdn.example.com/v.mp4?token=***)");
-    }
-
-    #[test]
-    fn userinfo_and_a_query_credential_are_both_stripped_in_one_pass() {
-        let out = redact_str("for uri (https://u:p@cdn.example.com/v?token=abc123)");
-        assert_eq!(out, "for uri (https://*:*@cdn.example.com/v?token=***)");
-    }
-}

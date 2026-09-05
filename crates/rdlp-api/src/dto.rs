@@ -114,7 +114,10 @@ impl From<&Event> for EventDto {
                 ("subtitles_missing", json!({ "requested": requested }))
             }
 
-            Event::Warning { message, .. } => ("warning", json!({ "message": message })),
+            Event::Warning { message, .. } => (
+                "warning",
+                json!({ "message": rdlp_redact::redact_str(message) }),
+            ),
 
             Event::Completed { output_files, .. } => {
                 let output_files: Vec<String> = output_files
@@ -170,7 +173,10 @@ impl From<&Event> for EventDto {
                 }),
             ),
 
-            Event::Debug { message, .. } => ("debug", json!({ "message": message })),
+            Event::Debug { message, .. } => (
+                "debug",
+                json!({ "message": rdlp_redact::redact_str(message) }),
+            ),
         };
 
         Self {

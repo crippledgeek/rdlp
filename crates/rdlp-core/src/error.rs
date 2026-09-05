@@ -116,7 +116,7 @@ pub enum RdlpError {
 ///
 /// Redacting where the text is rendered rather than where it is built covers
 /// every variant and every call site at once, including ones added later. The
-/// cost is 22 regex passes and an allocation, on an error path only.
+/// cost is 22 regex scans and an allocation or two, on an error path only.
 ///
 /// It filters free text, not URLs specifically, so a message that merely
 /// starts with `key=` or `code=` is redacted too. That is a deliberate trade:

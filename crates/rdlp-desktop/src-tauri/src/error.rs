@@ -97,7 +97,7 @@ pub enum AppError {
 /// The text can hold a URL: these messages are built by `format!("…: {e}")`
 /// over errors whose Display prints a request URI verbatim, credentials
 /// included.
-fn serialize_redacted<S>(message: &str, serializer: S) -> Result<S::Ok, S::Error>
+pub(crate) fn serialize_redacted<S>(message: &str, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: serde::Serializer,
 {
@@ -137,16 +137,64 @@ impl From<RdlpApiError> for AppError {
     }
 }
 
-/// Debug renders what Display does, redaction included.
+/// Debug redacts the free text while keeping the structure.
 ///
 /// The derived Debug printed every field verbatim, so `{e:?}` leaked what
-/// `{e}` strips. Unlike `RdlpError` and `RdlpApiError` — whose Debug mirrors
-/// the derive to keep their `RedactedUrlBuf` fields — every field here is
-/// either the redacted message or a plain scalar already shown by Display, so
-/// delegating loses nothing.
+/// `{e}` strips. Delegating to Display is not the fix — Display omits
+/// `retryable` from three variants, so `{e:?}` would silently stop reporting
+/// whether the frontend was told it could retry. That is the same trade
+/// rejected for `RdlpApiError`, where a pre-existing test caught it.
+///
+/// So this mirrors the derive with `message` passed through `redact`. Adding a
+/// variant means adding an arm — the compiler enforces that, which is why this
+/// is a `match` with no catch-all.
 impl fmt::Debug for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(self, f)
+        /// A struct variant carrying `message` and `retryable`.
+        macro_rules! retryable {
+            ($name:literal, $message:expr, $retryable:expr) => {
+                f.debug_struct($name)
+                    .field("message", &redact($message))
+                    .field("retryable", $retryable)
+                    .finish()
+            };
+        }
+
+        match self {
+            Self::SearchFailed { message, retryable } => {
+                retryable!("SearchFailed", message, retryable)
+            }
+            Self::NetworkError { message, retryable } => {
+                retryable!("NetworkError", message, retryable)
+            }
+            Self::ExtractionFailed { message } => f
+                .debug_struct("ExtractionFailed")
+                .field("message", &redact(message))
+                .finish(),
+            Self::DownloadFailed {
+                job_id,
+                message,
+                retryable,
+            } => f
+                .debug_struct("DownloadFailed")
+                .field("job_id", job_id)
+                .field("message", &redact(message))
+                .field("retryable", retryable)
+                .finish(),
+            Self::InvalidInput { field, message } => f
+                .debug_struct("InvalidInput")
+                .field("field", field)
+                .field("message", &redact(message))
+                .finish(),
+            Self::RateLimited { retry_after_ms } => f
+                .debug_struct("RateLimited")
+                .field("retry_after_ms", retry_after_ms)
+                .finish(),
+            Self::Internal { message } => f
+                .debug_struct("Internal")
+                .field("message", &redact(message))
+                .finish(),
+        }
     }
 }
 
@@ -367,5 +415,11 @@ mod tests {
         let dbg = format!("{e:?}");
         assert!(!shown.contains("hunter2"), "Display leaked: {shown}");
         assert!(!dbg.contains("hunter2"), "Debug leaked: {dbg}");
+        // Display omits `retryable`; Debug must not, or `{e:?}` stops
+        // reporting whether the frontend was told it could retry.
+        assert!(
+            dbg.contains("retryable"),
+            "Debug dropped a field Display omits: {dbg}"
+        );
     }
 }

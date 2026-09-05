@@ -126,3 +126,51 @@ fn acceptance_328_presigned_and_oauth_code_redacted_host_preserved() {
         "code redacted, state (anti-CSRF) kept"
     );
 }
+
+// ── Credential values and the parentheses `wreq::Error` wraps URLs in ──
+
+#[test]
+fn a_credential_parameter_inside_parentheses_keeps_its_closing_paren() {
+    // `wreq::Error`'s Display renders `for uri (<url>)`, so a credential in
+    // the LAST query parameter sits immediately before `)`. Redaction was
+    // always correct here; the message was malformed, losing the paren.
+    assert_eq!(
+        redact_str("for uri (https://cdn.example.com/v.mp4?token=abc123)"),
+        "for uri (https://cdn.example.com/v.mp4?token=***)"
+    );
+}
+
+#[test]
+fn a_credential_containing_a_paren_is_redacted_to_its_end() {
+    // The converse, and the reason `)` is NOT simply excluded from the value
+    // class: RFC 3986 §2.2 makes it a legal unencoded sub-delim, so a value
+    // may contain one. Excluding it stopped the match early and left the tail
+    // of the secret in the clear.
+    assert_eq!(
+        redact_str("https://h/p?token=abc)REST_OF_SECRET"),
+        "https://h/p?token=***"
+    );
+    // Both at once: an embedded paren AND the wrapper.
+    assert_eq!(
+        redact_str("for uri (https://h/p?token=abc)REST)"),
+        "for uri (https://h/p?token=***)"
+    );
+}
+
+#[test]
+fn userinfo_and_a_query_credential_are_both_stripped_in_one_pass() {
+    assert_eq!(
+        redact_str("for uri (https://u:p@cdn.example.com/v?token=abc123)"),
+        "for uri (https://*:*@cdn.example.com/v?token=***)"
+    );
+}
+
+#[test]
+fn an_adjacent_credential_parameter_still_matches() {
+    // The match consumes its trailing delimiter, so `${3}` has to put it back
+    // or the next parameter loses the `&` its own pattern anchors on.
+    assert_eq!(
+        redact_str("https://h/p?token=aaa&api_key=bbb"),
+        "https://h/p?token=***&api_key=***"
+    );
+}

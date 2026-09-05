@@ -121,6 +121,12 @@ pub struct DownloadLogPayload {
     /// Log severity level.
     pub(crate) level: LogLevel,
     /// Human-readable log message.
+    ///
+    /// Redacted on serialization for the same reason as
+    /// [`crate::error::AppError`]'s message fields: this text is assembled by
+    /// `format!("…: {e}")` at its producers, and a stringified transport error
+    /// renders the request URI verbatim.
+    #[serde(serialize_with = "crate::error::serialize_redacted")]
     pub(crate) message: String,
 }
 
@@ -457,8 +463,13 @@ mod tests {
     /// The `download-error` event is a SEPARATE path to the frontend from
     /// `AppError`, and it shipped unredacted while the `AppError` guard was
     /// being added. Its text comes from `RdlpApiError::user_message()`, which
-    /// now redacts at its own source — this pins that the payload built here
-    /// inherits it.
+    /// now redacts at its own source.
+    ///
+    /// This reconstructs the payload rather than driving `handle_event`'s
+    /// `Event::Failed` arm, which needs an `AppHandle`. So it would keep
+    /// passing if that arm switched to a different, unredacted source — the
+    /// invariant is anchored at `user_message_redacts_credentials`, and this
+    /// is a second assertion at the shape the frontend actually receives.
     #[test]
     fn download_error_payload_carries_no_credentials() {
         let err = rdlp_api::RdlpApiError::NetworkError {
@@ -480,5 +491,28 @@ mod tests {
             "username reached the frontend: {json}"
         );
         assert!(json.contains("cdn.example.com"), "over-redacted: {json}");
+    }
+
+    /// `Event::Warning` / `Event::Debug` reach the frontend through
+    /// `DownloadLogPayload`, a sibling channel to `download-error` that every
+    /// earlier guard on this branch missed. Its producers build text the same
+    /// way (`format!("Cookie loading failed: {e}")`), so it carries the same
+    /// risk.
+    #[test]
+    fn download_log_payload_carries_no_credentials() {
+        let payload = DownloadLogPayload {
+            job_id: "job-1".to_string(),
+            level: LogLevel::Warn,
+            message: "Cookie loading failed: for uri (https://admin:hunter2@h/p)".to_string(),
+        };
+        let json = serde_json::to_string(&payload).expect("payload must serialize");
+        assert!(
+            !json.contains("hunter2"),
+            "password reached the frontend: {json}"
+        );
+        assert!(
+            !json.contains("admin:"),
+            "userinfo reached the frontend: {json}"
+        );
     }
 }
