@@ -87,6 +87,10 @@ where
     // temp dir: a fixed name lets another local user pre-create or read the
     // copy. The directory is created 0700 on Unix (see `create_private_temp_dir`).
     let temp_root = create_private_temp_dir()?;
+    // The guard removes the whole private directory (DB copy + sidecars) on
+    // every exit — normal return AND a panic in `f`, closing the window where a
+    // credential-bearing copy could otherwise be left on disk by an unwind.
+    let _cleanup = TempDirGuard(&temp_root);
     let temp_db = temp_root.join(temp_name);
 
     copy_db_file(db_path, &temp_db)?;
@@ -105,14 +109,20 @@ where
         }
     }
 
-    let result = f(&temp_db);
+    f(&temp_db)
+}
 
-    // Remove the whole private directory and everything copied into it at once.
-    // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
-    #[allow(clippy::disallowed_methods)]
-    let _ = std::fs::remove_dir_all(&temp_root);
+/// Removes a directory tree on drop, so the private temp directory holding a
+/// cookie DB copy is cleaned up on any exit from `with_temp_db_copy` — normal
+/// return, `?` propagation, or a panic while the callback runs.
+struct TempDirGuard<'a>(&'a Path);
 
-    result
+impl Drop for TempDirGuard<'_> {
+    fn drop(&mut self) {
+        // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
+        #[allow(clippy::disallowed_methods)]
+        let _ = std::fs::remove_dir_all(self.0);
+    }
 }
 
 /// The two candidate source paths for a `SQLite` `-wal`/`-shm` sidecar of
