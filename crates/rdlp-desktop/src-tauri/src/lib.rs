@@ -51,10 +51,18 @@ const LOG_FILES_KEPT: usize = 3;
 ///
 /// Best-effort and non-fatal: a logger that cannot be locked down is still
 /// better than no logger, and this must not stop the app from starting.
+///
+/// One window remains, and is accepted rather than unnoticed: the plugin
+/// creates the directory and opens the first file during `build()`, at the
+/// process umask, and this runs after `build()` returns. For that sub-
+/// millisecond gap, once per launch, both are world-readable. Closing it would
+/// mean pre-creating the directory before the builder exists — which means
+/// reimplementing Tauri's `app_log_dir()` path resolution by hand, a worse
+/// trade against an attacker who must poll that exact path at that exact
+/// moment.
 #[cfg(unix)]
 fn restrict_log_dir(app: &tauri::App) {
     use std::os::unix::fs::PermissionsExt;
-    use tauri::Manager;
 
     let Ok(dir) = app.path().app_log_dir() else {
         return;

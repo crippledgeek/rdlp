@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { render, createTestQueryClient } from "@/test/test-utils";
 import { JobDetails } from "./JobDetails";
@@ -69,7 +69,9 @@ describe("JobDetails — Reveal in Folder", () => {
         });
         renderDetails();
         await userEvent.click(screen.getByRole("button", { name: /Reveal in Folder/i }));
-        expect(vi.mocked(toast.error)).toHaveBeenCalledWith("File not found: /tmp/v.mp4");
+        await waitFor(() =>
+            expect(vi.mocked(toast.error)).toHaveBeenCalledWith("File not found: /tmp/v.mp4"),
+        );
     });
 
     // `extractErrorMessage` returns "" for an empty message and "{}" for an
@@ -79,6 +81,8 @@ describe("JobDetails — Reveal in Folder", () => {
         vi.mocked(invokeTyped).mockRejectedValueOnce({ message: "" });
         renderDetails();
         await userEvent.click(screen.getByRole("button", { name: /Reveal in Folder/i }));
-        expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Failed to reveal the file");
+        await waitFor(() =>
+            expect(vi.mocked(toast.error)).toHaveBeenCalledWith("Failed to reveal the file"),
+        );
     });
 });
