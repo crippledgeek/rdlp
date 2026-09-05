@@ -6304,6 +6304,7 @@ dependencies = [
  "log",
  "pbkdf2",
  "rdlp-core",
+ "rdlp-redact",
  "rdlp-types",
  "rusqlite",
  "secret-service",

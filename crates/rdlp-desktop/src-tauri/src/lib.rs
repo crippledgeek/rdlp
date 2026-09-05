@@ -20,6 +20,22 @@ use rdlp_postprocess::TempRegistry;
 use state::AppState;
 use tauri::Manager;
 
+/// Level for the desktop's log targets.
+///
+/// `Info` even in a debug build: the workspace's ~370 `debug!` sites (172 in
+/// rdlp-extractor) are per-fragment detail that drowns the record you are
+/// actually reading. Raise a single noisy module with `.level_for(...)` while
+/// debugging it rather than turning the whole tree up.
+const LOG_LEVEL: log::LevelFilter = log::LevelFilter::Info;
+
+/// Bytes per log file before rotation. The plugin's own default is `40_000`,
+/// which this size of workspace fills in seconds.
+const LOG_MAX_FILE_SIZE: u128 = 5 * 1024 * 1024;
+
+/// How many rotated files to keep, so a bug report can include the run BEFORE
+/// the one that crashed. `KeepOne` (the plugin default) cannot.
+const LOG_FILES_KEPT: usize = 3;
+
 /// Run the Tauri application.
 ///
 /// Initialises plugins, registers managed state, binds all IPC
@@ -62,14 +78,15 @@ pub fn run() {
                         file_name: None,
                     }),
                 ])
-                // Debug while developing, Info in a release build: the debug
-                // level carries per-fragment download detail that would churn
-                // a user's log file for no diagnostic gain.
-                .level(if cfg!(debug_assertions) {
-                    log::LevelFilter::Debug
-                } else {
-                    log::LevelFilter::Info
-                })
+                .level(LOG_LEVEL)
+                // The plugin's defaults are 40 KB with `KeepOne` — which
+                // DELETES the previous file on every rotation. The workspace
+                // has ~370 `debug!` sites (172 in rdlp-extractor alone), so a
+                // single download would rotate several times over and leave a
+                // file holding only its last seconds: useless for the
+                // post-mortem this target exists to serve.
+                .max_file_size(LOG_MAX_FILE_SIZE)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(LOG_FILES_KEPT))
                 .build(),
         )
         .plugin(tauri_plugin_dialog::init())

@@ -85,6 +85,7 @@ require_tool rg
 EXTRACTOR_TARGET="crates/rdlp-extractor/src"
 PIPELINE_TARGET="crates/rdlp-postprocess/src"
 API_TARGET="crates/rdlp-api/src"
+COOKIES_TARGET="crates/rdlp-cookies/src"
 FAIL=0
 
 # Helper: run rg -U (multiline), filter out already-compliant lines and test files,
@@ -194,8 +195,43 @@ check "api:structured-kv:url_field" \
     '[a-z_]*url[a-z_]*:[?%]\s*=' \
     "$API_TARGET"
 
+# ---------------------------------------------------------------------------
+# Positional `url={}` interpolation — the form P1 cannot see.
+#
+# P1 anchors on `{url` INSIDE the literal, so it catches `"...{url}"` but not
+# `"...url={}", some_url` where the value arrives as a positional argument.
+# A real site sat in that blind spot: `debug!("Downloading subtitle: lang={lang},
+# url={}", sub.url)` wrote a token-bearing CDN URL. It was harmless while the
+# desktop had no logger installed; once one was, it went to a file on disk.
+#
+# Deliberately NOT running the full P1 macro class against rdlp-api: three of
+# its matches interpolate a `RedactedUrlBuf` (redacted by TYPE, so the line
+# carries no "RedactedUrl" text for the filter to see), and one of those is the
+# intentionally-named `user_message_unredacted`. This narrower pattern has no
+# such false positives.
+# ---------------------------------------------------------------------------
+check "positional:url_eq_brace" \
+    '(format!|anyhow!|bail!|error!|warn!|info!|debug!|trace!|panic!)\(\s*"(?:[^"\\]|\\.)*[a-z_]*url=\{\}' \
+    "$API_TARGET"
+
+check "cookies:positional:url_eq_brace" \
+    '(format!|anyhow!|bail!|error!|warn!|info!|debug!|trace!|panic!)\(\s*"(?:[^"\\]|\\.)*[a-z_]*url=\{\}' \
+    "$COOKIES_TARGET"
+
+# ---------------------------------------------------------------------------
+# rdlp-cookies — cookie URLs and cookie-domain-derived URLs.
+#
+# A cookie's URL is credential-adjacent by definition, and these are `debug!`
+# sites, which the desktop now emits to stdout, the devtools console and a log
+# file. Same P1 macro class as the pipeline; the crate is small and has no
+# `RedactedUrlBuf`-typed fields, so the class runs clean here.
+# ---------------------------------------------------------------------------
+check "cookies:macro:format_url" \
+    '(format!|anyhow!|bail!|error!|warn!|info!|debug!|trace!|panic!)\(\s*"(?:[^"\\]|\\.)*\{[a-z_]*url' \
+    "$COOKIES_TARGET"
+
 if [[ $FAIL -eq 0 ]]; then
-    echo "PASS — no raw URL interpolations found in $EXTRACTOR_TARGET, $PIPELINE_TARGET, or $API_TARGET"
+    echo "PASS — no raw URL interpolations found in $EXTRACTOR_TARGET, $PIPELINE_TARGET, $API_TARGET, or $COOKIES_TARGET"
     exit 0
 else
     echo ""

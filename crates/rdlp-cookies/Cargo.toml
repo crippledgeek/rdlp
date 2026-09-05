@@ -8,6 +8,7 @@ license.workspace = true
 [dependencies]
 rdlp-core = { path = "../rdlp-core" }
 rdlp-types = { path = "../rdlp-types" }
+rdlp-redact = { path = "../rdlp-redact" }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 rusqlite = { workspace = true }

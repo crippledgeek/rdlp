@@ -18,6 +18,7 @@ pub(crate) mod util;
 use async_trait::async_trait;
 use log::{debug, warn};
 use rdlp_core::{CookieJar, Result};
+use rdlp_redact::RedactedUrl;
 use rdlp_types::BrowserType;
 use std::path::Path;
 use std::sync::Arc;
@@ -102,7 +103,7 @@ impl CookieJar for SimpleCookieJar {
 
     async fn add_cookie(&self, url: &str, cookie: &str) -> Result<()> {
         if Url::parse(url).is_err() {
-            debug!("Invalid URL for cookie: {url}");
+            debug!("Invalid URL for cookie: {}", RedactedUrl::new(url));
             return Ok(());
         }
         // Log only the cookie *name* (the part before `=`) and the URL host —
