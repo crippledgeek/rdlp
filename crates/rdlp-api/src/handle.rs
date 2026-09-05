@@ -149,9 +149,18 @@ impl DownloadHandle {
     pub async fn wait(self) -> Result<DownloadResult, RdlpApiError> {
         match self.join_handle.await {
             Ok(result) => result,
-            Err(join_err) => Err(RdlpApiError::IoError {
-                message: format!("Download task panicked: {join_err}"),
-            }),
+            Err(join_err) => {
+                // A panicked download task left no trace: the caller got an
+                // error, the log got nothing. That is the failure mode #693
+                // existed to remove, so the panic is recorded here — at the
+                // boundary that owns it — before being handed back (#696).
+                // ERROR, not WARN: a panicking task is an internal bug, not an
+                // environmental failure the operator can act on.
+                log::error!("download: action=download outcome=panicked reason={join_err}");
+                Err(RdlpApiError::IoError {
+                    message: format!("Download task panicked: {join_err}"),
+                })
+            }
         }
     }
 }

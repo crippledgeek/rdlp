@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use log::{info, warn};
+use log::{debug, warn};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
@@ -179,6 +179,32 @@ where
         })
 }
 
+/// Record a terminal reveal failure once, then map it for the frontend.
+///
+/// Both failure modes of `reveal_in_folder` go through here. They used to
+/// diverge: the missing-file branch logged, the OS-call branch did not, so the
+/// log showed an attempt followed by silence while only the toast knew why
+/// (#696). One function means one record shape and no way to add a third
+/// branch that forgets.
+///
+/// The action, outcome and reason live in the MESSAGE, not in structured kv,
+/// because `tauri-plugin-log`'s formatter renders only target/level/message —
+/// kv fields are emitted and then dropped, so a structured field would be
+/// invisible in the log file. That is a property of our sink, not a
+/// preference; see #695 before adopting kv anywhere.
+///
+/// WARN rather than ERROR: a reveal failure is user-facing and usually
+/// environmental (no file manager, D-Bus unavailable), not an internal bug.
+///
+/// The path is a local filesystem path, not a URL, so it needs no redaction —
+/// a path in the operator's own log is not a credential.
+fn reveal_failed(path: &str, reason: impl std::fmt::Display) -> AppError {
+    warn!("reveal_in_folder: action=reveal outcome=failed path={path} reason={reason}");
+    AppError::Internal {
+        message: format!("Failed to reveal {path}: {reason}"),
+    }
+}
+
 /// Reveal a file or directory in the system file manager.
 ///
 /// Uses `tauri-plugin-opener` to invoke the OS-native "reveal in folder"
@@ -206,25 +232,60 @@ pub async fn reveal_in_folder(path: String) -> Result<(), AppError> {
     let path_buf = PathBuf::from(&path);
 
     if !path_buf.exists() {
-        warn!("reveal_in_folder: file does not exist: {path}");
-        return Err(AppError::Internal {
-            message: format!("File not found: {path}"),
-        });
+        return Err(reveal_failed(&path, "file not found"));
     }
 
-    info!("reveal_in_folder: revealing {path}");
+    // DEBUG, not INFO: an always-on "attempting" record is not an attested
+    // convention, and at INFO it is the noise an operator has to read past to
+    // find the outcome. The outcome is the signal (#695).
+    debug!("reveal_in_folder: action=reveal path={path}");
 
     reveal_off_runtime(move || tauri_plugin_opener::reveal_item_in_dir(&path_buf))
         .await?
-        .map_err(|e| AppError::Internal {
-            message: format!("Failed to reveal path in folder: {e}"),
-        })
+        .map_err(|e| reveal_failed(&path, e))
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::reveal_off_runtime;
+
+    /// A terminal reveal failure is RECORDED, not just returned.
+    ///
+    /// The failure used to be mapped into `AppError` and handed back with no
+    /// log at all, so the file showed the attempt and then nothing while only
+    /// the toast knew why (#696). The record carries action, outcome and
+    /// reason in the MESSAGE rather than in structured kv, because
+    /// `tauri-plugin-log`'s formatter renders only target/level/message — kv
+    /// fields are emitted and then dropped, so they would be invisible in the
+    /// very log file this exists to populate.
+    #[test]
+    fn a_reveal_failure_is_logged_once_at_warn() {
+        testing_logger::setup();
+        let err = super::reveal_failed("/tmp/v.mkv", "d-bus unavailable");
+
+        testing_logger::validate(|captured| {
+            let warns: Vec<_> = captured
+                .iter()
+                .filter(|l| l.level == log::Level::Warn)
+                .collect();
+            assert_eq!(warns.len(), 1, "exactly one terminal record");
+            let body = warns.first().map_or("", |l| l.body.as_str());
+            assert!(body.contains("/tmp/v.mkv"), "names the target: {body}");
+            assert!(
+                body.contains("d-bus unavailable"),
+                "names the reason: {body}"
+            );
+            assert!(
+                body.contains("outcome=failed"),
+                "states the outcome: {body}"
+            );
+        });
+
+        let shown = format!("{err}");
+        assert!(shown.contains("/tmp/v.mkv"), "got: {shown}");
+        assert!(shown.contains("d-bus unavailable"), "got: {shown}");
+    }
 
     /// A blocking closure that itself starts a runtime must survive.
     ///
