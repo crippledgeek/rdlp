@@ -213,6 +213,14 @@ impl HttpClientConfig {
         self.proxy = Some(proxy.into());
         self
     }
+
+    /// Set the maximum number of redirect hops followed before a request
+    /// fails.
+    #[must_use]
+    pub const fn with_max_redirects(mut self, max: usize) -> Self {
+        self.max_redirects = max;
+        self
+    }
 }
 
 #[cfg(test)]
