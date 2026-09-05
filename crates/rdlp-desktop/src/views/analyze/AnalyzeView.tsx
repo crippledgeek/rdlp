@@ -3,6 +3,7 @@
 // Playlist mode: shows EpisodeList instead of PresetToolbar + FormatsTable.
 
 import { useMemo } from "react";
+import { extractErrorMessage } from "@/api/invokeClient";
 import { useStore } from "@tanstack/react-store";
 import { useQuery } from "@tanstack/react-query";
 import { uiStore, setAnalyzeUrl } from "@/stores/uiStore";
@@ -65,7 +66,7 @@ export function AnalyzeView() {
                 <AlertCircle className="w-8 h-8 text-[#e85858]" />
                 <div className="text-center">
                     <p className="text-[14px] font-medium text-[#eeeeee] mb-1">Failed to extract formats</p>
-                    <p className="text-[12px] text-[var(--text-muted)]">{(error as Error).message}</p>
+                    <p className="text-[12px] text-[var(--text-muted)]">{extractErrorMessage(error)}</p>
                 </div>
                 <button
                     onClick={() => void refetch()}
