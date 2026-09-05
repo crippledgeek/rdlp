@@ -55,6 +55,40 @@ fn request_interrupt(disposition: &CancelDisposition, token: &CancellationToken)
     token.cancel();
 }
 
+/// Record why a download task failed to join, then map it for the caller.
+///
+/// A `JoinError` is NOT always a panic. The other shape — cancellation —
+/// arises when the task is aborted OR when the runtime shuts down with a
+/// download still in flight, which is what a normal app quit looks like.
+/// Reporting that as `outcome=panicked` at ERROR would make a clean shutdown
+/// read as an internal bug, so the two are told apart here.
+///
+/// The panic payload is redacted before it is logged OR returned. `JoinError`'s `Display`
+/// embeds the raw payload string when it downcasts to `String`/`&str`
+/// (tokio's `panic_payload_as_str`), and these records now persist to disk, so
+/// a future `panic!` written with a URL in its message would put that URL in
+/// the log file. `scripts/check-url-redaction.sh` cannot see this — its
+/// patterns match url-NAMED values, not a value embedded in a foreign type's
+/// `Display` (the documented non-goal in that gate's header; #684). The
+/// defence has to be the call, not the grep.
+fn task_join_error(join_err: &tokio::task::JoinError) -> RdlpApiError {
+    if join_err.is_panic() {
+        // ERROR: a panicking task is an internal bug.
+        let reason = rdlp_redact::redact_str(&join_err.to_string());
+        log::error!("download: action=download outcome=panicked reason={reason}");
+        RdlpApiError::IoError {
+            message: format!("Download task panicked: {reason}"),
+        }
+    } else {
+        // DEBUG: an aborted task or a runtime shutting down mid-download is
+        // ordinary, and was previously reported to the caller as a panic.
+        log::debug!("download: action=download outcome=cancelled reason={join_err}");
+        RdlpApiError::IoError {
+            message: format!("Download task cancelled: {join_err}"),
+        }
+    }
+}
+
 /// Handle to a running download.
 ///
 /// Provides access to the event stream, cancellation, and final result.
@@ -149,9 +183,7 @@ impl DownloadHandle {
     pub async fn wait(self) -> Result<DownloadResult, RdlpApiError> {
         match self.join_handle.await {
             Ok(result) => result,
-            Err(join_err) => Err(RdlpApiError::IoError {
-                message: format!("Download task panicked: {join_err}"),
-            }),
+            Err(join_err) => Err(task_join_error(&join_err)),
         }
     }
 }
@@ -281,5 +313,89 @@ mod tests {
             !disposition.should_keep(),
             "cancel() keeps the Discard default"
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod join_error_tests {
+    use super::task_join_error;
+    use crate::errors::RdlpApiError;
+
+    /// A panic is reported as a panic — and its payload is redacted.
+    ///
+    /// `JoinError`'s Display embeds the payload string, so a `panic!` written
+    /// with a credential-bearing URL would otherwise put it in a log file that
+    /// now persists. The probe panics with exactly that shape.
+    #[tokio::test]
+    async fn a_panicking_task_is_reported_as_a_panic() {
+        let join_err = tokio::spawn(async {
+            panic!("boom https://user:pw@example.com/v?token=secret");
+        })
+        .await
+        .expect_err("the task panicked");
+        assert!(join_err.is_panic());
+
+        let mapped = task_join_error(&join_err);
+        let msg = format!("{mapped}");
+        assert!(msg.contains("panicked"), "got: {msg}");
+
+        // Assert on the STORED FIELD, not on `Display`. `RdlpApiError`'s
+        // Display is `#[error("I/O error: {}", redact(message))]`, so the
+        // rendered form is clean whether or not the field is — asserting
+        // against `format!("{mapped}")` passes even when the raw payload is
+        // stored, i.e. it is a tautology. Verified by mutation: putting
+        // `{join_err}` back in the constructor leaves a Display assertion
+        // green and turns this one red. The field matters because a future
+        // path could read it without going through Display.
+        let RdlpApiError::IoError { message: stored } = &mapped else {
+            panic!("expected IoError, got: {mapped:?}");
+        };
+        assert!(
+            !stored.contains("secret"),
+            "stored token must not survive: {stored}"
+        );
+        assert!(
+            !stored.contains("user:pw"),
+            "stored userinfo must not survive: {stored}"
+        );
+
+        // And the same value reaches the log.
+        let logged = rdlp_redact::redact_str(&join_err.to_string());
+        assert!(
+            !logged.contains("secret"),
+            "payload token must not survive: {logged}"
+        );
+        assert!(
+            !logged.contains("user:pw"),
+            "payload userinfo must not survive: {logged}"
+        );
+    }
+
+    /// An aborted task is NOT a panic, and must not be reported as one.
+    ///
+    /// The same shape occurs when the runtime shuts down with a download in
+    /// flight — an ordinary app quit. Before this split it produced
+    /// "Download task panicked" and, once logged, an ERROR claiming an
+    /// internal bug.
+    #[tokio::test]
+    async fn a_cancelled_task_is_not_reported_as_a_panic() {
+        let handle = tokio::spawn(async {
+            // Never completes, so the abort below always wins. A timer would
+            // work too, but every round duration trips
+            // `clippy::duration_suboptimal_units` toward a constructor newer
+            // than our MSRV (`from_hours`/`from_mins` are 1.91; MSRV is 1.88).
+            std::future::pending::<()>().await;
+        });
+        handle.abort();
+        let join_err = handle.await.expect_err("the task was aborted");
+        assert!(
+            join_err.is_cancelled(),
+            "precondition: this is the cancel shape"
+        );
+
+        let msg = format!("{}", task_join_error(&join_err));
+        assert!(msg.contains("cancelled"), "got: {msg}");
+        assert!(!msg.contains("panicked"), "must not claim a panic: {msg}");
     }
 }

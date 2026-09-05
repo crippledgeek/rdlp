@@ -6,13 +6,14 @@
 //! `tauri-plugin-dialog`, and [`reveal_in_folder`] uses
 //! `tauri-plugin-opener` to show a file in the system file manager.
 
-// `Duration::from_mins` (lint's suggested replacement) needs Rust 1.95; MSRV is 1.85.
+// `Duration::from_mins` (lint's suggested replacement) is stable since Rust
+// 1.91 (`duration_constructors_lite`); the workspace MSRV is 1.88.
 #![allow(clippy::duration_suboptimal_units)]
 
 use std::path::PathBuf;
 use std::time::Duration;
 
-use log::{info, warn};
+use log::warn;
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
@@ -179,6 +180,38 @@ where
         })
 }
 
+/// Record a terminal reveal failure once, then map it for the frontend.
+///
+/// Both failure modes of `reveal_in_folder` go through here. They used to
+/// diverge: the missing-file branch logged, the OS-call branch did not, so the
+/// log showed an attempt followed by silence while only the toast knew why
+/// (#696). One function means one record shape and no way to add a third
+/// branch that forgets.
+///
+/// The action, outcome and reason live in the MESSAGE, not in structured kv,
+/// because the formatter this app installs renders only
+/// timestamp/target/level/message — kv fields are constructed and then
+/// dropped, so a structured field would be invisible in the log file.
+///
+/// That is the plugin's DEFAULT formatter, which we have chosen not to
+/// override, not an immutable property of the sink: `Builder::format` would
+/// let a dozen-line closure render `record.key_values()` and make real kv
+/// work. #695 has to make that call before this shape is copied to ~25 sites,
+/// because OpenTelemetry guidance (quoted in that issue) puts the variable parts in
+/// fields, not in the message.
+///
+/// WARN rather than ERROR: a reveal failure is user-facing and usually
+/// environmental (no file manager, D-Bus unavailable), not an internal bug.
+///
+/// The path is a local filesystem path, not a URL, so it needs no redaction —
+/// a path in the operator's own log is not a credential.
+fn reveal_failed(path: &str, reason: impl std::fmt::Display) -> AppError {
+    warn!("reveal: action=reveal outcome=failed path={path} reason={reason}");
+    AppError::Internal {
+        message: format!("Failed to reveal {path}: {reason}"),
+    }
+}
+
 /// Reveal a file or directory in the system file manager.
 ///
 /// Uses `tauri-plugin-opener` to invoke the OS-native "reveal in folder"
@@ -206,25 +239,62 @@ pub async fn reveal_in_folder(path: String) -> Result<(), AppError> {
     let path_buf = PathBuf::from(&path);
 
     if !path_buf.exists() {
-        warn!("reveal_in_folder: file does not exist: {path}");
-        return Err(AppError::Internal {
-            message: format!("File not found: {path}"),
-        });
+        return Err(reveal_failed(&path, "file not found"));
     }
 
-    info!("reveal_in_folder: revealing {path}");
+    // No "attempting" record. It was `info!` before; demoting it to `debug!`
+    // would have been a deletion in disguise, since `LOG_LEVEL` (lib.rs) is
+    // Info in every build — so the honest version is to remove it. Nothing is
+    // lost: the failure record below carries the same `path=`, and an
+    // always-on attempt line is not an attested convention (#695). Raise the
+    // module with `.level_for(...)` when tracing a specific reveal.
 
     reveal_off_runtime(move || tauri_plugin_opener::reveal_item_in_dir(&path_buf))
         .await?
-        .map_err(|e| AppError::Internal {
-            message: format!("Failed to reveal path in folder: {e}"),
-        })
+        .map_err(|e| reveal_failed(&path, e))
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::reveal_off_runtime;
+
+    /// A terminal reveal failure is RECORDED, not just returned.
+    ///
+    /// The failure used to be mapped into `AppError` and handed back with no
+    /// log at all, so the file showed the attempt and then nothing while only
+    /// the toast knew why (#696). The record carries action, outcome and
+    /// reason in the MESSAGE rather than in structured kv — see
+    /// `reveal_failed`'s doc for why, and for the fact that this is the
+    /// formatter we install rather than a fixed property of the sink.
+    #[test]
+    fn a_reveal_failure_is_logged_once_at_warn() {
+        testing_logger::setup();
+        let err = super::reveal_failed("/tmp/v.mkv", "d-bus unavailable");
+
+        testing_logger::validate(|captured| {
+            let warns: Vec<_> = captured
+                .iter()
+                .filter(|l| l.level == log::Level::Warn)
+                .collect();
+            assert_eq!(warns.len(), 1, "exactly one terminal record");
+            let body = warns.first().map_or("", |l| l.body.as_str());
+            assert!(body.contains("/tmp/v.mkv"), "names the target: {body}");
+            assert!(
+                body.contains("d-bus unavailable"),
+                "names the reason: {body}"
+            );
+            assert!(body.contains("action=reveal"), "names the action: {body}");
+            assert!(
+                body.contains("outcome=failed"),
+                "states the outcome: {body}"
+            );
+        });
+
+        let shown = format!("{err}");
+        assert!(shown.contains("/tmp/v.mkv"), "got: {shown}");
+        assert!(shown.contains("d-bus unavailable"), "got: {shown}");
+    }
 
     /// A blocking closure that itself starts a runtime must survive.
     ///
@@ -262,10 +332,11 @@ mod tests {
     ///
     /// Both guards return before the reveal, which is what keeps this module's
     /// tests hermetic: a positive case would pop a real file-manager window, so
-    /// the OS call itself is verified manually (and by `off_runtime`'s test for
+    /// the OS call itself is verified manually (and by `reveal_off_runtime`'s test for
     /// the part that actually broke).
     #[tokio::test]
     async fn missing_path_reports_the_path() {
+        testing_logger::setup();
         let err = super::reveal_in_folder("/nonexistent/rdlp-test-reveal.mkv".to_owned())
             .await
             .expect_err("missing path must fail");
@@ -274,5 +345,18 @@ mod tests {
             msg.contains("/nonexistent/rdlp-test-reveal.mkv"),
             "got: {msg}"
         );
+
+        // End-to-end: this branch must ROUTE THROUGH `reveal_failed`, not just
+        // return a similar message. Without this the test passes against a
+        // hand-rolled `AppError` that logs nothing.
+        testing_logger::validate(|captured| {
+            let warns: Vec<_> = captured
+                .iter()
+                .filter(|l| l.level == log::Level::Warn)
+                .collect();
+            assert_eq!(warns.len(), 1, "the branch logs exactly once");
+            let body = warns.first().map_or("", |l| l.body.as_str());
+            assert!(body.contains("outcome=failed"), "got: {body}");
+        });
     }
 }
