@@ -50,6 +50,15 @@ const MAX_REEXTRACT_RETRIES: u32 = 2;
 /// Delay (in seconds) before each re-extraction attempt.
 const REEXTRACT_DELAYS_SECS: [u64; 2] = [5, 15];
 
+/// Event-channel capacity for the one-shot request paths (extract, search,
+/// enrich, subtitles-only).
+///
+/// These paths drop the receiver before doing any work and return their
+/// result directly, so nothing ever reads the channel and the figure only
+/// bounds a buffer no consumer drains. Kept at the value the paths already
+/// used rather than tuned.
+const ONE_SHOT_EVENT_CAPACITY: usize = 16;
+
 #[cfg(test)]
 mod tests;
 
@@ -336,6 +345,38 @@ impl RdlpClient {
         DownloadHandle::new(id, rx, cancel_token, cancel_disposition, join_handle)
     }
 
+    /// Build a one-shot orchestrator with the configured cookies already
+    /// loaded.
+    ///
+    /// Every network-facing single-request path goes through here so cookie
+    /// loading cannot be forgotten at one of them — it was, on all three
+    /// search paths, which silently ignored `--cookies-from-browser` and left
+    /// a Cloudflare-gated site unreachable no matter what the operator passed.
+    ///
+    /// The event receiver is dropped immediately: these paths return their
+    /// result directly and emit no progress, so sends are best-effort by
+    /// construction.
+    async fn one_shot_orchestrator(
+        &self,
+        interactive: Option<Arc<dyn InteractiveCallback>>,
+    ) -> Result<Orchestrator, RdlpApiError> {
+        let (tx, _rx) = mpsc::channel::<Event>(ONE_SHOT_EVENT_CAPACITY);
+        let orchestrator = Orchestrator::new_with_registry(
+            Arc::clone(&self.config),
+            tx,
+            DownloadId::next(),
+            CancellationToken::new(),
+            interactive,
+            None,
+            Some(Arc::clone(&self.extractor_registry)),
+        );
+        orchestrator
+            .load_cookies()
+            .await
+            .map_err(RdlpApiError::from)?;
+        Ok(orchestrator)
+    }
+
     /// Extract metadata without downloading.
     ///
     /// # Arguments
@@ -346,24 +387,11 @@ impl RdlpClient {
     ///
     /// Returns an error if extraction fails or no extractor matches.
     pub async fn extract_info(&self, url: &str) -> Result<Vec<InfoDict>, RdlpApiError> {
-        let id = DownloadId::next();
-        let (tx, _rx) = mpsc::channel::<Event>(16);
-        let cancel_token = CancellationToken::new();
-
-        let orchestrator = Orchestrator::new_with_registry(
-            Arc::clone(&self.config),
-            tx,
-            id,
-            cancel_token,
-            None,
-            None,
-            Some(Arc::clone(&self.extractor_registry)),
-        );
-        orchestrator
-            .load_cookies()
+        self.one_shot_orchestrator(None)
+            .await?
+            .extract_info(url)
             .await
-            .map_err(RdlpApiError::from)?;
-        orchestrator.extract_info(url).await.map_err(Into::into)
+            .map_err(Into::into)
     }
 
     /// Download only subtitles (no video) for the given metadata.
@@ -387,24 +415,8 @@ impl RdlpClient {
         &self,
         info: &InfoDict,
     ) -> Result<Option<Vec<std::path::PathBuf>>, RdlpApiError> {
-        let id = DownloadId::next();
-        let (tx, _rx) = mpsc::channel::<Event>(16);
-        let cancel_token = CancellationToken::new();
-
-        let orchestrator = Orchestrator::new_with_registry(
-            Arc::clone(&self.config),
-            tx,
-            id,
-            cancel_token,
-            self.interactive.clone(),
-            None,
-            Some(Arc::clone(&self.extractor_registry)),
-        );
-        orchestrator
-            .load_cookies()
-            .await
-            .map_err(RdlpApiError::from)?;
-        orchestrator
+        self.one_shot_orchestrator(self.interactive.clone())
+            .await?
             .download_subtitles_only(info)
             .await
             .map_err(Into::into)
@@ -498,20 +510,11 @@ impl RdlpClient {
         site: &str,
         query: &rdlp_types::SearchQuery,
     ) -> Result<Vec<rdlp_types::SearchResultPreview>, RdlpApiError> {
-        let id = DownloadId::next();
-        let (tx, _rx) = mpsc::channel::<Event>(16);
-        let cancel_token = CancellationToken::new();
-
-        let orchestrator = Orchestrator::new_with_registry(
-            Arc::clone(&self.config),
-            tx,
-            id,
-            cancel_token,
-            None,
-            None,
-            Some(Arc::clone(&self.extractor_registry)),
-        );
-        orchestrator.search(site, query).await.map_err(Into::into)
+        self.one_shot_orchestrator(None)
+            .await?
+            .search(site, query)
+            .await
+            .map_err(Into::into)
     }
 
     /// Execute a paginated search on a site, returning a single page.
@@ -530,20 +533,8 @@ impl RdlpClient {
         site: &str,
         query: &rdlp_types::SearchQuery,
     ) -> Result<rdlp_types::SearchPageResponse, RdlpApiError> {
-        let id = DownloadId::next();
-        let (tx, _rx) = mpsc::channel::<Event>(16);
-        let cancel_token = CancellationToken::new();
-
-        let orchestrator = Orchestrator::new_with_registry(
-            Arc::clone(&self.config),
-            tx,
-            id,
-            cancel_token,
-            None,
-            None,
-            Some(Arc::clone(&self.extractor_registry)),
-        );
-        orchestrator
+        self.one_shot_orchestrator(None)
+            .await?
             .search_page(site, query)
             .await
             .map_err(Into::into)
@@ -579,20 +570,8 @@ impl RdlpClient {
         site: &str,
         preview: rdlp_types::SearchResultPreview,
     ) -> Result<rdlp_types::SearchResultPreview, RdlpApiError> {
-        let id = DownloadId::next();
-        let (tx, _rx) = mpsc::channel::<Event>(1);
-        let cancel_token = CancellationToken::new();
-
-        let orchestrator = Orchestrator::new_with_registry(
-            Arc::clone(&self.config),
-            tx,
-            id,
-            cancel_token,
-            None,
-            None,
-            Some(Arc::clone(&self.extractor_registry)),
-        );
-        orchestrator
+        self.one_shot_orchestrator(None)
+            .await?
             .enrich_search_result(site, preview)
             .await
             .map_err(Into::into)
@@ -1074,5 +1053,103 @@ mod terminal_event_tests {
             } => assert_eq!(status, Some(403)),
             other => panic!("expected Event::Failed(NetworkError), got {other:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod search_cookie_tests {
+    use rdlp_types::{Config, SearchQuery};
+
+    /// Every network-facing search path must load the configured cookie
+    /// source before it fetches.
+    ///
+    /// The probe is a cookie file that does not exist: loading it fails, so a
+    /// path that loads cookies reports THAT, while a path that skips loading
+    /// runs on to reject the unknown site instead. The two outcomes are
+    /// distinguishable without a network — the site does not exist, so no
+    /// request is possible either way, and the unknown-site rejection is what
+    /// the buggy ordering produces.
+    ///
+    /// Regression guard: `search`, `search_page` and `enrich_search_result`
+    /// each built an orchestrator and never called `load_cookies()`, so
+    /// `--cookies-from-browser` was silently ignored on every search. On a
+    /// Cloudflare-gated route that made the extractor's own advice ("pass
+    /// --cookies-from-browser") impossible to act on.
+    fn config_with_missing_cookie_file() -> Config {
+        Config {
+            cookies_file: Some(std::path::PathBuf::from(
+                "/nonexistent/rdlp-test-cookies.txt",
+            )),
+            ..Config::default()
+        }
+    }
+
+    fn query() -> SearchQuery {
+        SearchQuery {
+            query: "probe".to_owned(),
+            filters: Vec::new(),
+            max_results: None,
+            page: Some(1),
+        }
+    }
+
+    #[tokio::test]
+    async fn search_page_loads_cookies_before_fetching() {
+        let client = crate::RdlpClient::new(config_with_missing_cookie_file()).unwrap();
+        let err = client
+            .search_page("no-such-site", &query())
+            .await
+            .expect_err("missing cookie file must fail the search");
+        let msg = err.to_string();
+        // Anchored on the LOADER's own text, not the word "cookies": the
+        // Cloudflare advice this bug made unactionable itself contains
+        // "--cookies-from-browser", so a loose match passes on a live 403
+        // and proves nothing. Verified — the loose form was green before
+        // the fix.
+        assert!(msg.contains("Failed to load cookies"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn search_loads_cookies_before_fetching() {
+        let client = crate::RdlpClient::new(config_with_missing_cookie_file()).unwrap();
+        let err = client
+            .search("no-such-site", &query())
+            .await
+            .expect_err("missing cookie file must fail the search");
+        let msg = err.to_string();
+        // Anchored on the LOADER's own text, not the word "cookies": the
+        // Cloudflare advice this bug made unactionable itself contains
+        // "--cookies-from-browser", so a loose match passes on a live 403
+        // and proves nothing. Verified — the loose form was green before
+        // the fix.
+        assert!(msg.contains("Failed to load cookies"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn enrich_search_result_loads_cookies_before_fetching() {
+        let client = crate::RdlpClient::new(config_with_missing_cookie_file()).unwrap();
+        let preview = rdlp_types::SearchResultPreview {
+            video_url: "https://www.pornoxo.com/videos/1/x/".to_owned(),
+            title: "probe".to_owned(),
+            thumbnail_url: None,
+            duration: None,
+            uploader: None,
+            uploader_url: None,
+            actors: Vec::new(),
+            view_count: None,
+            upload_date: None,
+        };
+        let err = client
+            .enrich_search_result("no-such-site", preview)
+            .await
+            .expect_err("missing cookie file must fail the enrichment");
+        let msg = err.to_string();
+        // Anchored on the LOADER's own text, not the word "cookies": the
+        // Cloudflare advice this bug made unactionable itself contains
+        // "--cookies-from-browser", so a loose match passes on a live 403
+        // and proves nothing. Verified — the loose form was green before
+        // the fix.
+        assert!(msg.contains("Failed to load cookies"), "got: {msg}");
     }
 }
