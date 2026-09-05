@@ -18,12 +18,16 @@ use regex::Regex;
 /// - Exact case-sensitive AWS SigV4 patterns come first since they have
 ///   upper-case letters that would be clobbered by the generic case-insensitive
 ///   `signature` / `sig` patterns.
-/// - Longer param names precede shorter to avoid substring shadowing
-///   (`access_token` before `token`, `otp_code` before `otp`).
-/// - Generic query-parameter patterns use a `(^|[?&\s])` capture group for the
-///   boundary separator and re-emit it via `${1}` in the replacement, so that
-///   the `?`/`&` is preserved but the pattern only matches at a real parameter
-///   start (not as a suffix inside a longer key like `X-Amz-Signature`).
+/// - Longer param names precede shorter ones. With the boundary anchor this is
+///   now belt-and-braces rather than load-bearing: `_` and `-` are not in the
+///   boundary set, so `token=` cannot match inside `access_token=` regardless
+///   of order. Kept because the AWS-first rule above it IS load-bearing and the
+///   two read as one convention.
+/// - Generic query-parameter patterns capture the boundary separator in group 1
+///   and the value in group 2; `redact_str`'s closure re-emits the boundary, so
+///   the `?`/`&`/space is preserved and the pattern only matches at a real
+///   parameter start (not as a suffix inside a longer key like
+///   `X-Amz-Signature`).
 ///   The `^` alternative also matches bare credential fragments with no leading
 ///   separator (e.g. `token=secret` as a standalone log string).
 /// - The userinfo (`//user:pass@host`) pattern is a standalone structural rule.
@@ -31,7 +35,7 @@ use regex::Regex;
 /// Each entry pairs a pattern with the parameter NAME to re-emit. Every
 /// pattern exposes group 1 = the optional boundary character and group 2 = the
 /// value; `redact_str` builds the replacement from those, which is what lets
-/// the trailing-paren handling live in code rather than in 22 replacement
+/// the trailing-paren handling live in code rather than in 21 replacement
 /// strings.
 #[allow(clippy::expect_used)]
 static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 21]> = LazyLock::new(|| {
@@ -50,20 +54,13 @@ static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 21]> = LazyLock::new(|| {
             "X-Amz-Credential",
         ),
         // ── Longer param names first (boundary-capturing group) ────────────────
-        // Pattern: `(^|[?&\s])name=[^&\s]*?(\)?)([&\s]|$)`
-        //   →  replacement: `${1}name=***${2}${3}`
+        // Pattern: `(^|[?&\s])name=([^&\s]+)` — group 1 the boundary, group 2
+        // the value. There is no replacement STRING: `redact_str` builds the
+        // output in a closure, which is where the trailing-paren handling and
+        // the reason the delimiter is left unmatched are documented.
         //
-        // The value class deliberately still ALLOWS `)`, because RFC 3986 §2.2
-        // makes it a legal unencoded sub-delim in a query value — excluding it
-        // would stop the match at the first `)` and leave the rest of a secret
-        // in the clear. Instead the trailing `)` is captured optionally and
-        // re-emitted: non-greedy matching prefers the short value when the
-        // paren closes a wrapper (`wreq::Error` renders `for uri (…)`), and
-        // expands past an embedded `)` when more value follows. `${3}` puts
-        // back the delimiter the match consumed, so an adjacent credential
-        // parameter still matches on its own pass.
-        // The `(^|[?&\s])` captures the separator (or the empty start-of-string) and
-        // re-emits it via `${1}`, so that:
+        // The `(^|[?&\s])` captures the separator (or the empty start-of-string)
+        // so that:
         //   • bare fragments like `token=secret` (no leading `?`/`&`) are redacted, and
         //   • a credential named in free text after a space (`failed with
         //     token=SECRET`) is still redacted, and
@@ -143,7 +140,6 @@ static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 21]> = LazyLock::new(|| {
             Regex::new(r"(?i)(^|[?&\s])otp=([^&\s]+)").expect("valid regex"),
             "otp",
         ),
-        // ── Userinfo credentials in URL authority (`//user:pass@host`) ─────────
     ]
 });
 

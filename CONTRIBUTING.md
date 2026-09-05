@@ -52,8 +52,8 @@ cd rdlp
 # Build the project
 cargo build
 
-# Run tests (--all-features is load-bearing; see "Feature-gated code" below)
-cargo test --workspace --all-features
+# Run tests (--workspace is load-bearing; see "Feature-gated code" below)
+cargo test --workspace
 
 # Run clippy
 cargo clippy
@@ -124,26 +124,28 @@ git checkout -b fix/bug-description
 ### 3. Test Your Changes
 
 ```bash
-# Run all tests (--all-features is load-bearing; see below)
-cargo test --workspace --all-features
+# Run all tests (--workspace is load-bearing; see below)
+cargo test --workspace
 
 # Run tests for a specific crate
 cargo test -p rdlp-extractor
 
 # Run tests with output
-cargo test --all-features -- --nocapture
+cargo test --workspace -- --nocapture
 
-# Feature-gated code
+# Feature-gated code: use --workspace
 #
-# Two crates put code behind a non-default feature, and a plain `cargo test`
-# neither compiles nor runs it:
-#   rdlp-api  `serde`   — gates the whole `dto` module, which is compiled into
-#                         the desktop binary and carries every event payload
-#                         to the UI.
-#   rdlp-redact `log-kv` — gates the tracing-field redaction path.
-# Both are security-relevant. Measured 2026-09-05: the default gate runs 113
-# test binaries, `--all-features` runs 123. A test written for `dto` does not
-# execute at all without the flag.
+# `cargo test` runs Cargo's `default-members`, which EXCLUDES rdlp-desktop —
+# and rdlp-desktop is the only crate that enables `rdlp-api/serde`. Without it
+# the whole `dto` module is never compiled, so its tests do not exist: the
+# module that carries every event payload to the desktop UI goes untested, and
+# a test written for it silently does not run.
+#
+# `--workspace` pulls rdlp-desktop in, feature unification enables `serde`, and
+# `dto` is compiled and tested. Measured 2026-09-05: 94 test binaries by
+# default, 102 with `--workspace`, and the dto redaction test executes only
+# under the latter. (`rdlp-redact/log-kv` is enabled by rdlp-api, so it is
+# already reached at workspace scope; `--all-features` adds nothing here.)
 
 # Run clippy
 cargo clippy -- -W clippy::all

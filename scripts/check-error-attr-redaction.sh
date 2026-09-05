@@ -52,6 +52,12 @@ FILES=(
 # field directly — so Display/Debug redaction does nothing for them. Every
 # free-text `String` field needs `#[serde(serialize_with = "serialize_redacted")]`.
 # Both files below have already leaked once through a field that lacked it.
+# Scope is ERROR and EVENT payload types, deliberately not data models. On a
+# data model a `url: String` is the payload — the frontend needs it to fetch —
+# so the rule "every free-text String is redacted" inverts there and would
+# break the feature it is meant to protect. `rdlp-types::SubtitleDiagnostic`
+# carries error text and is guarded on its field by hand for that reason;
+# `SubtitleTrack` beside it is a model and is correctly not.
 SERDE_FILES=(
     "crates/rdlp-desktop/src-tauri/src/error.rs"
     "crates/rdlp-desktop/src-tauri/src/events.rs"
@@ -60,7 +66,18 @@ SERDE_FILES=(
 # Field names on those types that are not operator-assembled free text.
 # Field names on those types that are not operator-assembled free text:
 # identifiers, enum-ish tags, local filesystem paths, and formatted numbers.
-SERDE_EXEMPT_RE='job_id|field|level|url|filename|output_files|title|ext|format_id|stage|unit|id|speed|eta|filepath|unit_title'
+# Every entry must be a name actually present in a SERDE_FILES type — a stale
+# entry is a hole nobody is watching, which is why `retry_after_ms` and eight
+# others were removed.
+#
+# `url` is deliberately NOT exempt: a URL-carrying field must be typed
+# `RedactedUrlBuf` (which self-redacts and is not a `String`, so it never
+# matches the field rule at all). A `url: String` should be flagged.
+#
+# Both exemption lists match by NAME, not type — the gate cannot see types. A
+# new field named for something on these lists must be checked by its author to
+# actually be the harmless thing the name implies.
+SERDE_EXEMPT_RE='job_id|field|level|stage|speed|eta|filepath|unit_title'
 
 
 # Placeholder names that cannot carry operator-assembled free text: the
@@ -112,7 +129,9 @@ scan_file() {
             # comment is not routing, and `redact(` written there must not
             # satisfy the gate.
             sub(/\)\].*$/, "", args)
-            n_redacted = gsub(/redact\(/, "", args)
+            # Identifier-boundary anchored: a bare substring match would let
+            # `unredact(` or `maybe_redact(` satisfy the count.
+            n_redacted = gsub(/(^|[^A-Za-z0-9_])redact\(/, "", args)
 
             # Which positional fields are typed sources? Only THOSE placeholders
             # are exempt — a tuple variant may pair `#[source]` with a free-text
@@ -154,7 +173,17 @@ scan_serde_file() {
     }
     awk -v exempt="$SERDE_EXEMPT_RE" '
         /^[ \t]*\/\// { next }
-        /serialize_with[ \t]*=[ \t]*"([A-Za-z_]+::)*serialize_redacted"/ { guarded = 1; next }
+        # Must BE the attribute, not merely contain its text: a trailing comment
+        # mentioning it is not a guard. Same defect this gate closed for
+        # `redact(` one function above.
+        /^[ \t]*#\[serde\(/ && /serialize_with[ \t]*=[ \t]*"([A-Za-z_]+::)*serialize_redacted"/ {
+            guarded = 1; next
+        }
+        # A rustfmt-wrapped attribute spans lines; keep the guard alive across
+        # its continuation rather than letting the closing `)]` clear it.
+        guarded_open && /\)\]/ { guarded_open = 0; guarded = 1; next }
+        guarded_open { next }
+        /^[ \t]*#\[serde\(/ && !/\)\]/ { guarded_open = 1; next }
         /^[ \t]*(pub(\([a-z]+\))?[ \t]+)?[a-z_]+[ \t]*:[ \t]*(Option<)?String[,>]/ {
             name = $0
             sub(/^[ \t]*(pub(\([a-z]+\))?[ \t]+)?/, "", name)
@@ -208,6 +237,8 @@ if [ "${1:-}" = "--self-test" ]; then
     G { message: String, leak: String },'
     check_flags "typed source PLUS a free-text field" '    #[error("H: {0} leaked at {1}")]
     H(#[from] std::io::Error, String),'
+    check_flags "decoy identifier containing redact(" '    #[error("N failed: {0}", unredact(_0))]
+    N(String),'
     check_flags "redact( only in a trailing comment" '    #[error("I failed: {0}")] // redact( is not routing
     I(String),'
     check_flags "transparent over a non-allowlisted payload" '    #[error(transparent)]
@@ -237,6 +268,11 @@ if [ "${1:-}" = "--self-test" ]; then
     }
     serde_flags "unguarded String field" '    pub(crate) message: String,'
     serde_flags "unguarded Option<String> field" '    pub(crate) reason: Option<String>,'
+    serde_flags "serialize_with only in a trailing comment" '    pub(crate) leak: String, // serialize_with = "serialize_redacted"'
+    serde_clean "rustfmt-wrapped serde attribute" '    #[serde(
+        serialize_with = "serialize_redacted"
+    )]
+    pub(crate) message: String,'
     serde_clean "guarded field" '    #[serde(serialize_with = "serialize_redacted")]
     pub(crate) message: String,'
     serde_clean "exempt name" '    pub(crate) job_id: String,'

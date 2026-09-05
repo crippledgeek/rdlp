@@ -50,7 +50,10 @@ pub(super) async fn validate_subtitle_urls(
                 }
                 diagnostics.push(SubtitleDiagnostic {
                     key: format!("unreachable_{}", track.language),
-                    value: format!("HTTP {status}: {}", track.url),
+                    value: format!(
+                        "HTTP {status}: {}",
+                        rdlp_redact::RedactedUrl::new(&track.url)
+                    ),
                 });
             }
             UrlValidation::NetworkError(e) => {
@@ -97,7 +100,7 @@ async fn validate_single_url(url: &str, client: &wreq::Client) -> UrlValidation 
             debug!("HEAD 405 for subtitle URL, falling back to ranged GET");
         }
         Ok(resp) => return UrlValidation::Unreachable(resp.status().as_u16()),
-        Err(e) => return UrlValidation::NetworkError(e.to_string()),
+        Err(e) => return UrlValidation::NetworkError(rdlp_redact::redact_str(&e.to_string())),
     }
 
     // Fallback: GET with range header (0-1KB)
@@ -112,7 +115,7 @@ async fn validate_single_url(url: &str, client: &wreq::Client) -> UrlValidation 
             UrlValidation::Reachable
         }
         Ok(resp) => UrlValidation::Unreachable(resp.status().as_u16()),
-        Err(e) => UrlValidation::NetworkError(e.to_string()),
+        Err(e) => UrlValidation::NetworkError(rdlp_redact::redact_str(&e.to_string())),
     }
 }
 

@@ -69,12 +69,30 @@ pub enum SubtitleReason {
     UrlNotReachable(u16),
 }
 
+/// Serialize a diagnostic value with credentials stripped.
+///
+/// `SubtitleDiagnostic` derives `Serialize`, which reads the field directly, so
+/// redaction has to sit on the field. Its values are built by `format!` over a
+/// subtitle URL and over stringified transport errors — a `wreq::Error` renders
+/// the request URI verbatim — and either can carry a signed CDN token.
+///
+/// Producers redact before constructing, so this is belt-and-braces; it keeps
+/// the rule uniform (every free-text `String` on a `Serialize` type carries the
+/// guard) so a reader need not trace provenance to know whether one is missing.
+fn serialize_redacted<S>(value: &str, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&rdlp_redact::redact_str(value))
+}
+
 /// Diagnostic key-value pair for debugging subtitle issues.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SubtitleDiagnostic {
     /// Diagnostic key (e.g., "extractor", "`field_checked`")
     pub key: String,
     /// Diagnostic value
+    #[serde(serialize_with = "serialize_redacted")]
     pub value: String,
 }
 
