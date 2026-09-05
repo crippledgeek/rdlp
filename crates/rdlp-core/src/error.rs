@@ -391,6 +391,18 @@ error following redirect for uri (https://admin:hunter2@cdn.example.com/v.mp4)";
             !shown.contains("hunter2"),
             "password leaked via Debug: {shown}"
         );
+        // Positive assertions too: `cargo mutants` showed a Debug impl that
+        // returns `Ok(())` without writing anything passes an absence-only
+        // test — absence of a credential is satisfied by absence of output.
+        assert!(
+            shown.contains("Extraction"),
+            "variant name missing: {shown}"
+        );
+        assert!(shown.contains("message"), "field name missing: {shown}");
+        assert!(
+            shown.contains("cdn.example.com"),
+            "redacted text missing: {shown}"
+        );
     }
 
     #[test]

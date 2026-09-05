@@ -799,6 +799,14 @@ mod tests {
         assert!(!shown.contains("hunter2"), "Display leaked: {shown}");
         assert!(!dbg.contains("hunter2"), "Debug leaked: {dbg}");
         assert!(shown.contains("cdn.example.com"), "over-redacted: {shown}");
+        // An empty Debug satisfies the absence assertion above, so pin the
+        // structure as well — `cargo mutants` caught exactly that.
+        assert!(dbg.contains("NetworkError"), "variant name missing: {dbg}");
+        assert!(dbg.contains("status"), "field Display omits missing: {dbg}");
+        assert!(
+            dbg.contains("cdn.example.com"),
+            "redacted text missing: {dbg}"
+        );
     }
 
     #[test]

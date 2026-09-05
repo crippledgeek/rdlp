@@ -321,4 +321,56 @@ mod tests {
         assert_eq!(restored.payload, dto.payload);
         assert_eq!(restored.timestamp_ms, dto.timestamp_ms);
     }
+
+    /// The three event kinds that carry operator-assembled free text to a UI
+    /// bridge. Each is built by `format!("…: {e}")` at its producer, so a
+    /// stringified transport error puts the request URI — credentials included
+    /// — into the payload this DTO serializes.
+    ///
+    /// `Warning` and `Debug` shipped unredacted through an earlier round of
+    /// this branch; `Retrying` was found by review afterwards. All three are
+    /// asserted here so the next one added has a pattern to match.
+    #[test]
+    fn free_text_event_payloads_are_redacted() {
+        const LEAKY: &str = "failed for uri (https://admin:hunter2@cdn.example.com/v.mp4)";
+        let id = DownloadId::next();
+
+        let cases = [
+            Event::Warning {
+                id,
+                message: LEAKY.to_string(),
+            },
+            Event::Debug {
+                id,
+                message: LEAKY.to_string(),
+            },
+            Event::Retrying {
+                id,
+                attempt: 1,
+                max_attempts: 3,
+                reason: LEAKY.to_string(),
+            },
+        ];
+
+        for event in cases {
+            let dto = EventDto::from(&event);
+            let json = dto.payload.to_string();
+            assert!(
+                !json.contains("hunter2"),
+                "{} leaked a password: {json}",
+                dto.event_type
+            );
+            assert!(
+                !json.contains("admin"),
+                "{} leaked a username: {json}",
+                dto.event_type
+            );
+            // Positive: an empty payload would satisfy both assertions above.
+            assert!(
+                json.contains("cdn.example.com"),
+                "{} over-redacted, message no longer says where: {json}",
+                dto.event_type
+            );
+        }
+    }
 }

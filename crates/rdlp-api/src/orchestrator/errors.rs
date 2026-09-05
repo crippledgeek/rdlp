@@ -220,3 +220,42 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod redact_tests {
+    use super::*;
+
+    const LEAKY: &str = "failed for uri (https://admin:hunter2@cdn.example.com/v.mp4)";
+
+    #[test]
+    fn display_and_debug_redact_free_text() {
+        let e = OrchestratorError::PostProcessingFailed(LEAKY.to_string());
+        let shown = e.to_string();
+        let dbg = format!("{e:?}");
+        assert!(!shown.contains("hunter2"), "Display leaked: {shown}");
+        assert!(!dbg.contains("hunter2"), "Debug leaked: {dbg}");
+        // Positive assertions: an impl that writes nothing passes the two
+        // above, which is how `cargo mutants` found this test missing.
+        assert!(
+            dbg.contains("PostProcessingFailed"),
+            "variant missing: {dbg}"
+        );
+        assert!(
+            dbg.contains("cdn.example.com"),
+            "redacted text missing: {dbg}"
+        );
+    }
+
+    #[test]
+    fn the_anyhow_catch_all_is_redacted_too() {
+        // `Other` was `#[error(transparent)]`, which forwarded anyhow's text —
+        // our own `.context(...)` strings — with no redaction and no
+        // placeholder for the gate to see.
+        let e = OrchestratorError::Other(anyhow::anyhow!("{LEAKY}"));
+        let shown = e.to_string();
+        let dbg = format!("{e:?}");
+        assert!(!shown.contains("hunter2"), "Display leaked: {shown}");
+        assert!(!dbg.contains("hunter2"), "Debug leaked: {dbg}");
+        assert!(shown.contains("cdn.example.com"), "over-redacted: {shown}");
+    }
+}
