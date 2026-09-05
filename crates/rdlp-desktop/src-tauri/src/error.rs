@@ -32,6 +32,7 @@ pub enum AppError {
     /// A search operation failed.
     SearchFailed {
         /// Human-readable error message.
+        #[serde(serialize_with = "serialize_redacted")]
         message: String,
         /// Whether the frontend should offer a retry button.
         retryable: bool,
@@ -39,6 +40,7 @@ pub enum AppError {
     /// A network-level failure (timeout, DNS, HTTP 5xx, etc.).
     NetworkError {
         /// Human-readable error message.
+        #[serde(serialize_with = "serialize_redacted")]
         message: String,
         /// Whether the frontend should offer a retry button.
         retryable: bool,
@@ -46,6 +48,7 @@ pub enum AppError {
     /// Metadata extraction failed for a URL.
     ExtractionFailed {
         /// Human-readable error message.
+        #[serde(serialize_with = "serialize_redacted")]
         message: String,
     },
     /// A download job failed.
@@ -53,6 +56,7 @@ pub enum AppError {
         /// The UUID of the failed download job.
         job_id: String,
         /// Human-readable error message.
+        #[serde(serialize_with = "serialize_redacted")]
         message: String,
         /// Whether the frontend should offer a retry button.
         retryable: bool,
@@ -62,6 +66,7 @@ pub enum AppError {
         /// Which input field is invalid.
         field: String,
         /// What is wrong with the value.
+        #[serde(serialize_with = "serialize_redacted")]
         message: String,
     },
     /// Server returned HTTP 429; frontend should back off.
@@ -72,8 +77,28 @@ pub enum AppError {
     /// An unexpected internal error.
     Internal {
         /// Human-readable error message.
+        #[serde(serialize_with = "serialize_redacted")]
         message: String,
     },
+}
+
+/// Serialize a free-text error message with credentials stripped.
+///
+/// `AppError` derives `Serialize`, which reads each field directly — so unlike
+/// `RdlpError` and `RdlpApiError`, redacting Display and Debug does nothing
+/// for the path that actually reaches the UI. This is that path's guard, and
+/// it sits on the field so it applies to every construction site, present and
+/// future, rather than to the handful that happen to go through
+/// `From<RdlpApiError>`.
+///
+/// The text can hold a URL: these messages are built by `format!("…: {e}")`
+/// over errors whose Display prints a request URI verbatim, credentials
+/// included.
+fn serialize_redacted<S>(message: &str, serializer: S) -> Result<S::Ok, S::Error>
+where
+    S: serde::Serializer,
+{
+    serializer.serialize_str(&rdlp_redact::redact_str(message))
 }
 
 impl From<RdlpApiError> for AppError {
@@ -289,5 +314,30 @@ mod tests {
             retryable: true,
         };
         assert_eq!(err.to_string(), "Download abc-123 failed: timeout");
+    }
+
+    #[test]
+    fn serialized_messages_are_redacted() {
+        // The load-bearing one for the UI. `AppError` derives `Serialize`,
+        // which reads the field directly — so the Display/Debug redaction that
+        // covers RdlpError and RdlpApiError does nothing here, and a test on
+        // those two would pass while the frontend still received the password.
+        let e = AppError::NetworkError {
+            message: "failed for uri (https://admin:hunter2@cdn.example.com/v.mp4)".to_string(),
+            retryable: true,
+        };
+        let json = serde_json::to_string(&e).expect("AppError must serialize");
+        assert!(
+            !json.contains("hunter2"),
+            "password reached the frontend: {json}"
+        );
+        assert!(
+            !json.contains("admin"),
+            "username reached the frontend: {json}"
+        );
+        assert!(
+            json.contains("cdn.example.com"),
+            "over-redacted, message no longer says where: {json}"
+        );
     }
 }
