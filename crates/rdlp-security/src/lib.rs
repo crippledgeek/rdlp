@@ -259,10 +259,9 @@ enum Reach {
 /// the predicate from the registry rather than from a hand-picked list is what
 /// stops it drifting back into an arbitrary subset: the four hand-picked
 /// reserved ranges it replaced were chosen one at a time, and left all of
-/// `0.0.0.0/8` but
-/// `0.0.0.0`, and all of `240.0.0.0/4` but the broadcast address, reachable —
-/// those two were covered only because `std` happened to have a predicate for
-/// each.
+/// `0.0.0.0/8` but `0.0.0.0`, and all of `240.0.0.0/4` but the broadcast
+/// address, reachable — those two addresses were covered only because `std`
+/// happened to have a predicate for each.
 ///
 /// Two kinds of registry row are deliberately absent, because neither can
 /// change an answer: a `Blocked` row wholly inside another `Blocked` row, and

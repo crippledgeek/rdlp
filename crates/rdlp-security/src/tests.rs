@@ -565,19 +565,27 @@ fn every_registry_row_spans_the_addresses_it_claims_to() {
     // `spans` is this test, `pins` is every_registry_row_is_pinned_at_both_ends,
     // `nbr` is addresses_immediately_outside_every_row_agree_with_the_registry:
     //
-    //     mutation                       spans  pins  nbr
-    //     implementation row narrowed     pass  FAIL  pass
-    //     test CIDR narrowed              FAIL  FAIL  FAIL
-    //     implementation row widened      pass  pass  FAIL
-    //     test CIDR widened               FAIL  pass  pass
-    //     both tables narrowed together   FAIL  pass  pass
+    //     mutation                             spans  pins  nbr
+    //     impl 172.16.0.0/12 -> /16             pass  FAIL  pass
+    //     test CIDR 172.16.0.0/12 -> /16        FAIL  FAIL  FAIL
+    //     impl 192.0.2.0/24 -> /23              pass  pass  FAIL
+    //     test CIDR 192.0.2.0/24 -> /23         FAIL  pass  pass
+    //     both tables 172.16.0.0/12 -> /16      FAIL  pass  pass
     //
-    // So this test is the ONLY guard against the last two. A widened test
-    // CIDR leaves both literals inside the row, so the pins still agree, and
-    // it moves the neighbour probes outward with it, so the one address that
-    // would disagree is never tried. A co-ordinated edit moves the model and
-    // the expectation together, which is the hole the literals exist to
-    // close. The other two rows are covered without it.
+    // The rows name specific mutations, not classes, because two of these
+    // cells depend on the row chosen: narrowing an implementation row that
+    // has a nested row below it DOES trip the neighbour test (192.0.0.0/24
+    // -> /29 makes the 192.0.0.8 probe disagree), where narrowing
+    // 172.16.0.0/12 does not.
+    //
+    // What generalises is the bottom two rows, and they are why this test
+    // exists: a mutation of the TEST table is unreachable by anything
+    // outside these three, and both of these are invisible to the other two.
+    // A widened test CIDR leaves both literals inside the row, so the pins
+    // still agree, and it moves the neighbour probes outward with it, so the
+    // one address that would disagree is never tried. A co-ordinated edit
+    // moves the model and the expectation together, which is the hole the
+    // literals exist to close. The other three rows are caught without it.
     for (cidr, first, last, _) in EXPECTED_REGISTRY {
         let net: ipnet::Ipv4Net = cidr.parse().expect("test CIDR must parse");
         assert_eq!(net.network().to_string(), *first, "first address of {cidr}");
