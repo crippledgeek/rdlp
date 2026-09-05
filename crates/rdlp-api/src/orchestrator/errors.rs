@@ -100,25 +100,26 @@ pub enum OrchestratorError {
     InteractiveNotConfigured,
 
     /// Catch-all for errors with context chains from internal operations.
-    #[error(transparent)]
+    /// Catch-all for `anyhow`-carried failures.
+    ///
+    /// NOT `#[error(transparent)]`: `anyhow::Error` is a container whose text
+    /// is our own `.context(...)` strings, assembled by `format!` over values
+    /// that can include a URL — unlike `io::Error`, whose message is
+    /// OS-generated and inert. Rendering it explicitly is what lets it be
+    /// redacted.
+    #[error("{}", redact(&_0.to_string()))]
     Other(#[from] anyhow::Error),
 }
 
 /// Debug redacts the free text while keeping the structure.
 ///
 /// The derived Debug printed each payload verbatim, so `{e:?}` leaked what
-/// Display now strips. Typed sources keep the derive's shape: `RdlpError`
-/// redacts in its own Debug, and `io::Error`/`anyhow::Error` render their own
-/// crate's text.
+/// Display now strips. `RdlpError` and `io::Error` keep the derive's shape —
+/// the first redacts in its own Debug, the second's message is OS-generated.
+/// `anyhow::Error` does NOT: its text is our own `.context(...)` strings, so
+/// it is redacted here like any other free text.
 impl std::fmt::Debug for OrchestratorError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        /// A newtype variant carrying operator-assembled free text.
-        macro_rules! text {
-            ($name:literal, $t:expr) => {
-                f.debug_tuple($name).field(&redact($t)).finish()
-            };
-        }
-
         match self {
             Self::NoExtractor { url } => f.debug_struct("NoExtractor").field("url", url).finish(),
             Self::NoDownloader { url } => f.debug_struct("NoDownloader").field("url", url).finish(),
@@ -129,13 +130,24 @@ impl std::fmt::Debug for OrchestratorError {
             Self::DownloadFailed(e) => f.debug_tuple("DownloadFailed").field(e).finish(),
             Self::ChunkMergeFailed(e) => f.debug_tuple("ChunkMergeFailed").field(e).finish(),
             Self::Io(e) => f.debug_tuple("Io").field(e).finish(),
-            Self::Other(e) => f.debug_tuple("Other").field(e).finish(),
-            Self::InvalidFormatSelector(t) => text!("InvalidFormatSelector", t),
-            Self::PostProcessingFailed(t) => text!("PostProcessingFailed", t),
-            Self::ResumeDetectionFailed(t) => text!("ResumeDetectionFailed", t),
-            Self::PathGenerationFailed(t) => text!("PathGenerationFailed", t),
-            Self::IoError(t) => text!("IoError", t),
-            Self::Configuration(t) => text!("Configuration", t),
+            Self::Other(e) => f
+                .debug_tuple("Other")
+                .field(&redact(&e.to_string()))
+                .finish(),
+            Self::InvalidFormatSelector(t) => {
+                rdlp_redact::redacted_debug_tuple!(f, "InvalidFormatSelector", t)
+            }
+            Self::PostProcessingFailed(t) => {
+                rdlp_redact::redacted_debug_tuple!(f, "PostProcessingFailed", t)
+            }
+            Self::ResumeDetectionFailed(t) => {
+                rdlp_redact::redacted_debug_tuple!(f, "ResumeDetectionFailed", t)
+            }
+            Self::PathGenerationFailed(t) => {
+                rdlp_redact::redacted_debug_tuple!(f, "PathGenerationFailed", t)
+            }
+            Self::IoError(t) => rdlp_redact::redacted_debug_tuple!(f, "IoError", t),
+            Self::Configuration(t) => rdlp_redact::redacted_debug_tuple!(f, "Configuration", t),
             Self::UserCancelled => f.write_str("UserCancelled"),
             Self::NoFormat => f.write_str("NoFormat"),
             Self::InteractiveNotConfigured => f.write_str("InteractiveNotConfigured"),

@@ -169,7 +169,7 @@ impl From<&Event> for EventDto {
                 json!({
                     "attempt": attempt,
                     "max_attempts": max_attempts,
-                    "reason": reason,
+                    "reason": rdlp_redact::redact_str(reason),
                 }),
             ),
 

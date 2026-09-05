@@ -73,7 +73,7 @@ pub enum RdlpApiError {
     },
 
     /// Feature not available on this platform.
-    #[error("Unsupported platform for feature: {feature}")]
+    #[error("Unsupported platform for feature: {}", redact(feature))]
     UnsupportedPlatform {
         /// The feature that is not available.
         feature: String,
@@ -145,7 +145,7 @@ impl std::fmt::Debug for RdlpApiError {
                 .finish(),
             Self::UnsupportedPlatform { feature } => f
                 .debug_struct("UnsupportedPlatform")
-                .field("feature", feature)
+                .field("feature", &redact(feature))
                 .finish(),
             Self::UserCancelled => f.write_str("UserCancelled"),
         }

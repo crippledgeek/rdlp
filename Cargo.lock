@@ -6066,6 +6066,7 @@ dependencies = [
  "async-trait",
  "backon",
  "dirs",
+ "http",
  "log",
  "rdlp-redact",
  "rdlp-types",

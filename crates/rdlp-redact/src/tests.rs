@@ -132,8 +132,7 @@ fn acceptance_328_presigned_and_oauth_code_redacted_host_preserved() {
 #[test]
 fn a_credential_parameter_inside_parentheses_keeps_its_closing_paren() {
     // `wreq::Error`'s Display renders `for uri (<url>)`, so a credential in
-    // the LAST query parameter sits immediately before `)`. Redaction was
-    // always correct here; the message was malformed, losing the paren.
+    // the LAST query parameter sits immediately before `)`.
     assert_eq!(
         redact_str("for uri (https://cdn.example.com/v.mp4?token=abc123)"),
         "for uri (https://cdn.example.com/v.mp4?token=***)"
@@ -142,18 +141,58 @@ fn a_credential_parameter_inside_parentheses_keeps_its_closing_paren() {
 
 #[test]
 fn a_credential_containing_a_paren_is_redacted_to_its_end() {
-    // The converse, and the reason `)` is NOT simply excluded from the value
-    // class: RFC 3986 §2.2 makes it a legal unencoded sub-delim, so a value
-    // may contain one. Excluding it stopped the match early and left the tail
-    // of the secret in the clear.
+    // Why `)` is NOT excluded from the value class: RFC 3986 §2.2 makes it a
+    // legal unencoded sub-delim, so excluding it stopped the match early and
+    // left the tail of the secret in the clear.
     assert_eq!(
         redact_str("https://h/p?token=abc)REST_OF_SECRET"),
         "https://h/p?token=***"
     );
-    // Both at once: an embedded paren AND the wrapper.
     assert_eq!(
         redact_str("for uri (https://h/p?token=abc)REST)"),
         "for uri (https://h/p?token=***)"
+    );
+}
+
+#[test]
+fn a_repeated_credential_parameter_is_redacted_every_time() {
+    // Duplicate query keys are legal, and arise from redirect chains and from
+    // retry wrappers that append their own auth parameter without checking.
+    //
+    // An earlier fix consumed the delimiter after the value so it could
+    // re-emit it; that moved the scan cursor past the `&` the NEXT occurrence
+    // needs for its own boundary anchor, and only the first was redacted. The
+    // delimiter is no longer part of the match.
+    assert_eq!(
+        redact_str("https://h/p?token=aaa&token=bbb"),
+        "https://h/p?token=***&token=***"
+    );
+    assert_eq!(
+        redact_str("?token=a&token=b&token=c"),
+        "?token=***&token=***&token=***"
+    );
+}
+
+#[test]
+fn a_credential_named_in_free_text_after_a_space_is_redacted() {
+    // Whitespace is in the boundary set, so a credential mentioned in prose —
+    // which is how these strings are assembled — is caught, not just one in a
+    // query string.
+    assert_eq!(redact_str("token=aaa token=bbb"), "token=*** token=***");
+    assert_eq!(
+        redact_str("request failed with api_key=SECRET"),
+        "request failed with api_key=***"
+    );
+}
+
+#[test]
+fn a_hyphenated_name_is_not_matched_by_the_generic_pattern() {
+    // The boundary set must never admit `-`: the generic `signature=` pattern
+    // would then match inside `X-Amz-Signature` and re-emit it lower-cased.
+    // This is the property any widening of that set has to preserve.
+    assert_eq!(
+        redact_str("https://cdn/s?X-Amz-Signature=DEADBEEF"),
+        "https://cdn/s?X-Amz-Signature=***"
     );
 }
 
@@ -166,11 +205,19 @@ fn userinfo_and_a_query_credential_are_both_stripped_in_one_pass() {
 }
 
 #[test]
-fn an_adjacent_credential_parameter_still_matches() {
-    // The match consumes its trailing delimiter, so `${3}` has to put it back
-    // or the next parameter loses the `&` its own pattern anchors on.
+fn an_adjacent_credential_parameter_of_a_different_name_still_matches() {
     assert_eq!(
         redact_str("https://h/p?token=aaa&api_key=bbb"),
         "https://h/p?token=***&api_key=***"
+    );
+}
+
+#[test]
+fn a_message_with_no_credential_is_left_alone() {
+    // The control. Over-redaction would cost the diagnostic the message
+    // exists to carry, so the host and path must survive.
+    assert_eq!(
+        redact_str("for uri (https://cdn.example.com/v.mp4)"),
+        "for uri (https://cdn.example.com/v.mp4)"
     );
 }

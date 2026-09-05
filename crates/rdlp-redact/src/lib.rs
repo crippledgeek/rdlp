@@ -20,31 +20,37 @@ use regex::Regex;
 ///   `signature` / `sig` patterns.
 /// - Longer param names precede shorter to avoid substring shadowing
 ///   (`access_token` before `token`, `otp_code` before `otp`).
-/// - Generic query-parameter patterns use a `(^|[?&])` capture group for the
+/// - Generic query-parameter patterns use a `(^|[?&\s])` capture group for the
 ///   boundary separator and re-emit it via `${1}` in the replacement, so that
 ///   the `?`/`&` is preserved but the pattern only matches at a real parameter
 ///   start (not as a suffix inside a longer key like `X-Amz-Signature`).
 ///   The `^` alternative also matches bare credential fragments with no leading
 ///   separator (e.g. `token=secret` as a standalone log string).
 /// - The userinfo (`//user:pass@host`) pattern is a standalone structural rule.
+///
+/// Each entry pairs a pattern with the parameter NAME to re-emit. Every
+/// pattern exposes group 1 = the optional boundary character and group 2 = the
+/// value; `redact_str` builds the replacement from those, which is what lets
+/// the trailing-paren handling live in code rather than in 22 replacement
+/// strings.
 #[allow(clippy::expect_used)]
-static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 22]> = LazyLock::new(|| {
+static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 21]> = LazyLock::new(|| {
     [
         // ── AWS SigV4 exact-case — no boundary group needed (unique prefix) ────
         (
-            Regex::new(r"X-Amz-Security-Token=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "X-Amz-Security-Token=***${1}${2}",
+            Regex::new(r"()X-Amz-Security-Token=([^&\s]+)").expect("valid regex"),
+            "X-Amz-Security-Token",
         ),
         (
-            Regex::new(r"X-Amz-Signature=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "X-Amz-Signature=***${1}${2}",
+            Regex::new(r"()X-Amz-Signature=([^&\s]+)").expect("valid regex"),
+            "X-Amz-Signature",
         ),
         (
-            Regex::new(r"X-Amz-Credential=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "X-Amz-Credential=***${1}${2}",
+            Regex::new(r"()X-Amz-Credential=([^&\s]+)").expect("valid regex"),
+            "X-Amz-Credential",
         ),
         // ── Longer param names first (boundary-capturing group) ────────────────
-        // Pattern: `(^|[?&])name=[^&\s]*?(\)?)([&\s]|$)`
+        // Pattern: `(^|[?&\s])name=[^&\s]*?(\)?)([&\s]|$)`
         //   →  replacement: `${1}name=***${2}${3}`
         //
         // The value class deliberately still ALLOWS `)`, because RFC 3986 §2.2
@@ -56,88 +62,99 @@ static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 22]> = LazyLock::new(|| {
         // expands past an embedded `)` when more value follows. `${3}` puts
         // back the delimiter the match consumed, so an adjacent credential
         // parameter still matches on its own pass.
-        // The `(^|[?&])` captures the separator (or the empty start-of-string) and
+        // The `(^|[?&\s])` captures the separator (or the empty start-of-string) and
         // re-emits it via `${1}`, so that:
         //   • bare fragments like `token=secret` (no leading `?`/`&`) are redacted, and
+        //   • a credential named in free text after a space (`failed with
+        //     token=SECRET`) is still redacted, and
         //   • hyphenated names like `X-Amz-Signature` are NOT matched by the generic
-        //     `signature=` pattern (the `-` before it is neither `^` nor `?`/`&`).
+        //     `signature=` pattern — `-` is not in the boundary set, which is the
+        //     property that must survive any widening of it.
         (
-            Regex::new(r"(?i)(^|[?&])access_token=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "${1}access_token=***${2}${3}",
+            Regex::new(r"(?i)(^|[?&\s])access_token=([^&\s]+)").expect("valid regex"),
+            "access_token",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])client_secret=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "${1}client_secret=***${2}${3}",
+            Regex::new(r"(?i)(^|[?&\s])client_secret=([^&\s]+)").expect("valid regex"),
+            "client_secret",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])id_token=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "${1}id_token=***${2}${3}",
+            Regex::new(r"(?i)(^|[?&\s])id_token=([^&\s]+)").expect("valid regex"),
+            "id_token",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])api_key=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "${1}api_key=***${2}${3}",
+            Regex::new(r"(?i)(^|[?&\s])api_key=([^&\s]+)").expect("valid regex"),
+            "api_key",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])otp_code=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "${1}otp_code=***${2}${3}",
+            Regex::new(r"(?i)(^|[?&\s])otp_code=([^&\s]+)").expect("valid regex"),
+            "otp_code",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])authorization=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "${1}authorization=***${2}${3}",
+            Regex::new(r"(?i)(^|[?&\s])authorization=([^&\s]+)").expect("valid regex"),
+            "authorization",
         ),
         // ── Generic shorter names (boundary-capturing group) ───────────────────
         (
-            Regex::new(r"(?i)(^|[?&])token=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "${1}token=***${2}${3}",
+            Regex::new(r"(?i)(^|[?&\s])token=([^&\s]+)").expect("valid regex"),
+            "token",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])key=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "${1}key=***${2}${3}",
+            Regex::new(r"(?i)(^|[?&\s])key=([^&\s]+)").expect("valid regex"),
+            "key",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])password=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "${1}password=***${2}${3}",
+            Regex::new(r"(?i)(^|[?&\s])password=([^&\s]+)").expect("valid regex"),
+            "password",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])secret=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "${1}secret=***${2}${3}",
+            Regex::new(r"(?i)(^|[?&\s])secret=([^&\s]+)").expect("valid regex"),
+            "secret",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])bearer=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "${1}bearer=***${2}${3}",
+            Regex::new(r"(?i)(^|[?&\s])bearer=([^&\s]+)").expect("valid regex"),
+            "bearer",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])signature=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "${1}signature=***${2}${3}",
+            Regex::new(r"(?i)(^|[?&\s])signature=([^&\s]+)").expect("valid regex"),
+            "signature",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])sig=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "${1}sig=***${2}${3}",
+            Regex::new(r"(?i)(^|[?&\s])sig=([^&\s]+)").expect("valid regex"),
+            "sig",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])hmac=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "${1}hmac=***${2}${3}",
+            Regex::new(r"(?i)(^|[?&\s])hmac=([^&\s]+)").expect("valid regex"),
+            "hmac",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])auth=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "${1}auth=***${2}${3}",
+            Regex::new(r"(?i)(^|[?&\s])auth=([^&\s]+)").expect("valid regex"),
+            "auth",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])session=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "${1}session=***${2}${3}",
+            Regex::new(r"(?i)(^|[?&\s])session=([^&\s]+)").expect("valid regex"),
+            "session",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])code=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "${1}code=***${2}${3}",
+            Regex::new(r"(?i)(^|[?&\s])code=([^&\s]+)").expect("valid regex"),
+            "code",
         ),
         (
-            Regex::new(r"(?i)(^|[?&])otp=[^&\s]*?(\)?)([&\s]|$)").expect("valid regex"),
-            "${1}otp=***${2}${3}",
+            Regex::new(r"(?i)(^|[?&\s])otp=([^&\s]+)").expect("valid regex"),
+            "otp",
         ),
         // ── Userinfo credentials in URL authority (`//user:pass@host`) ─────────
-        (Regex::new(r"//[^@\s/]+@").expect("valid regex"), "//*:*@"),
     ]
 });
+
+/// Userinfo credentials in a URL authority (`//user:pass@host`).
+///
+/// Kept out of [`SANITIZE_PATTERNS`] because it has no `name=value` shape:
+/// there is no parameter name to re-emit and no value whose trailing `)` needs
+/// giving back, so it uses a plain replacement.
+#[allow(clippy::expect_used)]
+static USERINFO_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"//[^@\s/]+@").expect("valid regex"));
 
 /// Redact credential-bearing query parameters and userinfo from a URL string.
 ///
@@ -153,8 +170,34 @@ static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 22]> = LazyLock::new(|| {
 #[must_use]
 pub fn redact_str(s: &str) -> String {
     let mut result = Cow::Borrowed(s);
-    for (re, replacement) in SANITIZE_PATTERNS.iter() {
-        if let Cow::Owned(replaced) = re.replace_all(&result, *replacement) {
+    if let Cow::Owned(replaced) = USERINFO_PATTERN.replace_all(&result, "//*:*@") {
+        result = Cow::Owned(replaced);
+    }
+    for (re, name) in SANITIZE_PATTERNS.iter() {
+        let replaced = re.replace_all(&result, |caps: &regex::Captures<'_>| {
+            let boundary = caps.get(1).map_or("", |m| m.as_str());
+            let value = caps.get(2).map_or("", |m| m.as_str());
+            // The value class deliberately ADMITS `)`, because RFC 3986 §2.2
+            // makes it a legal unencoded sub-delim — excluding it would stop
+            // the match at the first `)` and leave the rest of a secret in the
+            // clear. Trailing `)` are given back instead, so the parentheses
+            // `wreq::Error` wraps a URI in (`for uri (…)`) survive.
+            //
+            // The delimiter after the value is NOT part of the match. Consuming
+            // it (an earlier attempt) moved the scan cursor past the `&` that
+            // the NEXT occurrence of the same parameter needs for its own
+            // `(^|[?&\s])` anchor, so `token=a&token=b` redacted only the first.
+            let trailing_parens = value.len() - value.trim_end_matches(')').len();
+            let mut out = String::with_capacity(boundary.len() + name.len() + 4 + trailing_parens);
+            out.push_str(boundary);
+            out.push_str(name);
+            out.push_str("=***");
+            for _ in 0..trailing_parens {
+                out.push(')');
+            }
+            out
+        });
+        if let Cow::Owned(replaced) = replaced {
             result = Cow::Owned(replaced);
         }
     }
@@ -252,3 +295,27 @@ impl_redacting_traits!(RedactedUrlBuf);
 
 #[cfg(test)]
 mod tests;
+
+/// Render a newtype error variant's `Debug` with its free text redacted.
+///
+/// Two crates hand-write `Debug` for an error enum whose newtype variants
+/// carry operator-assembled text; both need the same three lines. The
+/// redaction lives here so neither can drift from it.
+///
+/// ```
+/// # use std::fmt;
+/// # struct E(String);
+/// impl fmt::Debug for E {
+///     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+///         rdlp_redact::redacted_debug_tuple!(f, "E", &self.0)
+///     }
+/// }
+/// ```
+#[macro_export]
+macro_rules! redacted_debug_tuple {
+    ($f:expr, $name:literal, $text:expr) => {
+        $f.debug_tuple($name)
+            .field(&$crate::redact_str($text))
+            .finish()
+    };
+}

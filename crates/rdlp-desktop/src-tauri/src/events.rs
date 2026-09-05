@@ -56,6 +56,12 @@ pub struct DownloadErrorPayload {
     /// The UUID of the download job.
     pub(crate) job_id: String,
     /// Human-readable error message.
+    ///
+    /// Its text comes from `RdlpApiError::user_message()`, which redacts at
+    /// its own source; the serializer is belt-and-braces, and keeps the rule
+    /// uniform — every free-text `String` on a `Serialize` type carries it, so
+    /// a reader never has to trace provenance to know whether one is missing.
+    #[serde(serialize_with = "crate::error::serialize_redacted")]
     pub(crate) error: String,
     /// Whether the frontend should offer a retry button.
     pub(crate) retryable: bool,

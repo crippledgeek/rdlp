@@ -23,6 +23,8 @@ log = { workspace = true }
 backon = { workspace = true }
 
 [dev-dependencies]
+# Building a `wreq::Response` in tests goes through `From<http::Response<T>>`.
+http = "1"
 tokio = { workspace = true, features = ["test-util"] }
 tempfile = { workspace = true }
 

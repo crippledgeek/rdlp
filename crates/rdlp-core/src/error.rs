@@ -146,12 +146,6 @@ impl std::fmt::Debug for RdlpError {
                     .finish()
             };
         }
-        /// One arm's worth: a newtype variant carrying free text.
-        macro_rules! text {
-            ($name:literal, $text:expr) => {
-                f.debug_tuple($name).field(&redact($text)).finish()
-            };
-        }
 
         match self {
             Self::Network { message, url } => with_url!("Network", message, url),
@@ -162,17 +156,17 @@ impl std::fmt::Debug for RdlpError {
                 .field("status", status)
                 .field("reason", &redact(reason))
                 .finish(),
-            Self::NoExtractor(t) => text!("NoExtractor", t),
-            Self::InvalidUrl(t) => text!("InvalidUrl", t),
-            Self::PostProcess(t) => text!("PostProcess", t),
-            Self::FFmpeg(t) => text!("FFmpeg", t),
-            Self::JavaScript(t) => text!("JavaScript", t),
-            Self::Cookie(t) => text!("Cookie", t),
-            Self::Plugin(t) => text!("Plugin", t),
-            Self::FormatSelection(t) => text!("FormatSelection", t),
-            Self::Config(t) => text!("Config", t),
-            Self::Unsupported(t) => text!("Unsupported", t),
-            Self::Other(t) => text!("Other", t),
+            Self::NoExtractor(t) => rdlp_redact::redacted_debug_tuple!(f, "NoExtractor", t),
+            Self::InvalidUrl(t) => rdlp_redact::redacted_debug_tuple!(f, "InvalidUrl", t),
+            Self::PostProcess(t) => rdlp_redact::redacted_debug_tuple!(f, "PostProcess", t),
+            Self::FFmpeg(t) => rdlp_redact::redacted_debug_tuple!(f, "FFmpeg", t),
+            Self::JavaScript(t) => rdlp_redact::redacted_debug_tuple!(f, "JavaScript", t),
+            Self::Cookie(t) => rdlp_redact::redacted_debug_tuple!(f, "Cookie", t),
+            Self::Plugin(t) => rdlp_redact::redacted_debug_tuple!(f, "Plugin", t),
+            Self::FormatSelection(t) => rdlp_redact::redacted_debug_tuple!(f, "FormatSelection", t),
+            Self::Config(t) => rdlp_redact::redacted_debug_tuple!(f, "Config", t),
+            Self::Unsupported(t) => rdlp_redact::redacted_debug_tuple!(f, "Unsupported", t),
+            Self::Other(t) => rdlp_redact::redacted_debug_tuple!(f, "Other", t),
             // Typed sources: their Display is the crate's own and carries no
             // URL we assembled, so they keep the derive's shape.
             Self::Io(e) => f.debug_tuple("Io").field(e).finish(),
@@ -438,6 +432,62 @@ error following redirect for uri (https://admin:hunter2@cdn.example.com/v.mp4)";
             let dbg = format!("{e:?}");
             assert!(!dbg.contains("hunter2"), "Debug leaked: {dbg}");
         }
+    }
+
+    // ── check_http_response ─────────────────────────────────────────────
+    //
+    // Added because `cargo mutants` reported both of its mutations MISSED:
+    // the whole function could be replaced with `Ok(())`, and the `!` in its
+    // status test deleted, with the entire suite still green. Nothing
+    // exercised it — it is the error gate for every HTTP response in the
+    // workspace.
+    //
+    // These are constructed rather than driven through a live client, because
+    // `wreq::Response` cannot be built directly; `http::Response` converts.
+
+    fn response_with_status(code: u16) -> wreq::Response {
+        wreq::Response::from(
+            http::Response::builder()
+                .status(code)
+                .body(wreq::Body::default())
+                .expect("valid response"),
+        )
+    }
+
+    #[test]
+    fn check_http_response_accepts_success_statuses() {
+        for code in [200_u16, 201, 204, 299] {
+            assert!(
+                check_http_response(&response_with_status(code)).is_ok(),
+                "{code} should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn check_http_response_rejects_non_success_statuses() {
+        // Kills "replace with Ok(())": a 404 must be an Err.
+        for code in [300_u16, 400, 404, 500] {
+            // `expect_err` takes a plain &str, so a `{code}` there would be
+            // literal rather than the status that failed.
+            let Err(err) = check_http_response(&response_with_status(code)) else {
+                panic!("{code} should be rejected");
+            };
+            match err {
+                RdlpError::Http { status, .. } => assert_eq!(status, code),
+                other => panic!("expected Http, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn check_http_response_reports_the_status_and_its_reason() {
+        // Kills "delete !": with the negation gone, 200 would error and 404
+        // would pass, so pinning BOTH directions is what makes the operator
+        // deletion detectable.
+        let err =
+            check_http_response(&response_with_status(404)).expect_err("404 should be rejected");
+        assert_eq!(err.to_string(), "HTTP error 404: Not Found");
     }
 }
 

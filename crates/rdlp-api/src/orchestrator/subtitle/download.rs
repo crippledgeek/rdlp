@@ -201,9 +201,14 @@ impl Orchestrator {
                     downloaded.push((track.language.clone(), sub_path));
                 }
                 Err(e) => {
+                    // `e` is an `anyhow::Error` that may wrap a `wreq::Error`,
+                    // whose Display prints the request URI verbatim. This log
+                    // is outside every error type this crate redacts at its
+                    // own boundary, so it redacts here.
                     warn!(
                         lang:% = track.language;
-                        "Failed to download subtitle: {e}"
+                        "Failed to download subtitle: {}",
+                        rdlp_redact::redact_str(&e.to_string())
                     );
                 }
             }
