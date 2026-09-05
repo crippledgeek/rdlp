@@ -52,6 +52,19 @@ FILES=(
 # field directly — so Display/Debug redaction does nothing for them. Every
 # free-text `String` field needs `#[serde(serialize_with = "serialize_redacted")]`.
 # Both files below have already leaked once through a field that lacked it.
+# Hand-written JSON builders carrying event free text. These have no derive
+# and so no compiler backstop at all: a new `json!({ "message": message })` arm
+# compiles, passes clippy, passes the tests, and leaks — which `dto.rs` did
+# twice during this branch, for `Warning`/`Debug` and then `Retrying`. By the
+# argument in this gate's own header, the surface with the worst record is the
+# one that most needs watching.
+DTO_FILES=(
+    "crates/rdlp-api/src/dto.rs"
+)
+
+# Free-text JSON keys: the value must be routed through a redacting call.
+DTO_FREE_TEXT_KEYS='message|reason|error'
+
 # Scope is ERROR and EVENT payload types, deliberately not data models. On a
 # data model a `url: String` is the payload — the frontend needs it to fetch —
 # so the rule "every free-text String is redacted" inverts there and would
@@ -210,14 +223,49 @@ scan_serde_file() {
             guarded = 0
             next
         }
-        # Any other non-blank line clears a pending attribute.
+        # Any other non-blank line clears a pending attribute. Doc comments
+        # are skipped above and so do NOT clear it, which is deliberate but
+        # asymmetric: a non-serde attribute between the guard and the field
+        # (`#[allow(dead_code)]`) DOES clear it and the field is flagged. A
+        # `)]` inside a string literal in a wrapped attribute also closes it
+        # early. Both err toward flagging, so neither is a hole — recorded so
+        # the next author who hits one reads it as a limit, not a bug.
         /[^ \t]/ { guarded = 0 }
 
         function close_serde_attr() {
             in_attr = 0
+            # Strip from the attribute close onward BEFORE testing it: the
+            # accumulation includes any trailing comment, and a comment naming
+            # the serializer is not a guard. scan_file does exactly this at its
+            # args step; these are two separate awk programs, so the rule has to
+            # be stated in both — which is how they drifted, and this is the
+            # only shared point either has.
+            sub(/\)\].*$/, "", attr_acc)
             if (attr_acc ~ /serialize_with[ \t]*=[ \t]*"([A-Za-z_]+::)*serialize_redacted"/) {
                 guarded = 1
             }
+        }
+    ' "$file"
+}
+
+# A free-text JSON value must be routed through `redact_str(` or through
+# `user_message()`, which redacts at its own source.
+scan_dto_file() {
+    local file="$1"
+    [ -f "$file" ] || {
+        echo "check-error-attr-redaction: missing $file" >&2
+        return 2
+    }
+    awk -v keys="$DTO_FREE_TEXT_KEYS" '
+        /^[ \t]*\/\// { next }
+        {
+            line = $0
+            sub(/\/\/.*$/, "", line)
+            if (line !~ ("\"(" keys ")\"[ \t]*:")) next
+            if (line ~ /redact_str\(/) next
+            if (line ~ /user_message\(\)/) next
+            gsub(/[ \t]+/, " ", line)
+            printf "%d:%s   [free-text JSON value not redacted]\n", NR, line
         }
     ' "$file"
 }
@@ -292,6 +340,12 @@ if [ "${1:-}" = "--self-test" ]; then
     serde_flags "unguarded Vec<String> field" '    pub(crate) leaks: Vec<String>,'
     serde_flags "unguarded Box<str> field" '    pub(crate) leak: Box<str>,'
     serde_flags "unguarded Option<String> field" '    pub(crate) reason: Option<String>,'
+    serde_flags "serde attribute with the serializer only in its trailing comment" '    #[serde(rename = "msg")] // serialize_with = "serialize_redacted"
+    pub(crate) message: String,'
+    serde_flags "wrapped attribute, serializer only in the trailing comment" '    #[serde(
+        rename = "msg"
+    )] // serialize_with = "serialize_redacted"
+    pub(crate) message: String,'
     serde_flags "serialize_with only in a trailing comment" '    pub(crate) leak: String, // serialize_with = "serialize_redacted"'
     serde_flags "wrapped serde attribute WITHOUT the serializer" '    #[serde(
         rename = "msg"
@@ -315,6 +369,27 @@ if [ "${1:-}" = "--self-test" ]; then
     #[error("M failed: {}", redact(message))]
     M { message: String },'
 
+    dto_flags() {
+        printf '%s\n' "$2" > "$canary"
+        if [ -z "$(scan_dto_file "$canary")" ]; then
+            echo "check-error-attr-redaction: SELF-TEST FAILED — dto missed: $1" >&2
+            exit 1
+        fi
+    }
+    dto_clean() {
+        printf '%s\n' "$2" > "$canary"
+        if [ -n "$(scan_dto_file "$canary")" ]; then
+            echo "check-error-attr-redaction: SELF-TEST FAILED — dto false positive: $1" >&2
+            exit 1
+        fi
+    }
+    dto_flags "bare message value" '                json!({ "message": message }),'
+    dto_flags "bare reason value" '                    "reason": reason,'
+    dto_flags "redact named only in a comment" '                json!({ "message": message }), // redact_str( elsewhere'
+    dto_clean "routed through redact_str" '                json!({ "message": rdlp_redact::redact_str(message) }),'
+    dto_clean "routed through user_message" '                json!({ "message": AsRef::<str>::as_ref(&error.user_message()) }),'
+    dto_clean "non-free-text key" '                json!({ "url": url }),'
+
     echo "$SENTINEL"
     exit 0
 fi
@@ -329,6 +404,13 @@ done
 
 for f in "${SERDE_FILES[@]}"; do
     found="$(scan_serde_file "$f")" || exit 2
+    if [ -n "$found" ]; then
+        offenders="${offenders}${f}:"$'\n'"${found}"$'\n'
+    fi
+done
+
+for f in "${DTO_FILES[@]}"; do
+    found="$(scan_dto_file "$f")" || exit 2
     if [ -n "$found" ]; then
         offenders="${offenders}${f}:"$'\n'"${found}"$'\n'
     fi

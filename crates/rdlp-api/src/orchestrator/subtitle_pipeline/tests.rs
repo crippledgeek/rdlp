@@ -274,11 +274,18 @@ async fn test_validate_urls_auth_reason_on_403() {
 /// a live server.
 ///
 /// Measured against wreq 6.0.0-rc.28: its `Error` Display renders
-/// `error sending request for uri (<uri>)`, and it STRIPS userinfo from that
-/// uri — but keeps the query string intact. So `admin:hunter2@` is not the
-/// leak here; `?token=…` is, and that is how signed CDN URLs actually carry
-/// credentials. A first version of this test used userinfo and passed with the
-/// redaction removed, proving nothing.
+/// `error sending request for uri (<uri>)`, and for a request built through
+/// `RequestBuilder` it STRIPS userinfo from that uri — but keeps the query
+/// string intact. So `admin:hunter2@` is not the leak on this path; `?token=…`
+/// is, and that is how signed CDN URLs actually carry credentials. A first
+/// version of this test used userinfo and passed with the redaction removed,
+/// proving nothing.
+///
+/// The strip is a property of the builder path, not of wreq errors generally:
+/// an error raised while following a redirect carries the target taken from
+/// the `Location` header, which never passes through that stripping. So
+/// userinfo CAN appear there — `USERINFO_PATTERN` covers it, and the
+/// redaction here is what makes that moot.
 ///
 /// Port 1 refuses immediately, so the error is real with no mock and no
 /// network. `validate_single_url` is a plain private async fn taking a
