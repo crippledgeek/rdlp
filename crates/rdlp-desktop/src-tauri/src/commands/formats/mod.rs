@@ -49,10 +49,21 @@ pub async fn formats(
         message: e.to_string(),
     })?;
 
-    // 2. Extract metadata
+    // 2. Extract metadata. The shared client was built once from
+    // `config.toml`; the GUI's network settings live in `AppSettings`, so
+    // they can only reach this path as a per-call override (#691). Clone out
+    // of the guard: it must not be held across the `.await`.
+    let network = {
+        let settings = state
+            .settings
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        crate::commands::network::settings_network_options(&settings)?
+    };
+
     let info_dicts = state
         .client
-        .extract_info(&url)
+        .extract_info(&url, &network)
         .await
         .map_err(AppError::from)?;
 

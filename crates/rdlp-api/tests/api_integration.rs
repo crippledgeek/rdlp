@@ -291,7 +291,10 @@ async fn test_extract_info_unsupported_url() {
     let client = test_client();
 
     let result = client
-        .extract_info("https://totally-unknown-site.example.com/video123")
+        .extract_info(
+            "https://totally-unknown-site.example.com/video123",
+            &rdlp_api::request::NetworkOptions::default(),
+        )
         .await;
     assert!(result.is_err(), "Should fail for unsupported URL");
 

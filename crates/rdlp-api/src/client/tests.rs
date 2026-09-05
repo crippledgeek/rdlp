@@ -64,7 +64,9 @@ fn test_build_config_applies_overrides() {
         ..Default::default()
     };
 
-    let config = client.build_config(&request);
+    let config = client
+        .build_config(&request)
+        .expect("merged config must be valid");
     assert_eq!(
         config.output_directory,
         std::path::PathBuf::from("/tmp/test")
@@ -85,7 +87,9 @@ fn test_build_config_preserves_base_when_no_override() {
 
     let client = RdlpClient::builder().config(base_config).build().unwrap();
     let request = DownloadRequest::new("http://example.com");
-    let config = client.build_config(&request);
+    let config = client
+        .build_config(&request)
+        .expect("merged config must be valid");
 
     assert!(config.verbose);
     assert!(config.overwrite);
@@ -103,7 +107,9 @@ fn test_build_config_preserves_remux_from_base_config() {
     let client = RdlpClient::builder().config(base_config).build().unwrap();
     // Default request has all None — should NOT overwrite config values
     let request = DownloadRequest::new("http://example.com");
-    let config = client.build_config(&request);
+    let config = client
+        .build_config(&request)
+        .expect("merged config must be valid");
 
     assert_eq!(
         config.postprocess.remux_container,
@@ -128,7 +134,9 @@ fn test_build_config_verbose_none_preserves_base() {
     };
     let client = RdlpClient::builder().config(base_config).build().unwrap();
     let request = DownloadRequest::new("http://example.com");
-    let config = client.build_config(&request);
+    let config = client
+        .build_config(&request)
+        .expect("merged config must be valid");
     assert!(
         config.verbose,
         "verbose must be preserved when request.verbose is None"
@@ -144,7 +152,9 @@ fn test_build_config_verbose_some_overrides() {
     let client = RdlpClient::builder().config(base_config).build().unwrap();
     let mut request = DownloadRequest::new("http://example.com");
     request.verbose = Some(true);
-    let config = client.build_config(&request);
+    let config = client
+        .build_config(&request)
+        .expect("merged config must be valid");
     assert!(
         config.verbose,
         "verbose must be overridden by request.verbose = Some(true)"
@@ -160,7 +170,9 @@ fn test_build_config_verbose_false_overrides() {
     let client = RdlpClient::builder().config(base_config).build().unwrap();
     let mut request = DownloadRequest::new("http://example.com");
     request.verbose = Some(false);
-    let config = client.build_config(&request);
+    let config = client
+        .build_config(&request)
+        .expect("merged config must be valid");
     assert!(
         !config.verbose,
         "verbose must be overridden by request.verbose = Some(false)"
@@ -205,43 +217,23 @@ fn test_search_filters_unknown_site() {
     assert!(client.search_filters("nonexistent").is_err());
 }
 
+/// A request-level `cookies_from_browser` reaches the merged config.
+///
+/// What remains of a former test that also re-asserted
+/// `config.cookies_from_browser.is_some() || config.cookies_file.is_some()`
+/// against configs it had just built with those fields — a tautology over
+/// the test's own values that no production change could fail. This half
+/// exercises `build_config`, so it can.
 #[test]
-fn test_cookies_explicitly_requested_flag() {
+fn test_build_config_propagates_cookies_from_browser() {
     use rdlp_types::BrowserType;
-    use std::path::PathBuf;
 
-    // No cookies requested — flag should be false
-    let config_none = Config::default();
-    assert!(
-        config_none.cookies_from_browser.is_none() && config_none.cookies_file.is_none(),
-        "Default config should not have cookies explicitly requested"
-    );
-
-    // Browser cookies requested — flag should be true
-    let config_browser = Config {
-        cookies_from_browser: Some(BrowserType::Chrome),
-        ..Config::default()
-    };
-    assert!(
-        config_browser.cookies_from_browser.is_some() || config_browser.cookies_file.is_some(),
-        "Config with browser cookie should be explicitly requested"
-    );
-
-    // Cookie file requested — flag should be true
-    let config_file = Config {
-        cookies_file: Some(PathBuf::from("/tmp/cookies.txt")),
-        ..Config::default()
-    };
-    assert!(
-        config_file.cookies_from_browser.is_some() || config_file.cookies_file.is_some(),
-        "Config with cookie file should be explicitly requested"
-    );
-
-    // Verify merge propagates cookies_from_browser from request
     let client = RdlpClient::new(Config::default()).unwrap();
     let mut request = DownloadRequest::new("http://example.com");
     request.network.cookies_from_browser = Some(BrowserType::Firefox);
-    let merged = client.build_config(&request);
+    let merged = client
+        .build_config(&request)
+        .expect("merged config must be valid");
     assert_eq!(
         merged.cookies_from_browser,
         Some(BrowserType::Firefox),
@@ -249,13 +241,15 @@ fn test_cookies_explicitly_requested_flag() {
     );
 }
 
+/// A config with no cookie source configured must not fail on cookies.
+///
+/// `load_cookies` is a no-op when neither source is set, so the sanitizing
+/// loader must return `Ok` and the download must reach extraction (where it
+/// fails on the unsupported URL, which is expected). This is the guard that
+/// the always-fatal cookie handling did not become fatal for downloads that
+/// never asked for cookies.
 #[tokio::test]
-async fn test_download_without_explicit_cookies_warns_on_cookie_error() {
-    // Default config — no explicit cookies requested.
-    // Cookie loading won't fail with default config (no browser, no
-    // file), so this verifies the non-fatal path doesn't produce a
-    // Failed event. The download will proceed to extraction and fail
-    // there (unsupported URL), which is expected.
+async fn test_download_without_cookie_source_does_not_fail_on_cookies() {
     let client = RdlpClient::new(Config::default()).unwrap();
     let request = DownloadRequest::new("http://example.com/video");
     let mut handle = client.download(request);
@@ -273,40 +267,55 @@ async fn test_download_without_explicit_cookies_warns_on_cookie_error() {
     }
     assert!(
         !got_cookie_failed,
-        "Should not get a cookie-related Failed event when cookies are not explicitly requested"
+        "must not get a cookie-related Failed event when no cookie source is configured"
     );
 }
 
+/// A configured cookie source that cannot be loaded fails the download.
+///
+/// This is the download path's half of the cookie contract, and the branch
+/// `load_cookies_sanitized` rewrote from three outcomes to one — the
+/// `search_cookie_tests` module only reaches the one-shot paths, and the
+/// invalid-merge test exits before the spawn, so without this the in-task
+/// branch has no coverage at all.
+///
+/// Asserted on the sanitized message: it must name the configured source and
+/// give the FILE advice (not the browser advice a single shared string used
+/// to give for both).
 #[tokio::test]
-async fn test_download_explicit_cookies_file_fatal_on_missing() {
+async fn test_download_reports_a_cookie_failure_as_a_failed_event() {
     use std::path::PathBuf;
 
-    // Config with explicit cookie file that doesn't exist
     let config = Config {
         cookies_file: Some(PathBuf::from("/nonexistent/path/cookies.txt")),
         ..Config::default()
     };
     let client = RdlpClient::new(config).unwrap();
-
-    let request = DownloadRequest::new("http://example.com/video");
-    let mut handle = client.download(request);
+    let mut handle = client.download(DownloadRequest::new("http://example.com/video"));
 
     let mut got_failed = false;
     while let Some(event) = handle.events().recv().await {
         if let Event::Failed { error, .. } = &event {
             got_failed = true;
-            // The error should be about cookie loading
             let msg = error.user_message();
             assert!(
-                msg.to_lowercase().contains("cookie") || msg.to_lowercase().contains("file"),
-                "Error message should reference cookies or file, got: {msg}"
+                msg.contains("/nonexistent/path/cookies.txt"),
+                "must name the configured source; got: {msg}"
+            );
+            assert!(
+                msg.contains("Netscape cookie file"),
+                "must give the file-source advice; got: {msg}"
+            );
+            assert!(
+                !msg.contains("os error"),
+                "must not leak the loader's own error text; got: {msg}"
             );
             break;
         }
     }
     assert!(
         got_failed,
-        "Expected a Failed event when explicit cookie file is missing"
+        "expected a Failed event when the configured cookie file is missing"
     );
 
     handle.cancel();

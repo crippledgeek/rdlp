@@ -215,43 +215,37 @@ fn build_subtitle_options(
 fn build_network_options(
     options: &DownloadOptions,
     settings: &crate::state::AppSettings,
-) -> NetworkOptions {
-    // Merge cookies: per-download overrides settings default.
-    let cookies_from_browser = options
-        .cookies_from_browser
-        .or(settings.cookies_from_browser);
-    let cookies_file: Option<PathBuf> = options
-        .cookies_file
-        .as_deref()
-        .map(PathBuf::from)
-        .or_else(|| settings.cookies_file.clone());
+) -> Result<NetworkOptions, AppError> {
+    // The settings half is the same overlay every other command applies
+    // (`settings_network_options`); this function adds only the per-download
+    // overrides on top of it, so no field can be honoured here and forgotten
+    // there — search honoured none of them (#691).
+    let from_settings = crate::commands::network::settings_network_options(settings)?;
 
-    // Merge proxy: per-download overrides settings default.
-    let proxy = options.proxy.clone().or_else(|| settings.proxy.clone());
+    // Rate limit: choose between the two *strings* before parsing. Parsing
+    // first and then falling back would let an unparseable per-download value
+    // silently inherit the settings rate instead of overriding it.
+    let rate_limit = match options.rate_limit.as_deref() {
+        Some(per_download) => parse_rate_limit(per_download),
+        None => from_settings.rate_limit,
+    };
 
-    // Rate limit: per-download overrides settings default, then parse string
-    // like "500K" to bytes per second.
-    let rate_limit_str = options
-        .rate_limit
-        .clone()
-        .or_else(|| settings.rate_limit.clone());
-
-    NetworkOptions {
-        cookies_from_browser,
-        cookies_file,
-        rate_limit: rate_limit_str.as_deref().and_then(parse_rate_limit),
-        proxy,
-        timeout_secs: settings.socket_timeout,
-        read_timeout_secs: settings.read_timeout,
-        pool_idle_timeout_secs: settings.pool_idle_timeout,
-        download_timeout_secs: settings.download_timeout,
-        merge_timeout_secs: settings.merge_timeout,
-        concurrent_fragments: settings.concurrent_fragments,
-        buffer_size: settings.buffer_size,
-        parallel_threshold: settings.parallel_threshold,
-        hls_head_probe_timeout: settings.hls_head_probe_timeout,
-        ..NetworkOptions::default()
-    }
+    Ok(NetworkOptions {
+        cookies_from_browser: options
+            .cookies_from_browser
+            .or(from_settings.cookies_from_browser),
+        cookies_file: options
+            .cookies_file
+            .as_deref()
+            .map(PathBuf::from)
+            .or_else(|| from_settings.cookies_file.clone()),
+        proxy: options
+            .proxy
+            .clone()
+            .or_else(|| from_settings.proxy.clone()),
+        rate_limit,
+        ..from_settings
+    })
 }
 
 /// Start a new download for the given URL.
@@ -304,20 +298,12 @@ pub async fn start_download(
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
 
-    // Validate proxy URL at the boundary if provided per-download.
+    // Validate the per-download proxy at the boundary. The SETTINGS proxy is
+    // validated inside `settings_network_options`, which every command uses,
+    // so it is checked here too — via `build_network_options` below — without
+    // this function keeping its own copy of the check.
     if let Some(proxy) = &options.proxy {
-        rdlp_security::validate_proxy_url(proxy).map_err(|e| AppError::InvalidInput {
-            field: "proxy".to_owned(),
-            message: e.to_string(),
-        })?;
-    }
-    // Also validate the settings proxy (may have been loaded from disk before
-    // validate_security was added).
-    if let Some(proxy) = &settings.proxy {
-        rdlp_security::validate_proxy_url(proxy).map_err(|e| AppError::InvalidInput {
-            field: "proxy".to_owned(),
-            message: e.to_string(),
-        })?;
+        crate::commands::network::validate_proxy(proxy)?;
     }
 
     // Validate recode thread count at the IPC boundary (Config::validate is not
@@ -357,7 +343,7 @@ pub async fn start_download(
 
     // Network options (borrows `options`; must run before any `options`
     // field with a non-`Copy` type is moved out below).
-    let network_options = build_network_options(&options, &settings);
+    let network_options = build_network_options(&options, &settings)?;
 
     // Build the download request from options + settings
     let output_dir = options
@@ -974,7 +960,7 @@ mod tests {
             ..AppSettings::default()
         };
         let options = default_download_options();
-        let net = build_network_options(&options, &settings);
+        let net = build_network_options(&options, &settings).expect("valid settings");
         assert_eq!(net.timeout_secs, Some(45));
         assert_eq!(net.read_timeout_secs, Some(120));
         assert_eq!(net.pool_idle_timeout_secs, Some(0));
@@ -989,7 +975,7 @@ mod tests {
     fn test_default_settings_leave_timeouts_unset_in_network_options() {
         let settings = AppSettings::default();
         let options = default_download_options();
-        let net = build_network_options(&options, &settings);
+        let net = build_network_options(&options, &settings).expect("valid settings");
         assert!(net.timeout_secs.is_none());
         assert!(net.read_timeout_secs.is_none());
         assert!(net.pool_idle_timeout_secs.is_none());
@@ -1090,7 +1076,8 @@ mod tests {
             hls_head_probe_timeout: Some(30),
             ..crate::state::AppSettings::default()
         };
-        let net = build_network_options(&default_download_options(), &settings);
+        let net =
+            build_network_options(&default_download_options(), &settings).expect("valid settings");
         assert_eq!(net.concurrent_fragments, Some(16));
         assert_eq!(net.buffer_size, Some(8 * 1024 * 1024));
         assert_eq!(net.parallel_threshold, Some(20 * 1024 * 1024));
@@ -1105,7 +1092,8 @@ mod tests {
         let net = build_network_options(
             &default_download_options(),
             &crate::state::AppSettings::default(),
-        );
+        )
+        .expect("valid settings");
         assert!(net.concurrent_fragments.is_none());
         assert!(net.buffer_size.is_none());
         assert!(net.parallel_threshold.is_none());
@@ -1119,7 +1107,8 @@ mod tests {
             download_timeout: Some(600),
             ..crate::state::AppSettings::default()
         };
-        let net = build_network_options(&default_download_options(), &settings);
+        let net =
+            build_network_options(&default_download_options(), &settings).expect("valid settings");
         assert_eq!(net.timeout_secs, Some(45));
         assert_eq!(net.download_timeout_secs, Some(600));
     }
@@ -1140,7 +1129,7 @@ mod tests {
             cookies_file: Some(PathBuf::from("/settings/cookies.txt")),
             ..AppSettings::default()
         };
-        let net = build_network_options(&options, &settings);
+        let net = build_network_options(&options, &settings).expect("valid settings");
         assert_eq!(
             net.cookies_file,
             Some(PathBuf::from("/per-download/cookies.txt"))
@@ -1155,7 +1144,7 @@ mod tests {
             cookies_file: Some(PathBuf::from("/settings/cookies.txt")),
             ..AppSettings::default()
         };
-        let net = build_network_options(&options, &settings);
+        let net = build_network_options(&options, &settings).expect("valid settings");
         assert_eq!(
             net.cookies_file,
             Some(PathBuf::from("/settings/cookies.txt"))
@@ -1173,7 +1162,7 @@ mod tests {
             cookies_from_browser: Some(BrowserType::Firefox),
             ..AppSettings::default()
         };
-        let net = build_network_options(&options, &settings);
+        let net = build_network_options(&options, &settings).expect("valid settings");
         assert_eq!(net.cookies_from_browser, Some(BrowserType::Chrome));
     }
 
@@ -1185,7 +1174,7 @@ mod tests {
             cookies_from_browser: Some(BrowserType::Firefox),
             ..AppSettings::default()
         };
-        let net = build_network_options(&options, &settings);
+        let net = build_network_options(&options, &settings).expect("valid settings");
         assert_eq!(net.cookies_from_browser, Some(BrowserType::Firefox));
     }
 
@@ -1200,7 +1189,7 @@ mod tests {
             proxy: Some("http://settings:3128".to_owned()),
             ..AppSettings::default()
         };
-        let net = build_network_options(&options, &settings);
+        let net = build_network_options(&options, &settings).expect("valid settings");
         assert_eq!(net.proxy.as_deref(), Some("http://per-download:3128"));
     }
 
@@ -1212,7 +1201,7 @@ mod tests {
             proxy: Some("http://settings:3128".to_owned()),
             ..AppSettings::default()
         };
-        let net = build_network_options(&options, &settings);
+        let net = build_network_options(&options, &settings).expect("valid settings");
         assert_eq!(net.proxy.as_deref(), Some("http://settings:3128"));
     }
 
@@ -1228,7 +1217,7 @@ mod tests {
             rate_limit: Some("2M".to_owned()),
             ..AppSettings::default()
         };
-        let net = build_network_options(&options, &settings);
+        let net = build_network_options(&options, &settings).expect("valid settings");
         assert_eq!(net.rate_limit, Some(512_000));
     }
 
@@ -1241,7 +1230,7 @@ mod tests {
             rate_limit: Some("2M".to_owned()),
             ..AppSettings::default()
         };
-        let net = build_network_options(&options, &settings);
+        let net = build_network_options(&options, &settings).expect("valid settings");
         assert_eq!(net.rate_limit, Some(2 * 1024 * 1024));
     }
 
@@ -1450,7 +1439,7 @@ pub async fn job_options(
 /// Bare integers are treated as bytes per second.
 ///
 /// Returns `None` on parse error.
-fn parse_rate_limit(s: &str) -> Option<u64> {
+pub(super) fn parse_rate_limit(s: &str) -> Option<u64> {
     let s = s.trim();
     if s.is_empty() {
         return None;
