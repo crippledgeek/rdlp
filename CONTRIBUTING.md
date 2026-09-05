@@ -52,8 +52,8 @@ cd rdlp
 # Build the project
 cargo build
 
-# Run tests
-cargo test
+# Run tests (--all-features is load-bearing; see "Feature-gated code" below)
+cargo test --workspace --all-features
 
 # Run clippy
 cargo clippy
@@ -124,14 +124,26 @@ git checkout -b fix/bug-description
 ### 3. Test Your Changes
 
 ```bash
-# Run all tests
-cargo test
+# Run all tests (--all-features is load-bearing; see below)
+cargo test --workspace --all-features
 
 # Run tests for a specific crate
 cargo test -p rdlp-extractor
 
 # Run tests with output
-cargo test -- --nocapture
+cargo test --all-features -- --nocapture
+
+# Feature-gated code
+#
+# Two crates put code behind a non-default feature, and a plain `cargo test`
+# neither compiles nor runs it:
+#   rdlp-api  `serde`   — gates the whole `dto` module, which is compiled into
+#                         the desktop binary and carries every event payload
+#                         to the UI.
+#   rdlp-redact `log-kv` — gates the tracing-field redaction path.
+# Both are security-relevant. Measured 2026-09-05: the default gate runs 113
+# test binaries, `--all-features` runs 123. A test written for `dto` does not
+# execute at all without the flag.
 
 # Run clippy
 cargo clippy -- -W clippy::all
