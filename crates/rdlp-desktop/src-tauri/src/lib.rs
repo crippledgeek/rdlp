@@ -48,14 +48,16 @@ pub fn run() {
         //
         // `Stdout` covers `pnpm tauri dev`; `LogDir` gives a file to attach to
         // a bug report, at `$XDG_DATA_HOME/com.rdlp.desktop/logs` on Linux,
-        // rotated by the plugin's own `max_file_size` handling. `Webview` is
-        // deliberately omitted: it only emits an event, which shows nothing
-        // unless the frontend also calls `attachConsole()` from
-        // `@tauri-apps/plugin-log`.
+        // rotated by the plugin's own `max_file_size` handling. `Webview`
+        // forwards records to the devtools console, where a frontend bug is
+        // usually being read anyway — `main.tsx` calls `attachConsole()` to
+        // receive them. That is an event listener, not a plugin command, so it
+        // needs no `log:` capability entry.
         .plugin(
             tauri_plugin_log::Builder::new()
                 .targets([
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
                         file_name: None,
                     }),
