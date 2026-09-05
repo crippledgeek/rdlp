@@ -7,6 +7,7 @@
 use std::fmt;
 
 use rdlp_api::RdlpApiError;
+use rdlp_redact::redact_str as redact;
 use serde::Serialize;
 
 /// Frontend-facing error type for Tauri IPC commands.
@@ -26,7 +27,7 @@ use serde::Serialize;
 ///   "data": { "message": "connection reset", "retryable": true }
 /// }
 /// ```
-#[derive(Debug, Serialize)]
+#[derive(Serialize)]
 #[serde(tag = "kind", content = "data")]
 pub enum AppError {
     /// A search operation failed.
@@ -84,12 +85,14 @@ pub enum AppError {
 
 /// Serialize a free-text error message with credentials stripped.
 ///
-/// `AppError` derives `Serialize`, which reads each field directly — so unlike
-/// `RdlpError` and `RdlpApiError`, redacting Display and Debug does nothing
-/// for the path that actually reaches the UI. This is that path's guard, and
-/// it sits on the field so it applies to every construction site, present and
-/// future, rather than to the handful that happen to go through
-/// `From<RdlpApiError>`.
+/// `AppError` derives `Serialize`, which reads each field directly, so its
+/// Display and Debug redaction does not cover the serialized form. This guards
+/// that form, on the field, so it applies to every construction site rather
+/// than to the handful routed through `From<RdlpApiError>`.
+///
+/// It is one of several paths to the frontend, not the only one: the
+/// `download-error` event and `DownloadJob.error` carry
+/// `RdlpApiError::user_message()` instead, which redacts at its own source.
 ///
 /// The text can hold a URL: these messages are built by `format!("…: {e}")`
 /// over errors whose Display prints a request URI verbatim, credentials
@@ -98,7 +101,7 @@ fn serialize_redacted<S>(message: &str, serializer: S) -> Result<S::Ok, S::Error
 where
     S: serde::Serializer,
 {
-    serializer.serialize_str(&rdlp_redact::redact_str(message))
+    serializer.serialize_str(&redact(message))
 }
 
 impl From<RdlpApiError> for AppError {
@@ -134,32 +137,45 @@ impl From<RdlpApiError> for AppError {
     }
 }
 
+/// Debug renders what Display does, redaction included.
+///
+/// The derived Debug printed every field verbatim, so `{e:?}` leaked what
+/// `{e}` strips. Unlike `RdlpError` and `RdlpApiError` — whose Debug mirrors
+/// the derive to keep their `RedactedUrlBuf` fields — every field here is
+/// either the redacted message or a plain scalar already shown by Display, so
+/// delegating loses nothing.
+impl fmt::Debug for AppError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+
 impl fmt::Display for AppError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::SearchFailed { message, .. } => {
-                write!(f, "Search failed: {message}")
+                write!(f, "Search failed: {}", redact(message))
             }
             Self::NetworkError { message, .. } => {
-                write!(f, "Network error: {message}")
+                write!(f, "Network error: {}", redact(message))
             }
             Self::ExtractionFailed { message } => {
-                write!(f, "Extraction failed: {message}")
+                write!(f, "Extraction failed: {}", redact(message))
             }
             Self::DownloadFailed {
                 job_id, message, ..
             } => {
-                write!(f, "Download {job_id} failed: {message}")
+                write!(f, "Download {job_id} failed: {}", redact(message))
             }
             Self::InvalidInput { field, message } => {
-                write!(f, "Invalid {field}: {message}")
+                write!(f, "Invalid {field}: {}", redact(message))
             }
             Self::RateLimited { retry_after_ms } => match retry_after_ms {
                 Some(ms) => write!(f, "Rate limited, retry after {ms} ms"),
                 None => write!(f, "Rate limited"),
             },
             Self::Internal { message } => {
-                write!(f, "Internal error: {message}")
+                write!(f, "Internal error: {}", redact(message))
             }
         }
     }
@@ -339,5 +355,17 @@ mod tests {
             json.contains("cdn.example.com"),
             "over-redacted, message no longer says where: {json}"
         );
+    }
+
+    #[test]
+    fn app_error_display_and_debug_redact_credentials() {
+        let e = AppError::NetworkError {
+            message: "failed for uri (https://admin:hunter2@cdn.example.com/v.mp4)".to_string(),
+            retryable: true,
+        };
+        let shown = e.to_string();
+        let dbg = format!("{e:?}");
+        assert!(!shown.contains("hunter2"), "Display leaked: {shown}");
+        assert!(!dbg.contains("hunter2"), "Debug leaked: {dbg}");
     }
 }

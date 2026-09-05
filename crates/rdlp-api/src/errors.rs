@@ -98,12 +98,9 @@ pub enum RdlpApiError {
     },
 }
 
-/// Redact free text on its way to an operator. See `rdlp_core::error`'s
-/// counterpart — these messages are carried over from `RdlpError` or built the
-/// same way, so they can hold a URL that arrived inside a stringified error.
-fn redact(text: &str) -> String {
-    rdlp_redact::redact_str(text)
-}
+/// Redact free text on its way to an operator. See
+/// `rdlp_core::error`'s import of the same function for the why.
+use rdlp_redact::redact_str as redact;
 
 /// Debug redacts the free text while keeping the structure.
 ///
@@ -156,9 +153,27 @@ impl std::fmt::Debug for RdlpApiError {
 }
 
 impl RdlpApiError {
-    /// Human-friendly message suitable for UI display.
+    /// Human-friendly message suitable for UI display, with credentials
+    /// stripped.
+    ///
+    /// This is a SEPARATE rendering from `Display`, and it is the one the
+    /// desktop actually ships to the frontend: the `download-error` Tauri
+    /// event and `DownloadJob.error` both take their text from here, and
+    /// neither is an `AppError`, so neither is covered by that type's
+    /// `#[serde(serialize_with)]` guard. Redacting at this choke point covers
+    /// all of them — and `rdlp_api::dto::EventDto` — rather than at each
+    /// call site, where the next new sink would miss it.
     #[must_use]
     pub fn user_message(&self) -> Cow<'static, str> {
+        // Always owned: `redact` returns a `String`, and the borrowed arms are
+        // fixed strings with nothing to strip. The cost is an allocation on an
+        // error path.
+        Cow::Owned(redact(&self.user_message_unredacted()))
+    }
+
+    /// The raw message, before redaction. Private: every caller wants
+    /// [`Self::user_message`].
+    fn user_message_unredacted(&self) -> Cow<'static, str> {
         match self {
             Self::InvalidInput { message } => Cow::Owned(format!("Invalid input: {message}")),
             Self::UnsupportedUrl { url } => Cow::Owned(format!("This URL is not supported: {url}")),
@@ -799,5 +814,21 @@ mod tests {
             !shown.contains("hunter2"),
             "leaked across the boundary: {shown}"
         );
+    }
+
+    #[test]
+    fn user_message_redacts_credentials() {
+        // `user_message()` builds its own text and does NOT go through the
+        // `#[error]` attributes, so the Display redaction says nothing about
+        // it. It is the text the desktop ships to the frontend for a failed
+        // download, via the `download-error` event and `DownloadJob.error`.
+        let e = RdlpApiError::NetworkError {
+            message: "failed for uri (https://admin:hunter2@cdn.example.com/v.mp4)".into(),
+            status: None,
+        };
+        let msg = e.user_message();
+        assert!(!msg.contains("hunter2"), "password leaked to the UI: {msg}");
+        assert!(!msg.contains("admin"), "username leaked to the UI: {msg}");
+        assert!(msg.contains("cdn.example.com"), "over-redacted: {msg}");
     }
 }

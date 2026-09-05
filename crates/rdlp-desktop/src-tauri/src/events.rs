@@ -453,4 +453,32 @@ mod tests {
         assert_eq!(v["jobId"], "abc-123");
         assert!(v.get("job_id").is_none(), "must be camelCase on the wire");
     }
+
+    /// The `download-error` event is a SEPARATE path to the frontend from
+    /// `AppError`, and it shipped unredacted while the `AppError` guard was
+    /// being added. Its text comes from `RdlpApiError::user_message()`, which
+    /// now redacts at its own source — this pins that the payload built here
+    /// inherits it.
+    #[test]
+    fn download_error_payload_carries_no_credentials() {
+        let err = rdlp_api::RdlpApiError::NetworkError {
+            message: "failed for uri (https://admin:hunter2@cdn.example.com/v.mp4)".into(),
+            status: None,
+        };
+        let payload = DownloadErrorPayload {
+            job_id: "job-1".to_string(),
+            error: err.user_message().into_owned(),
+            retryable: err.is_retryable(),
+        };
+        let json = serde_json::to_string(&payload).expect("payload must serialize");
+        assert!(
+            !json.contains("hunter2"),
+            "password reached the frontend: {json}"
+        );
+        assert!(
+            !json.contains("admin"),
+            "username reached the frontend: {json}"
+        );
+        assert!(json.contains("cdn.example.com"), "over-redacted: {json}");
+    }
 }

@@ -116,10 +116,12 @@ pub enum RdlpError {
 ///
 /// Redacting where the text is rendered rather than where it is built covers
 /// every variant and every call site at once, including ones added later. The
-/// cost is one allocation on an error path.
-fn redact(text: &str) -> String {
-    rdlp_redact::redact_str(text)
-}
+/// cost is 22 regex passes and an allocation, on an error path only.
+///
+/// It filters free text, not URLs specifically, so a message that merely
+/// starts with `key=` or `code=` is redacted too. That is a deliberate trade:
+/// over-redacting a diagnostic beats leaking a credential.
+use rdlp_redact::redact_str as redact;
 
 /// Debug redacts the free text while keeping the structure.
 ///
@@ -362,19 +364,6 @@ mod redact_tests {
             "redacted form expected in message: {rendered}"
         );
     }
-}
-
-#[cfg(test)]
-mod cancelled_tests {
-    use super::*;
-
-    #[test]
-    fn cancelled_variant_displays_lowercase() {
-        let e = RdlpError::Cancelled;
-        let s = format!("{e}");
-        assert!(s.to_lowercase().contains("cancelled"), "got: {s}");
-    }
-
     /// A URL with credentials, arriving the way it really does: inside a
     /// message some call site built with `format!("…: {e}")` over an error
     /// whose Display printed the request URI verbatim.
@@ -449,5 +438,17 @@ error following redirect for uri (https://admin:hunter2@cdn.example.com/v.mp4)";
             let dbg = format!("{e:?}");
             assert!(!dbg.contains("hunter2"), "Debug leaked: {dbg}");
         }
+    }
+}
+
+#[cfg(test)]
+mod cancelled_tests {
+    use super::*;
+
+    #[test]
+    fn cancelled_variant_displays_lowercase() {
+        let e = RdlpError::Cancelled;
+        let s = format!("{e}");
+        assert!(s.to_lowercase().contains("cancelled"), "got: {s}");
     }
 }
