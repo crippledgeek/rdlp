@@ -15,7 +15,6 @@ use std::time::Duration;
 use log::{info, warn};
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
-use tauri_plugin_opener::OpenerExt;
 
 use crate::error::AppError;
 use crate::state::{AppSettings, AppState, SettingsValidationError};
@@ -149,23 +148,54 @@ pub async fn pick_directory(app: AppHandle) -> Result<Option<String>, AppError> 
     }
 }
 
+/// Run the blocking reveal without occupying an async-runtime worker thread.
+///
+/// Generic over the closure so the test can drive the same mechanism with a
+/// synthetic blocking call, but named — and its error message phrased — for
+/// the one operation it serves. A second caller would inherit "Reveal task
+/// failed", so give this a parameterised message before adding one.
+///
+/// `tauri-plugin-opener`'s Linux reveal is blocking: it opens a zbus session
+/// connection, which calls `block_on` internally. Invoked directly from an
+/// `async` command it runs on a Tokio worker and panics with "Cannot start a
+/// runtime from within a runtime" — and a panicking command never sends an IPC
+/// response, so the caller's promise hangs forever instead of rejecting. That
+/// is why the button appeared to do nothing at all (#693).
+///
+/// Upstream has the same defect in the plugin's own command
+/// (tauri-apps/plugins-workspace#3552); its fix PR #3565 was still unmerged as
+/// of 2026-09-05. We pin 2.5.3, and the newest release then published (2.5.5)
+/// also predates the fix — so bumping the dependency does not remove the need
+/// for this wrapper.
+async fn reveal_off_runtime<F, R>(f: F) -> Result<R, AppError>
+where
+    F: FnOnce() -> R + Send + 'static,
+    R: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|e| AppError::Internal {
+            message: format!("Reveal task failed: {e}"),
+        })
+}
+
 /// Reveal a file or directory in the system file manager.
 ///
 /// Uses `tauri-plugin-opener` to invoke the OS-native "reveal in folder"
-/// action for the given path. Requires the `opener:allow-reveal-item-in-dir`
-/// capability.
+/// action for the given path. No `opener:` capability is involved: Tauri
+/// capabilities gate JS-to-command IPC, and this calls the plugin's Rust
+/// function directly.
 ///
 /// # Arguments
 ///
 /// * `path` - Absolute path to the file or directory to reveal.
-/// * `app` - Tauri application handle for accessing the opener plugin.
 ///
 /// # Errors
 ///
 /// Returns [`AppError::Internal`] if the path is invalid or the OS
 /// reveal action fails.
 #[tauri::command]
-pub async fn reveal_in_folder(path: String, app: AppHandle) -> Result<(), AppError> {
+pub async fn reveal_in_folder(path: String) -> Result<(), AppError> {
     if path.is_empty() {
         return Err(AppError::InvalidInput {
             field: "path".to_owned(),
@@ -184,11 +214,65 @@ pub async fn reveal_in_folder(path: String, app: AppHandle) -> Result<(), AppErr
 
     info!("reveal_in_folder: revealing {path}");
 
-    app.opener()
-        .reveal_item_in_dir(&path_buf)
+    reveal_off_runtime(move || tauri_plugin_opener::reveal_item_in_dir(&path_buf))
+        .await?
         .map_err(|e| AppError::Internal {
             message: format!("Failed to reveal path in folder: {e}"),
-        })?;
+        })
+}
 
-    Ok(())
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod tests {
+    use super::reveal_off_runtime;
+
+    /// A blocking closure that itself starts a runtime must survive.
+    ///
+    /// This is the shape of `zbus::blocking::Connection::session()`, which is
+    /// what the opener plugin calls on Linux: `Runtime::block_on` panics when
+    /// it runs on a thread that is already driving async tasks. Running the
+    /// closure on the blocking pool is what makes it legal — so this test
+    /// fails (by panic) against a helper that simply calls `f()` inline, which
+    /// is exactly what the command used to do.
+    #[tokio::test]
+    async fn runs_a_blocking_call_that_starts_its_own_runtime() {
+        let out = reveal_off_runtime(|| {
+            tokio::runtime::Runtime::new()
+                .expect("runtime")
+                .block_on(async { 7 })
+        })
+        .await;
+        assert_eq!(out.expect("must not panic"), 7);
+    }
+
+    /// An empty path is rejected at the boundary, before any OS call.
+    #[tokio::test]
+    async fn empty_path_is_rejected() {
+        let err = super::reveal_in_folder(String::new())
+            .await
+            .expect_err("empty path must be rejected");
+        assert!(
+            matches!(err, crate::error::AppError::InvalidInput { ref field, .. } if field == "path"),
+            "got: {err:?}"
+        );
+    }
+
+    /// A path that does not exist fails with a message naming it, rather than
+    /// reaching the file manager.
+    ///
+    /// Both guards return before the reveal, which is what keeps this module's
+    /// tests hermetic: a positive case would pop a real file-manager window, so
+    /// the OS call itself is verified manually (and by `off_runtime`'s test for
+    /// the part that actually broke).
+    #[tokio::test]
+    async fn missing_path_reports_the_path() {
+        let err = super::reveal_in_folder("/nonexistent/rdlp-test-reveal.mkv".to_owned())
+            .await
+            .expect_err("missing path must fail");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("/nonexistent/rdlp-test-reveal.mkv"),
+            "got: {msg}"
+        );
+    }
 }

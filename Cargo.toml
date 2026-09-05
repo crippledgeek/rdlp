@@ -129,7 +129,12 @@ terminal_size = "0.4"
 # Logging
 log = { version = "0.4", features = ["kv"] }
 env_logger = { version = "0.11", features = ["kv"] }
-tracing = "0.1"
+# `log` feature (not `log-always`): a `tracing` event emits a `log` record only
+# when no `tracing` Subscriber is active. rdlp-cli installs one, so its events
+# keep going there; rdlp-desktop installs none, so rdlp-http's events reach
+# tauri-plugin-log instead of vanishing. `log-always` would double-emit under
+# the CLI's subscriber.
+tracing = { version = "0.1", features = ["log"] }
 tracing-subscriber = { version = "0.3.22", features = ["env-filter", "fmt", "tracing-log"] }
 
 # Configuration

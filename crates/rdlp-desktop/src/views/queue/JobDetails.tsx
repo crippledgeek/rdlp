@@ -2,13 +2,14 @@
 // Shows full job info, original options snapshot, logs, and action buttons.
 
 import { useStore } from "@tanstack/react-store";
+import { toast } from "@/components/ui/sonner";
 import { useQuery } from "@tanstack/react-query";
 import { FolderOpen, RotateCcw, X } from "lucide-react";
 import { uiStore, setSelectedJob } from "@/stores/uiStore";
 import { downloadsQueryOptions, cancelDownload, removeJob, startDownload } from "@/api/downloads";
 import { StatusBadge } from "@/components/StatusBadge";
 import { isTerminal as isTerminalStatus, isInFlight, jobSubLabel } from "@/lib/jobStatus";
-import { invokeTyped } from "@/api/invokeClient";
+import { invokeTyped, extractErrorMessage } from "@/api/invokeClient";
 import { cn, progressPercentLabel } from "@/lib/utils";
 
 function formatDate(ts: number | null): string {
@@ -47,7 +48,12 @@ export function JobDetails() {
     };
     const handleReveal = () => {
         if (!job.output_path) return;
-        invokeTyped<void>("reveal_in_folder", { path: job.output_path }).catch(console.error);
+        // A reveal failure must be visible: the OS call can fail for reasons
+        // the user can act on (file moved or deleted since the download), and
+        // `console.error` is invisible in a packaged build (#693).
+        invokeTyped<void>("reveal_in_folder", { path: job.output_path }).catch((e: unknown) =>
+            toast.error(extractErrorMessage(e) || "Failed to reveal the file"),
+        );
     };
 
     return (

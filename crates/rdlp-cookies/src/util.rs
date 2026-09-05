@@ -3,6 +3,7 @@
 use std::path::Path;
 
 use log::debug;
+use rdlp_redact::RedactedUrl;
 use url::Url;
 use wreq::Uri;
 use wreq::cookie::CookieStore;
@@ -36,11 +37,17 @@ pub(crate) fn insert_cookie_into_jar(
     let url_str = format!("{scheme}://{host}{path}");
 
     if Url::parse(&url_str).is_err() {
-        debug!("Invalid URL from cookie domain: {url_str}");
+        debug!(
+            "Invalid URL from cookie domain: {}",
+            RedactedUrl::new(&url_str)
+        );
         return false;
     }
     let Ok(uri) = url_str.parse::<Uri>() else {
-        debug!("Invalid Uri from cookie domain: {url_str}");
+        debug!(
+            "Invalid Uri from cookie domain: {}",
+            RedactedUrl::new(&url_str)
+        );
         return false;
     };
 

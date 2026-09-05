@@ -27,6 +27,7 @@ url = { workspace = true }
 
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
+tauri-plugin-log = "2.9"
 tauri-plugin-opener = "2"
 
 serde = { workspace = true }
@@ -35,6 +36,9 @@ tokio = { workspace = true, features = ["time"] }
 thiserror = { workspace = true }
 rdlp-redact = { workspace = true, features = ["serde"] }
 log = { workspace = true }
+# Panic -> `log::error!` bridge, so panics reach the same targets as everything
+# else. The standard companion to a `log` backend; not worth hand-writing.
+log-panics = { version = "2.1", features = ["with-backtrace"] }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 dirs = { workspace = true }

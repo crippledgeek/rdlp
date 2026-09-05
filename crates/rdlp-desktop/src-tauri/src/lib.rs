@@ -14,12 +14,75 @@
 pub mod commands;
 pub mod error;
 pub mod events;
-pub mod panic_hook;
 pub mod state;
 
 use rdlp_postprocess::TempRegistry;
 use state::AppState;
 use tauri::Manager;
+
+/// Level for the desktop's log targets.
+///
+/// `Info` even in a debug build: the workspace's 426 `debug!` sites (172 in
+/// rdlp-extractor) are per-fragment detail that drowns the record you are
+/// actually reading. Raise a single noisy module with `.level_for(...)` while
+/// debugging it rather than turning the whole tree up.
+const LOG_LEVEL: log::LevelFilter = log::LevelFilter::Info;
+
+/// Bytes per log file before rotation. The plugin's own default is `40_000`,
+/// which this size of workspace fills in seconds.
+const LOG_MAX_FILE_SIZE: u128 = 5 * 1024 * 1024;
+
+/// How many rotated files to keep, so a bug report can include the run BEFORE
+/// the one that crashed. `KeepOne` (the plugin default) cannot.
+const LOG_FILES_KEPT: usize = 3;
+
+/// Restrict the log directory to the owning user.
+///
+/// The plugin opens log files with a bare `OpenOptions::create(true)`, so they
+/// land at the process umask (typically 0644) and are world-readable on a
+/// shared machine. Nothing logged today is secret — but the whole point of
+/// this branch is that records now PERSIST, and the blast radius of a future
+/// mistake should not be "every local user".
+///
+/// The DIRECTORY is restricted rather than the file: `RotationStrategy`
+/// re-creates the file through that same unmoded `OpenOptions`, so a chmod on
+/// the file would be silently undone at the first rotation, while 0700 on the
+/// directory covers every rotated file by construction.
+///
+/// Best-effort and non-fatal: a logger that cannot be locked down is still
+/// better than no logger, and this must not stop the app from starting.
+///
+/// One window remains, and is accepted rather than unnoticed: the plugin
+/// creates the directory and opens the first file during `build()`, at the
+/// process umask, and this runs after `build()` returns. For that sub-
+/// millisecond gap, once per launch, both are world-readable. Closing it would
+/// mean pre-creating the directory before the builder exists — which means
+/// reimplementing Tauri's `app_log_dir()` path resolution by hand, a worse
+/// trade against an attacker who must poll that exact path at that exact
+/// moment.
+#[cfg(unix)]
+fn restrict_log_dir(app: &tauri::App) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let Ok(dir) = app.path().app_log_dir() else {
+        return;
+    };
+    // The plugin creates this directory while initializing its `LogDir`
+    // target, which has already run by the time `build()` returns — so this
+    // only tightens what exists rather than creating it. If it is somehow
+    // absent there is nothing to protect and nothing to warn about yet.
+    if !dir.is_dir() {
+        return;
+    }
+    if let Err(e) = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)) {
+        log::warn!("could not restrict the log directory to this user: {e}");
+    }
+}
+
+/// No-op off Unix: permission bits are a POSIX concept, and Windows/macOS
+/// place the log directory inside the user's own profile already.
+#[cfg(not(unix))]
+fn restrict_log_dir(_app: &tauri::App) {}
 
 /// Run the Tauri application.
 ///
@@ -32,15 +95,61 @@ use tauri::Manager;
 /// `tauri.conf.json`) or if the main webview window cannot be opened.
 /// These are unrecoverable startup failures.
 pub fn run() {
-    // Install the global panic hook before any Tauri or Tokio code
-    // runs so panics in async command handlers are captured to the log
-    // rather than dying silently. See `panic_hook` module docs.
-    panic_hook::install_panic_hook();
+    // Route panics through `log` so they reach the same targets as every other
+    // record. Panics in async command handlers are the reason this matters: a
+    // panicking Tauri command never sends an IPC response, so the caller's
+    // promise hangs with no error anywhere — how #693 stayed invisible.
+    //
+    // Chained onto the default hook rather than replacing it. `log_panics`
+    // calls `set_hook` without `take_hook`, so on its own it would DROP the
+    // default stderr printer — and the log backend is not installed until the
+    // plugin below initializes. A panic in the builder chain or another
+    // plugin's setup would then reach a facade with no logger and no stderr
+    // fallback: silent, which is the exact failure this work exists to remove.
+    let default_hook = std::panic::take_hook();
+    log_panics::init();
+    let log_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        log_hook(info);
+        default_hook(info);
+    }));
 
     // SAFETY (expect): startup-time fatal; tauri.conf.json is validated at
     // build time and the application cannot function without the webview.
     #[allow(clippy::expect_used)]
     let app = tauri::Builder::default()
+        // Registered first: it installs the global `log` backend, and every
+        // other plugin and command logs through the `log` facade. The crate
+        // depended on `log` with no backend at all, so every `info!`/`warn!`
+        // in the desktop crate was discarded.
+        //
+        // `Stdout` covers `pnpm tauri dev`; `LogDir` gives a file to attach to
+        // a bug report, at `$XDG_DATA_HOME/com.rdlp.desktop/logs` on Linux,
+        // rotated by the plugin's own `max_file_size` handling. `Webview`
+        // forwards records to the devtools console, where a frontend bug is
+        // usually being read anyway — `main.tsx` calls `attachConsole()` to
+        // receive them. That is an event listener, not a plugin command, so it
+        // needs no `log:` capability entry.
+        .plugin(
+            tauri_plugin_log::Builder::new()
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: None,
+                    }),
+                ])
+                .level(LOG_LEVEL)
+                // The plugin's defaults are 40 KB with `KeepOne` — which
+                // DELETES the previous file on every rotation. The workspace
+                // has 426 `debug!` sites (172 in rdlp-extractor alone), so a
+                // single download would rotate several times over and leave a
+                // file holding only its last seconds: useless for the
+                // post-mortem this target exists to serve.
+                .max_file_size(LOG_MAX_FILE_SIZE)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepSome(LOG_FILES_KEPT))
+                .build(),
+        )
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(AppState::new())
@@ -67,6 +176,8 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
+
+    restrict_log_dir(&app);
 
     app.run(|app, event| {
         if let tauri::RunEvent::ExitRequested { .. } = event {

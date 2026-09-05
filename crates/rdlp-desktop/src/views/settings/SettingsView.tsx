@@ -2,6 +2,7 @@
 // ConfigPanel is hidden when this view is active (settings uses full width).
 
 import { useState } from "react";
+import { extractErrorMessage } from "@/api/invokeClient";
 import { useQuery } from "@tanstack/react-query";
 import { settingsQueryOptions, updateSettings } from "@/api/settings";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -83,13 +84,7 @@ export function SettingsView() {
             setSaved(true);
             setTimeout(() => setSaved(false), 2000);
         } catch (e: unknown) {
-            const msg =
-                e instanceof Error
-                    ? e.message
-                    : typeof e === "object" && e !== null && "message" in e
-                      ? String((e as Record<string, unknown>)["message"])
-                      : String(e);
-            setSaveError(msg);
+            setSaveError(extractErrorMessage(e) || "Failed to save settings");
         }
     };
 

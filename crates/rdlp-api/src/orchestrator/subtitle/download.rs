@@ -69,7 +69,8 @@ impl Orchestrator {
                 continue;
             }
 
-            debug!("Downloading subtitle: lang={lang}, url={}", sub.url);
+            let safe_url = rdlp_redact::RedactedUrl::new(&sub.url);
+            debug!("Downloading subtitle: lang={lang}, url={safe_url}");
 
             match self.download_subtitle_file(&sub.url, &sub_path).await {
                 Ok(()) => {

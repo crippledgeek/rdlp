@@ -3,13 +3,14 @@
 // Compact mode (72px) used within playlist groups: no URL, episode title prominent.
 
 import { useStore } from "@tanstack/react-store";
+import { toast } from "@/components/ui/sonner";
 import { X, RotateCcw, FolderOpen } from "lucide-react";
 import { Button as AriaButton } from "react-aria-components";
 import { uiStore, setSelectedJob } from "@/stores/uiStore";
 import { cancelDownload, removeJob, startDownload } from "@/api/downloads";
 import { StatusBadge } from "@/components/StatusBadge";
 import { isTerminal as isTerminalStatus, isInFlight, jobSubLabel } from "@/lib/jobStatus";
-import { invokeTyped } from "@/api/invokeClient";
+import { invokeTyped, extractErrorMessage } from "@/api/invokeClient";
 import { cn, displayTitle, progressPercentLabel } from "@/lib/utils";
 import { formatSize } from "@/components/utils/formatUtils";
 import type { DownloadJob } from "@/types";
@@ -44,7 +45,14 @@ export function JobCard({ job, compact = false }: JobCardProps) {
 
     async function handleReveal() {
         if (!job.output_path) return;
-        await invokeTyped<void>("reveal_in_folder", { path: job.output_path });
+        // Unhandled here before: an invoke rejection in an async handler is
+        // swallowed silently, so a failed reveal looked identical to a
+        // successful one (#693).
+        try {
+            await invokeTyped<void>("reveal_in_folder", { path: job.output_path });
+        } catch (e: unknown) {
+            toast.error(extractErrorMessage(e) || "Failed to reveal the file");
+        }
     }
 
     // Episode label for compact mode (e.g. "Ep 3 — Episode Title")

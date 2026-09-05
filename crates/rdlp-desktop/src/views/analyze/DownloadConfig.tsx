@@ -2,6 +2,7 @@
 // Uses TanStack Form + Zod for form state and validation.
 
 import { useStore } from "@tanstack/react-store";
+import { extractErrorMessage } from "@/api/invokeClient";
 import { useQuery } from "@tanstack/react-query";
 import { useForm } from "@tanstack/react-form";
 import { toast } from "@/components/ui/sonner";
@@ -174,10 +175,7 @@ export function DownloadConfig() {
                 toast.success("Download queued");
                 setView("queue");
             } catch (err: unknown) {
-                const message = err && typeof err === "object" && "message" in err
-                    ? String((err as { message: unknown }).message)
-                    : "Failed to start download";
-                toast.error(message);
+                toast.error(extractErrorMessage(err) || "Failed to start download");
             }
         },
     });
