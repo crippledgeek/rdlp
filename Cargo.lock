@@ -6351,6 +6351,7 @@ dependencies = [
 name = "rdlp-security"
 version = "0.1.0"
 dependencies = [
+ "ipnet",
  "log",
  "rdlp-redact",
  "thiserror 2.0.18",
