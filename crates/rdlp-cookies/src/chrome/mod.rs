@@ -25,9 +25,16 @@ use crate::util;
 mod linux;
 #[cfg(target_os = "windows")]
 mod windows;
+// Every other target (notably macOS) gets a stub decryptor so the crate still
+// compiles and Chrome extraction fails at runtime with `Unsupported` — the
+// pre-split behaviour. Firefox/Netscape cookie loading is unaffected.
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+mod unsupported;
 
 #[cfg(target_os = "linux")]
 use linux::Decryptor;
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+use unsupported::Decryptor;
 #[cfg(target_os = "windows")]
 use windows::Decryptor;
 
@@ -367,6 +374,21 @@ mod tests {
         assert!(matches!(classify(b"plain_value"), Scheme::Plaintext));
         // Too short to carry a prefix.
         assert!(matches!(classify(b"ab"), Scheme::Plaintext));
+    }
+
+    #[test]
+    fn classify_treats_a_bare_prefix_as_encrypted_with_empty_body() {
+        // Exactly the prefix length (3 bytes), no ciphertext: must classify as
+        // Encrypted (an empty body that then fails to decrypt), NOT Plaintext.
+        // Pins the `len < PREFIX_LEN` boundary against an off-by-one to `<=`,
+        // which would mis-route a bare "v10" to Plaintext.
+        match classify(b"v10") {
+            Scheme::Encrypted {
+                version: CipherVersion::V10,
+                body,
+            } => assert!(body.is_empty()),
+            _ => panic!("bare prefix must be Encrypted, not Plaintext"),
+        }
     }
 
     #[test]

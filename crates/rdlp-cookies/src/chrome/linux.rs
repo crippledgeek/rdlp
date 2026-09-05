@@ -176,7 +176,14 @@ async fn first_secret(
 #[cfg(test)]
 // indexing_slicing: test-only prefix stripping (`[3..]`) on fixed-length
 // constants defined in this module; the lengths are known at the call site.
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
+// disallowed_methods: the DB-fixture test uses synchronous std::fs directly,
+// which is fine in a #[test] (no async runtime to block).
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::disallowed_methods
+)]
 mod tests {
     use super::*;
     use crate::chrome::{Decrypted, decrypt_value};
@@ -265,5 +272,71 @@ mod tests {
             Decrypted::Undecryptable => {}
             _ => panic!("expected undecryptable below version 24"),
         }
+    }
+
+    #[test]
+    fn decrypt_value_skips_a_malformed_short_v10_value() {
+        // A "v10"-prefixed value too short to be valid ciphertext is skipped as
+        // undecryptable, not returned verbatim as a bogus plaintext cookie (the
+        // pre-split code returned "v10xxxxx" here). Deliberate behaviour change.
+        let decryptor = Decryptor::from_keys(vec![PEANUTS_KEY, EMPTY_KEY], vec![EMPTY_KEY]);
+        match decrypt_value(&decryptor, b"v10xxxxx", 0) {
+            Decrypted::Undecryptable => {}
+            _ => panic!("a short v10 value must be skipped, not returned as plaintext"),
+        }
+    }
+
+    /// End-to-end over a hand-built cookie DB: proves `read_cookies_from_db`
+    /// reads `meta.version`, applies the v24 strip, counts each inserted cookie,
+    /// and decrypts a real v10 value. Kills the mutants on `read_meta_version`
+    /// and the `read_cookies_from_db` count path (a wrong meta version drops the
+    /// hashed cookie, breaking the count of 2).
+    #[test]
+    fn read_cookies_from_db_reads_meta_version_and_counts_inserts() {
+        use crate::chrome::{read_cookies_from_db, read_meta_version};
+        use rusqlite::params;
+
+        let dir = std::env::temp_dir().join(format!("rdlp-cookie-db-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let db_path = dir.join("Cookies");
+
+        {
+            let conn = rusqlite::Connection::open(&db_path).unwrap();
+            conn.execute("CREATE TABLE meta (key TEXT, value TEXT)", [])
+                .unwrap();
+            conn.execute("INSERT INTO meta VALUES ('version', '24')", [])
+                .unwrap();
+            conn.execute(
+                "CREATE TABLE cookies (host_key TEXT, name TEXT, encrypted_value BLOB, \
+                 value TEXT, path TEXT, is_secure INTEGER, is_httponly INTEGER)",
+                [],
+            )
+            .unwrap();
+            // A v10 value whose plaintext is sha256-hash ‖ "hello"; at version 24
+            // the hash is stripped and the cookie value is "hello".
+            conn.execute(
+                "INSERT INTO cookies VALUES ('.example.com', 'sess', ?1, '', '/', 1, 1)",
+                params![V10_HASHED_HELLO],
+            )
+            .unwrap();
+            // A plaintext-column cookie: taken verbatim, no decryption.
+            conn.execute(
+                "INSERT INTO cookies VALUES ('.example.com', 'plain', x'', 'plainval', '/', 0, 0)",
+                [],
+            )
+            .unwrap();
+
+            assert_eq!(read_meta_version(&conn), 24);
+        }
+
+        let decryptor = Decryptor::from_keys(vec![PEANUTS_KEY, EMPTY_KEY], vec![EMPTY_KEY]);
+        // extract_cookies passes the inner wreq Jar (the CookieStore impl).
+        let jar = wreq::cookie::Jar::default();
+        let count = read_cookies_from_db(&db_path, &decryptor, &jar).unwrap();
+
+        // Both cookies inserted: the decrypted "hello" and the plaintext one.
+        assert_eq!(count, 2);
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
