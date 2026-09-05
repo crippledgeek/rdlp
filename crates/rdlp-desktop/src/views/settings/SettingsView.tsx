@@ -4,6 +4,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { settingsQueryOptions, updateSettings } from "@/api/settings";
+import { errorMessage } from "@/lib/errorMessage";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { GeneralSection } from "./sections/GeneralSection";
@@ -83,13 +84,7 @@ export function SettingsView() {
             setSaved(true);
             setTimeout(() => setSaved(false), 2000);
         } catch (e: unknown) {
-            const msg =
-                e instanceof Error
-                    ? e.message
-                    : typeof e === "object" && e !== null && "message" in e
-                      ? String((e as Record<string, unknown>)["message"])
-                      : String(e);
-            setSaveError(msg);
+            setSaveError(errorMessage(e, "Failed to save settings"));
         }
     };
 

@@ -3,6 +3,8 @@
 // Compact mode (72px) used within playlist groups: no URL, episode title prominent.
 
 import { useStore } from "@tanstack/react-store";
+import { toast } from "@/components/ui/sonner";
+import { errorMessage } from "@/lib/errorMessage";
 import { X, RotateCcw, FolderOpen } from "lucide-react";
 import { Button as AriaButton } from "react-aria-components";
 import { uiStore, setSelectedJob } from "@/stores/uiStore";
@@ -44,7 +46,14 @@ export function JobCard({ job, compact = false }: JobCardProps) {
 
     async function handleReveal() {
         if (!job.output_path) return;
-        await invokeTyped<void>("reveal_in_folder", { path: job.output_path });
+        // Unhandled here before: an invoke rejection in an async handler is
+        // swallowed silently, so a failed reveal looked identical to a
+        // successful one (#693).
+        try {
+            await invokeTyped<void>("reveal_in_folder", { path: job.output_path });
+        } catch (e: unknown) {
+            toast.error(errorMessage(e, "Failed to reveal the file"));
+        }
     }
 
     // Episode label for compact mode (e.g. "Ep 3 — Episode Title")
