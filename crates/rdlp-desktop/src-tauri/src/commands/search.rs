@@ -80,7 +80,7 @@ pub async fn search_content(
             .settings
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        settings_network_options(&settings)
+        settings_network_options(&settings)?
     };
 
     if let Some(p) = page {
@@ -154,7 +154,7 @@ pub async fn enrich_search_result(
             .settings
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        settings_network_options(&settings)
+        settings_network_options(&settings)?
     };
 
     state

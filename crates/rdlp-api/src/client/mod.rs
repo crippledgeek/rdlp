@@ -196,7 +196,20 @@ impl RdlpClient {
         let config = match self.build_config(&request) {
             Ok(config) => Arc::new(config),
             Err(api_err) => {
-                return Self::failed_handle(id, tx, rx, cancel_token, cancel_disposition, api_err);
+                // Reported through the same two surfaces a mid-download
+                // failure uses — a terminal event and the join handle's
+                // `Err` — so a caller watching only events sees no new shape.
+                let failed_task = tokio::spawn(async move {
+                    // intentional: receiver may have disconnected
+                    let _ = tx
+                        .send(Event::Failed {
+                            id,
+                            error: api_err.clone(),
+                        })
+                        .await;
+                    Err(api_err)
+                });
+                return DownloadHandle::new(id, rx, cancel_token, cancel_disposition, failed_task);
             }
         };
         let interactive_flag = request.format.interactive;
@@ -718,32 +731,6 @@ impl RdlpClient {
         )
     }
 
-    /// A handle for a download that failed before it could start.
-    ///
-    /// The failure still arrives as a terminal [`Event::Failed`] on the event
-    /// stream and as the join handle's `Err`, so a caller that only watches
-    /// events sees the same shape it would for a mid-download failure.
-    fn failed_handle(
-        id: DownloadId,
-        tx: mpsc::Sender<Event>,
-        rx: mpsc::Receiver<Event>,
-        cancel_token: CancellationToken,
-        cancel_disposition: crate::cancel::CancelDisposition,
-        error: RdlpApiError,
-    ) -> DownloadHandle {
-        let join_handle = tokio::spawn(async move {
-            // intentional: receiver may have disconnected
-            let _ = tx
-                .send(Event::Failed {
-                    id,
-                    error: error.clone(),
-                })
-                .await;
-            Err(error)
-        });
-        DownloadHandle::new(id, rx, cancel_token, cancel_disposition, join_handle)
-    }
-
     /// Returns the shared client+jar to reuse for `request`, or `None` if it
     /// overrides a client-level network field and needs its own client.
     fn shared_http_for(&self, request: &DownloadRequest) -> Option<SharedHttpClient> {
@@ -845,8 +832,10 @@ async fn load_cookies_sanitized(orchestrator: &Orchestrator) -> Result<(), RdlpA
             path.display()
         ),
         // `load_cookies` only touches a configured source, so it cannot fail
-        // with neither set.
-        (None, None) => format!("Failed to load cookies: {e}"),
+        // with neither set. The detail is in the log above; interpolating `e`
+        // here would make this function's "never returned" guarantee
+        // conditional on that reasoning staying true.
+        (None, None) => "Failed to load cookies.".to_owned(),
     };
     Err(RdlpApiError::IoError { message })
 }
@@ -1378,7 +1367,7 @@ mod search_cookie_tests {
     /// through the override rather than the base config, so a green result
     /// proves the override reached `load_cookies()` rather than that the
     /// config did. Verified by mutation: stubbing out the `merge_into` call
-    /// in `one_shot_orchestrator` fails this test and only this one.
+    /// in `one_shot_orchestrator` fails this test.
     #[tokio::test]
     async fn search_page_honors_per_call_cookie_override() {
         let client = crate::RdlpClient::new(Config::default()).unwrap();

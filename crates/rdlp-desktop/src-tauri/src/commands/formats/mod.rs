@@ -58,7 +58,7 @@ pub async fn formats(
             .settings
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        crate::commands::network::settings_network_options(&settings)
+        crate::commands::network::settings_network_options(&settings)?
     };
 
     let info_dicts = state

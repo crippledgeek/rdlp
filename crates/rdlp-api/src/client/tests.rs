@@ -270,3 +270,53 @@ async fn test_download_without_cookie_source_does_not_fail_on_cookies() {
         "must not get a cookie-related Failed event when no cookie source is configured"
     );
 }
+
+/// A configured cookie source that cannot be loaded fails the download.
+///
+/// This is the download path's half of the cookie contract, and the branch
+/// `load_cookies_sanitized` rewrote from three outcomes to one — the
+/// `search_cookie_tests` module only reaches the one-shot paths, and the
+/// invalid-merge test exits before the spawn, so without this the in-task
+/// branch has no coverage at all.
+///
+/// Asserted on the sanitized message: it must name the configured source and
+/// give the FILE advice (not the browser advice a single shared string used
+/// to give for both).
+#[tokio::test]
+async fn test_download_reports_a_cookie_failure_as_a_failed_event() {
+    use std::path::PathBuf;
+
+    let config = Config {
+        cookies_file: Some(PathBuf::from("/nonexistent/path/cookies.txt")),
+        ..Config::default()
+    };
+    let client = RdlpClient::new(config).unwrap();
+    let mut handle = client.download(DownloadRequest::new("http://example.com/video"));
+
+    let mut got_failed = false;
+    while let Some(event) = handle.events().recv().await {
+        if let Event::Failed { error, .. } = &event {
+            got_failed = true;
+            let msg = error.user_message();
+            assert!(
+                msg.contains("/nonexistent/path/cookies.txt"),
+                "must name the configured source; got: {msg}"
+            );
+            assert!(
+                msg.contains("Netscape cookie file"),
+                "must give the file-source advice; got: {msg}"
+            );
+            assert!(
+                !msg.contains("os error"),
+                "must not leak the loader's own error text; got: {msg}"
+            );
+            break;
+        }
+    }
+    assert!(
+        got_failed,
+        "expected a Failed event when the configured cookie file is missing"
+    );
+
+    handle.cancel();
+}
