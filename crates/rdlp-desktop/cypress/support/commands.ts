@@ -4,6 +4,8 @@
 
 /// <reference types="cypress" />
 
+import { setupTauriMock, type InvokeHandler } from "./tauriMock";
+
 declare global {
     namespace Cypress {
         interface Chainable {
@@ -32,6 +34,16 @@ declare global {
              * Navigate to the History tab in the sidebar.
              */
             goToHistory(): Chainable<void>;
+
+            /**
+             * Visit the app with the Tauri IPC mock installed, overriding
+             * individual command handlers for this test.
+             *
+             * The global `beforeEach` in support/e2e.ts already visits with the
+             * default handlers; use this only when a test needs different ones.
+             * @param overrides - Handlers to replace, keyed by command name.
+             */
+            visitWithMock(overrides?: Record<string, InvokeHandler>): Chainable<void>;
         }
     }
 }
@@ -59,6 +71,24 @@ Cypress.Commands.add("goToQueue", () => {
 Cypress.Commands.add("goToHistory", () => {
     cy.get('[aria-label^="History"]').first().click();
 });
+
+// Three places wrote this same `cy.visit("/", { onBeforeLoad(win) {
+// setupTauriMock(win, ...) } })` block: the global `beforeEach` and each of
+// the two specs that need custom handlers. It is also the form the
+// unregistered-command error tells you to reach for — and that error, and the
+// doc comment on `defaultHandlers` in ./tauriMock, both named
+// `cy.visitWithMock()` while nothing defined it. Defining it once makes the
+// citation true and gives all three call sites one mechanism to share.
+Cypress.Commands.add(
+    "visitWithMock",
+    (overrides: Record<string, InvokeHandler> = {}) => {
+        cy.visit("/", {
+            onBeforeLoad(win) {
+                setupTauriMock(win, overrides);
+            },
+        });
+    },
+);
 
 // cypress-axe registers cy.injectAxe() and cy.checkA11y() globally via its
 // import in cypress/support/e2e.ts. Types ship with the package; no extra

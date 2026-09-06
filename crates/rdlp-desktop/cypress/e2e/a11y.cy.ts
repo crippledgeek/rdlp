@@ -34,6 +34,29 @@ function logViolations(violations: AxeResult[]) {
     cy.task("log", JSON.stringify(data, null, 2)).then(() => {});
 }
 
+/**
+ * Expand the logs drawer if it is currently collapsed.
+ *
+ * In practice it always is: the global `beforeEach` (support/e2e.ts) visits
+ * afresh before every test, and `bottomDrawerExpanded` is in-memory state
+ * defaulting to false (stores/uiStore.ts:48), so a load always returns it
+ * collapsed. The "drawer toggle exposes aria-expanded" test relies on exactly
+ * that — it runs straight after the first caller below, asserts
+ * `aria-expanded === "false"` unconditionally, and passes.
+ *
+ * So the conditional is not guarding against observed inherited state. It
+ * guards the ASSUMPTION: a spec-local visit, `testIsolation: false`, or
+ * persisting that store would each leave the drawer open, and an unconditional
+ * click would then close the drawer these two tests need open.
+ */
+function ensureDrawerExpanded() {
+    cy.get("body").then(($body) => {
+        if ($body.find('[aria-label="Expand drawer"]').length > 0) {
+            cy.get('[aria-label="Expand drawer"]').click();
+        }
+    });
+}
+
 function injectAndCheck(page: Parameters<typeof allowlistFor>[0]) {
     cy.injectAxe();
     cy.checkA11y(
@@ -72,12 +95,7 @@ describe("a11y: WCAG 2.1 AA regression", () => {
     });
 
     it("Logs drawer expanded", () => {
-        // Ensure drawer is expanded regardless of state inherited from prior tests.
-        cy.get("body").then(($body) => {
-            if ($body.find('[aria-label="Expand drawer"]').length > 0) {
-                cy.get('[aria-label="Expand drawer"]').click();
-            }
-        });
+        ensureDrawerExpanded();
         injectAndCheck("logs-expanded");
     });
 
@@ -94,12 +112,7 @@ describe("a11y: WCAG 2.1 AA regression", () => {
     });
 
     it("log severity chips toggle aria-pressed", () => {
-        // Ensure drawer is expanded regardless of state inherited from prior tests.
-        cy.get("body").then(($body) => {
-            if ($body.find('[aria-label="Expand drawer"]').length > 0) {
-                cy.get('[aria-label="Expand drawer"]').click();
-            }
-        });
+        ensureDrawerExpanded();
         // All four chips start pressed (default filter set is full).
         ["info", "warn", "error", "debug"].forEach((level) => {
             cy.contains("button", new RegExp(`^${level}$`, "i"))
