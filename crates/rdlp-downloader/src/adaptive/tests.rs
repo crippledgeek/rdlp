@@ -610,11 +610,13 @@ fn chunk_clause_reports_the_applied_transition() {
 /// At the floor the clause says so instead of claiming a decrease.
 ///
 /// This is the regression the intent-derived version shipped: `MIN_CHUNK_LEVEL`
-/// is also the default starting level, so a download spends much of its life at
-/// or near the floor and a −2 from there clamps — while the message announced
-/// "chunk -2" regardless. Saturation is the state an operator most needs during
-/// a throughput collapse that nothing relieves, so it is reported rather than
-/// omitted.
+/// is also the default starting level, so a −2 requested at the start clamps
+/// and moves nothing — while the message announced "chunk -2" regardless.
+/// Saturation is the state an operator most needs during a throughput collapse
+/// that nothing relieves, so it is reported rather than omitted.
+///
+/// No claim is made here about how often that happens; see `apply_chunk_delta`
+/// for why this comment set stopped making frequency arguments.
 ///
 /// Fails against the intent-derived version, which had no floor branch at all.
 #[test]
@@ -643,10 +645,12 @@ fn chunk_clause_reports_saturation_at_the_floor() {
     );
 }
 
-/// Pins the ladder the clause doc describes in prose.
+/// Pins the +2 ramp and the floor clamp through the controller's own phase
+/// machine.
 ///
-/// That claim was edited wrong twice by hand, so it is asserted rather than
-/// reasoned about. The load-bearing half is that the FIRST adjustment of a real
+/// The clause doc no longer narrates this sequence — repeated attempts to put
+/// it in prose were each wrong — so it is asserted here instead. The
+/// load-bearing half is that the FIRST adjustment of a real
 /// download ramps by +2 — so the ramp is driven through the controller's own
 /// phase machine (`report_chunk_complete` → `adjust` → `adjust_slow_start`'s
 /// `prev_ewma == None` arm) rather than by calling `apply_chunk_delta` with a
@@ -690,5 +694,42 @@ fn floor_is_one_decrease_below_the_first_ramp() {
     assert!(
         second.contains("already at the minimum"),
         "the next consecutive decrease saturates, got: {second}"
+    );
+}
+
+/// The startup summary names the level the controller will actually run.
+///
+/// `AdaptiveState::new` clamps to `[MIN_CHUNK_LEVEL, 7]`, but the summary was
+/// built from the raw config value — so a controller configured below the floor
+/// announced `chunk_level=0 (64KB)` while running at 2 (256KB). Operator-facing
+/// text describing a state the process is not in is the same defect this branch
+/// exists to remove, one layer down.
+#[test]
+fn startup_summary_reports_the_clamped_level() {
+    let logged = Arc::new(Mutex::new(Vec::<String>::new()));
+    let below_floor = AdaptiveConfig {
+        initial_chunk_level: 0,
+        ..AdaptiveConfig::default()
+    };
+    let _ctrl = AdaptiveController::new(
+        1024 * 1024,
+        below_floor,
+        ControllerMode::HttpChunked,
+        Some(Arc::new(RecordingCallback {
+            logs: Arc::clone(&logged),
+        })),
+    );
+
+    let summary = logged.lock().expect("lock")[0].clone();
+    assert!(
+        summary.contains(&format!("chunk_level={MIN_CHUNK_LEVEL}")),
+        "the summary must name the clamped level, got: {summary}"
+    );
+    assert!(
+        summary.contains(&format!(
+            "({}KB)",
+            CHUNK_LEVELS[MIN_CHUNK_LEVEL as usize] / 1024
+        )),
+        "and the byte size that goes with it, got: {summary}"
     );
 }

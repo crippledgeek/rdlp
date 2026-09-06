@@ -70,7 +70,10 @@ const EWMA_ALPHA: f64 = 0.3;
 /// Threshold for "significant drop" (triggers multiplicative decrease).
 const MD_THRESHOLD: f64 = 0.30;
 
-/// Threshold for "mild noise" (within 10 %, hold steady).
+/// Lower bound of the hold band. A drop ABOVE this and below `MD_THRESHOLD`
+/// is treated as noise and the level holds; at or below it, throughput counts
+/// as stable or improving and the level steps up (+1). Pre-existing wording
+/// said "within 10 %, hold steady", which named the one case that does not.
 const NOISE_THRESHOLD: f64 = 0.10;
 
 /// Number of consecutive plateaus in `SlowStart` before transitioning to Steady.
@@ -81,7 +84,9 @@ const SLOW_START_PLATEAU_LIMIT: usize = 3;
 /// Congestion-control phase for the adaptive controller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
-    /// Aggressive ramp-up: chunk level grows by 2 each interval.
+    /// Aggressive ramp-up: chunk level grows by 2 each interval WHILE
+    /// throughput is growing. A plateau interval counts toward the exit
+    /// instead and moves the level not at all.
     SlowStart,
     /// AIMD steady state: chunk +1 level on stability, −2 levels on congestion.
     Steady,
@@ -213,17 +218,22 @@ impl AdaptiveController {
         mode: ControllerMode,
         log_callback: Option<Arc<dyn ProgressCallback>>,
     ) -> Self {
+        // Built from the state's level, not the config's: `AdaptiveState::new`
+        // clamps to [`MIN_CHUNK_LEVEL`, 7], so reporting the raw config value
+        // told the operator `chunk_level=0 (64KB)` for a controller that would
+        // run at 2 (256KB) — and indexing `CHUNK_LEVELS` with an out-of-range
+        // config value would panic before the clamp could help.
+        let state = AdaptiveState::new(config.initial_chunk_level);
         let msg = format!(
             "Adaptive controller: mode={mode:?}, size={:.1} MB, \
              connections={} (fixed), chunk_level={} ({}KB)",
             total_size as f64 / 1024.0 / 1024.0,
             config.max_connections,
-            config.initial_chunk_level,
-            CHUNK_LEVELS[config.initial_chunk_level as usize] / 1024,
+            state.current_chunk_level,
+            CHUNK_LEVELS[state.current_chunk_level as usize] / 1024,
         );
         info!("{msg}");
         let semaphore = Arc::new(Semaphore::new(config.max_connections.max(1)));
-        let state = AdaptiveState::new(config.initial_chunk_level);
         let ctrl = Self {
             state: Mutex::new(state),
             semaphore,
@@ -505,24 +515,21 @@ impl AdaptiveController {
     /// Apply `delta` to the chunk level and describe what actually happened.
     ///
     /// The returned clause is a message's only claim about the chunk level, and
-    /// it reports the *applied* transition rather than the requested delta.
-    /// Intent and outcome diverge routinely, not rarely: the level clamps at
-    /// both ends, and `MIN_CHUNK_LEVEL` is also the default starting level
-    /// (`AdaptiveConfig::default`), so a download sits at or near the floor for
-    /// much of its life and a −2 from level 2 or 3 clamps. Saturation is common
-    /// rather than an edge case, which is why it is reported instead of passed
-    /// over: "already at the minimum" is what an operator needs during a
-    /// throughput collapse that nothing relieves, and it is precisely what an
-    /// intent-derived clause hides.
+    /// it reports the *applied* transition rather than the requested delta. The
+    /// two differ because the level clamps at both ends, and because
+    /// `HlsSegments` mode discards the adjustment entirely — there the clause is
+    /// empty.
     ///
-    /// That states a property, not a trajectory, deliberately. Three successive
-    /// attempts to narrate the ladder here were each wrong, because the level's
-    /// path depends on how many intervals rose before the first drop.
-    /// `floor_is_one_decrease_below_the_first_ramp` pins one concrete sequence;
-    /// the general claim belongs in no comment.
+    /// The saturation wording exists for one structural reason:
+    /// `AdaptiveConfig::default().initial_chunk_level` IS `MIN_CHUNK_LEVEL`, so
+    /// a −2 requested at the start moves nothing, and an intent-derived clause
+    /// would announce a cut that did not occur.
+    /// `chunk_clause_reports_saturation_at_the_floor` pins exactly that.
     ///
-    /// In `HlsSegments` mode the adjustment is discarded entirely and the
-    /// clause is empty.
+    /// How OFTEN saturation happens is deliberately not claimed here. Every
+    /// previous version of this comment tried to characterise where the level
+    /// spends its time, and each one was wrong in a new way; the branch needs no
+    /// frequency argument to justify it, so it makes none.
     ///
     /// These messages reach the UI's log pane through `log_callback`, so this
     /// text is read by operators, not only by the log file.
