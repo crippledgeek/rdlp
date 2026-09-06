@@ -4,7 +4,6 @@
 // queries (search). The site selector is hidden via CSS until the input is in
 // search mode (i.e., the displayValue is non-empty and does not look like a URL).
 
-import { setupTauriMock } from "../support/e2e";
 
 const INPUT = 'input[aria-label="URL or search query"]';
 const CLEAR_BUTTON = 'button[aria-label="Clear input"]';
@@ -67,17 +66,13 @@ describe("Search flow", () => {
 
     it("shows the no-results state when search returns empty", () => {
         // Override the search mock to return empty results.
-        cy.visit("/", {
-            onBeforeLoad(win) {
-                setupTauriMock(win, {
-                    search_content: () => ({
-                        results: [],
-                        page: 1,
-                        has_more: false,
-                        total_estimate: 0,
-                    }),
-                });
-            },
+        cy.visitWithMock({
+            search_content: () => ({
+                results: [],
+                page: 1,
+                has_more: false,
+                total_estimate: 0,
+            }),
         });
 
         cy.get(INPUT).type("no results query{enter}");

@@ -2,7 +2,6 @@
 //
 // Covers: loading settings, changing values, saving, and error handling.
 
-import { setupTauriMock } from "../support/e2e";
 
 // Selectors specific to React Aria Components rendered by Jolly UI:
 // - Checkbox renders as a <label> with data-selected reflecting checked state.
@@ -67,13 +66,9 @@ describe("Settings page", () => {
     });
 
     it("shows error alert when save fails", () => {
-        cy.visit("/", {
-            onBeforeLoad(win) {
-                setupTauriMock(win, {
-                    update_settings: () => {
-                        throw new Error("Disk full");
-                    },
-                });
+        cy.visitWithMock({
+            update_settings: () => {
+                throw new Error("Disk full");
             },
         });
 
