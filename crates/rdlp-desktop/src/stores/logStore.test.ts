@@ -128,6 +128,54 @@ describe("cap boundary", () => {
     });
 });
 
+describe("hidden window — records arriving with no frames at all", () => {
+    // `requestAnimationFrame` does not fire while the document is not being
+    // rendered, so a minimized or occluded window accepts records from Rust
+    // with no flush in between, for as long as it stays hidden. These bursts
+    // therefore run with NO drainFrames() until the very end.
+    //
+    // Honest limit of this test: it cannot observe the memory bound, only the
+    // published result — an implementation that buffered all 15000 entries and
+    // trimmed at flush time would pass it too. The bound is structural (a
+    // fixed-size ring, no trim branch to delete) rather than test-visible.
+    // What these DO pin is the wraparound arithmetic that the fixed-size
+    // buffer introduces, which a trimmed array never had to get right.
+    it("holds exactly the newest MAX_ENTRIES after three full laps", () => {
+        appendN(MAX_ENTRIES * 3, "lap");
+        drainFrames();
+
+        const { entries } = logStore.state;
+        expect(entries).toHaveLength(MAX_ENTRIES);
+        expect(entries[0]?.message).toBe(`lap${MAX_ENTRIES * 2}`);
+        expect(entries[MAX_ENTRIES - 1]?.message).toBe(`lap${MAX_ENTRIES * 3 - 1}`);
+    });
+
+    it("stays ordered oldest-first across a wrap", () => {
+        appendN(MAX_ENTRIES + 3, "w");
+        drainFrames();
+
+        const ids = logStore.state.entries.map((e) => e.id);
+        for (let i = 1; i < ids.length; i++) {
+            expect(ids[i]!).toBeGreaterThan(ids[i - 1]!);
+        }
+    });
+
+    it("keeps the window correct when flushes land mid-lap", () => {
+        // A window that is restored, hidden again, restored — snapshots taken
+        // at arbitrary points in the ring rather than only at a lap boundary.
+        appendN(MAX_ENTRIES - 2, "a");
+        drainFrames();
+        appendN(5, "b"); // crosses the wrap point
+        drainFrames();
+
+        const { entries } = logStore.state;
+        expect(entries).toHaveLength(MAX_ENTRIES);
+        expect(entries[MAX_ENTRIES - 1]?.message).toBe("b4");
+        // Three of the original entries were evicted by the five new ones.
+        expect(entries[0]?.message).toBe("a3");
+    });
+});
+
 describe("ordering and identity", () => {
     it("preserves FIFO order across an eviction", () => {
         appendN(MAX_ENTRIES + 10);
