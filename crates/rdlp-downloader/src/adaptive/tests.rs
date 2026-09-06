@@ -489,8 +489,11 @@ fn test_realtime_ratio_calculation() {
 /// them).
 /// On the CLI they also remain reachable with `-v`, whose filter admits DEBUG.
 ///
-/// The startup summary (one line per download, naming mode/size/connections)
-/// stays at INFO deliberately — that one is operator-relevant.
+/// The startup summary (one line per controller, naming
+/// mode/size/connections) stays at INFO deliberately — that one is
+/// operator-relevant. It is one line per download only where a single
+/// controller is built; DASH constructs one per representation, so a download
+/// with separate audio emits two.
 #[test]
 fn per_adjustment_messages_are_debug_not_info() {
     testing_logger::setup();

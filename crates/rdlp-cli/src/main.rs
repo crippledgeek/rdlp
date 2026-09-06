@@ -533,10 +533,10 @@ mod tests {
     /// produce a filter that looks fine and logs nothing — the parameter being
     /// typed prevents an invalid *level*, never a mistake in this function.
     ///
-    /// Asserts the whole rendering rather than a substring: `contains("zbus")`
-    /// would pass on a bare `zbus` directive, which parses and means TRACE —
-    /// the precise noise regression this branch removes — and would not notice
-    /// the level half being mangled at all.
+    /// Asserts the full `zbus=warn` directive rather than the bare target:
+    /// `contains("zbus")` would pass on a bare `zbus` directive, which parses
+    /// and means TRACE — the precise noise regression this branch removes — and
+    /// would not notice the level half being mangled at all.
     #[test]
     fn filter_directive_parses() {
         for level in [tracing::Level::INFO, tracing::Level::DEBUG] {

@@ -14,7 +14,7 @@
 /// INFO and carries authentication material, not merely volume:
 ///
 /// - zbus 5.14.0 contains exactly one `info!` call site in the entire crate
-///   (`connection/mod.rs`, "Connection lost name"). The 140 INFO lines
+///   (`connection/mod.rs`, the "lost name" warning). The 140 INFO lines
 ///   observed in a single 287-line session came from `#[instrument]`, whose
 ///   default level is INFO, on `write_commands`/`read_commands`
 ///   (`connection/handshake/common.rs`).
@@ -64,10 +64,14 @@ pub const ZBUS: &str = "zbus";
 ///
 /// The field-conditional rule covers span creation and `record_all`. A span's
 /// *close* record takes this target unconditionally (`Drop for Span`), fields
-/// or not — but it is emitted at TRACE and discarded either way. It does not
-/// even reach this filter: fern sets `log::max_level` to the maximum of the
-/// default level and every override, so the `log!` macro gates a TRACE record
-/// against that ceiling first. Had it got through, the `Warn` here would
-/// discard it too — fern's per-target lookup replaces the global level rather
-/// than combining with it (`find_module(target).unwrap_or(default_level)`).
+/// or not — but it is emitted at TRACE and discarded BY this filter, not
+/// despite it.
+///
+/// The `max_level` ceiling does not stop it: `Span::log` compares the SPAN's
+/// own level (INFO, for zbus's `#[instrument]`) against `log::max_level`, not
+/// the TRACE level of the record it is about to emit, so that gate passes. The
+/// record then reaches `logger.enabled()` carrying `{level: Trace, target:
+/// "tracing::span"}`, where fern's per-target lookup returns the `Warn` set
+/// here — it replaces the global level rather than combining with it
+/// (`find_module(target).unwrap_or(default_level)`) — and TRACE is below it.
 pub const TRACING_SPAN_LIFECYCLE: &str = "tracing::span";
