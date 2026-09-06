@@ -357,11 +357,25 @@ error, an `Event::Failed` reaching a background consumer — reaches the log
    `tracing-subscriber` is installed — builds a five-field `ValueSet` (message,
    target, module, file, line) and never calls the record's `key_values()`; the
    kv pairs are dropped before any `tracing` layer sees the event, so the CLI
-   sink never receives them. `tauri-plugin-log` 2.9.1's default formatter
-   (`out.finish(format_args!("[{}] {}", record.target(), message))` and its
-   colored variant, which adds only level and timestamp) interpolates target,
-   level, and message — nothing else — so the desktop sink drops them too. Both
-   are version-specific findings; re-check them if either crate moves.
+   sink never receives them. `tauri-plugin-log` 2.9.1's `Builder::default()`
+   (`lib.rs:427-441`, the `#[cfg(desktop)]` branch this app actually runs) does
+   the same:
+
+   ```rust
+   format_args!(
+       "{}[{}][{}] {}",
+       DEFAULT_TIMEZONE_STRATEGY.get_now().format(&format).unwrap(),
+       record.target(),
+       record.level(),
+       message
+   )
+   ```
+
+   — timestamp, target, level, and message, never a kv field, because this
+   closure never calls `record.key_values()` either. The desktop sink drops
+   kv pairs for the same reason the CLI does, not because its field list is
+   short. Both findings are version-specific; re-check them if either crate
+   moves.
    OpenTelemetry's "static event name, structured attributes" guidance cannot be
    followed literally on this stack as a result — a stable field vocabulary
    folded into the message string is the adaptation.
