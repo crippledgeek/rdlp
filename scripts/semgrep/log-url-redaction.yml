@@ -27,3 +27,89 @@ rules:
             - pattern-not: rdlp_redact ...
             - pattern-not: sanitize_for_logging ...
             - pattern-not: rdlp_security ...
+
+  # Sibling of raw-url-in-log-field, covering the ATTRIBUTE form the macro
+  # rule above cannot see. `#[instrument(..., fields(url = %url))]` puts the
+  # credential-shaped field name and its sigil on the RIGHT of `=` (`url =
+  # %url`), the opposite of the structured-kv shape `check-url-redaction.sh`'s
+  # grep and this file's other rule both anchor on (`url:? = <var>` / `url =
+  # $X ...` as a call). It reached a log file on disk from three real sites
+  # before they were fixed to wrap the value in RedactedUrl (#695).
+  - id: raw-url-in-instrument-field
+    languages: [generic]
+    severity: ERROR
+    # generic_ellipsis_max_span: 0 confines every "..." in this rule (both the
+    # detection patterns and the pattern-not-inside exclusion below) to a
+    # SINGLE line. Without it, generic mode's ellipsis can span up to 10
+    # lines (semgrep docs, "generic pattern matching") -- measured directly:
+    # a multi-line `///` doc paragraph followed a few lines later by a real
+    # `#[instrument(fields(url = %url))]` was SILENTLY EXCLUDED, because the
+    # exclusion's own ellipsis bled past the comment block into the real
+    # violation. Every attribute this rule targets is written on one physical
+    # line in this codebase, so span:0 costs nothing on the detection side.
+    options:
+      generic_ellipsis_max_span: 0
+    paths:
+      include: ['*.rs']
+    message: >-
+      Raw URL (or URL-shaped value: uri/endpoint/src/location/target/addr/host)
+      in a #[instrument] span field reaches the logger unredacted (CWE-532).
+      Wrap the value with rdlp_redact::RedactedUrl::new(<url>) so its Display
+      redacts credentials. See CODING_RULES.md "URL Redaction — Controls
+      (tiered)". (#695)
+    patterns:
+      # `fields(...)` can be instrument's only argument, its first, its last,
+      # or sandwiched between others (e.g. `skip(self)`) -- and independently,
+      # the credential-shaped field can be fields()'s only entry, first,
+      # last, or sandwiched among sibling fields. Validated empirically
+      # (uvx semgrep against synthetic fixtures, 2026-09-06): a leading or
+      # trailing "..." in generic mode does NOT match when there is nothing
+      # on that side, so a single pattern using outer ellipsis unconditionally
+      # misses the "sole argument" shapes at BOTH levels. All 4x4 = 16
+      # combinations are enumerated rather than assumed away.
+      #
+      # $...X (not $X) after the `%` sigil: generic mode's plain metavariable
+      # captures exactly ONE token ("generic pattern matching" docs), so `$X`
+      # matched a bare `url` but silently failed to match a dotted/qualified
+      # expression like `format.url` or `self.state.url` -- a real mutation
+      # test against execution.rs's `fields(url = %format.url, ...)` shape
+      # proved this: it passed the gate uncaught until switched to `$...X`.
+      - pattern-either:
+          - pattern: '#[instrument(fields($FIELD = %$...X))]'
+          - pattern: '#[instrument(fields($FIELD = %$...X), ...)]'
+          - pattern: '#[instrument(..., fields($FIELD = %$...X))]'
+          - pattern: '#[instrument(..., fields($FIELD = %$...X), ...)]'
+          - pattern: '#[instrument(fields($FIELD = %$...X, ...))]'
+          - pattern: '#[instrument(fields($FIELD = %$...X, ...), ...)]'
+          - pattern: '#[instrument(..., fields($FIELD = %$...X, ...))]'
+          - pattern: '#[instrument(..., fields($FIELD = %$...X, ...), ...)]'
+          - pattern: '#[instrument(fields(..., $FIELD = %$...X))]'
+          - pattern: '#[instrument(fields(..., $FIELD = %$...X), ...)]'
+          - pattern: '#[instrument(..., fields(..., $FIELD = %$...X))]'
+          - pattern: '#[instrument(..., fields(..., $FIELD = %$...X), ...)]'
+          - pattern: '#[instrument(fields(..., $FIELD = %$...X, ...))]'
+          - pattern: '#[instrument(fields(..., $FIELD = %$...X, ...), ...)]'
+          - pattern: '#[instrument(..., fields(..., $FIELD = %$...X, ...))]'
+          - pattern: '#[instrument(..., fields(..., $FIELD = %$...X, ...), ...)]'
+      # extraction.rs's own regression test DOCUMENTS this exact vulnerable
+      # shape, verbatim, inside a `///` line ("`#[instrument(fields(url =
+      # %url))]` interpolated a raw..."). Generic mode has no concept of a
+      # Rust comment, so without this exclusion the quote itself is flagged.
+      # Validated: this excludes ONLY the doc-comment line and does not
+      # narrow detection of any of the 16 real-code shapes above.
+      - pattern-not-inside: '/// ...'
+      - metavariable-regex:
+          metavariable: $FIELD
+          regex: '^(url|uri|endpoint|src|location|target|addr|host)$'
+      - metavariable-pattern:
+          metavariable: $...X
+          patterns:
+            # Same sanitizer allowlist as raw-url-in-log-field, reused rather
+            # than re-derived: generic-mode pattern-not is prefix-matched, and
+            # surrounding it with ellipsis breaks that (see the comment
+            # above), so each form is enumerated rather than wrapped.
+            - pattern-not: RedactedUrl ...
+            - pattern-not: RedactedUrlBuf ...
+            - pattern-not: rdlp_redact ...
+            - pattern-not: sanitize_for_logging ...
+            - pattern-not: rdlp_security ...
