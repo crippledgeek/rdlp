@@ -63,3 +63,14 @@ export async function mockEmit(event: string, payload?: unknown): Promise<void> 
 export function clearEventListeners(): void {
     eventListeners.clear();
 }
+
+/**
+ * How many listeners are currently registered for `event`.
+ *
+ * Lets a teardown test assert the listener was actually removed. Asserting
+ * only that a handler stopped being called cannot distinguish an unlisten from
+ * a `mounted`-style guard that leaves the listener attached and leaking.
+ */
+export function listenerCount(event: string): number {
+    return eventListeners.get(event)?.length ?? 0;
+}

@@ -3,7 +3,7 @@
 // event into the Log Viewer's ring buffer.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { mockEmit, clearEventListeners } from "@/test/tauri-mock";
+import { mockEmit, clearEventListeners, listenerCount } from "@/test/tauri-mock";
 
 const appendLog = vi.fn();
 
@@ -90,5 +90,20 @@ describe("registerLogEvents", () => {
         await mockEmit("log://log", { message: "after teardown", level: 3 });
 
         expect(appendLog).not.toHaveBeenCalled();
+    });
+
+    // Deliberately separate from the assertion above, which the `mounted`
+    // guard alone satisfies: delete the unlisten call and the handler still
+    // stops appending, while staying subscribed to the event forever. Only the
+    // listener count can see that leak, and the cleanup exists for no other
+    // reason than to prevent it.
+    it("detaches the listener on cleanup, not merely silences it", async () => {
+        expect(listenerCount("log://log")).toBe(1);
+
+        cleanup();
+        await Promise.resolve();
+        await Promise.resolve();
+
+        expect(listenerCount("log://log")).toBe(0);
     });
 });

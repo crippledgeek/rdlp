@@ -144,23 +144,47 @@ pub fn run() {
         // `download-log` messages — no facade record had ever reached it.
         .plugin(
             tauri_plugin_log::Builder::new()
+                // The builder's default prefix lives on the ROOT dispatch
+                // (`Builder::new()` is `Default::default()`), and fern hands
+                // each child target a record whose `args()` are already the
+                // parent's output — `FormatCallback::finish` rebuilds the
+                // record with `.args(formatted_message)` before passing it
+                // down (fern 0.7.1, src/log_impl.rs:531-547).
+                //
+                // So a per-target formatter WRAPS the default prefix rather
+                // than replacing it. Clearing the root is what makes each
+                // target's own format authoritative; without this the pane
+                // would render the timestamp and level twice and the target
+                // three times.
+                .clear_format()
                 .targets([
-                    // Formatted for a pane that renders its own timestamp and
-                    // level badge: emitting the builder's default
-                    // `[date][time][target][LEVEL] msg` would print both twice
-                    // in every row. The target survives because it is the one
-                    // part the pane cannot recover — which crate spoke.
-                    //
-                    // Applied per-target, so `LogDir` below keeps the full
-                    // default prefix. A file has no surrounding UI to carry
-                    // that context.
+                    // The pane renders its own timestamp and level badge, so
+                    // the one thing it cannot recover is which crate spoke.
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview).format(
                         |out, message, record| {
                             out.finish(format_args!("[{}] {message}", record.target()));
                         },
                     ),
+                    // A file has no surrounding UI to carry that context, so
+                    // it keeps the full prefix. This reproduces the shape the
+                    // plugin's own default emitted (tauri-plugin-log 2.9.1,
+                    // src/lib.rs:429-441) — including its UTC basis
+                    // (`DEFAULT_TIMEZONE_STRATEGY`, lib.rs:53), so clearing the
+                    // root above does not silently change what the file has
+                    // always looked like. `chrono` rather than `time` because
+                    // the desktop crate already depends on it.
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
                         file_name: None,
+                    })
+                    .format(|out, message, record| {
+                        // One `now()`: two calls can straddle a second
+                        // boundary and print a date and a time that disagree.
+                        out.finish(format_args!(
+                            "{}[{}][{}] {message}",
+                            chrono::Utc::now().format("[%Y-%m-%d][%H:%M:%S]"),
+                            record.target(),
+                            record.level(),
+                        ));
                     }),
                 ])
                 .level(LOG_LEVEL)
