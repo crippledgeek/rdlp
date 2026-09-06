@@ -17,6 +17,25 @@
 //! `unicode-security` dependency (those solve heavier adjacent problems — full
 //! `BidiClass` resolution and identifier-spoofing detection — that this
 //! byte-inert-ing task does not need).
+//!
+//! ## Why this lives in `rdlp-redact`, not `rdlp-security`
+//!
+//! This module moved from `rdlp-security` (#695): `rdlp-types` needed
+//! `sanitize_for_terminal` for its boundary-record `Display` impl, and pulling
+//! in `rdlp-security` for one string filter dragged `ipnet`, `url`,
+//! `thiserror`, and `log` into a crate documented as "pure data types … no
+//! I/O" for a function that does no networking and validates no URL.
+//!
+//! `rdlp-redact` was already `rdlp-types`'s dependency, and is the closer
+//! fit: both this module and [`redact_str`](crate::redact_str) exist to make
+//! attacker- or operator-influenced text **safe to write to a boundary
+//! sink** — a log line or a terminal — before it gets there. `redact_str`
+//! strips *credentials*; this module strips *control and bidi-formatting
+//! characters* (CWE-117 log injection, CWE-150 terminal escape injection,
+//! CVE-2021-42574 Trojan Source). Different threat, same job: the last thing
+//! standing between attacker-controlled text and the sink. `rdlp-security`
+//! keeps the concern that actually needs its dependencies — SSRF/URL
+//! validation — and stays free of this one.
 
 /// Return `true` for the Unicode bidi controls used in "Trojan Source" spoofing.
 ///
@@ -37,7 +56,7 @@
 /// # Examples
 ///
 /// ```
-/// use rdlp_security::text::is_bidi_control;
+/// use rdlp_redact::text::is_bidi_control;
 ///
 /// assert!(is_bidi_control('\u{202e}')); // RIGHT-TO-LEFT OVERRIDE
 /// assert!(is_bidi_control('\u{2066}')); // LEFT-TO-RIGHT ISOLATE

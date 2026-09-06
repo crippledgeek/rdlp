@@ -15,7 +15,7 @@
 use std::fmt;
 
 use rdlp_redact::RedactedUrl;
-use rdlp_security::text::sanitize_for_terminal;
+use rdlp_redact::text::sanitize_for_terminal;
 
 /// What a boundary action acted on. At most one per record.
 ///

@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use log::{debug, error, warn};
 use rdlp_api::InfoDict;
 use rdlp_api::RdlpApiError;
-use rdlp_security::text::sanitize_for_terminal;
+use rdlp_redact::text::sanitize_for_terminal;
 use rdlp_types::boundary::{Action, failure_record};
 
 /// Print all supported codecs

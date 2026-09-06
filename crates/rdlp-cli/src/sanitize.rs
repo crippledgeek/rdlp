@@ -19,10 +19,11 @@
 //! strips control characters at the filesystem boundary — here we guard the
 //! terminal/log boundary the same way.
 
-// The implementation moved to `rdlp-security` when `rdlp-types`'s boundary
-// record needed the same filter: rdlp-types cannot depend on this binary
-// crate, and the character classes it composes (`char::is_control` plus
-// `is_bidi_control`) already lived there. Re-exported rather than relocated
-// at every call site so `rdlp_cli::sanitize::sanitize_for_terminal` keeps
-// naming the CLI's terminal boundary.
-pub use rdlp_security::text::sanitize_for_terminal;
+// The implementation moved to `rdlp-security` (then to `rdlp-redact`, #695)
+// when `rdlp-types`'s boundary record needed the same filter: rdlp-types
+// cannot depend on this binary crate, and the character classes it composes
+// (`char::is_control` plus `is_bidi_control`) already lived there. Re-exported
+// rather than relocated at every call site so
+// `rdlp_cli::sanitize::sanitize_for_terminal` keeps naming the CLI's terminal
+// boundary.
+pub use rdlp_redact::text::sanitize_for_terminal;

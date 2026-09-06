@@ -21,14 +21,14 @@ use rdlp_types::boundary::Action;
 /// length to 500 characters to prevent oversized or malformed queries from
 /// reaching the backend.
 ///
-/// Bidi-control stripping ([`rdlp_security::text::is_bidi_control`]) keeps this
+/// Bidi-control stripping ([`rdlp_redact::text::is_bidi_control`]) keeps this
 /// boundary consistent with the terminal and filesystem sanitizers; the
 /// zero-width joiner `U+200D` that legitimate emoji depend on is preserved.
 fn sanitize_query(input: &str) -> String {
     input
         .trim()
         .chars()
-        .filter(|c| !c.is_control() && !rdlp_security::text::is_bidi_control(*c))
+        .filter(|c| !c.is_control() && !rdlp_redact::text::is_bidi_control(*c))
         .take(500)
         .collect()
 }

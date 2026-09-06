@@ -5,12 +5,18 @@
 //! wrapper types [`RedactedUrl`] (borrowed) and [`RedactedUrlBuf`] (owned) whose
 //! [`Display`](std::fmt::Display) / [`Debug`](std::fmt::Debug) implementations
 //! automatically redact on format.
+//!
+//! Also provides [`text`], the control/bidi-character filters that make text
+//! safe to reach a terminal or log sink (a distinct threat from the
+//! credential redaction above — see that module's doc for why it lives here).
 
 use std::borrow::Cow;
 use std::fmt;
 use std::sync::LazyLock;
 
 use regex::Regex;
+
+pub mod text;
 
 /// Ordered set of `(pattern, replacement)` pairs applied left-to-right by [`redact_str`].
 ///

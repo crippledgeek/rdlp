@@ -53,8 +53,6 @@ use ipnet::Ipv4Net;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use thiserror::Error;
 
-pub mod text;
-
 // ============================================================================
 // Security Constants
 // ============================================================================
