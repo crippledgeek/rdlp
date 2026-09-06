@@ -107,3 +107,11 @@ graphify-out/
 # nested target/ under examples/plugins/.
 mutants.out/
 mutants.out.old/
+
+# Tauri codegen output. `tauri-build` regenerates this on every build, and it
+# differs per host OS — a Linux build never refreshes windows-schema.json, so a
+# tracked copy silently rots (it had already drifted from the dependency set
+# alongside it). Upstream's own `tauri init` gitignores the whole `gen` folder
+# for exactly this reason. The files still exist locally, so the `$schema`
+# reference in capabilities/default.json keeps resolving for IDE completion.
+crates/rdlp-desktop/src-tauri/gen/

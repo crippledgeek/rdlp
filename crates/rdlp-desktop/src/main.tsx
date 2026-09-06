@@ -24,7 +24,7 @@ import "./index.css";
 //
 // Registering before first render additionally keeps log records emitted
 // during startup, which a mount-time effect would have missed. That benefit is
-// specific to the two log listeners: they write to a module-level ring buffer
+// specific to the two log listeners: they write to a module-level store
 // that exists already. It does NOT extend to the download events, whose
 // `setQueryData` updaters are all `old?.map(...)` and so no-op until the
 // downloads query has data — harmless, since a download event cannot precede

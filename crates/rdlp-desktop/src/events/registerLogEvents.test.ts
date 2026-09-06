@@ -1,13 +1,13 @@
 // @vitest-environment node
 // Tests for registerLogEvents — the bridge from tauri-plugin-log's `log://log`
-// event into the Log Viewer's ring buffer.
+// event into the shared log store.
 
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mockEmit, clearEventListeners, listenerCount } from "@/test/tauri-mock";
 
 const appendLog = vi.fn();
 
-vi.mock("@/components/LogViewer", () => ({
+vi.mock("@/stores/logStore", () => ({
     appendLog: (...args: unknown[]) => appendLog(...args),
 }));
 
@@ -60,7 +60,7 @@ describe("registerLogEvents", () => {
         clearEventListeners();
     });
 
-    it("forwards a log://log record into the ring buffer with no job id", async () => {
+    it("forwards a log://log record into the log store with no job id", async () => {
         await mockEmit("log://log", {
             message: "[rdlp_extractor] resolved 3 formats",
             level: 3,
