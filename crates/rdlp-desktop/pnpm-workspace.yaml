@@ -55,6 +55,14 @@ overrides:
   # complain. The failure mode is staleness, not conflict — hence the revisit
   # trigger recorded in crates/rdlp-desktop/CLAUDE.md.
   #
+  # Upstream: TanStack/form#2132, open since 2026-04-18, confirmed against
+  # form-core 1.33.5 in Aug 2026 by a reporter who also patches it out. A
+  # maintainer has said they hope to fix it in v2 (currently alpha). So this
+  # override is a stopgap with a known end condition: when this project moves to
+  # TanStack Form v2, check whether it is still needed. That issue also has the
+  # deeper root cause — the `formEventClient` singleton is instantiated at
+  # module load, so bundlers cannot tree-shake it despite `sideEffects: false`.
+  #
   # One assumption holds the whole thing up: that consumers import the package
   # ROOT, which is what carries the NODE_ENV switch. 0.5.0 also publishes a
   # `/production` subpath that deliberately re-exports the REAL client and is
