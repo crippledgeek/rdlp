@@ -413,11 +413,14 @@ error, an `Event::Failed` reaching a background consumer — reaches the log
    both redact every `message` field in their `Display` impls, so a record that
    interpolates the constructed error value (`reason={e}`) is redacted for
    free — the constructor never has to remember to call `redact_str`. Never
-   interpolate a *foreign* error type directly (`wreq::Error`,
-   `std::io::Error`, `tokio::task::JoinError`) — its `Display` carries no such
-   guarantee. Wrap it into `AppError`/`RdlpApiError` first, or, where neither
-   fits (`task_join_error`'s raw panic payload), pass it through
-   `rdlp_redact::redact_str` explicitly before it is logged or returned.
+   interpolate a *foreign* error type directly **into a log macro**
+   (`wreq::Error`, `std::io::Error`, `tokio::task::JoinError`) — its `Display`
+   carries no such guarantee. Passing one to a *constructor*
+   (`AppError::internal(action, io_err)`) is fine and is what ~20 sites do:
+   the constructor stringifies it into a `message` field, and the record
+   interpolates the constructed error, whose `Display` redacts. Where a raw
+   value must reach a macro and no constructor fits (`task_join_error`'s panic
+   payload), pass it through `rdlp_redact::redact_str` explicitly first.
 
 6. **Enforcement, two tiers.** The `AppError::snake_case(...)` constructors
    record as they build, so a call site that goes through them cannot forget

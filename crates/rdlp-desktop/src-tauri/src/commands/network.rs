@@ -64,8 +64,13 @@ pub(crate) fn settings_network_options(settings: &AppSettings) -> Result<Network
 /// back to no proxy on failure, so this is not the security boundary — it is
 /// what turns that silent fallback into an error the operator can act on.
 pub(crate) fn validate_proxy(proxy: &str) -> Result<(), AppError> {
+    // `validate_proxy`, not `network_check`: the action names the operation
+    // that failed, and nothing in the tree is called `network_check`. This
+    // fires wherever settings are turned into `NetworkOptions` — analyze,
+    // search, and download — so the action is the only thing in the record
+    // that says which check refused.
     rdlp_security::validate_proxy_url(proxy)
-        .map_err(|e| AppError::invalid_input(Action::new("network_check"), "proxy", e))
+        .map_err(|e| AppError::invalid_input(Action::new("validate_proxy"), "proxy", e))
 }
 
 #[cfg(test)]

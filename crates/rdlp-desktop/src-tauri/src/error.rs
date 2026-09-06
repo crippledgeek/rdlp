@@ -89,11 +89,11 @@ pub enum AppError {
 /// Map an API error to its frontend shape, without recording anything.
 ///
 /// Private: the only caller is [`AppError::from_api`], which pairs this
-/// mapping with the terminal record. There is deliberately no `From`
-/// impl here — a `?`-based conversion cannot log (it has no `Action`),
-/// so `commands/formats/mod.rs:68`'s `.map_err(AppError::from)?` no
-/// longer compiles once this impl is gone. That call site is fixed in a
-/// later task, not here.
+/// mapping with the terminal record. There is deliberately no
+/// `From<RdlpApiError>` impl, because a `?`-conversion cannot log — it has
+/// no way to learn the action. The invariant that buys: converting an
+/// `RdlpApiError` with `?` or `.map_err(AppError::from)` is a compile
+/// error, so every conversion must name an action and therefore records.
 fn map_api(err: &RdlpApiError) -> AppError {
     match err {
         RdlpApiError::InvalidInput { message } => AppError::InvalidInput {
@@ -144,14 +144,19 @@ pub(crate) fn record_failure(action: &Action<'_>, level: Level, reason: &impl fm
 /// Terminal-record constructors.
 ///
 /// Every one of these logs the outcome as it builds the error. That is the
-/// point: the boundary record is not something a call site can forget,
-/// because there is no path to an `AppError` that does not write one. A
-/// later task in this change set adds `scripts/check-boundary-log.sh` to
-/// gate any bypass of these constructors.
+/// point: a call site that goes through a constructor cannot forget the
+/// record.
 ///
-/// The record interpolates `{self}` — the constructed error — rather than the
-/// incoming `reason`, because `AppError`'s `Display` redacts every `message`
-/// (see the impl below) and the incoming value is the unwrapped one.
+/// It does not follow that no unrecorded `AppError` can exist. The variants
+/// are `pub`, so `AppError::Internal { message }` still compiles anywhere in
+/// the crate; what closes that path is `scripts/check-boundary-log.sh`'s B1
+/// rule, which rejects a literal `AppError::Variant { … }` construction
+/// outside this file. The compiler enforces the record's *shape*; the gate
+/// enforces that the constructors are the only way in.
+///
+/// The record interpolates the constructed error rather than the incoming
+/// `reason`, because `AppError`'s `Display` redacts every `message` (see the
+/// impl below) and the incoming value is the unwrapped one.
 impl AppError {
     /// Record and build an invalid-input failure. WARN: user-correctable.
     #[must_use]
@@ -714,10 +719,21 @@ mod boundary_record_tests {
 
         testing_logger::validate(|captured| {
             let body = captured.first().map_or("", |l| l.body.as_str());
-            assert_eq!(
-                body,
-                "action=download outcome=failed reason=Download  failed: disk full"
+            // `starts_with`, not an equality against the whole line: with no
+            // job id, `Display` renders "Download  failed" with a doubled
+            // space, and pinning that by equality would make the artifact a
+            // contract that a later fix to the message has to preserve. What
+            // this test is FOR is that the record is well-formed and the job
+            // id is absent, not that the prose is malformed in one exact way.
+            assert!(
+                body.starts_with("action=download outcome=failed"),
+                "got: {body}"
             );
+            assert!(
+                !body.contains("job_id="),
+                "no subject, so no job_id field: {body}"
+            );
+            assert!(body.contains("disk full"), "names the reason: {body}");
         });
         assert!(matches!(
             err,
