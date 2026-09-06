@@ -139,6 +139,41 @@ const defaultHandlers: Record<string, InvokeHandler> = {
     queue: () => [],
 
     get_history: () => [],
+
+    // Registered so the Settings view has codec data. Unregistered, these fell
+    // through to the `Promise.resolve(null)` fallback below — and null is a
+    // value the real contract cannot produce: both commands are INFALLIBLE,
+    // returning a plain `Vec<_>` (src-tauri/src/commands/codecs.rs:15,27), so
+    // not even an error path yields one. `SystemSection` destructures with
+    // `= []`, which defaults only on undefined, so the fabricated null reached
+    // `.length` and crashed the whole Settings view. The a11y spec failed on
+    // that, and it read as an app bug rather than a harness one.
+    //
+    // These return one codec each rather than `[]` ON PURPOSE. `SystemSection`
+    // opens with `if (codecs.length === 0) return null`, so an empty array
+    // unmounts the section — the a11y spec would then pass because the codec
+    // markup is ABSENT, not because it is accessible, and no regression inside
+    // it could ever be caught. The same applies to DownloadConfig's
+    // expert-mode codec selectors.
+    available_codecs: () => [
+        {
+            codec: "h264",
+            displayName: "H.264 / AVC",
+            defaultContainer: "mp4",
+            encoders: [
+                { encoderName: "libx264", displayName: "x264", speedControls: [] },
+            ],
+        },
+    ],
+
+    available_audio_codecs: () => [
+        {
+            codec: "aac",
+            displayName: "AAC",
+            encoders: [{ encoderName: "aac", displayName: "AAC (native)" }],
+            supportedContainers: ["mp4", "mkv"],
+        },
+    ],
 };
 
 // ---------------------------------------------------------------------------
