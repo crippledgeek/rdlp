@@ -12,13 +12,25 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import type { ComponentType } from "react";
+import { queryClient } from "@/query/queryClient";
+
+// The shell mock RENDERS its plugins rather than ignoring them. A mock that
+// returns a bare <div> never invokes `render`, so the panel's props are never
+// observed — and deleting `client={queryClient}`, the single thing that makes
+// mounting above QueryClientProvider legal, would pass every test here.
+const captured = vi.hoisted(() => ({ client: undefined as unknown }));
 
 vi.mock("@tanstack/react-devtools", () => ({
-    TanStackDevtools: () => <div data-testid="devtools-shell" />,
+    TanStackDevtools: ({ plugins }: { plugins: Array<{ render: React.ReactNode }> }) => (
+        <div data-testid="devtools-shell">{plugins[0]?.render}</div>
+    ),
 }));
 
 vi.mock("@tanstack/react-query-devtools", () => ({
-    ReactQueryDevtoolsPanel: () => <div data-testid="query-panel" />,
+    ReactQueryDevtoolsPanel: ({ client }: { client?: unknown }) => {
+        captured.client = client;
+        return <div data-testid="query-panel" />;
+    },
 }));
 
 const { withDevtools } = await import("./withDevtools");
@@ -43,6 +55,20 @@ describe("withDevtools", () => {
         render(<Root label="forwarded" />);
 
         expect(screen.getByText("forwarded")).toBeInTheDocument();
+    });
+
+    // The load-bearing claim of this HOC's shape. Wrapping from outside puts
+    // the panel ABOVE QueryClientProvider, so it cannot read the client from
+    // context — it works only because the client is handed over explicitly.
+    // Without this assertion the panel would throw "No QueryClient set" the
+    // first time anyone opened it in dev, and no test would have objected.
+    it("hands the panel the app's own query client, not context", () => {
+        const Root = withDevtools(() => <div />);
+
+        render(<Root />);
+
+        expect(screen.getByTestId("query-panel")).toBeInTheDocument();
+        expect(captured.client).toBe(queryClient);
     });
 
     it("mounts exactly one devtools shell", () => {

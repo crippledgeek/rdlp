@@ -33,3 +33,18 @@ allowBuilds:
 # empirically: the install warned and exited 0). Kept explicit so the guard
 # survives a future default flip and stays greppable.
 strictDepBuilds: true
+
+# Force the guarded event client. `@tanstack/form-core` (via react-form) depends
+# on 0.4.3, whose root export is the REAL EventClient — the NODE_ENV no-op that
+# strips it from production was only added in 0.5.0. Left alone, `FormApi.mount()`
+# registers live `form:request-form-force-submit` / `-reset` / `-state` listeners
+# in the shipped bundle, a debug RPC surface reachable by any script running in
+# the page. Bumping react-form does NOT fix this: 1.33.5, the latest, still
+# depends on 0.4.3 — verified with `pnpm why`, and by measuring the built bundle.
+overrides:
+  # `^0.5.0`, not `>=0.5.0`: an open-ended floor would silently adopt a future
+  # 0.6/1.0 whose API form-core may not match. This line is a behaviour fix, so
+  # it should track a version pair that was actually tested together. If
+  # form-core later requires a newer line, this override will conflict loudly
+  # rather than resolve to something unverified.
+  "@tanstack/devtools-event-client": "^0.5.0"

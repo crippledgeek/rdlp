@@ -12,12 +12,20 @@ export default defineConfig(async () => ({
     // MUST be first — the plugin documents that ordering, and it is what
     // strips every devtools import from a production bundle.
     //
-    // `removeDevtoolsOnBuild` defaults to true, so `vite build` emits nothing
-    // devtools-related and the packages stay devDependencies. That default is
-    // the whole reason to use the plugin rather than gating the component on
-    // `import.meta.env.DEV` by hand: the docs recommend the hand-rolled
-    // conditional only for non-Vite projects, and a conditional is a thing
-    // someone can later get wrong, whereas the strip is unconditional.
+    // `removeDevtoolsOnBuild` defaults to true, so the devtools imports and
+    // JSX are stripped from a production build and these packages stay
+    // devDependencies. It does NOT mean the build emits nothing
+    // devtools-related — the transform rewrites files rather than removing
+    // them, so `src/devtools/withDevtools.tsx` still ships as a transparent
+    // wrapper. That file documents the mechanism; do not restate it here, or
+    // the two drift apart (an earlier draft of this comment claimed the
+    // opposite of what the plugin does, in all three files that mention it).
+    //
+    // The default is the whole reason to use the plugin rather than gating the
+    // component on `import.meta.env.DEV` by hand: the docs recommend the
+    // hand-rolled conditional only for non-Vite projects, and a conditional is
+    // a thing someone can later get wrong, whereas the strip is
+    // unconditional.
     //
     // Not added to vitest.config.ts, which has its own plugins array. Not
     // because it would do harm — the sub-plugin that starts the event bus is
