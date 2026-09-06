@@ -610,9 +610,9 @@ fn chunk_clause_reports_the_applied_transition() {
 /// At the floor the clause says so instead of claiming a decrease.
 ///
 /// This is the regression the intent-derived version shipped: `MIN_CHUNK_LEVEL`
-/// is also the default starting level, so a download is back on the floor
-/// after its first decrease and every one after that moves nothing while the
-/// message announced "chunk -2". Saturation is the state an operator most needs during
+/// is also the default starting level, so a download spends much of its life at
+/// or near the floor and a −2 from there clamps — while the message announced
+/// "chunk -2" regardless. Saturation is the state an operator most needs during
 /// a throughput collapse that nothing relieves, so it is reported rather than
 /// omitted.
 ///
@@ -643,38 +643,52 @@ fn chunk_clause_reports_saturation_at_the_floor() {
     );
 }
 
-/// Pins the ladder the two clause docs describe in prose.
+/// Pins the ladder the clause doc describes in prose.
 ///
-/// Those docs justify the saturation branch by claiming the floor is one
-/// decrease away, not far below. That claim has been wrong twice while being
-/// edited by hand, so it is asserted here rather than reasoned about again.
+/// That claim was edited wrong twice by hand, so it is asserted rather than
+/// reasoned about. The load-bearing half is that the FIRST adjustment of a real
+/// download ramps by +2 — so the ramp is driven through the controller's own
+/// phase machine (`report_chunk_complete` → `adjust` → `adjust_slow_start`'s
+/// `prev_ewma == None` arm) rather than by calling `apply_chunk_delta` with a
+/// hard-coded 2, which would leave the doc's claim unpinned if that arm's delta
+/// ever changed.
 #[test]
 fn floor_is_one_decrease_below_the_first_ramp() {
     let ctrl = make_controller(64 * 1024 * 1024);
-    let mut state = ctrl.state.lock().unwrap();
-
     assert_eq!(
-        state.current_chunk_level, MIN_CHUNK_LEVEL,
-        "starts on the floor"
+        ctrl.state.lock().unwrap().current_chunk_level,
+        MIN_CHUNK_LEVEL,
+        "a default download starts on the floor"
     );
 
-    // The first adjustment of a download takes the SlowStart initial ramp.
-    ctrl.apply_chunk_delta(&mut state, 2);
-    assert_eq!(state.current_chunk_level, MIN_CHUNK_LEVEL + 2, "ramps to 4");
+    // One full decision interval — the controller's first adjustment. The lock
+    // must NOT be held here: `report_chunk_complete` takes it itself.
+    drive(
+        &ctrl,
+        AdaptiveConfig::default().decision_interval,
+        10_000_000.0,
+    );
+    assert_eq!(
+        ctrl.state.lock().unwrap().current_chunk_level,
+        MIN_CHUNK_LEVEL + 2,
+        "the first adjustment takes the SlowStart ramp (+2)"
+    );
 
-    // First decrease returns it to the floor — it moves.
+    let mut state = ctrl.state.lock().unwrap();
+
+    // One decrease returns it to the floor — and says so.
     let first = ctrl.apply_chunk_delta(&mut state, MD_CHUNK_DELTA);
     assert_eq!(state.current_chunk_level, MIN_CHUNK_LEVEL);
     assert!(
         first.contains('→'),
-        "the first decrease does move the level, got: {first}"
+        "that decrease does move the level, got: {first}"
     );
 
-    // The second is the one that moves nothing.
+    // A further decrease, with no increase in between, is the saturating one.
     let second = ctrl.apply_chunk_delta(&mut state, MD_CHUNK_DELTA);
     assert_eq!(state.current_chunk_level, MIN_CHUNK_LEVEL);
     assert!(
         second.contains("already at the minimum"),
-        "the second decrease is the saturating one, got: {second}"
+        "the next consecutive decrease saturates, got: {second}"
     );
 }

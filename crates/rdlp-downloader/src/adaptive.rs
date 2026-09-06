@@ -55,10 +55,10 @@ const MIN_CHUNK_LEVEL: u8 = 2;
 
 /// Chunk levels shed by one multiplicative decrease.
 ///
-/// Two levels. `CHUNK_LEVELS` doubles at every index, so this QUARTERS the
-/// request size — a harder cut than AIMD's classic halving, chosen because a
-/// single level barely moves the 256KB floor. (The doubling ladder is exactly
-/// why −2 is not a halving; −1 would be.)
+/// Two levels. `CHUNK_LEVELS` doubles at every index, so this quarters the
+/// request size; −1 would be the classic AIMD halving. The value predates this
+/// comment and its rationale is not recorded — do not infer one from the
+/// arithmetic alone.
 const MD_CHUNK_DELTA: i8 = -2;
 
 /// Maximum number of throughput samples retained in history.
@@ -444,19 +444,20 @@ impl AdaptiveController {
 
     /// Steady phase AIMD adjustments.
     fn adjust_steady(&self, state: &mut AdaptiveState, current_ewma: f64, prev_ewma: Option<f64>) {
-        let Some(prev) = prev_ewma else {
-            // First measurement in Steady — apply additive increase. Logged
-            // like every other adjustment: `bump_chunk_level` no longer reports
-            // anything itself, so calling it directly would move the level with
-            // no operator-visible trace at all.
-            let note = self.apply_chunk_delta(state, 1);
-            let msg = format!("Adaptive [Steady]: first measurement{note}");
-            debug!("{msg}");
-            self.log(&msg);
-            return;
-        };
+        // `prev_ewma` is always `Some` here: `adjust` assigns `state.last_ewma`
+        // before dispatching, and the phase only becomes `Steady` inside
+        // `adjust_slow_start`, which runs after that assignment. Folding the
+        // `None` case into the zero case states the invariant instead of
+        // maintaining a branch nothing can reach — an earlier revision logged
+        // from it, describing a trace no run could ever produce.
+        debug_assert!(
+            prev_ewma.is_some(),
+            "adjust sets last_ewma before dispatching to Steady"
+        );
+        let prev = prev_ewma.unwrap_or(0.0);
 
         if prev == 0.0 {
+            // No usable baseline — treat it as the stable case and step up.
             let note = self.apply_chunk_delta(state, 1);
             let msg = format!("Adaptive [Steady]: no prior throughput{note}");
             debug!("{msg}");
@@ -507,16 +508,21 @@ impl AdaptiveController {
     /// it reports the *applied* transition rather than the requested delta.
     /// Intent and outcome diverge routinely, not rarely: the level clamps at
     /// both ends, and `MIN_CHUNK_LEVEL` is also the default starting level
-    /// (`AdaptiveConfig::default`), so the floor sits one decrease away rather
-    /// than far below. A download starts at level 2, ramps to 4 on its first
-    /// adjustment, and its FIRST decrease (4 → 2) already returns it to the
-    /// floor — so the second and every later decrease requests a cut and moves
-    /// nothing. In `HlsSegments` mode
-    /// the adjustment is discarded entirely and the clause is empty.
+    /// (`AdaptiveConfig::default`), so a download sits at or near the floor for
+    /// much of its life and a −2 from level 2 or 3 clamps. Saturation is common
+    /// rather than an edge case, which is why it is reported instead of passed
+    /// over: "already at the minimum" is what an operator needs during a
+    /// throughput collapse that nothing relieves, and it is precisely what an
+    /// intent-derived clause hides.
     ///
-    /// Saturation is reported rather than omitted: "already at the minimum" is
-    /// what an operator needs during a throughput collapse that nothing
-    /// relieves, and it is precisely the case an intent-derived clause hides.
+    /// That states a property, not a trajectory, deliberately. Three successive
+    /// attempts to narrate the ladder here were each wrong, because the level's
+    /// path depends on how many intervals rose before the first drop.
+    /// `floor_is_one_decrease_below_the_first_ramp` pins one concrete sequence;
+    /// the general claim belongs in no comment.
+    ///
+    /// In `HlsSegments` mode the adjustment is discarded entirely and the
+    /// clause is empty.
     ///
     /// These messages reach the UI's log pane through `log_callback`, so this
     /// text is read by operators, not only by the log file.
