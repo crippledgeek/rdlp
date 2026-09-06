@@ -25,6 +25,7 @@ use rdlp_api::{RdlpApiError, RdlpClient};
 use rdlp_cli::event_handler::CliEventHandler;
 use rdlp_cli::interactive::DialoguerCallback;
 use rdlp_cli::sanitize::sanitize_for_terminal;
+use rdlp_types::boundary::Action;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use tracing::{debug, info, warn};
@@ -349,7 +350,7 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
                     }
                 }
             }
-            Err(e) => fail_with("search", &e, verbose),
+            Err(e) => fail_with(Action::new("search"), &e, verbose),
         }
 
         return Ok(());
@@ -367,7 +368,7 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
             .await
         {
             Ok(infos) => infos,
-            Err(e) => fail_with("list_subs", &e, verbose),
+            Err(e) => fail_with(Action::new("list_subs"), &e, verbose),
         };
 
         // Use the first video's metadata for subtitle selection
@@ -388,7 +389,7 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
                 Ok(None) => {
                     debug!("Subtitle selection cancelled");
                 }
-                Err(e) => fail_with("list_subs", &e, verbose),
+                Err(e) => fail_with(Action::new("list_subs"), &e, verbose),
             }
         }
 
@@ -402,7 +403,7 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
             .await
         {
             Ok(infos) => infos,
-            Err(e) => fail_with("analyze", &e, verbose),
+            Err(e) => fail_with(Action::new("analyze"), &e, verbose),
         };
 
         if args.dump_json {
@@ -472,7 +473,7 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
                 // User cancelled - already printed message via events
                 Ok(())
             }
-            Err(e) => fail_with("process_local", &e, verbose),
+            Err(e) => fail_with(Action::new("process_local"), &e, verbose),
         };
     }
 
@@ -512,7 +513,7 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
             // User cancelled - already printed message via events
             Ok(())
         }
-        Err(e) => fail_with("download", &e, verbose),
+        Err(e) => fail_with(Action::new("download"), &e, verbose),
     };
 
     // Clean up any temp files created during this session (e.g. aborted

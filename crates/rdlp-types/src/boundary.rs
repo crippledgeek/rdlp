@@ -4,6 +4,13 @@
 //! the compiler rather than by review: a record names exactly one subject, and
 //! a URL subject cannot carry an unredacted value. See
 //! `CODING_RULES.md` "Boundary Logging" for the convention itself.
+//!
+//! They live here, in the leaf types crate, rather than in either boundary,
+//! because both sinks need them: `rdlp-desktop`'s `AppError` constructors and
+//! `rdlp-cli`'s `record_failure`. While the vocabulary lived in the desktop
+//! crate the CLI hand-wrote its `action=` string, so the "a record names
+//! exactly one subject" guarantee held on only one of the two boundaries the
+//! convention names.
 
 use std::fmt;
 

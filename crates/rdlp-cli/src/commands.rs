@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use log::{debug, error, warn};
 use rdlp_api::InfoDict;
 use rdlp_api::RdlpApiError;
+use rdlp_types::boundary::Action;
 
 /// Print all supported codecs
 pub fn print_codecs() {
@@ -110,18 +111,23 @@ pub const fn exit_code_for(e: &RdlpApiError) -> i32 {
 /// exits the process. `e`'s Display is redacted per variant, so the reason
 /// carries no credential.
 ///
+/// `action` is an [`Action`], not a `&str`: the vocabulary is shared with the
+/// desktop boundary so a call site cannot hand-roll `&format!("download
+/// {url}")` and slip an unredacted subject into the record. A bare `&str`
+/// does not compile.
+///
 /// `verbose`'s DEBUG line is a second record of the SAME causal event the
 /// ERROR line above it already carries — the convention forbids two records
 /// at ERROR for one outcome, so it is demoted to DEBUG rather than dropped.
-pub fn record_failure(action: &str, e: &RdlpApiError, verbose: bool) {
-    error!("action={action} outcome=failed reason={e}");
+pub fn record_failure(action: Action<'_>, e: &RdlpApiError, verbose: bool) {
+    error!("{action} outcome=failed reason={e}");
     if verbose {
-        debug!("action={action} outcome=failed detail={e:?}");
+        debug!("{action} outcome=failed detail={e:?}");
     }
 }
 
 /// Log an `RdlpApiError` and exit with the appropriate structured code.
-pub fn fail_with(action: &str, e: &RdlpApiError, verbose: bool) -> ! {
+pub fn fail_with(action: Action<'_>, e: &RdlpApiError, verbose: bool) -> ! {
     record_failure(action, e, verbose);
     std::process::exit(exit_code_for(e))
 }
@@ -129,6 +135,8 @@ pub fn fail_with(action: &str, e: &RdlpApiError, verbose: bool) -> ! {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use rdlp_types::boundary::Action;
+
     /// The CLI's terminal record carries the same vocabulary as the desktop's.
     #[test]
     fn the_cli_terminal_record_names_action_and_outcome() {
@@ -136,7 +144,7 @@ mod tests {
         let err = rdlp_api::RdlpApiError::InvalidInput {
             message: "bad url".to_owned(),
         };
-        super::record_failure("analyze", &err, false);
+        super::record_failure(Action::new("analyze"), &err, false);
 
         testing_logger::validate(|captured| {
             let errs: Vec<_> = captured
@@ -161,7 +169,7 @@ mod tests {
         let err = rdlp_api::RdlpApiError::InvalidInput {
             message: "bad url".to_owned(),
         };
-        super::record_failure("analyze", &err, true);
+        super::record_failure(Action::new("analyze"), &err, true);
 
         testing_logger::validate(|captured| {
             let errs = captured

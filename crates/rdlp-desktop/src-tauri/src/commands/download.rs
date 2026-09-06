@@ -12,7 +12,6 @@ use tauri::{AppHandle, State};
 
 use rdlp_redact::RedactedUrl;
 
-use crate::boundary::{Action, Subject};
 use crate::error::AppError;
 use crate::events;
 use crate::state::{AppState, DownloadJob, JobStatus, SavedDownloadOptions};
@@ -21,6 +20,7 @@ use rdlp_api::request::{
     DownloadRequest, FormatOptions, NetworkOptions, OutputOptions, PostProcessOptions,
     SubtitleOptions,
 };
+use rdlp_types::boundary::{Action, Subject};
 use rdlp_types::{AudioFormat, BrowserType, ContainerFormat, RecodeAudioMode, VideoEncoderName};
 
 /// Frontend-supplied download options.

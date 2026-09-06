@@ -5,9 +5,9 @@
 //! events. The frontend listens for these events via Tauri's IPC
 //! event system to update the download queue UI in real time.
 
-use crate::boundary::{Action, Subject};
 use log::debug;
 use rdlp_api::Event;
+use rdlp_types::boundary::{Action, Subject};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 

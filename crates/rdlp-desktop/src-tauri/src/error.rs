@@ -11,7 +11,7 @@ use rdlp_api::RdlpApiError;
 use rdlp_redact::redact_str as redact;
 use serde::Serialize;
 
-use crate::boundary::Action;
+use rdlp_types::boundary::Action;
 
 /// Frontend-facing error type for Tauri IPC commands.
 ///
@@ -193,7 +193,7 @@ impl AppError {
     }
 
     /// Record and build a download failure. The job id travels in `action`'s
-    /// `Subject` (`crate::boundary::Subject`), not as a fourth parameter.
+    /// `Subject` (`rdlp_types::boundary::Subject`), not as a fourth parameter.
     #[must_use]
     pub fn download_failed(action: Action<'_>, reason: impl fmt::Display, retryable: bool) -> Self {
         let e = Self::DownloadFailed {
@@ -521,7 +521,7 @@ mod tests {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod boundary_record_tests {
     use super::AppError;
-    use crate::boundary::{Action, Subject};
+    use rdlp_types::boundary::{Action, Subject};
 
     /// Exactly one record, at WARN, carrying the full field vocabulary.
     #[test]

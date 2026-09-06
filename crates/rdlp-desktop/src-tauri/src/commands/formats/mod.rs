@@ -15,9 +15,9 @@ use rdlp_types::protocol::DownloadProtocol;
 use rdlp_types::{Format, FormatSelector};
 use tauri::State;
 
-use crate::boundary::Action;
 use crate::error::AppError;
 use crate::state::AppState;
+use rdlp_types::boundary::Action;
 
 /// Retrieve available formats for a URL.
 ///

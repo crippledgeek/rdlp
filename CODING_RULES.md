@@ -335,7 +335,7 @@ When you add a new URL-bearing error variant or log a URL: pick the field type
 Every user-visible failure — a Tauri command returning `Err`, the CLI's terminal
 error, an `Event::Failed` reaching a background consumer — reaches the log
 **exactly once**, at the right level, redacted. This section is the convention;
-`error.rs` and `boundary.rs` are the enforcement.
+`rdlp-desktop`'s `error.rs` and `rdlp-types`'s `boundary.rs` are the enforcement.
 
 1. **The record shape** is interpolated text, not a bag of unrelated fields:
 
@@ -343,8 +343,8 @@ error, an `Event::Failed` reaching a background consumer — reaches the log
    action=<verb> [<subject>] outcome=<failed|cancelled|panicked> reason=<display>
    ```
 
-   `<subject>` is at most one of `path=`, `url=`, or `job_id=` (`crate::boundary::Subject`
-   on desktop). Worked example, from `error.rs`'s `download_failed`:
+   `<subject>` is at most one of `path=`, `url=`, or `job_id=` (`rdlp_types::boundary::Subject`,
+   shared by both sinks). Worked example, from `error.rs`'s `download_failed`:
 
    ```
    action=download job_id=job-7 outcome=failed reason=Download job-7 failed: disk full

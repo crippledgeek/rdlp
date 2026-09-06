@@ -16,9 +16,9 @@ use std::time::Duration;
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
-use crate::boundary::{Action, Subject};
 use crate::error::AppError;
 use crate::state::{AppSettings, AppState, SettingsValidationError};
+use rdlp_types::boundary::{Action, Subject};
 
 /// Retrieve the current application settings.
 ///
@@ -233,8 +233,8 @@ pub async fn reveal_in_folder(path: String) -> Result<(), AppError> {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::reveal_off_runtime;
-    use crate::boundary::{Action, Subject};
     use crate::error::AppError;
+    use rdlp_types::boundary::{Action, Subject};
 
     /// A terminal reveal failure is RECORDED, not just returned.
     ///

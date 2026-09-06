@@ -11,7 +11,6 @@
 // doc, and an outer doc merged with it makes rustdoc resolve the inner
 // doc's intra-doc links against THIS module's scope instead of the
 // submodule's own — "no item named `AppError` in scope" (#661).
-mod boundary;
 pub mod commands;
 pub mod error;
 pub mod events;

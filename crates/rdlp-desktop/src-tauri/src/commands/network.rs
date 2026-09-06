@@ -9,9 +9,9 @@
 
 use rdlp_api::request::NetworkOptions;
 
-use crate::boundary::Action;
 use crate::error::AppError;
 use crate::state::AppSettings;
+use rdlp_types::boundary::Action;
 
 /// Build the [`NetworkOptions`] the persisted settings imply, validating the
 /// proxy at the IPC boundary.

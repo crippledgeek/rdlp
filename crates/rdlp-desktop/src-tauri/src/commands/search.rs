@@ -10,10 +10,10 @@ use rdlp_api::{
     SearchSiteInfo,
 };
 
-use crate::boundary::Action;
 use crate::commands::network::settings_network_options;
 use crate::error::AppError;
 use crate::state::AppState;
+use rdlp_types::boundary::Action;
 
 /// Sanitize a user-provided query string.
 ///

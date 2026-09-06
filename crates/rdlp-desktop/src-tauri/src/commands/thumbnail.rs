@@ -9,8 +9,8 @@ use tauri::ipc::Response;
 
 use rdlp_redact::RedactedUrl;
 
-use crate::boundary::{Action, Subject};
 use crate::error::AppError;
+use rdlp_types::boundary::{Action, Subject};
 
 /// Maximum response body size (5 MB).
 const MAX_BODY_SIZE: usize = 5 * 1024 * 1024;
