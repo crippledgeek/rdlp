@@ -367,7 +367,7 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
             .await
         {
             Ok(infos) => infos,
-            Err(e) => fail_with("list-subs", &e, verbose),
+            Err(e) => fail_with("list_subs", &e, verbose),
         };
 
         // Use the first video's metadata for subtitle selection
@@ -388,7 +388,7 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
                 Ok(None) => {
                     debug!("Subtitle selection cancelled");
                 }
-                Err(e) => fail_with("list-subs", &e, verbose),
+                Err(e) => fail_with("list_subs", &e, verbose),
             }
         }
 
@@ -472,7 +472,7 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
                 // User cancelled - already printed message via events
                 Ok(())
             }
-            Err(e) => fail_with("download", &e, verbose),
+            Err(e) => fail_with("process_local", &e, verbose),
         };
     }
 

@@ -515,6 +515,33 @@ mod tests {
         });
     }
 
+    /// A download failure is expected and user-facing — it must never also
+    /// land at ERROR, which this convention reserves for internal/unexpected
+    /// failures. Does not attempt the emit-failure `debug!` branch: that path
+    /// needs a real `tauri::AppHandle` and is not reachable from a unit test.
+    #[test]
+    fn a_failed_download_never_logs_at_error() {
+        testing_logger::setup();
+        let err = rdlp_api::RdlpApiError::NetworkError {
+            message: "connection reset".to_owned(),
+            status: None,
+        };
+        super::record_download_failure("job-7", &err);
+
+        testing_logger::validate(|captured| {
+            let warns = captured
+                .iter()
+                .filter(|l| l.level == log::Level::Warn)
+                .count();
+            let errors = captured
+                .iter()
+                .filter(|l| l.level == log::Level::Error)
+                .count();
+            assert_eq!(warns, 1, "exactly one WARN record");
+            assert_eq!(errors, 0, "never at ERROR — this failure is expected");
+        });
+    }
+
     /// The `download-error` event is a SEPARATE path to the frontend from
     /// `AppError`, and it shipped unredacted while the `AppError` guard was
     /// being added. Its text comes from `RdlpApiError::user_message()`, which
