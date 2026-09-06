@@ -7,11 +7,7 @@
 // `setupTauriMock` for cy.visitWithMock(), and e2e.ts imports commands.ts, so
 // keeping it here is what stops that becoming an import cycle.
 
-/**
- * Default fixture responses keyed by Tauri command name.
- * Tests can override individual commands by passing overrides to
- * `setupTauriMock()` or `cy.visitWithMock()`.
- */
+/** One mocked Tauri command: takes the invoke args, returns the fixture. */
 type InvokeHandler = (args: Record<string, unknown>) => unknown;
 
 /**
@@ -33,11 +29,16 @@ function unregisteredCommandError(commands: readonly string[]): Error {
         commands.length === 1 ? "command" : `${commands.length} commands`;
     return new Error(
         `[Tauri mock] Unregistered ${subject} invoked: ${commands.join(", ")}. ` +
-            `Register a handler in cypress/support/e2e.ts, or pass one via ` +
-            `setupTauriMock()/cy.visitWithMock() overrides.`,
+            `Add a default handler in cypress/support/tauriMock.ts, or pass one ` +
+            `for this test via cy.visitWithMock({ ${commands[0]}: () => ... }).`,
     );
 }
 
+/**
+ * Default fixture responses keyed by Tauri command name — the handlers every
+ * test gets. A single test overrides one by passing it to
+ * `cy.visitWithMock({ <command>: () => ... })`.
+ */
 const defaultHandlers: Record<string, InvokeHandler> = {
     search_providers: () => [
         { name: "redtube", display_name: "RedTube" },
@@ -158,13 +159,13 @@ const defaultHandlers: Record<string, InvokeHandler> = {
     // Search results render <Thumbnail>, which routes every external HTTPS URL
     // straight through the Rust proxy rather than attempting a direct <img>
     // load — `useProxyFromStart` forces `directFailed` on the first render
-    // (Thumbnail.tsx:80-82), off `shouldProxy` (22-36). Unregistered, this fell through the fallback: the
+    // (Thumbnail.tsx:81), off `shouldProxy` (23-37). Unregistered, this fell through the fallback: the
     // old one fabricated a null that `new Uint8Array(null)` turned into an
     // empty blob, so the thumbnails were broken images the specs never noticed.
     //
     // Real bytes, not an empty buffer — a 1x1 transparent PNG — so the <img>
     // actually decodes. There is no safety net if it does not: the proxy-success
-    // branch renders a bare <img> with no onError (Thumbnail.tsx:133), and the
+    // branch renders a bare <img> with no onError (Thumbnail.tsx:134), and the
     // bg-muted placeholder needs `proxyFailed` from the QUERY, which a decode
     // failure never sets. An undecodable blob is therefore a permanently broken
     // image that no assertion here can tell apart from a rendered one.
@@ -306,5 +307,5 @@ function setupTauriMock(
     };
 }
 
-export { setupTauriMock, defaultHandlers, unregisteredCommands, unregisteredCommandError };
+export { setupTauriMock, unregisteredCommands, unregisteredCommandError };
 export type { InvokeHandler };

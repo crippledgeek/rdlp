@@ -13,6 +13,14 @@ import { unregisteredCommands, unregisteredCommandError } from "./tauriMock";
 // ---------------------------------------------------------------------------
 
 beforeEach(() => {
+    // `afterEach` clears on both its paths, so this set is normally already
+    // empty here. Kept anyway: an invoke still in flight as the previous page
+    // tears down would otherwise be attributed to the NEXT test and name a
+    // command that test never called. This NARROWS that window rather than
+    // closing it — anything landing after this line, including during the
+    // queued `cy.visitWithMock()` while the old page is still live, is still
+    // misattributed. Reasoned from the hook sequence, not measured: cheap
+    // insurance, not a known-live path.
     unregisteredCommands.clear();
     cy.visitWithMock();
 });

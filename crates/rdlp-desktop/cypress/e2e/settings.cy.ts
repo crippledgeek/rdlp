@@ -2,7 +2,6 @@
 //
 // Covers: loading settings, changing values, saving, and error handling.
 
-
 // Selectors specific to React Aria Components rendered by Jolly UI:
 // - Checkbox renders as a <label> with data-selected reflecting checked state.
 // - The Output Directory input has id="output-dir".

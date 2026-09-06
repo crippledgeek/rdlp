@@ -4,7 +4,7 @@
 
 /// <reference types="cypress" />
 
-import { setupTauriMock } from "./tauriMock";
+import { setupTauriMock, type InvokeHandler } from "./tauriMock";
 
 declare global {
     namespace Cypress {
@@ -43,9 +43,7 @@ declare global {
              * default handlers; use this only when a test needs different ones.
              * @param overrides - Handlers to replace, keyed by command name.
              */
-            visitWithMock(
-                overrides?: Record<string, (args: Record<string, unknown>) => unknown>,
-            ): Chainable<void>;
+            visitWithMock(overrides?: Record<string, InvokeHandler>): Chainable<void>;
         }
     }
 }
@@ -74,15 +72,16 @@ Cypress.Commands.add("goToHistory", () => {
     cy.get('[aria-label^="History"]').first().click();
 });
 
-// Both specs that need custom handlers wrote this same `cy.visit("/", {
-// onBeforeLoad(win) { setupTauriMock(win, ...) } })` block. It is also the
-// form the unregistered-command error tells you to reach for — and that error,
-// and the doc comment above `setupTauriMock`, both named `cy.visitWithMock()`
-// while nothing defined it. Defining it once makes the citation true and gives
-// the two call sites one mechanism to share.
+// Three places wrote this same `cy.visit("/", { onBeforeLoad(win) {
+// setupTauriMock(win, ...) } })` block: the global `beforeEach` and each of
+// the two specs that need custom handlers. It is also the form the
+// unregistered-command error tells you to reach for — and that error, and the
+// doc comment on `defaultHandlers` in ./tauriMock, both named
+// `cy.visitWithMock()` while nothing defined it. Defining it once makes the
+// citation true and gives all three call sites one mechanism to share.
 Cypress.Commands.add(
     "visitWithMock",
-    (overrides: Record<string, (args: Record<string, unknown>) => unknown> = {}) => {
+    (overrides: Record<string, InvokeHandler> = {}) => {
         cy.visit("/", {
             onBeforeLoad(win) {
                 setupTauriMock(win, overrides);

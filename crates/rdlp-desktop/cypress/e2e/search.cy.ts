@@ -4,7 +4,6 @@
 // queries (search). The site selector is hidden via CSS until the input is in
 // search mode (i.e., the displayValue is non-empty and does not look like a URL).
 
-
 const INPUT = 'input[aria-label="URL or search query"]';
 const CLEAR_BUTTON = 'button[aria-label="Clear input"]';
 
