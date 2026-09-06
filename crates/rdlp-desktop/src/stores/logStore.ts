@@ -54,7 +54,17 @@ export const logStore = new Store<LogState>({ entries: [] });
 // all times, whether a frame ever arrives or not, and there is no trim branch
 // that a later edit can delete without any test noticing — which is how both
 // earlier attempts at this failed.
-const ring: Array<LogEntry | undefined> = new Array(MAX_ENTRIES);
+//
+// Sealed so the slot count is enforced rather than merely intended: `const`
+// pins the binding, not the length, and a later `ring.push(...)` would
+// reintroduce unbounded retention (the published snapshot would survive it —
+// every read is modulo-bounded — so nothing would fail). The `.fill()` is
+// load-bearing, not cosmetic: sealing a HOLEY array makes `ring[head] = ...`
+// throw "Cannot add property 0", because assigning to an absent index creates
+// a property. Pre-filling makes the indices exist (and the array packed) so
+// writes succeed while growth throws. Verified both halves before adopting.
+const ring: Array<LogEntry | undefined> = new Array(MAX_ENTRIES).fill(undefined);
+Object.seal(ring);
 let head = 0; // slot the next record goes into
 let count = 0; // records currently held, never above MAX_ENTRIES
 let nextId = 0;
