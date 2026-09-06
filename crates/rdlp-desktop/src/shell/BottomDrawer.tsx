@@ -10,13 +10,10 @@ import { Tabs, TabList, Tab, TabPanel } from "@/components/ui/tabs";
 import { uiStore, toggleBottomDrawer, setSelectedJob, setView } from "@/stores/uiStore";
 import { downloadsQueryOptions } from "@/api/downloads";
 import { isInFlight, isTerminal } from "@/lib/jobStatus";
-import { LogViewer, appendLog } from "@/components/LogViewer";
+import { LogViewer } from "@/components/LogViewer";
 import { StatusBadge } from "@/components/StatusBadge";
 import { progressPercentLabel } from "@/lib/utils";
 import type { DownloadJob } from "@/types";
-
-// Re-export appendLog so event registration can use it
-export { appendLog };
 
 interface JobsPanelProps {
     jobs: DownloadJob[];

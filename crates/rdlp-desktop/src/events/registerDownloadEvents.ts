@@ -18,7 +18,7 @@ import {
     onUnitStarted,
 } from "../lib/tauri";
 import { queryKeys } from "../query/queryKeys";
-import { appendLog } from "../components/LogViewer";
+import { appendLog } from "../stores/logStore";
 import { cancelledJobPatch, postProcessingJobPatch } from "../lib/jobStatus";
 
 import type { DownloadJob } from "../types";
@@ -33,7 +33,7 @@ import type { DownloadJob } from "../types";
  *
  * The log file on disk is the only complete record. The global log viewer keeps
  * a longer tail than this one but is also bounded (MAX_ENTRIES in
- * components/LogViewer.tsx), so it is not a fallback for the whole history.
+ * stores/logStore.ts), so it is not a fallback for the whole history.
  */
 export const MAX_JOB_LOG_MESSAGES = 500;
 
@@ -179,7 +179,7 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
     unlisteners.push(
         onDownloadLog((p) => {
             if (!mounted) return;
-            // Forward to global log viewer ring buffer
+            // Forward to the shared log store the Log Viewer renders
             const level = p.level === "warn" ? "warn" : p.level === "debug" ? "debug" : "info";
             appendLog(level, p.message, p.jobId);
             qc.setQueryData<DownloadJob[]>(

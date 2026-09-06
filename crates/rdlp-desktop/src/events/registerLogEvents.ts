@@ -1,4 +1,4 @@
-// Bridge from the Rust `log` facade into the Log Viewer's ring buffer.
+// Bridge from the Rust `log` facade into the shared log store.
 //
 // Called once at module scope from main.tsx, next to `attachConsole()` — not
 // from a component effect. The listener is tied to the window's lifetime
@@ -15,8 +15,8 @@
 
 import type { UnlistenFn } from "@tauri-apps/api/event";
 import { onLogRecord } from "../lib/tauri";
-import { appendLog } from "../components/LogViewer";
-import type { LogEntry } from "../components/LogViewer";
+import { appendLog } from "../stores/logStore";
+import type { LogEntry } from "../stores/logStore";
 
 /**
  * Translate tauri-plugin-log's numeric level into the Log Viewer's severity
