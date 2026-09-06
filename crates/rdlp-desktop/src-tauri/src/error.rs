@@ -197,7 +197,7 @@ impl AppError {
     #[must_use]
     pub fn download_failed(action: Action<'_>, reason: impl fmt::Display, retryable: bool) -> Self {
         let e = Self::DownloadFailed {
-            job_id: String::new(),
+            job_id: action.job_id().unwrap_or_default().to_owned(),
             message: reason.to_string(),
             retryable,
         };
@@ -620,9 +620,30 @@ mod boundary_record_tests {
             // stayed green through a passing gate.
             assert_eq!(
                 body,
-                "action=download job_id=job-7 outcome=failed reason=Download  failed: disk full"
+                "action=download job_id=job-7 outcome=failed reason=Download job-7 failed: disk full"
             );
         });
+    }
+
+    /// A subject that is NOT `Subject::Job` still produces a valid record —
+    /// `unwrap_or_default()` falls back to an empty job id rather than
+    /// panicking or leaving the message malformed.
+    #[test]
+    fn a_download_failure_without_a_job_subject_has_an_empty_job_id() {
+        testing_logger::setup();
+        let err = AppError::download_failed(Action::new("download"), "disk full", false);
+
+        testing_logger::validate(|captured| {
+            let body = captured.first().map_or("", |l| l.body.as_str());
+            assert_eq!(
+                body,
+                "action=download outcome=failed reason=Download  failed: disk full"
+            );
+        });
+        assert!(matches!(
+            err,
+            AppError::DownloadFailed { ref job_id, .. } if job_id.is_empty()
+        ));
     }
 
     /// `from_api` maps AND records, so a `?`-converted API error cannot reach

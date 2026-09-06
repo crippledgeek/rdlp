@@ -49,6 +49,20 @@ impl<'a> Action<'a> {
     pub const fn with_subject(name: &'a str, subject: Subject<'a>) -> Self {
         Self { name, subject }
     }
+
+    /// The job id this action names, if its subject is [`Subject::Job`].
+    ///
+    /// Lets a constructor that stores the job id in a struct field (e.g.
+    /// `AppError::DownloadFailed.job_id`) read it back from the same
+    /// `Action` that renders it into the record, rather than taking it as a
+    /// second, driftable parameter.
+    #[must_use]
+    pub const fn job_id(&self) -> Option<&'a str> {
+        match self.subject {
+            Subject::Job(j) => Some(j),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for Action<'_> {
