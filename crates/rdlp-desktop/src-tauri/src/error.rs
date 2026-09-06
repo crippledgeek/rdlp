@@ -131,8 +131,9 @@ fn map_api(err: &RdlpApiError) -> AppError {
 ///
 /// Every one of these logs the outcome as it builds the error. That is the
 /// point: the boundary record is not something a call site can forget,
-/// because there is no path to an `AppError` that does not write one.
-/// `scripts/check-boundary-log.sh` keeps the bypass closed.
+/// because there is no path to an `AppError` that does not write one. A
+/// later task in this change set adds `scripts/check-boundary-log.sh` to
+/// gate any bypass of these constructors.
 ///
 /// The record interpolates `{self}` — the constructed error — rather than the
 /// incoming `reason`, because `AppError`'s `Display` redacts every `message`
@@ -613,6 +614,14 @@ mod boundary_record_tests {
         testing_logger::validate(|captured| {
             let body = captured.first().map_or("", |l| l.body.as_str());
             assert!(body.contains("job_id=job-7"), "names the job: {body}");
+            // Pins the whole record, not just a substring: `contains` alone
+            // cannot tell `action=X subject outcome=Y` from `action=X
+            // outcome=Y subject`, which is exactly how a field-order defect
+            // stayed green through a passing gate.
+            assert_eq!(
+                body,
+                "action=download job_id=job-7 outcome=failed reason=Download  failed: disk full"
+            );
         });
     }
 
