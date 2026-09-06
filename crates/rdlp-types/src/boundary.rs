@@ -84,9 +84,35 @@ impl fmt::Display for Action<'_> {
     }
 }
 
+/// Render the one canonical terminal-record body for a failed action.
+///
+/// ```text
+/// action=<verb> [<subject>] outcome=failed reason=<display>
+/// ```
+///
+/// This is the single place that text is built. Before it existed the format
+/// string was hand-written at eight sites across two crates (six `AppError`
+/// constructors, both arms of `from_api`, `events.rs`, and the CLI's
+/// `record_failure`), only one of which was pinned by an equality assertion —
+/// so seven copies could drift past the `contains` assertions that guard the
+/// rest.
+///
+/// The LEVEL is deliberately not decided here. Choosing WARN vs ERROR is a
+/// property of the failing variant (`AppError::internal` is ERROR, everything
+/// else is WARN), which is knowledge the desktop crate owns; this crate owns
+/// only the shape.
+///
+/// `reason` is rendered through its `Display`, which for `AppError` and
+/// `RdlpApiError` is already credential-redacting — see `CODING_RULES.md`
+/// "Boundary Logging" rule 5.
+#[must_use]
+pub fn failure_record(action: &Action<'_>, reason: &impl fmt::Display) -> String {
+    format!("{action} outcome=failed reason={reason}")
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{Action, Subject};
+    use super::{Action, Subject, failure_record};
     use rdlp_redact::RedactedUrl;
 
     #[test]
@@ -113,5 +139,14 @@ mod tests {
     fn a_job_subject_is_named() {
         let a = Action::with_subject("download", Subject::Job("job-7"));
         assert_eq!(a.to_string(), "action=download job_id=job-7");
+    }
+
+    #[test]
+    fn the_record_body_names_action_subject_outcome_and_reason() {
+        let a = Action::with_subject("download", Subject::Job("job-7"));
+        assert_eq!(
+            failure_record(&a, &"disk full"),
+            "action=download job_id=job-7 outcome=failed reason=disk full"
+        );
     }
 }

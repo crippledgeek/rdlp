@@ -6,12 +6,12 @@
 
 use std::fmt;
 
-use log::{error, warn};
+use log::Level;
 use rdlp_api::RdlpApiError;
 use rdlp_redact::redact_str as redact;
 use serde::Serialize;
 
-use rdlp_types::boundary::Action;
+use rdlp_types::boundary::{Action, failure_record};
 
 /// Frontend-facing error type for Tauri IPC commands.
 ///
@@ -127,6 +127,20 @@ fn map_api(err: &RdlpApiError) -> AppError {
     }
 }
 
+/// Emit a terminal boundary record. The one place this crate logs a failure.
+///
+/// `pub(crate)` rather than private so `events.rs` — which records an
+/// `Event::Failed` carrying an `RdlpApiError`, not an `AppError`, and so
+/// cannot go through the constructors — writes the same shape from the same
+/// code rather than a ninth hand-written copy of the format string.
+///
+/// The level is the caller's, because it follows the failing variant and not
+/// the call site: every `AppError` constructor passes a level fixed in its own
+/// body (see the impl below), never one chosen by whoever called it.
+pub(crate) fn record_failure(action: &Action<'_>, level: Level, reason: &impl fmt::Display) {
+    log::log!(level, "{}", failure_record(action, reason));
+}
+
 /// Terminal-record constructors.
 ///
 /// Every one of these logs the outcome as it builds the error. That is the
@@ -146,7 +160,7 @@ impl AppError {
             field: field.to_owned(),
             message: message.to_string(),
         };
-        warn!("{action} outcome=failed reason={e}");
+        record_failure(&action, Level::Warn, &e);
         e
     }
 
@@ -156,7 +170,7 @@ impl AppError {
         let e = Self::Internal {
             message: reason.to_string(),
         };
-        error!("{action} outcome=failed reason={e}");
+        record_failure(&action, Level::Error, &e);
         e
     }
 
@@ -167,7 +181,7 @@ impl AppError {
             message: reason.to_string(),
             retryable,
         };
-        warn!("{action} outcome=failed reason={e}");
+        record_failure(&action, Level::Warn, &e);
         e
     }
 
@@ -178,7 +192,7 @@ impl AppError {
             message: reason.to_string(),
             retryable,
         };
-        warn!("{action} outcome=failed reason={e}");
+        record_failure(&action, Level::Warn, &e);
         e
     }
 
@@ -188,7 +202,7 @@ impl AppError {
         let e = Self::ExtractionFailed {
             message: reason.to_string(),
         };
-        warn!("{action} outcome=failed reason={e}");
+        record_failure(&action, Level::Warn, &e);
         e
     }
 
@@ -201,7 +215,7 @@ impl AppError {
             message: reason.to_string(),
             retryable,
         };
-        warn!("{action} outcome=failed reason={e}");
+        record_failure(&action, Level::Warn, &e);
         e
     }
 
@@ -209,7 +223,7 @@ impl AppError {
     #[must_use]
     pub fn rate_limited(action: Action<'_>, retry_after_ms: Option<u64>) -> Self {
         let e = Self::RateLimited { retry_after_ms };
-        warn!("{action} outcome=failed reason={e}");
+        record_failure(&action, Level::Warn, &e);
         e
     }
 
@@ -221,11 +235,12 @@ impl AppError {
     #[must_use]
     pub fn from_api(action: Action<'_>, err: &RdlpApiError) -> Self {
         let e = map_api(err);
-        if matches!(e, Self::Internal { .. }) {
-            error!("{action} outcome=failed reason={e}");
+        let level = if matches!(e, Self::Internal { .. }) {
+            Level::Error
         } else {
-            warn!("{action} outcome=failed reason={e}");
-        }
+            Level::Warn
+        };
+        record_failure(&action, level, &e);
         e
     }
 }

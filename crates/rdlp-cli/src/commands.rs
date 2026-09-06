@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use log::{debug, error, warn};
 use rdlp_api::InfoDict;
 use rdlp_api::RdlpApiError;
-use rdlp_types::boundary::Action;
+use rdlp_types::boundary::{Action, failure_record};
 
 /// Print all supported codecs
 pub fn print_codecs() {
@@ -120,7 +120,7 @@ pub const fn exit_code_for(e: &RdlpApiError) -> i32 {
 /// ERROR line above it already carries — the convention forbids two records
 /// at ERROR for one outcome, so it is demoted to DEBUG rather than dropped.
 pub fn record_failure(action: Action<'_>, e: &RdlpApiError, verbose: bool) {
-    error!("{action} outcome=failed reason={e}");
+    error!("{}", failure_record(&action, e));
     if verbose {
         debug!("{action} outcome=failed detail={e:?}");
     }

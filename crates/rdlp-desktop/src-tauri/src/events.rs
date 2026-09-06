@@ -161,7 +161,7 @@ pub(crate) fn format_eta(eta: &std::time::Duration) -> String {
 /// the reason needs no `redact_str` here.
 fn record_download_failure(job_id: &str, err: &rdlp_api::RdlpApiError) {
     let action = Action::with_subject("download", Subject::Job(job_id));
-    log::warn!("{action} outcome=failed reason={err}");
+    crate::error::record_failure(&action, log::Level::Warn, err);
 }
 
 /// Forward an rdlp-api [`Event`] to the Tauri frontend.
