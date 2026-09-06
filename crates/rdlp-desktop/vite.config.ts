@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { devtools } from "@tanstack/devtools-vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
@@ -8,6 +9,37 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
   plugins: [
+    // MUST be first — the plugin documents that ordering, and it is what
+    // strips every devtools import from a production bundle.
+    //
+    // `removeDevtoolsOnBuild` defaults to true, so the devtools imports and
+    // JSX are stripped from a production build and these packages stay
+    // devDependencies. It does NOT mean the build emits nothing
+    // devtools-related — the transform rewrites files rather than removing
+    // them, so `src/devtools/withDevtools.tsx` still ships as a transparent
+    // wrapper. That file documents the mechanism; do not restate it here, or
+    // the two drift apart (an earlier draft of this comment claimed the
+    // opposite of what the plugin does, in all three files that mention it).
+    //
+    // The default is the whole reason to use the plugin rather than gating the
+    // component on `import.meta.env.DEV` by hand: the docs recommend the
+    // hand-rolled conditional only for non-Vite projects, and a conditional is
+    // a thing someone can later get wrong, whereas the strip is
+    // unconditional.
+    //
+    // Not added to vitest.config.ts, which has its own plugins array. Not
+    // because it would do harm — the sub-plugin that starts the event bus is
+    // gated on `config.mode === 'development'` and vitest resolves mode to
+    // 'test', so registering it there would be inert. It is simply nothing a
+    // test run needs.
+    devtools({
+      // Off, and this one is not a preference. `attachConsole()` in main.tsx
+      // forwards every Rust `log` record into the browser console, and console
+      // piping would send the browser console on to the Vite terminal — putting
+      // those records back on a terminal in dev, which is precisely what
+      // removing the `Stdout` log target (#705) took them off. Default is on.
+      consolePiping: { enabled: false },
+    }),
     tailwindcss(),
     react({
       babel: {

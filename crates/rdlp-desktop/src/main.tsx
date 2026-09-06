@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { attachConsole } from "@tauri-apps/plugin-log";
 import App from "./App";
+import { withDevtools } from "./devtools/withDevtools";
 import { queryClient } from "./query/queryClient";
 import { registerDownloadEvents } from "./events/registerDownloadEvents";
 import { registerLogEvents } from "./events/registerLogEvents";
@@ -36,8 +37,18 @@ void attachConsole();
 void registerLogEvents();
 void registerDownloadEvents(queryClient);
 
+// Devtools are attached here rather than inside `App`, so the app component
+// carries no reference to them.
+//
+// This file is NOT rewritten by the devtools Vite plugin — the transform only
+// visits files that name a devtools package, and this one names none. So in a
+// production build `withDevtools` is still imported and still called here; what
+// changes is that the wrapper it returns has had its devtools JSX stripped and
+// renders only `<App />`.
+const Root = withDevtools(App);
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <Root />
   </React.StrictMode>,
 );
