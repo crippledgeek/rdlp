@@ -38,8 +38,13 @@ void registerLogEvents();
 void registerDownloadEvents(queryClient);
 
 // Devtools are attached here rather than inside `App`, so the app component
-// carries no reference to them. The Vite plugin strips the wrapper and its
-// imports from a production build.
+// carries no reference to them.
+//
+// This file is NOT rewritten by the devtools Vite plugin — the transform only
+// visits files that name a devtools package, and this one names none. So in a
+// production build `withDevtools` is still imported and still called here; what
+// changes is that the wrapper it returns has had its devtools JSX stripped and
+// renders only `<App />`.
 const Root = withDevtools(App);
 
 ReactDOM.createRoot(document.getElementById("root")!).render(

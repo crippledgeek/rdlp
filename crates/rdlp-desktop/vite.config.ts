@@ -19,9 +19,19 @@ export default defineConfig(async () => ({
     // conditional only for non-Vite projects, and a conditional is a thing
     // someone can later get wrong, whereas the strip is unconditional.
     //
-    // Not added to vitest.config.ts, which has its own plugins array: the
-    // event bus would open a port per test run for no benefit.
-    devtools(),
+    // Not added to vitest.config.ts, which has its own plugins array. Not
+    // because it would do harm — the sub-plugin that starts the event bus is
+    // gated on `config.mode === 'development'` and vitest resolves mode to
+    // 'test', so registering it there would be inert. It is simply nothing a
+    // test run needs.
+    devtools({
+      // Off, and this one is not a preference. `attachConsole()` in main.tsx
+      // forwards every Rust `log` record into the browser console, and console
+      // piping would send the browser console on to the Vite terminal — putting
+      // those records back on a terminal in dev, which is precisely what
+      // removing the `Stdout` log target (#705) took them off. Default is on.
+      consolePiping: { enabled: false },
+    }),
     tailwindcss(),
     react({
       babel: {
