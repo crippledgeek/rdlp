@@ -330,6 +330,88 @@ messages (CWE-532 / OWASP "redact at source"). **Each catches what the others ca
 When you add a new URL-bearing error variant or log a URL: pick the field type
 (`RedactedUrlBuf`) first; the grep gate is the backstop, not the design.
 
+### Boundary Logging
+
+Every user-visible failure — a Tauri command returning `Err`, the CLI's terminal
+error, an `Event::Failed` reaching a background consumer — reaches the log
+**exactly once**, at the right level, redacted. This section is the convention;
+`error.rs` and `boundary.rs` are the enforcement.
+
+1. **The record shape** is interpolated text, not a bag of unrelated fields:
+
+   ```
+   action=<verb> [<subject>] outcome=<failed|cancelled|panicked> reason=<display>
+   ```
+
+   `<subject>` is at most one of `path=`, `url=`, or `job_id=` (`crate::boundary::Subject`
+   on desktop). Worked example, from `error.rs`'s `download_failed`:
+
+   ```
+   action=download job_id=job-7 outcome=failed reason=Download job-7 failed: disk full
+   ```
+
+2. **Why interpolated text and not `log`'s structured kv.** The workspace root
+   builds `log` 0.4.29 with its `kv` feature (`Cargo.toml`), so a `warn!(url:? =
+   raw_url; "…")` call **compiles**. It does not render. `tracing-log` 0.2.0's
+   `dispatch_record` — the bridge every `log!` call passes through once
+   `tracing-subscriber` is installed — builds a five-field `ValueSet` (message,
+   target, module, file, line) and never calls the record's `key_values()`; the
+   kv pairs are dropped before any `tracing` layer sees the event, so the CLI
+   sink never receives them. `tauri-plugin-log` 2.9.1's default formatter
+   (`out.finish(format_args!("[{}] {}", record.target(), message))` and its
+   colored variant, which adds only level and timestamp) interpolates target,
+   level, and message — nothing else — so the desktop sink drops them too. Both
+   are version-specific findings; re-check them if either crate moves.
+   OpenTelemetry's "static event name, structured attributes" guidance cannot be
+   followed literally on this stack as a result — a stable field vocabulary
+   folded into the message string is the adaptation.
+
+3. **Levels follow the variant, not per-site judgement.** WARN is an expected,
+   user-facing failure (network, bad input, a job that failed) — most terminal
+   records. ERROR is an internal/unexpected failure only (`AppError::internal`,
+   a panicking download task). INFO is reserved for operator-relevant success,
+   never a failure record. DEBUG is library breadcrumbs and demoted duplicates
+   (the CLI's verbose detail line, a cancelled-not-panicked `JoinError`). A call
+   site does not choose the level; the constructor it calls already fixed it.
+
+4. **Three terminal boundaries, and one deliberate non-boundary:**
+   - A Tauri IPC command returning `Err(AppError)` — recorded by the
+     `AppError::snake_case(...)` constructors in `error.rs` as they build.
+   - `rdlp-cli`'s `fail_with` / `record_failure` (`commands.rs`) — the CLI's
+     one terminal record before `process::exit`.
+   - A consumer of `Event::Failed` — `rdlp-desktop`'s `record_download_failure`
+     in `events.rs`, called from the background event-forwarding loop.
+
+   **`rdlp-api` is not a boundary.** Both of its consumers (CLI, desktop) are
+   boundaries themselves, so a record inside `rdlp-api` on the same failure
+   would be the duplicate-ERROR anti-pattern this convention exists to end. The
+   one exception is `handle.rs`'s `task_join_error`: the panic payload behind a
+   `JoinError` exists only at that join point — by the time it reaches a
+   consumer it has already been re-wrapped into an `RdlpApiError` message, so
+   the raw payload would never be recorded anywhere else.
+
+5. **Redaction is by type, not by call site.** `AppError` and `RdlpApiError`
+   both redact every `message` field in their `Display` impls, so a record that
+   interpolates the constructed error value (`reason={e}`) is redacted for
+   free — the constructor never has to remember to call `redact_str`. Never
+   interpolate a *foreign* error type directly (`wreq::Error`,
+   `std::io::Error`, `tokio::task::JoinError`) — its `Display` carries no such
+   guarantee. Wrap it into `AppError`/`RdlpApiError` first, or, where neither
+   fits (`task_join_error`'s raw panic payload), pass it through
+   `rdlp_redact::redact_str` explicitly before it is logged or returned.
+
+6. **Enforcement, two tiers.** The `AppError::snake_case(...)` constructors
+   record as they build, so a call site that goes through them cannot forget
+   the record — the tier-1 guard is structural, the same "secrets-as-types"
+   idea as the URL controls above. Two gates police *bypass* of that structure
+   rather than presence of a log line, because a grep is reliable at proving
+   "no other path exists" and unreliable at proving "every failure logged":
+   `scripts/check-boundary-log.sh` rejects a literal `AppError::Variant { … }`
+   construction outside `error.rs` (B1) and a `warn!`/`error!` call inside
+   `commands/` (B2), and `scripts/semgrep/log-url-redaction.yml`'s
+   `raw-url-in-instrument-field` rule closes the one path around both — an
+   unredacted URL in a `#[tracing::instrument(fields(...))]` span attribute.
+
 ## Code Reuse
 
 ### Extractor Format Building
