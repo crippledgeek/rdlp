@@ -484,8 +484,9 @@ fn test_realtime_ratio_calculation() {
 /// channel the UI reads, so the `log::` record was a duplicate wherever a
 /// caller supplies a progress callback — which is all three controller
 /// construction sites (`http/parallel.rs`, `dash/download.rs`, and
-/// `fragments.rs`, the last of which passed `None` until this change and so
-/// was the one path where the demotion would genuinely have lost them).
+/// `fragments.rs`, which passed `None` until its callback was wired one
+/// commit later — the one path where the demotion would otherwise have lost
+/// them).
 /// On the CLI they also remain reachable with `-v`, whose filter admits DEBUG.
 ///
 /// The startup summary (one line per download, naming mode/size/connections)
@@ -738,7 +739,7 @@ fn startup_summary_reports_the_clamped_level() {
 ///
 /// Above-ceiling companion to `startup_summary_reports_the_clamped_level`. The
 /// pre-fix summary indexed `CHUNK_LEVELS` with the raw config value, so a level
-/// past the array's end aborted the process before the clamp could apply. This
+/// past the array's end panicked before the clamp could apply. This
 /// pins the case the fix's own comment cites; it fails by panic, not assertion,
 /// against the unpatched code.
 #[test]

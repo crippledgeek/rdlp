@@ -231,7 +231,9 @@ pub async fn download_pre_resolved_fragments(
     // Build the AIMD adaptive controller in HlsSegments mode.
     // `HlsSegments` skips chunk-level adjustments (segment sizes are
     // server-determined) and tunes only connection count via the semaphore.
-    // Mirrors dash/download.rs:389-399 line-for-line.
+    // Mirrors the controller construction in `dash::download`'s
+    // `download_representation`. Not "line-for-line": that path threads its
+    // `log_callback` from an owned parameter, this one clones `progress`.
     //
     // The controller gets the same `log_callback` the DASH path gives it, so
     // its AIMD messages reach the UI's log channel on both. `progress` is an
@@ -242,8 +244,9 @@ pub async fn download_pre_resolved_fragments(
     // desktop's default level.
     let concurrency = http.concurrent_fragments().max(1);
 
-    // total_size = 0: not meaningful for segment-based downloads (mirrors
-    // dash/download.rs:390). HlsSegments mode skips chunk-level adjustments
+    // total_size = 0: not meaningful for segment-based downloads (same choice
+    // in `download_representation`). HlsSegments mode skips chunk-level
+    // adjustments
     // anyway, so the value is unused; passing 0 keeps parity with DASH.
     let controller = Arc::new(AdaptiveController::new(
         0,
@@ -393,7 +396,7 @@ pub async fn download_pre_resolved_fragments(
         total_bytes += bytes.len() as u64;
 
         // Inform the AIMD controller of segment completion so it can tune
-        // the connection count. Mirrors dash/download.rs:426.
+        // the connection count. Mirrors the semaphore use in `download_representation`.
         controller.report_segment_complete(bytes.len() as u64, fetch_elapsed, seg_dur);
 
         // Update progress accounting from the cumulative byte total. Feeding the

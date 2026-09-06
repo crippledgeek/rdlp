@@ -335,7 +335,7 @@ async fn download_representation(
 ) -> Result<u64> {
     // #347: cooperative-cancel gate before any work for this representation
     // (init segment + segment loop). Mirrors the fragment downloader idiom
-    // (fragments.rs:138 / :329) — a pre-cancelled token returns
+    // (`download_pre_resolved_fragments`, its pre-loop check and its per-fragment permit acquisition) — a pre-cancelled token returns
     // `RdlpError::Cancelled` before any network round-trip.
     if cancel.is_some_and(CancellationToken::is_cancelled) {
         return Err(RdlpError::Cancelled);
@@ -449,7 +449,7 @@ async fn download_representation(
         async move {
             // #347: per-segment cooperative-cancel check at the top of each
             // fetch task, mirroring the fragment downloader's per-iteration
-            // gate (fragments.rs:329). A cancel that fires mid-download stops
+            // gate in `download_pre_resolved_fragments`. A cancel that fires mid-download stops
             // in-flight segment tasks from issuing further network round-trips.
             // The check below short-circuits a segment whose task starts after
             // cancel; an in-flight segment body is ALSO interrupted mid-read by

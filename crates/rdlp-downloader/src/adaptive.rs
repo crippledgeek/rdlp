@@ -500,7 +500,9 @@ impl AdaptiveController {
             debug!("{msg}");
             self.log(&msg);
         } else if ratio > NOISE_THRESHOLD {
-            // 10–30 % drop — within noise, hold.
+            // Drop above 10 % and up to 30 % — noise, hold. Exclusive at the
+            // lower edge: at exactly 10 % this test is false and the level
+            // steps up instead (see `NOISE_THRESHOLD`).
         } else {
             // Stable or improving — additive increase (+1 level).
             let note = self.apply_chunk_delta(state, 1);
@@ -537,8 +539,9 @@ impl AdaptiveController {
     /// intent-derived clause would announce a cut that did not occur.
     /// `chunk_clause_reports_saturation_at_the_floor` pins that arithmetic
     /// directly; `floor_is_one_decrease_below_the_first_ramp` pins the path the
-    /// phase machine actually takes to reach it, which is a ramp followed by two
-    /// decreases — the controller never requests a decrease at startup.
+    /// phase machine actually takes to a decrease that saturates: a ramp, one
+    /// decrease back to the floor, and a second that moves nothing — the
+    /// controller never requests a decrease at startup.
     ///
     /// How OFTEN saturation happens is deliberately not claimed here. Every
     /// previous version of this comment tried to characterise where the level
