@@ -34,6 +34,23 @@ function logViolations(violations: AxeResult[]) {
     cy.task("log", JSON.stringify(data, null, 2)).then(() => {});
 }
 
+/**
+ * Expand the logs drawer if it is currently collapsed.
+ *
+ * Two tests need it open and neither controls what the one before it left
+ * behind — the drawer's state carries across tests within the spec file, since
+ * only the page reload between them resets it. Written as a no-op when the
+ * drawer is already open rather than an unconditional click, which would
+ * collapse it in exactly that case.
+ */
+function ensureDrawerExpanded() {
+    cy.get("body").then(($body) => {
+        if ($body.find('[aria-label="Expand drawer"]').length > 0) {
+            cy.get('[aria-label="Expand drawer"]').click();
+        }
+    });
+}
+
 function injectAndCheck(page: Parameters<typeof allowlistFor>[0]) {
     cy.injectAxe();
     cy.checkA11y(
@@ -72,12 +89,7 @@ describe("a11y: WCAG 2.1 AA regression", () => {
     });
 
     it("Logs drawer expanded", () => {
-        // Ensure drawer is expanded regardless of state inherited from prior tests.
-        cy.get("body").then(($body) => {
-            if ($body.find('[aria-label="Expand drawer"]').length > 0) {
-                cy.get('[aria-label="Expand drawer"]').click();
-            }
-        });
+        ensureDrawerExpanded();
         injectAndCheck("logs-expanded");
     });
 
@@ -94,12 +106,7 @@ describe("a11y: WCAG 2.1 AA regression", () => {
     });
 
     it("log severity chips toggle aria-pressed", () => {
-        // Ensure drawer is expanded regardless of state inherited from prior tests.
-        cy.get("body").then(($body) => {
-            if ($body.find('[aria-label="Expand drawer"]').length > 0) {
-                cy.get('[aria-label="Expand drawer"]').click();
-            }
-        });
+        ensureDrawerExpanded();
         // All four chips start pressed (default filter set is full).
         ["info", "warn", "error", "debug"].forEach((level) => {
             cy.contains("button", new RegExp(`^${level}$`, "i"))
