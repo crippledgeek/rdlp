@@ -139,6 +139,18 @@ const defaultHandlers: Record<string, InvokeHandler> = {
     queue: () => [],
 
     get_history: () => [],
+
+    // Registered so the Settings view has codec data. Unregistered, these fell
+    // through to the `Promise.resolve(null)` fallback below — and null is a
+    // value neither side of the real contract can produce: the Rust commands
+    // return `Result<Vec<_>, AppError>` and `invokeTyped<T>` either resolves T
+    // or throws. `SystemSection` destructures with `= []`, which defaults only
+    // on undefined, so the fabricated null reached `.length` and crashed the
+    // whole Settings view. The a11y spec failed on that, and it read as an app
+    // bug rather than a harness one.
+    available_codecs: () => [],
+
+    available_audio_codecs: () => [],
 };
 
 // ---------------------------------------------------------------------------

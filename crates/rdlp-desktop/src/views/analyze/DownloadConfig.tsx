@@ -194,10 +194,17 @@ export function DownloadConfig() {
     // Gated via skipToken in the queryFn slot (v5 documented pattern) so the
     // queryFn identity changes on the first false->true transition instead of
     // relying on the `enabled` flag which silently no-ops under React 19.
-    const { data: videoCodecs = [] } = useQuery(codecsQueryOptions(expertMode));
-    const { data: audioCodecs = [] } = useQuery(
+    //
+    // `?? []` rather than a `= []` default on both: the default fires only on
+    // undefined, and these two queries back the only commands the Cypress stub
+    // left unregistered, so they are the pair a fabricated null has actually
+    // reached. See SystemSection for the full reasoning.
+    const { data: videoCodecsData } = useQuery(codecsQueryOptions(expertMode));
+    const videoCodecs = videoCodecsData ?? [];
+    const { data: audioCodecsData } = useQuery(
         audioCodecsQueryOptions(resolvedContainer || null, recodeActive && !!resolvedContainer),
     );
+    const audioCodecs = audioCodecsData ?? [];
 
     // Derive speed-control knobs for the selected encoder (expert mode only).
     // Must come after videoCodecs is declared.

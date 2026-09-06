@@ -5,7 +5,15 @@ import { useQuery } from "@tanstack/react-query";
 import { codecsQueryOptions } from "@/api/codecs";
 
 export function SystemSection() {
-    const { data: codecs = [] } = useQuery(codecsQueryOptions(true));
+    // `?? []`, not a `= []` destructuring default: the default fires only on
+    // undefined. The declared contract cannot produce null — the Rust command
+    // returns `Result<Vec<_>, AppError>` and `invokeTyped<T>` resolves T or
+    // throws — so this is hardening rather than a fix for a reachable bug. It
+    // exists because a null DID reach here once, fabricated by the Cypress
+    // stub's fallback for unregistered commands, and crashed this whole
+    // section. Cheap insurance against any future source of the same shape.
+    const { data } = useQuery(codecsQueryOptions(true));
+    const codecs = data ?? [];
 
     if (codecs.length === 0) return null;
 
