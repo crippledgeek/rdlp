@@ -57,6 +57,9 @@ rand = "0.8"
 base64 = { workspace = true }
 sha2 = "0.10"
 hex = { workspace = true }
+# Captures span/event output to assert the instrument level and redaction
+# (Task 8: the tracing->log bridge is not exercised by a plain log capture).
+tracing-subscriber = { workspace = true }
 
 # Per-crate lint config — extends workspace lints (which cannot be composed
 # with workspace = true once per-crate tables are added).

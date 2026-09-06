@@ -19,7 +19,7 @@ impl Orchestrator {
     /// Returns an error if:
     /// - No extractor is found for the URL
     /// - Extraction fails
-    #[instrument(skip(self), fields(url = %url))]
+    #[instrument(level = "debug", skip(self), fields(url = %rdlp_redact::RedactedUrl::new(url)))]
     pub(super) async fn extract_video(&self, url: &str) -> Result<rdlp_types::InfoDict> {
         debug!("Finding extractor for URL...");
 
@@ -133,7 +133,7 @@ impl Orchestrator {
     /// Returns an error if:
     /// - No extractor is found for the URL
     /// - Extraction fails
-    #[instrument(skip(self), fields(url = %url))]
+    #[instrument(level = "debug", skip(self), fields(url = %rdlp_redact::RedactedUrl::new(url)))]
     pub(super) async fn extract_playlist(&self, url: &str) -> Result<Vec<rdlp_types::InfoDict>> {
         debug!("Finding extractor for URL...");
 
@@ -295,5 +295,121 @@ impl Orchestrator {
                 OrchestratorError::Configuration(format!("Unknown search site: '{extractor_name}'"))
             })?;
         Ok(extractor.supported_filters())
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::missing_docs_in_private_items)]
+mod tests {
+    use super::*;
+    use crate::handle::DownloadId;
+    use rdlp_types::Config;
+    use std::io;
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
+    use tracing_subscriber::fmt::MakeWriter;
+
+    /// The span field carries a redacted URL, not the raw one.
+    ///
+    /// `#[instrument(fields(url = %url))]` interpolated a raw `&str` into a
+    /// record that persists to the desktop's `LogDir`. The redaction gate
+    /// cannot see this shape — its rule A1 matches a structured-kv sigil
+    /// left of the `=`, while an instrument field puts the sigil on the
+    /// right (`url = %url`).
+    #[test]
+    fn the_extraction_span_field_is_redacted() {
+        let raw = "https://user:hunter2@example.com/v";
+        let shown = rdlp_redact::RedactedUrl::new(raw).to_string();
+        assert!(!shown.contains("hunter2"), "got: {shown}");
+    }
+
+    /// A writer that appends into a shared buffer, so the test can inspect
+    /// exactly what `tracing_subscriber::fmt` rendered for the span.
+    #[derive(Clone, Default)]
+    struct CapturedOutput(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for CapturedOutput {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for CapturedOutput {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    fn test_orchestrator() -> Orchestrator {
+        let config = Arc::new(Config::default());
+        let (tx, _rx) = mpsc::channel::<crate::events::Event>(64);
+        let id = DownloadId::next();
+        let token = CancellationToken::new();
+        Orchestrator::new(config, tx, id, token, None)
+    }
+
+    /// Exercises the real `tracing` -> subscriber pipeline (not just the
+    /// redaction helper in isolation), so a regression that puts the raw
+    /// `url` back into `fields(...)`, or that reverts the span to INFO,
+    /// fails this test. This is the load-bearing check the brief's Step 4
+    /// calls a "live run" — captured here instead of shelling out to the
+    /// CLI, so it runs in the normal suite and in CI.
+    #[test]
+    fn the_extraction_span_is_debug_and_redacted_in_real_output() {
+        let captured = CapturedOutput::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(captured.clone())
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            // The function body logs via the `log` facade (no `LogTracer`
+            // bridge is installed here), so nothing inside the span would
+            // otherwise reach this subscriber. Recording span creation
+            // itself is what surfaces the `url` field and the span's level.
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NEW)
+            .finish();
+
+        let orchestrator = test_orchestrator();
+        let raw = "https://user:hunter2@example.invalid/v";
+
+        tracing::subscriber::with_default(subscriber, || {
+            // `with_default` is thread-local; a multi-thread runtime would
+            // run the instrumented future on a worker thread that never saw
+            // it, so use `current_thread` to keep everything on this one.
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            // No extractor matches this host; the call errors, but the span
+            // is opened (and its fields recorded) before that happens.
+            rt.block_on(async {
+                let _ = orchestrator.extract_video(raw).await;
+            });
+        });
+
+        let output = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            output.contains("extract_video"),
+            "expected the span in the captured output: {output}"
+        );
+        assert!(
+            !output.contains("hunter2"),
+            "raw credential leaked into the span's recorded output: {output}"
+        );
+        assert!(
+            !output.contains("INFO extract_video") && !output.contains("INFO rdlp_api"),
+            "expected the span at DEBUG, found an INFO record: {output}"
+        );
+        assert!(
+            output.contains("DEBUG"),
+            "expected at least one DEBUG-level record for the span: {output}"
+        );
     }
 }
