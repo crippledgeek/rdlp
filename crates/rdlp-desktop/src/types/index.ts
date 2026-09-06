@@ -381,6 +381,27 @@ export interface DownloadLogPayload {
     message: string;
 }
 
+/**
+ * A record from the Rust `log` facade, emitted as "log://log" by
+ * tauri-plugin-log's `Webview` target.
+ *
+ * `level` is an integer, not a string: the plugin's `LogLevel` derives
+ * `Serialize_repr` over `repr(u16)` — Trace=1, Debug=2, Info=3, Warn=4,
+ * Error=5. Map it with `severityFromPluginLevel` rather than comparing
+ * numbers at a call site.
+ *
+ * `message` is whatever the target's formatter produced, so its shape is set
+ * by the `.format(...)` given to the `Webview` target in
+ * `src-tauri/src/lib.rs` — not by the crate that called `info!`.
+ *
+ * Unrelated to `DownloadLogPayload`, which is a per-job progress message
+ * rather than a facade record.
+ */
+export interface LogRecordPayload {
+    level: number;
+    message: string;
+}
+
 /** Post-processing progress payload emitted as "postprocess-progress". */
 export interface PostProcessProgressPayload {
     jobId: string;

@@ -127,20 +127,71 @@ pub fn run() {
         // depended on `log` with no backend at all, so every `info!`/`warn!`
         // in the desktop crate was discarded.
         //
-        // `Stdout` covers `pnpm tauri dev`; `LogDir` gives a file to attach to
-        // a bug report, at `$XDG_DATA_HOME/com.rdlp.desktop/logs` on Linux,
-        // rotated by the plugin's own `max_file_size` handling. `Webview`
-        // forwards records to the devtools console, where a frontend bug is
-        // usually being read anyway — `main.tsx` calls `attachConsole()` to
-        // receive them. That is an event listener, not a plugin command, so it
-        // needs no `log:` capability entry.
+        // Two sinks, and deliberately no stdout one. `LogDir` gives a file to
+        // attach to a bug report, at `$XDG_DATA_HOME/com.rdlp.desktop/logs` on
+        // Linux, rotated by the plugin's own `max_file_size` handling.
+        // `Webview` emits each record as the `log://log` event, which has two
+        // subscribers: `events/registerLogEvents.ts` feeds the in-app Log
+        // Viewer, and `main.tsx` calls `attachConsole()` to mirror records into
+        // the devtools console. Both are event listeners rather than plugin
+        // commands, so neither needs a `log:` capability entry.
+        //
+        // A terminal is not one of the places a desktop user reads logs: under
+        // a bundled launch there is no attached console at all, so the records
+        // a `Stdout` target wrote were discarded everywhere except
+        // `pnpm tauri dev`. The Log Viewer is the surface that replaces it, and
+        // until it subscribed to `log://log` it showed only per-job
+        // `download-log` messages — no facade record had ever reached it.
         .plugin(
             tauri_plugin_log::Builder::new()
+                // The builder's default prefix lives on the ROOT dispatch
+                // (`Builder::new()` is `Default::default()`), and fern hands
+                // each child target a record whose `args()` are already the
+                // parent's output — `FormatCallback::finish` rebuilds the
+                // record with `.args(formatted_message)` before passing it
+                // down (fern 0.7.1, src/log_impl.rs:531-547).
+                //
+                // So a per-target formatter WRAPS the default prefix rather
+                // than replacing it. Clearing the root is what makes each
+                // target's own format authoritative; without this the pane
+                // would render the timestamp and level twice and the target
+                // three times.
+                .clear_format()
                 .targets([
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
+                    // The pane renders its own timestamp and level badge, so
+                    // the one thing it cannot recover is which crate spoke.
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview).format(
+                        |out, message, record| {
+                            out.finish(format_args!("[{}] {message}", record.target()));
+                        },
+                    ),
+                    // A file has no surrounding UI to carry that context, so
+                    // it keeps the full prefix. This reproduces the shape the
+                    // plugin's own default emitted (tauri-plugin-log 2.9.1,
+                    // src/lib.rs:429-441) — including its UTC basis
+                    // (`DEFAULT_TIMEZONE_STRATEGY`, lib.rs:53), so clearing the
+                    // root above does not silently change what the file has
+                    // always looked like. `chrono` rather than `time` because
+                    // the desktop crate already depends on it.
+                    //
+                    // The UTC here is now hardcoded, where it used to follow
+                    // the builder. `.timezone_strategy(...)` still moves the
+                    // rotated file's NAME, but no longer reaches these lines —
+                    // so setting it to `UseLocal` would give a file stamped
+                    // local time whose every record reads UTC, and nothing
+                    // would fail. Change both together or neither.
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
                         file_name: None,
+                    })
+                    .format(|out, message, record| {
+                        // One `now()`: two calls can straddle a second
+                        // boundary and print a date and a time that disagree.
+                        out.finish(format_args!(
+                            "{}[{}][{}] {message}",
+                            chrono::Utc::now().format("[%Y-%m-%d][%H:%M:%S]"),
+                            record.target(),
+                            record.level(),
+                        ));
                     }),
                 ])
                 .level(LOG_LEVEL)
