@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { attachConsole } from "@tauri-apps/plugin-log";
 import App from "./App";
+import { withDevtools } from "./devtools/withDevtools";
 import { queryClient } from "./query/queryClient";
 import { registerDownloadEvents } from "./events/registerDownloadEvents";
 import { registerLogEvents } from "./events/registerLogEvents";
@@ -36,8 +37,13 @@ void attachConsole();
 void registerLogEvents();
 void registerDownloadEvents(queryClient);
 
+// Devtools are attached here rather than inside `App`, so the app component
+// carries no reference to them. The Vite plugin strips the wrapper and its
+// imports from a production build.
+const Root = withDevtools(App);
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
-    <App />
+    <Root />
   </React.StrictMode>,
 );

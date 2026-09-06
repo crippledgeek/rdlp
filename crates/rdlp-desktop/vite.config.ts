@@ -1,4 +1,5 @@
 import { defineConfig } from "vite";
+import { devtools } from "@tanstack/devtools-vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
@@ -8,6 +9,19 @@ const host = process.env.TAURI_DEV_HOST;
 // https://vitejs.dev/config/
 export default defineConfig(async () => ({
   plugins: [
+    // MUST be first — the plugin documents that ordering, and it is what
+    // strips every devtools import from a production bundle.
+    //
+    // `removeDevtoolsOnBuild` defaults to true, so `vite build` emits nothing
+    // devtools-related and the packages stay devDependencies. That default is
+    // the whole reason to use the plugin rather than gating the component on
+    // `import.meta.env.DEV` by hand: the docs recommend the hand-rolled
+    // conditional only for non-Vite projects, and a conditional is a thing
+    // someone can later get wrong, whereas the strip is unconditional.
+    //
+    // Not added to vitest.config.ts, which has its own plugins array: the
+    // event bus would open a port per test run for no benefit.
+    devtools(),
     tailwindcss(),
     react({
       babel: {
