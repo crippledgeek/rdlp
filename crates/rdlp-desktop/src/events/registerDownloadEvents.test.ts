@@ -87,10 +87,10 @@ describe("registerDownloadEvents", () => {
 
     // Boundary pair for MAX_JOB_LOG_MESSAGES: at the cap nothing is dropped;
     // one past it the oldest goes and the newest stays. A single far-from-
-    // boundary case (say 2000 messages) would pass against an off-by-one in
-    // the slice, which is the regression that actually costs a message —
-    // verified by mutation: `slice(len - MAX + 1)` fails these, a 2000-message
-    // test would not.
+    // boundary case is weaker: `slice(len - MAX + 1)` fails the one-past test
+    // (the slice never runs at exactly the cap, so the at-cap test still
+    // passes), and a 2000-message test would catch it only if it asserted
+    // contents rather than length. The pair pins both edges directly.
     //
     // The bounds derive from the constant, so these pin the eviction
     // *mechanism*, not the number 500. Retuning the cap deliberately moves the

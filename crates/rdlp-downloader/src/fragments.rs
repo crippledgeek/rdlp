@@ -396,7 +396,8 @@ pub async fn download_pre_resolved_fragments(
         total_bytes += bytes.len() as u64;
 
         // Inform the AIMD controller of segment completion so it can tune
-        // the connection count. Mirrors the semaphore use in `download_representation`.
+        // the connection count. Mirrors `report_segment_complete` in
+        // `download_representation`.
         controller.report_segment_complete(bytes.len() as u64, fetch_elapsed, seg_dur);
 
         // Update progress accounting from the cumulative byte total. Feeding the

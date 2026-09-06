@@ -20,8 +20,10 @@
 ///   (`connection/handshake/common.rs`).
 /// - `write_commands` records its arguments as span fields, and
 ///   `Command::Auth(Option<AuthMechanism>, Option<Vec<u8>>)` carries the
-///   D-Bus AUTH response — the client UID under `EXTERNAL`, the
-///   `~/.dbus-keyrings` cookie-derived response under `DBUS_COOKIE_SHA1`.
+///   D-Bus AUTH response, which under `EXTERNAL` is the client UID.
+///   (`DBUS_COOKIE_SHA1` would carry a `~/.dbus-keyrings`-derived response,
+///   but zbus dropped that mechanism in 5.0 — `AuthMechanism` has only
+///   `External` and `Anonymous`, so the UID is the whole exposure here.)
 ///
 /// On the desktop that material was being persisted to a rotating log file, so
 /// this filter is an information-disclosure fix as much as a noise fix. All
@@ -62,9 +64,10 @@ pub const ZBUS: &str = "zbus";
 ///
 /// The field-conditional rule covers span creation and `record_all`. A span's
 /// *close* record takes this target unconditionally (`Drop for Span`), fields
-/// or not — but it is emitted at TRACE, which this filter's own `Warn` ceiling
-/// discards. Note it is discarded BY this filter, not despite it: fern checks
-/// the per-target override *instead of* the global level
-/// (`find_module(target).unwrap_or(default_level)`), so the sink's INFO never
-/// applies to this target at all.
+/// or not — but it is emitted at TRACE and discarded either way. It does not
+/// even reach this filter: fern sets `log::max_level` to the maximum of the
+/// default level and every override, so the `log!` macro gates a TRACE record
+/// against that ceiling first. Had it got through, the `Warn` here would
+/// discard it too — fern's per-target lookup replaces the global level rather
+/// than combining with it (`find_module(target).unwrap_or(default_level)`).
 pub const TRACING_SPAN_LIFECYCLE: &str = "tracing::span";
