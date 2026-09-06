@@ -5,6 +5,7 @@
 //! events. The frontend listens for these events via Tauri's IPC
 //! event system to update the download queue UI in real time.
 
+use crate::boundary::{Action, Subject};
 use log::debug;
 use rdlp_api::Event;
 use serde::Serialize;
@@ -150,6 +151,19 @@ pub(crate) fn format_eta(eta: &std::time::Duration) -> String {
     }
 }
 
+/// Record a terminal download failure.
+///
+/// Split out of the `Event::Failed` arm so it is callable from a test without
+/// a `tauri::AppHandle`. WARN, not ERROR: a download failing is expected and
+/// user-facing (network, site change, disk), not an internal bug.
+///
+/// `err`'s `Display` is redacted per variant (`rdlp-api/src/errors.rs`), so
+/// the reason needs no `redact_str` here.
+fn record_download_failure(job_id: &str, err: &rdlp_api::RdlpApiError) {
+    let action = Action::with_subject("download", Subject::Job(job_id));
+    log::warn!("{action} outcome=failed reason={err}");
+}
+
 /// Forward an rdlp-api [`Event`] to the Tauri frontend.
 ///
 /// Maps each relevant event variant to the appropriate frontend event
@@ -203,6 +217,8 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
         }
 
         Event::Failed { error, .. } => {
+            record_download_failure(job_id, error);
+
             let payload = DownloadErrorPayload {
                 job_id: job_id.to_owned(),
                 error: error.user_message().into_owned(),
@@ -464,6 +480,39 @@ mod tests {
         let v = serde_json::to_value(&payload).expect("serialization should succeed");
         assert_eq!(v["jobId"], "abc-123");
         assert!(v.get("job_id").is_none(), "must be camelCase on the wire");
+    }
+
+    /// A failed download is recorded, not only shown as a toast.
+    ///
+    /// The arm forwards `user_message()` to the frontend; before this it wrote
+    /// no record of the failure at all, only a `debug!` if the *emit* failed.
+    #[test]
+    fn a_failed_download_is_recorded_once_at_warn() {
+        testing_logger::setup();
+        let err = rdlp_api::RdlpApiError::NetworkError {
+            message: "connection reset".to_owned(),
+            status: None,
+        };
+        super::record_download_failure("job-7", &err);
+
+        testing_logger::validate(|captured| {
+            let warns: Vec<_> = captured
+                .iter()
+                .filter(|l| l.level == log::Level::Warn)
+                .collect();
+            assert_eq!(warns.len(), 1, "exactly one terminal record");
+            let body = warns.first().map_or("", |l| l.body.as_str());
+            assert!(body.contains("action=download"), "names the action: {body}");
+            assert!(
+                body.contains("outcome=failed"),
+                "states the outcome: {body}"
+            );
+            assert!(body.contains("job_id=job-7"), "names the job: {body}");
+            assert!(
+                body.contains("connection reset"),
+                "names the reason: {body}"
+            );
+        });
     }
 
     /// The `download-error` event is a SEPARATE path to the frontend from
