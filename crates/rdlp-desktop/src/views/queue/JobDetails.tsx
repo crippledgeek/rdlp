@@ -11,7 +11,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { isTerminal as isTerminalStatus, isInFlight, jobSubLabel } from "@/lib/jobStatus";
 import { invokeTyped, extractErrorMessage } from "@/api/invokeClient";
 import { cn, progressPercentLabel } from "@/lib/utils";
-import { MAX_JOB_LOG_MESSAGES } from "../../events/registerDownloadEvents";
+import { MAX_JOB_LOG_MESSAGES } from "@/events/registerDownloadEvents";
 
 function formatDate(ts: number | null): string {
     if (!ts) return "—";

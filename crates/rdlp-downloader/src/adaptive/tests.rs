@@ -583,3 +583,98 @@ fn hls_mode_messages_claim_no_chunk_change() {
         );
     }
 }
+
+/// The chunk clause reports the transition that was applied.
+///
+/// Positive half of the pair below: when the level genuinely moves, the message
+/// names the real before/after rather than the requested delta.
+#[test]
+fn chunk_clause_reports_the_applied_transition() {
+    let ctrl = make_controller(64 * 1024 * 1024);
+    let mut state = ctrl.state.lock().unwrap();
+
+    // From the default (== MIN_CHUNK_LEVEL) an increase does move the level.
+    let note = ctrl.apply_chunk_delta(&mut state, 1);
+
+    assert!(
+        note.contains("chunk level 2 → 3"),
+        "expected the applied transition, got: {note}"
+    );
+    assert_eq!(
+        state.current_chunk_level,
+        MIN_CHUNK_LEVEL + 1,
+        "the clause must describe a transition that really happened"
+    );
+}
+
+/// At the floor the clause says so instead of claiming a decrease.
+///
+/// This is the regression the intent-derived version shipped: `MIN_CHUNK_LEVEL`
+/// is also the default starting level, so a download is back on the floor
+/// after its first decrease and every one after that moves nothing while the
+/// message announced "chunk -2". Saturation is the state an operator most needs during
+/// a throughput collapse that nothing relieves, so it is reported rather than
+/// omitted.
+///
+/// Fails against the intent-derived version, which had no floor branch at all.
+#[test]
+fn chunk_clause_reports_saturation_at_the_floor() {
+    let ctrl = make_controller(64 * 1024 * 1024);
+    let mut state = ctrl.state.lock().unwrap();
+    assert_eq!(
+        state.current_chunk_level, MIN_CHUNK_LEVEL,
+        "precondition: the default start IS the floor, which is what makes \
+         this the common case rather than an edge case"
+    );
+
+    let note = ctrl.apply_chunk_delta(&mut state, MD_CHUNK_DELTA);
+
+    assert!(
+        note.contains("already at the minimum"),
+        "the floor must be reported, got: {note}"
+    );
+    assert!(
+        !note.contains('→'),
+        "no transition may be claimed when the level did not move, got: {note}"
+    );
+    assert_eq!(
+        state.current_chunk_level, MIN_CHUNK_LEVEL,
+        "the level must not have moved"
+    );
+}
+
+/// Pins the ladder the two clause docs describe in prose.
+///
+/// Those docs justify the saturation branch by claiming the floor is one
+/// decrease away, not far below. That claim has been wrong twice while being
+/// edited by hand, so it is asserted here rather than reasoned about again.
+#[test]
+fn floor_is_one_decrease_below_the_first_ramp() {
+    let ctrl = make_controller(64 * 1024 * 1024);
+    let mut state = ctrl.state.lock().unwrap();
+
+    assert_eq!(
+        state.current_chunk_level, MIN_CHUNK_LEVEL,
+        "starts on the floor"
+    );
+
+    // The first adjustment of a download takes the SlowStart initial ramp.
+    ctrl.apply_chunk_delta(&mut state, 2);
+    assert_eq!(state.current_chunk_level, MIN_CHUNK_LEVEL + 2, "ramps to 4");
+
+    // First decrease returns it to the floor — it moves.
+    let first = ctrl.apply_chunk_delta(&mut state, MD_CHUNK_DELTA);
+    assert_eq!(state.current_chunk_level, MIN_CHUNK_LEVEL);
+    assert!(
+        first.contains('→'),
+        "the first decrease does move the level, got: {first}"
+    );
+
+    // The second is the one that moves nothing.
+    let second = ctrl.apply_chunk_delta(&mut state, MD_CHUNK_DELTA);
+    assert_eq!(state.current_chunk_level, MIN_CHUNK_LEVEL);
+    assert!(
+        second.contains("already at the minimum"),
+        "the second decrease is the saturating one, got: {second}"
+    );
+}

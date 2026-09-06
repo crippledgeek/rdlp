@@ -105,10 +105,12 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SuspendingWriter {
 fn default_filter(level: tracing::Level) -> EnvFilter {
     // `EnvFilter::new` is lossy, NOT panicking: it routes through
     // `parse_lossy`, which prints "ignoring `X`" to stderr and DROPS the bad
-    // directive, leaving only the builder's default `ERROR`. So a malformed
-    // directive fails silently and in the worst direction — a bad level half
-    // degrades the process to near-total log silence, and a bad zbus half
-    // restores exactly the noise this filter exists to remove.
+    // directive. Whatever parsed is all that remains — the builder's `ERROR`
+    // default is added only when NOTHING parsed (`filter/env/builder.rs`,
+    // `from_directives`). So a malformed directive fails silently and in the
+    // worst direction: a bad level half leaves just `zbus=warn` standing and
+    // silences the rest of the tree outright, and a bad zbus half restores
+    // exactly the noise this filter exists to remove.
     //
     // That is why the parameter is a `tracing::Level` rather than a `&str`:
     // no value of it can produce an invalid directive, so a config- or

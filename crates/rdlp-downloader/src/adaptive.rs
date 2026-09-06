@@ -55,8 +55,10 @@ const MIN_CHUNK_LEVEL: u8 = 2;
 
 /// Chunk levels shed by one multiplicative decrease.
 ///
-/// Halves the request size in level terms (`CHUNK_LEVELS` is power-of-two), the
-/// standard AIMD response to a congestion signal.
+/// Two levels. `CHUNK_LEVELS` doubles at every index, so this QUARTERS the
+/// request size — a harder cut than AIMD's classic halving, chosen because a
+/// single level barely moves the 256KB floor. (The doubling ladder is exactly
+/// why −2 is not a halving; −1 would be.)
 const MD_CHUNK_DELTA: i8 = -2;
 
 /// Maximum number of throughput samples retained in history.
@@ -443,13 +445,22 @@ impl AdaptiveController {
     /// Steady phase AIMD adjustments.
     fn adjust_steady(&self, state: &mut AdaptiveState, current_ewma: f64, prev_ewma: Option<f64>) {
         let Some(prev) = prev_ewma else {
-            // First measurement in Steady — apply additive increase.
-            self.bump_chunk_level(state, 1);
+            // First measurement in Steady — apply additive increase. Logged
+            // like every other adjustment: `bump_chunk_level` no longer reports
+            // anything itself, so calling it directly would move the level with
+            // no operator-visible trace at all.
+            let note = self.apply_chunk_delta(state, 1);
+            let msg = format!("Adaptive [Steady]: first measurement{note}");
+            debug!("{msg}");
+            self.log(&msg);
             return;
         };
 
         if prev == 0.0 {
-            self.bump_chunk_level(state, 1);
+            let note = self.apply_chunk_delta(state, 1);
+            let msg = format!("Adaptive [Steady]: no prior throughput{note}");
+            debug!("{msg}");
+            self.log(&msg);
             return;
         }
 
@@ -496,8 +507,11 @@ impl AdaptiveController {
     /// it reports the *applied* transition rather than the requested delta.
     /// Intent and outcome diverge routinely, not rarely: the level clamps at
     /// both ends, and `MIN_CHUNK_LEVEL` is also the default starting level
-    /// (`AdaptiveConfig::default`), so the first multiplicative decrease of a
-    /// typical download requests −2 and moves nothing. In `HlsSegments` mode
+    /// (`AdaptiveConfig::default`), so the floor sits one decrease away rather
+    /// than far below. A download starts at level 2, ramps to 4 on its first
+    /// adjustment, and its FIRST decrease (4 → 2) already returns it to the
+    /// floor — so the second and every later decrease requests a cut and moves
+    /// nothing. In `HlsSegments` mode
     /// the adjustment is discarded entirely and the clause is empty.
     ///
     /// Saturation is reported rather than omitted: "already at the minimum" is

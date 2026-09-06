@@ -62,6 +62,9 @@ pub const ZBUS: &str = "zbus";
 ///
 /// The field-conditional rule covers span creation and `record_all`. A span's
 /// *close* record takes this target unconditionally (`Drop for Span`), fields
-/// or not — but it is emitted at TRACE, so the desktop's INFO sink discards it
-/// before this filter is consulted either way.
+/// or not — but it is emitted at TRACE, which this filter's own `Warn` ceiling
+/// discards. Note it is discarded BY this filter, not despite it: fern checks
+/// the per-target override *instead of* the global level
+/// (`find_module(target).unwrap_or(default_level)`), so the sink's INFO never
+/// applies to this target at all.
 pub const TRACING_SPAN_LIFECYCLE: &str = "tracing::span";
