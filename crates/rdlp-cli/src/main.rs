@@ -103,11 +103,18 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SuspendingWriter {
 /// arrives as real spans under their own `zbus::…` target and the directive
 /// below already covers them.
 fn default_filter(level: tracing::Level) -> EnvFilter {
-    // `EnvFilter::new` panics on an unparseable directive. Taking a
-    // `tracing::Level` rather than a `&str` is what keeps that unreachable:
-    // there is no value of the parameter that produces an invalid directive,
-    // so a config- or CLI-derived string cannot later turn this into a
-    // startup crash. `filter_directive_parses` pins the formatting.
+    // `EnvFilter::new` is lossy, NOT panicking: it routes through
+    // `parse_lossy`, which prints "ignoring `X`" to stderr and DROPS the bad
+    // directive, leaving only the builder's default `ERROR`. So a malformed
+    // directive fails silently and in the worst direction — a bad level half
+    // degrades the process to near-total log silence, and a bad zbus half
+    // restores exactly the noise this filter exists to remove.
+    //
+    // That is why the parameter is a `tracing::Level` rather than a `&str`:
+    // no value of it can produce an invalid directive, so a config- or
+    // CLI-derived string cannot reintroduce the silent-degradation class.
+    // Typing the level cannot catch a mistake in the format string itself,
+    // which is what `filter_directive_parses` is for.
     EnvFilter::new(format!("{level},{}=warn", rdlp_types::log_targets::ZBUS))
 }
 
@@ -518,18 +525,29 @@ mod tests {
     use super::*;
 
     /// `default_filter` builds its directive with `Level`'s `Display`, which
-    /// is uppercase (`INFO`), while the directives it is concatenated with are
-    /// lowercase. `EnvFilter::new` panics rather than erring on a directive it
-    /// cannot parse, so this asserts the mixed-case string is actually
-    /// accepted — the parameter being typed prevents an invalid *level*, not a
-    /// formatting mistake in this function.
+    /// is uppercase (`INFO`), while the directive it is concatenated with is
+    /// lowercase. A directive `EnvFilter` cannot parse is dropped silently
+    /// (`parse_lossy`), not rejected, so a formatting mistake here would
+    /// produce a filter that looks fine and logs nothing — the parameter being
+    /// typed prevents an invalid *level*, never a mistake in this function.
+    ///
+    /// Asserts the whole rendering rather than a substring: `contains("zbus")`
+    /// would pass on a bare `zbus` directive, which parses and means TRACE —
+    /// the precise noise regression this branch removes — and would not notice
+    /// the level half being mangled at all.
     #[test]
     fn filter_directive_parses() {
         for level in [tracing::Level::INFO, tracing::Level::DEBUG] {
             let rendered = default_filter(level).to_string();
             assert!(
-                rendered.contains(rdlp_types::log_targets::ZBUS),
-                "the zbus directive must survive into the built filter, got: {rendered}"
+                rendered.contains(&format!("{}=warn", rdlp_types::log_targets::ZBUS)),
+                "zbus must be pinned to warn, not merely present, got: {rendered}"
+            );
+            assert!(
+                rendered
+                    .to_lowercase()
+                    .contains(&level.to_string().to_lowercase()),
+                "the requested level must survive into the filter, got: {rendered}"
             );
         }
     }

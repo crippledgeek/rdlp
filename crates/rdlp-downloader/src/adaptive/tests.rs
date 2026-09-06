@@ -561,12 +561,11 @@ fn hls_mode_messages_claim_no_chunk_change() {
 
     // Drive several decision intervals across rising, falling and flat
     // throughput so every phase-transition message is exercised.
-    for (i, bps) in [4.0, 8.0, 8.0, 1.0, 1.0, 4.0].iter().enumerate() {
+    for bps in [4.0, 8.0, 8.0, 1.0, 1.0, 4.0] {
         for _ in 0..AdaptiveConfig::default().decision_interval {
             let bytes = (bps * 1024.0 * 1024.0) as u64;
             ctrl.report_chunk_complete(bytes, std::time::Duration::from_secs(1));
         }
-        assert!(i < 6);
     }
 
     let msgs = logged.lock().expect("lock").clone();
@@ -575,8 +574,11 @@ fn hls_mode_messages_claim_no_chunk_change() {
         "expected tuning messages beyond the startup summary, got {msgs:?}"
     );
     for m in &msgs {
+        // Matches "chunk " rather than the "+"/"level" spellings: a partial
+        // regression restoring only the negative clause would slip past those
+        // and still tell an HLS operator the chunk size had changed.
         assert!(
-            !m.contains("chunk +") && !m.contains("chunk level"),
+            !m.contains("chunk "),
             "HLS mode must not claim a chunk adjustment, got: {m}"
         );
     }

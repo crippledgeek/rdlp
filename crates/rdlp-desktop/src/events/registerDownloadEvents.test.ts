@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { QueryClient } from "@tanstack/react-query";
 import { mockEmit, clearEventListeners } from "@/test/tauri-mock";
 import { queryKeys } from "../query/queryKeys";
-import { registerDownloadEvents } from "./registerDownloadEvents";
+import { registerDownloadEvents, MAX_JOB_LOG_MESSAGES } from "./registerDownloadEvents";
 import type { DownloadJob } from "../types";
 
 function makeJob(overrides: Partial<DownloadJob> = {}): DownloadJob {
@@ -83,6 +83,55 @@ describe("registerDownloadEvents", () => {
 
         const jobs = qc.getQueryData<DownloadJob[]>(queryKeys.downloads.list())!;
         expect(jobs[0]!.logMessages).toEqual(["Fetching metadata"]);
+    });
+
+    // Boundary pair for MAX_JOB_LOG_MESSAGES: at the cap nothing is dropped;
+    // one past it the oldest goes and the newest stays. A single far-from-
+    // boundary case (say 2000 messages) would pass against an off-by-one in
+    // the slice, which is the regression that actually costs a message —
+    // verified by mutation: `slice(len - MAX + 1)` fails these, a 2000-message
+    // test would not.
+    //
+    // The bounds derive from the constant, so these pin the eviction
+    // *mechanism*, not the number 500. Retuning the cap deliberately moves the
+    // tests with it and stays green; that is intended, since the number is
+    // policy rather than a contract.
+    it("retains every message when exactly at the cap", async () => {
+        const job = makeJob({ id: "job-42" });
+        qc.setQueryData<DownloadJob[]>(queryKeys.downloads.list(), [job]);
+
+        for (let i = 0; i < MAX_JOB_LOG_MESSAGES; i++) {
+            await mockEmit("download-log", {
+                jobId: "job-42",
+                level: "info",
+                message: `msg-${i}`,
+            });
+        }
+
+        const jobs = qc.getQueryData<DownloadJob[]>(queryKeys.downloads.list())!;
+        const logs = jobs[0]!.logMessages!;
+        expect(logs).toHaveLength(MAX_JOB_LOG_MESSAGES);
+        expect(logs[0]).toBe("msg-0");
+        expect(logs[logs.length - 1]).toBe(`msg-${MAX_JOB_LOG_MESSAGES - 1}`);
+    });
+
+    it("drops the oldest message one past the cap", async () => {
+        const job = makeJob({ id: "job-42" });
+        qc.setQueryData<DownloadJob[]>(queryKeys.downloads.list(), [job]);
+
+        for (let i = 0; i < MAX_JOB_LOG_MESSAGES + 1; i++) {
+            await mockEmit("download-log", {
+                jobId: "job-42",
+                level: "info",
+                message: `msg-${i}`,
+            });
+        }
+
+        const jobs = qc.getQueryData<DownloadJob[]>(queryKeys.downloads.list())!;
+        const logs = jobs[0]!.logMessages!;
+        expect(logs).toHaveLength(MAX_JOB_LOG_MESSAGES);
+        expect(logs[0]).toBe("msg-1");
+        expect(logs[logs.length - 1]).toBe(`msg-${MAX_JOB_LOG_MESSAGES}`);
     });
 
     it("accumulates multiple log messages in order", async () => {

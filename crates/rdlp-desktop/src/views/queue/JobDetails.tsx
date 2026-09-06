@@ -11,6 +11,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { isTerminal as isTerminalStatus, isInFlight, jobSubLabel } from "@/lib/jobStatus";
 import { invokeTyped, extractErrorMessage } from "@/api/invokeClient";
 import { cn, progressPercentLabel } from "@/lib/utils";
+import { MAX_JOB_LOG_MESSAGES } from "../../events/registerDownloadEvents";
 
 function formatDate(ts: number | null): string {
     if (!ts) return "—";
@@ -183,7 +184,11 @@ export function JobDetails() {
             {/* Log messages */}
             {job.logMessages && job.logMessages.length > 0 && (
                 <div className="space-y-1.5">
-                    <h3 className="section-heading">Logs ({job.logMessages.length})</h3>
+                    <h3 className="section-heading">
+                        {job.logMessages.length >= MAX_JOB_LOG_MESSAGES
+                            ? `Logs (last ${job.logMessages.length})`
+                            : `Logs (${job.logMessages.length})`}
+                    </h3>
                     <div className="max-h-[160px] overflow-y-auto space-y-0.5">
                         {job.logMessages.map((msg, i) => (
                             <p key={i} className="text-[10px] font-mono text-[var(--text-muted)] leading-relaxed">

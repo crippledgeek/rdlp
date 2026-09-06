@@ -21,16 +21,21 @@ import { queryKeys } from "../query/queryKeys";
 import { appendLog } from "../components/LogViewer";
 import { cancelledJobPatch, postProcessingJobPatch } from "../lib/jobStatus";
 
+import type { DownloadJob } from "../types";
+
 /**
  * Per-job log tail retained for the details pane.
  *
  * The adaptive controller emits roughly one tuning message per decision
  * interval, so a multi-thousand-segment HLS download would otherwise grow this
  * array without bound — and because each append copies it, the accumulation is
- * quadratic. The pane shows a tail, not a transcript: the full history is in
- * the log file on disk and in the global log viewer.
+ * quadratic. The pane shows a tail, not a transcript.
+ *
+ * The log file on disk is the only complete record. The global log viewer keeps
+ * a longer tail than this one but is also bounded (MAX_ENTRIES in
+ * components/LogViewer.tsx), so it is not a fallback for the whole history.
  */
-const MAX_JOB_LOG_MESSAGES = 500;
+export const MAX_JOB_LOG_MESSAGES = 500;
 
 /** Append `message`, keeping only the most recent `MAX_JOB_LOG_MESSAGES`. */
 function appendBounded(
@@ -42,7 +47,6 @@ function appendBounded(
         ? next.slice(next.length - MAX_JOB_LOG_MESSAGES)
         : next;
 }
-import type { DownloadJob } from "../types";
 
 interface ProgressEntry {
     progress: number;

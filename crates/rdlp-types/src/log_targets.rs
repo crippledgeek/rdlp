@@ -59,4 +59,9 @@ pub const ZBUS: &str = "zbus";
 /// carry `fields(...)`, so their creation records keep the `rdlp_api::…`
 /// target and pass this filter untouched. Check that still holds before
 /// adding a fieldless span you expect to read at INFO.
+///
+/// The field-conditional rule covers span creation and `record_all`. A span's
+/// *close* record takes this target unconditionally (`Drop for Span`), fields
+/// or not — but it is emitted at TRACE, so the desktop's INFO sink discards it
+/// before this filter is consulted either way.
 pub const TRACING_SPAN_LIFECYCLE: &str = "tracing::span";
