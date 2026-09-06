@@ -37,11 +37,17 @@ function logViolations(violations: AxeResult[]) {
 /**
  * Expand the logs drawer if it is currently collapsed.
  *
- * Two tests need it open and neither controls what the one before it left
- * behind — the drawer's state carries across tests within the spec file, since
- * only the page reload between them resets it. Written as a no-op when the
- * drawer is already open rather than an unconditional click, which would
- * collapse it in exactly that case.
+ * In practice it always is: the global `beforeEach` (support/e2e.ts) visits
+ * afresh before every test, and `bottomDrawerExpanded` is in-memory state
+ * defaulting to false (stores/uiStore.ts:48), so a load always returns it
+ * collapsed. The "drawer toggle exposes aria-expanded" test relies on exactly
+ * that — it runs straight after the first caller below, asserts
+ * `aria-expanded === "false"` unconditionally, and passes.
+ *
+ * So the conditional is not guarding against observed inherited state. It
+ * guards the ASSUMPTION: a spec-local visit, `testIsolation: false`, or
+ * persisting that store would each leave the drawer open, and an unconditional
+ * click would then close the drawer these two tests need open.
  */
 function ensureDrawerExpanded() {
     cy.get("body").then(($body) => {

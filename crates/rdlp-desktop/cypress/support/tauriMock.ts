@@ -159,16 +159,18 @@ const defaultHandlers: Record<string, InvokeHandler> = {
     // Search results render <Thumbnail>, which routes every external HTTPS URL
     // straight through the Rust proxy rather than attempting a direct <img>
     // load — `useProxyFromStart` forces `directFailed` on the first render
-    // (Thumbnail.tsx:81), off `shouldProxy` (23-37). Unregistered, this fell through the fallback: the
-    // old one fabricated a null that `new Uint8Array(null)` turned into an
-    // empty blob, so the thumbnails were broken images the specs never noticed.
+    // (Thumbnail.tsx:81), off `shouldProxy` (23-37). Unregistered, this fell
+    // through the fallback: the old one fabricated a null that
+    // `new Uint8Array(null)` turned into an empty blob, so the thumbnails were
+    // broken images the specs never noticed.
     //
     // Real bytes, not an empty buffer — a 1x1 transparent PNG — so the <img>
-    // actually decodes. There is no safety net if it does not: the proxy-success
-    // branch renders a bare <img> with no onError (Thumbnail.tsx:134), and the
-    // bg-muted placeholder needs `proxyFailed` from the QUERY, which a decode
-    // failure never sets. An undecodable blob is therefore a permanently broken
-    // image that no assertion here can tell apart from a rendered one.
+    // actually decodes. There is no safety net if it does not: the
+    // proxy-success branch renders a bare <img> with no onError
+    // (Thumbnail.tsx:134), and the bg-muted placeholder needs `proxyFailed`
+    // from the QUERY, which a decode failure never sets. An undecodable blob is
+    // therefore a permanently broken image that no assertion here can tell
+    // apart from a rendered one.
     proxy_thumbnail: () => {
         const PNG_1X1_BASE64 =
             "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk" +

@@ -49,5 +49,3 @@ export function allowlistFor(page: PageId): Record<string, { enabled: false }> {
     }
     return out;
 }
-
-export const PAGES: PageId[] = Object.keys(ENTRIES) as PageId[];
