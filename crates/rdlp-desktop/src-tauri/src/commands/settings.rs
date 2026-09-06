@@ -13,10 +13,10 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use log::warn;
 use tauri::{AppHandle, State};
 use tauri_plugin_dialog::DialogExt;
 
+use crate::boundary::{Action, Subject};
 use crate::error::AppError;
 use crate::state::{AppSettings, AppState, SettingsValidationError};
 
@@ -68,16 +68,14 @@ pub async fn update_settings(
     settings: AppSettings,
     state: State<'_, AppState>,
 ) -> Result<(), AppError> {
-    settings
-        .validate_security()
-        .map_err(|e| AppError::InvalidInput {
-            field: match &e {
-                SettingsValidationError::CookiesFileTraversal => "cookies_file".to_owned(),
-                SettingsValidationError::InvalidProxy(_) => "proxy".to_owned(),
-                SettingsValidationError::OutOfRange { field, .. } => (*field).to_owned(),
-            },
-            message: e.to_string(),
-        })?;
+    settings.validate_security().map_err(|e| {
+        let field = match &e {
+            SettingsValidationError::CookiesFileTraversal => "cookies_file",
+            SettingsValidationError::InvalidProxy(_) => "proxy",
+            SettingsValidationError::OutOfRange { field, .. } => field,
+        };
+        AppError::invalid_input(Action::new("update_settings"), field, e)
+    })?;
 
     let mut current = state
         .settings
@@ -86,9 +84,7 @@ pub async fn update_settings(
     *current = settings;
     let result = current.save();
     drop(current);
-    result.map_err(|e| AppError::Internal {
-        message: format!("Failed to save settings: {e}"),
-    })?;
+    result.map_err(|e| AppError::internal(Action::new("save_settings"), e))?;
 
     Ok(())
 }
@@ -123,23 +119,32 @@ pub async fn pick_directory(app: AppHandle) -> Result<Option<String>, AppError> 
 
     let folder = tokio::time::timeout(Duration::from_secs(300), rx)
         .await
-        .map_err(|_| AppError::Internal {
-            message: "Folder picker timed out after 5 minutes".to_owned(),
+        .map_err(|_| {
+            AppError::internal(
+                Action::new("pick_directory"),
+                "folder picker timed out after 5 minutes",
+            )
         })?
-        .map_err(|_| AppError::Internal {
-            message: "Folder picker channel closed unexpectedly".to_owned(),
+        .map_err(|_| {
+            AppError::internal(
+                Action::new("pick_directory"),
+                "folder picker channel closed unexpectedly",
+            )
         })?;
 
     match folder {
         Some(file_path) => {
-            let path = file_path.into_path().map_err(|e| AppError::Internal {
-                message: format!("Failed to convert folder path: {e}"),
-            })?;
+            let path = file_path
+                .into_path()
+                .map_err(|e| AppError::internal(Action::new("pick_directory"), e))?;
 
             let path_str = path
                 .to_str()
-                .ok_or_else(|| AppError::Internal {
-                    message: "Selected path contains invalid UTF-8".to_owned(),
+                .ok_or_else(|| {
+                    AppError::internal(
+                        Action::new("pick_directory"),
+                        "selected path contains invalid UTF-8",
+                    )
                 })?
                 .to_owned();
 
@@ -175,41 +180,7 @@ where
 {
     tauri::async_runtime::spawn_blocking(f)
         .await
-        .map_err(|e| AppError::Internal {
-            message: format!("Reveal task failed: {e}"),
-        })
-}
-
-/// Record a terminal reveal failure once, then map it for the frontend.
-///
-/// Both failure modes of `reveal_in_folder` go through here. They used to
-/// diverge: the missing-file branch logged, the OS-call branch did not, so the
-/// log showed an attempt followed by silence while only the toast knew why
-/// (#696). One function means one record shape and no way to add a third
-/// branch that forgets.
-///
-/// The action, outcome and reason live in the MESSAGE, not in structured kv,
-/// because the formatter this app installs renders only
-/// timestamp/target/level/message — kv fields are constructed and then
-/// dropped, so a structured field would be invisible in the log file.
-///
-/// That is the plugin's DEFAULT formatter, which we have chosen not to
-/// override, not an immutable property of the sink: `Builder::format` would
-/// let a dozen-line closure render `record.key_values()` and make real kv
-/// work. #695 has to make that call before this shape is copied to ~25 sites,
-/// because OpenTelemetry guidance (quoted in that issue) puts the variable parts in
-/// fields, not in the message.
-///
-/// WARN rather than ERROR: a reveal failure is user-facing and usually
-/// environmental (no file manager, D-Bus unavailable), not an internal bug.
-///
-/// The path is a local filesystem path, not a URL, so it needs no redaction —
-/// a path in the operator's own log is not a credential.
-fn reveal_failed(path: &str, reason: impl std::fmt::Display) -> AppError {
-    warn!("reveal: action=reveal outcome=failed path={path} reason={reason}");
-    AppError::Internal {
-        message: format!("Failed to reveal {path}: {reason}"),
-    }
+        .map_err(|e| AppError::internal(Action::new("reveal"), format!("reveal task failed: {e}")))
 }
 
 /// Reveal a file or directory in the system file manager.
@@ -230,16 +201,20 @@ fn reveal_failed(path: &str, reason: impl std::fmt::Display) -> AppError {
 #[tauri::command]
 pub async fn reveal_in_folder(path: String) -> Result<(), AppError> {
     if path.is_empty() {
-        return Err(AppError::InvalidInput {
-            field: "path".to_owned(),
-            message: "Output file path is empty".to_owned(),
-        });
+        return Err(AppError::invalid_input(
+            Action::new("reveal"),
+            "path",
+            "output file path is empty",
+        ));
     }
 
     let path_buf = PathBuf::from(&path);
 
     if !path_buf.exists() {
-        return Err(reveal_failed(&path, "file not found"));
+        return Err(AppError::internal(
+            Action::with_subject("reveal", Subject::Path(&path)),
+            "file not found",
+        ));
     }
 
     // No "attempting" record. It was `info!` before; demoting it to `debug!`
@@ -251,35 +226,37 @@ pub async fn reveal_in_folder(path: String) -> Result<(), AppError> {
 
     reveal_off_runtime(move || tauri_plugin_opener::reveal_item_in_dir(&path_buf))
         .await?
-        .map_err(|e| reveal_failed(&path, e))
+        .map_err(|e| AppError::internal(Action::with_subject("reveal", Subject::Path(&path)), e))
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::reveal_off_runtime;
+    use crate::boundary::{Action, Subject};
+    use crate::error::AppError;
 
     /// A terminal reveal failure is RECORDED, not just returned.
     ///
     /// The failure used to be mapped into `AppError` and handed back with no
     /// log at all, so the file showed the attempt and then nothing while only
-    /// the toast knew why (#696). The record carries action, outcome and
-    /// reason in the MESSAGE rather than in structured kv — see
-    /// `reveal_failed`'s doc for why, and for the fact that this is the
-    /// formatter we install rather than a fixed property of the sink.
+    /// the toast knew why (#696).
     #[test]
     fn a_reveal_failure_is_logged_once_at_warn() {
         testing_logger::setup();
-        let err = super::reveal_failed("/tmp/v.mkv", "d-bus unavailable");
+        let err = AppError::internal(
+            Action::with_subject("reveal", Subject::Path("/tmp/v.mkv")),
+            "d-bus unavailable",
+        );
 
         testing_logger::validate(|captured| {
-            let warns: Vec<_> = captured
+            let errs: Vec<_> = captured
                 .iter()
-                .filter(|l| l.level == log::Level::Warn)
+                .filter(|l| l.level == log::Level::Error)
                 .collect();
-            assert_eq!(warns.len(), 1, "exactly one terminal record");
-            let body = warns.first().map_or("", |l| l.body.as_str());
-            assert!(body.contains("/tmp/v.mkv"), "names the target: {body}");
+            assert_eq!(errs.len(), 1, "exactly one terminal record");
+            let body = errs.first().map_or("", |l| l.body.as_str());
+            assert!(body.contains("path=/tmp/v.mkv"), "names the target: {body}");
             assert!(
                 body.contains("d-bus unavailable"),
                 "names the reason: {body}"
@@ -291,8 +268,10 @@ mod tests {
             );
         });
 
+        // The path lives in the structured log record (asserted above), not in
+        // the frontend-facing `Display` — `Internal`'s message is the bare
+        // reason, matching every other constructor's shape.
         let shown = format!("{err}");
-        assert!(shown.contains("/tmp/v.mkv"), "got: {shown}");
         assert!(shown.contains("d-bus unavailable"), "got: {shown}");
     }
 
@@ -322,7 +301,7 @@ mod tests {
             .await
             .expect_err("empty path must be rejected");
         assert!(
-            matches!(err, crate::error::AppError::InvalidInput { ref field, .. } if field == "path"),
+            matches!(err, AppError::InvalidInput { ref field, .. } if field == "path"),
             "got: {err:?}"
         );
     }
@@ -341,22 +320,25 @@ mod tests {
             .await
             .expect_err("missing path must fail");
         let msg = format!("{err}");
-        assert!(
-            msg.contains("/nonexistent/rdlp-test-reveal.mkv"),
-            "got: {msg}"
-        );
+        assert!(msg.contains("file not found"), "got: {msg}");
 
-        // End-to-end: this branch must ROUTE THROUGH `reveal_failed`, not just
-        // return a similar message. Without this the test passes against a
-        // hand-rolled `AppError` that logs nothing.
+        // End-to-end: this branch must ROUTE THROUGH `AppError::internal`, not
+        // just return a similar message. Without this the test passes against
+        // a hand-rolled `AppError` that logs nothing. ERROR, not WARN: this
+        // builds an `Internal` variant, and the level follows the variant.
+        // The path lives in the structured log record, not in the Display.
         testing_logger::validate(|captured| {
-            let warns: Vec<_> = captured
+            let errs: Vec<_> = captured
                 .iter()
-                .filter(|l| l.level == log::Level::Warn)
+                .filter(|l| l.level == log::Level::Error)
                 .collect();
-            assert_eq!(warns.len(), 1, "the branch logs exactly once");
-            let body = warns.first().map_or("", |l| l.body.as_str());
+            assert_eq!(errs.len(), 1, "the branch logs exactly once");
+            let body = errs.first().map_or("", |l| l.body.as_str());
             assert!(body.contains("outcome=failed"), "got: {body}");
+            assert!(
+                body.contains("path=/nonexistent/rdlp-test-reveal.mkv"),
+                "names the target: {body}"
+            );
         });
     }
 }
