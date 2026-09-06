@@ -1,4 +1,19 @@
 use super::*;
+use std::sync::{Arc, Mutex};
+
+/// Captures `on_log` so a test can assert on the controller's message text.
+struct RecordingCallback {
+    logs: Arc<Mutex<Vec<String>>>,
+}
+
+impl rdlp_core::ProgressCallback for RecordingCallback {
+    fn on_progress(&self, _p: &rdlp_core::DownloadProgress) {}
+    fn on_complete(&self, _s: &rdlp_core::DownloadStats) {}
+    fn on_error(&self, _e: &str) {}
+    fn on_log(&self, msg: &str) {
+        self.logs.lock().expect("lock").push(msg.to_string());
+    }
+}
 
 /// Build a default controller for HTTP mode with given `total_size`.
 fn make_controller(total_size: u64) -> AdaptiveController {
@@ -480,10 +495,10 @@ fn per_adjustment_messages_are_debug_not_info() {
     testing_logger::setup();
     let ctrl = make_controller(64 * 1024 * 1024);
 
-    // Twice `AdaptiveConfig::default().decision_interval` (4), so `adjust`
-    // runs at least once however the samples fall. If that default is raised
-    // past this count the DEBUG assertion below fails loudly, rather than the
-    // test quietly passing while exercising nothing.
+    // Twice `AdaptiveConfig::default().decision_interval`, so `adjust` runs at
+    // least once however that default moves — deriving the count is what keeps
+    // it that way, where a hard-coded loop bound would silently stop reaching
+    // `adjust` the first time the interval was raised.
     let chunks = 2 * AdaptiveConfig::default().decision_interval;
     for _ in 0..chunks {
         ctrl.report_chunk_complete(1024 * 1024, std::time::Duration::from_millis(500));
@@ -522,4 +537,47 @@ fn per_adjustment_messages_are_debug_not_info() {
              the INFO bound above proves nothing"
         );
     });
+}
+
+/// In `HlsSegments` mode the tuning messages must not claim a chunk change.
+///
+/// `bump_chunk_level` discards the adjustment there (segment sizes are
+/// server-determined), so a "chunk +2" clause describes something that did not
+/// happen. These messages reach the desktop's log pane through `log_callback`,
+/// so the text is read by operators — this became visible when the HLS path
+/// started passing a callback.
+#[test]
+fn hls_mode_messages_claim_no_chunk_change() {
+    let logged = Arc::new(Mutex::new(Vec::<String>::new()));
+    let sink = Arc::new(RecordingCallback {
+        logs: Arc::clone(&logged),
+    });
+    let ctrl = AdaptiveController::new(
+        0,
+        AdaptiveConfig::default(),
+        ControllerMode::HlsSegments,
+        Some(sink),
+    );
+
+    // Drive several decision intervals across rising, falling and flat
+    // throughput so every phase-transition message is exercised.
+    for (i, bps) in [4.0, 8.0, 8.0, 1.0, 1.0, 4.0].iter().enumerate() {
+        for _ in 0..AdaptiveConfig::default().decision_interval {
+            let bytes = (bps * 1024.0 * 1024.0) as u64;
+            ctrl.report_chunk_complete(bytes, std::time::Duration::from_secs(1));
+        }
+        assert!(i < 6);
+    }
+
+    let msgs = logged.lock().expect("lock").clone();
+    assert!(
+        msgs.len() > 1,
+        "expected tuning messages beyond the startup summary, got {msgs:?}"
+    );
+    for m in &msgs {
+        assert!(
+            !m.contains("chunk +") && !m.contains("chunk level"),
+            "HLS mode must not claim a chunk adjustment, got: {m}"
+        );
+    }
 }

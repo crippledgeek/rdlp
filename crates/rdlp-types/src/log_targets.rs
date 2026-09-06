@@ -28,8 +28,16 @@
 /// six of zbus's `warn!` sites — including the handshake's own rejection paths
 /// — sit above the threshold and still reach the operator.
 ///
-/// Both sinks match on the `::` module hierarchy rather than a raw string
-/// prefix, so this name covers `zbus::…` without also catching `zbus_names`.
+/// The two sinks match this name differently, and only one of them is
+/// hierarchy-aware. fern walks `::` segments (`fern-0.7.1` `log_impl.rs`), so
+/// on the desktop it covers `zbus::…` and nothing else. `EnvFilter` compares
+/// with a plain `str::starts_with` (`tracing-subscriber-0.3.22`
+/// `filter/directive.rs`, `filter/env/directive.rs`), so on the CLI it also
+/// silences `zbus_names…` and any other `zbus`-prefixed target. That is
+/// harmless — `zbus_names 4.3.1` contains no `log` or `tracing` call sites at
+/// all — but it is a real difference, so do not assume the desktop's
+/// narrowness holds here. Writing `zbus::` to force a boundary would be worse:
+/// it would stop matching the bare `zbus` target.
 pub const ZBUS: &str = "zbus";
 
 /// `tracing`'s fixed target for span *lifecycle* records crossing the `log`
@@ -42,9 +50,13 @@ pub const ZBUS: &str = "zbus";
 /// `zbus::…` target and [`ZBUS`] alone covers them.
 ///
 /// This target is deliberately not crate-specific and there is no narrower
-/// one: `tracing` stamps every *fieldless* span lifecycle record with this
-/// constant regardless of the span's own target. A future `tracing` span in an
-/// rdlp crate would therefore be silenced here too. That is acceptable only
-/// while no rdlp crate emits spans worth reading at INFO — verify before
-/// relying on it, rather than assuming the filter stays zbus-specific.
+/// one: `tracing` stamps a span lifecycle record with this constant, instead
+/// of the span's own target, exactly when the span has no fields.
+///
+/// So the reach is bounded but not zbus-specific: a future *fieldless*
+/// `tracing` span in an rdlp crate would be silenced here too. Today none is
+/// at risk — all seven rdlp `#[instrument]` sites (`rdlp-api`'s orchestrator)
+/// carry `fields(...)`, so their creation records keep the `rdlp_api::…`
+/// target and pass this filter untouched. Check that still holds before
+/// adding a fieldless span you expect to read at INFO.
 pub const TRACING_SPAN_LIFECYCLE: &str = "tracing::span";

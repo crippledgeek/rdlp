@@ -384,8 +384,9 @@ impl AdaptiveController {
         let Some(prev) = prev_ewma else {
             // No previous measurement — stay in SlowStart and ramp chunk size up.
             let msg = format!(
-                "Adaptive [SlowStart]: initial ramp — chunk +2 (ewma={:.1} MB/s)",
+                "Adaptive [SlowStart]: initial ramp (ewma={:.1} MB/s){}",
                 current_ewma / 1024.0 / 1024.0,
+                self.chunk_action(2),
             );
             debug!("{msg}");
             self.log(&msg);
@@ -396,9 +397,10 @@ impl AdaptiveController {
         if current_ewma > prev {
             // Throughput is increasing — stay aggressive on chunk size.
             let msg = format!(
-                "Adaptive [SlowStart]: throughput rising {:.1} → {:.1} MB/s — chunk +2",
+                "Adaptive [SlowStart]: throughput rising {:.1} → {:.1} MB/s{}",
                 prev / 1024.0 / 1024.0,
                 current_ewma / 1024.0 / 1024.0,
+                self.chunk_action(2),
             );
             debug!("{msg}");
             self.log(&msg);
@@ -407,10 +409,10 @@ impl AdaptiveController {
         } else if current_ewma < prev {
             // Throughput dropped — transition to Steady and apply one MD.
             let msg = format!(
-                "Adaptive [SlowStart → Steady]: throughput drop {:.1} → {:.1} MB/s — \
-                 applying multiplicative decrease",
+                "Adaptive [SlowStart → Steady]: throughput drop {:.1} → {:.1} MB/s{}",
                 prev / 1024.0 / 1024.0,
                 current_ewma / 1024.0 / 1024.0,
+                self.chunk_action(-2),
             );
             debug!("{msg}");
             self.log(&msg);
@@ -453,11 +455,11 @@ impl AdaptiveController {
         if ratio > MD_THRESHOLD {
             // Throughput dropped > 30 % — multiplicative decrease.
             let msg = format!(
-                "Adaptive [Steady]: throughput drop {:.0}% ({:.1} → {:.1} MB/s) — \
-                 multiplicative decrease",
+                "Adaptive [Steady]: throughput drop {:.0}% ({:.1} → {:.1} MB/s){}",
                 ratio * 100.0,
                 prev / 1024.0 / 1024.0,
                 current_ewma / 1024.0 / 1024.0,
+                self.chunk_action(-2),
             );
             debug!("{msg}");
             self.log(&msg);
@@ -467,8 +469,9 @@ impl AdaptiveController {
         } else {
             // Stable or improving — additive increase (+1 level).
             let msg = format!(
-                "Adaptive [Steady]: stable at {:.1} MB/s — chunk +1",
+                "Adaptive [Steady]: stable at {:.1} MB/s{}",
                 current_ewma / 1024.0 / 1024.0,
+                self.chunk_action(1),
             );
             debug!("{msg}");
             self.log(&msg);
@@ -485,14 +488,35 @@ impl AdaptiveController {
     fn apply_md(&self, state: &mut AdaptiveState) {
         let before_level = state.current_chunk_level;
         self.bump_chunk_level(state, -(2i8));
-        let msg = format!(
-            "Adaptive MD: chunk level {} → {} ({}KB)",
-            before_level,
-            state.current_chunk_level,
-            CHUNK_LEVELS[state.current_chunk_level as usize] / 1024,
-        );
-        debug!("{msg}");
-        self.log(&msg);
+        // Silent when the level did not move — in `HlsSegments` mode
+        // `bump_chunk_level` discards the adjustment entirely, and at the floor
+        // it clamps, so an unconditional line would report "3 → 3" as if the
+        // decrease had been applied.
+        if state.current_chunk_level != before_level {
+            let msg = format!(
+                "Adaptive MD: chunk level {} → {} ({}KB)",
+                before_level,
+                state.current_chunk_level,
+                CHUNK_LEVELS[state.current_chunk_level as usize] / 1024,
+            );
+            debug!("{msg}");
+            self.log(&msg);
+        }
+    }
+
+    /// The chunk clause for a tuning message — empty when the mode fixes the
+    /// chunk level.
+    ///
+    /// `bump_chunk_level` discards the adjustment in `HlsSegments` mode, so a
+    /// message naming one there describes something that did not happen. These
+    /// messages reach the UI's log channel, so that text is read by operators,
+    /// not just by the log file.
+    fn chunk_action(&self, delta: i8) -> String {
+        if self.mode == ControllerMode::HlsSegments {
+            String::new()
+        } else {
+            format!(" — chunk {delta:+}")
+        }
     }
 
     /// Adjust the chunk level by `delta`, clamped to [`MIN_CHUNK_LEVEL`, 7].

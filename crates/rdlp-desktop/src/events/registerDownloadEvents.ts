@@ -20,6 +20,28 @@ import {
 import { queryKeys } from "../query/queryKeys";
 import { appendLog } from "../components/LogViewer";
 import { cancelledJobPatch, postProcessingJobPatch } from "../lib/jobStatus";
+
+/**
+ * Per-job log tail retained for the details pane.
+ *
+ * The adaptive controller emits roughly one tuning message per decision
+ * interval, so a multi-thousand-segment HLS download would otherwise grow this
+ * array without bound — and because each append copies it, the accumulation is
+ * quadratic. The pane shows a tail, not a transcript: the full history is in
+ * the log file on disk and in the global log viewer.
+ */
+const MAX_JOB_LOG_MESSAGES = 500;
+
+/** Append `message`, keeping only the most recent `MAX_JOB_LOG_MESSAGES`. */
+function appendBounded(
+    existing: string[] | undefined,
+    message: string,
+): string[] {
+    const next = [...(existing || []), message];
+    return next.length > MAX_JOB_LOG_MESSAGES
+        ? next.slice(next.length - MAX_JOB_LOG_MESSAGES)
+        : next;
+}
 import type { DownloadJob } from "../types";
 
 interface ProgressEntry {
@@ -163,7 +185,10 @@ export function registerDownloadEvents(qc: QueryClient): () => void {
                         job.id === p.jobId
                             ? {
                                   ...job,
-                                  logMessages: [...(job.logMessages || []), p.message],
+                                  logMessages: appendBounded(
+                                      job.logMessages,
+                                      p.message,
+                                  ),
                               }
                             : job,
                     ),

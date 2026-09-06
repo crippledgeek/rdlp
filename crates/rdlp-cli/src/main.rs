@@ -102,7 +102,12 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SuspendingWriter {
 /// this binary installs a `tracing` subscriber, so zbus's instrumentation
 /// arrives as real spans under their own `zbus::…` target and the directive
 /// below already covers them.
-fn default_filter(level: &str) -> EnvFilter {
+fn default_filter(level: tracing::Level) -> EnvFilter {
+    // `EnvFilter::new` panics on an unparseable directive. Taking a
+    // `tracing::Level` rather than a `&str` is what keeps that unreachable:
+    // there is no value of the parameter that produces an invalid directive,
+    // so a config- or CLI-derived string cannot later turn this into a
+    // startup crash. `filter_directive_parses` pins the formatting.
     EnvFilter::new(format!("{level},{}=warn", rdlp_types::log_targets::ZBUS))
 }
 
@@ -160,13 +165,16 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
     let multi_progress = Arc::new(MultiProgress::new());
 
     if !config.quiet {
-        // `RUST_LOG`, when set, is the operator's explicit choice and is used
-        // verbatim — including if it turns the noisy targets back up. The
-        // quieting below applies only to the filters we synthesize ourselves.
+        // Only `-v` consults `RUST_LOG`; without it the filter is fixed at
+        // INFO. That asymmetry is pre-existing. Where `RUST_LOG` IS consulted
+        // and parses, it is used verbatim — including if it turns the noisy
+        // targets back up — so the quieting applies only to the filters we
+        // synthesize ourselves.
         let filter = if config.verbose {
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| default_filter("debug"))
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| default_filter(tracing::Level::DEBUG))
         } else {
-            default_filter("info")
+            default_filter(tracing::Level::INFO)
         };
 
         let writer = SuspendingWriter {
@@ -503,4 +511,26 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
     temp_registry.cleanup_all();
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `default_filter` builds its directive with `Level`'s `Display`, which
+    /// is uppercase (`INFO`), while the directives it is concatenated with are
+    /// lowercase. `EnvFilter::new` panics rather than erring on a directive it
+    /// cannot parse, so this asserts the mixed-case string is actually
+    /// accepted — the parameter being typed prevents an invalid *level*, not a
+    /// formatting mistake in this function.
+    #[test]
+    fn filter_directive_parses() {
+        for level in [tracing::Level::INFO, tracing::Level::DEBUG] {
+            let rendered = default_filter(level).to_string();
+            assert!(
+                rendered.contains(rdlp_types::log_targets::ZBUS),
+                "the zbus directive must survive into the built filter, got: {rendered}"
+            );
+        }
+    }
 }
