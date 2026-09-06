@@ -93,3 +93,43 @@ fn non_credential_field_name(phase: &str) {}
 /// `#[instrument(fields(url = %url))]` would leak the raw URL if written
 /// for real -- this line only documents the pattern to avoid.
 fn doc_comment_quoting_the_pattern() {}
+
+// The three sibling spellings the rule was blind to before #695's fix wave.
+// Each leaks exactly as the `%`-sigil `#[instrument(...)]` form does, and
+// each is paired with its sanitized counterpart so a rule that fired on
+// everything could not pass this file either.
+
+// The fully-qualified attribute path. Legal, and used in-tree for other
+// attributes, so nothing stops it being written for `instrument` too.
+// ruleid: raw-url-in-instrument-field
+#[tracing::instrument(fields(url = %url))]
+fn qualified_attribute_path(url: &str) {}
+
+// ok: raw-url-in-instrument-field
+#[tracing::instrument(skip(self), fields(url = %rdlp_redact::RedactedUrl::new(url)))]
+fn qualified_attribute_path_sanitized(url: &str) {}
+
+// tracing's Debug sigil. For a `&str` the Debug rendering carries the
+// credential just as Display does -- only the quotes differ.
+// ruleid: raw-url-in-instrument-field
+#[instrument(fields(url = ?url))]
+fn debug_sigil(url: &str) {}
+
+// ok: raw-url-in-instrument-field
+#[instrument(skip(self), fields(url = ?RedactedUrl::new(url)))]
+fn debug_sigil_sanitized(url: &str) {}
+
+// No sigil at all: this compiles, because `&str: tracing::Value`.
+// ruleid: raw-url-in-instrument-field
+#[instrument(fields(url = url))]
+fn no_sigil(url: &str) {}
+
+// ok: raw-url-in-instrument-field
+#[instrument(skip(self), fields(url = RedactedUrl::new(url)))]
+fn no_sigil_sanitized(url: &str) {}
+
+// The three spellings compose with the argument-position axes, not just with
+// the sole-argument shape.
+// ruleid: raw-url-in-instrument-field
+#[tracing::instrument(level = "debug", skip(self), fields(n = 1, url = ?self.state.url))]
+fn qualified_debug_sigil_last_of_many(&self) {}

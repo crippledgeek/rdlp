@@ -55,8 +55,9 @@ rules:
       Raw URL (or URL-shaped value: uri/endpoint/src/location/target/addr/host)
       in a #[instrument] span field reaches the logger unredacted (CWE-532).
       Wrap the value with rdlp_redact::RedactedUrl::new(<url>) so its Display
-      redacts credentials. See CODING_RULES.md "URL Redaction — Controls
-      (tiered)". (#695)
+      redacts credentials. Any sigil (%, ?, or none) and either attribute
+      spelling (#[instrument] / #[tracing::instrument]) leaks identically.
+      See CODING_RULES.md "URL Redaction — Controls (tiered)". (#695)
     patterns:
       # `fields(...)` can be instrument's only argument, its first, its last,
       # or sandwiched between others (e.g. `skip(self)`) -- and independently,
@@ -68,29 +69,44 @@ rules:
       # misses the "sole argument" shapes at BOTH levels. All 4x4 = 16
       # combinations are enumerated rather than assumed away.
       #
-      # $...X (not $X) after the `%` sigil: generic mode's plain metavariable
-      # captures exactly ONE token ("generic pattern matching" docs), so `$X`
-      # matched a bare `url` but silently failed to match a dotted/qualified
-      # expression like `format.url` or `self.state.url` -- a real mutation
-      # test against execution.rs's `fields(url = %format.url, ...)` shape
-      # proved this: it passed the gate uncaught until switched to `$...X`.
+      # $...X (not $X) after `=`: generic mode's plain metavariable captures
+      # exactly ONE token ("generic pattern matching" docs), so `$X` matched a
+      # bare `url` but silently failed to match a dotted/qualified expression
+      # like `format.url` or `self.state.url` -- a real mutation test against
+      # execution.rs's `fields(url = %format.url, ...)` shape proved this: it
+      # passed the gate uncaught until switched to `$...X`.
+      #
+      # NO SIGIL in the pattern, and `$...ATTR` for the attribute name. The
+      # rule used to require the literal `#[instrument(` and a literal `%`,
+      # which made it blind to three sibling spellings of the very defect it
+      # exists to catch -- all measured, all previously unflagged:
+      #   * `#[tracing::instrument(fields(url = %url))]` -- the fully-qualified
+      #     path, which is legal and used in-tree for other attributes.
+      #   * `fields(url = ?url)` -- tracing's Debug sigil. For a `&str` the
+      #     Debug rendering carries the credential just as Display does.
+      #   * `fields(url = url)` -- no sigil at all, which compiles because
+      #     `&str: tracing::Value`.
+      # `$...X` swallows any leading sigil, so one sigil-free pattern covers
+      # all three; `$...ATTR` covers `instrument` and `tracing::instrument`
+      # (measured: it does NOT stretch across a preceding `skip(self),`, which
+      # is why the `..., fields(...)` half of the 16 is still needed).
       - pattern-either:
-          - pattern: '#[instrument(fields($FIELD = %$...X))]'
-          - pattern: '#[instrument(fields($FIELD = %$...X), ...)]'
-          - pattern: '#[instrument(..., fields($FIELD = %$...X))]'
-          - pattern: '#[instrument(..., fields($FIELD = %$...X), ...)]'
-          - pattern: '#[instrument(fields($FIELD = %$...X, ...))]'
-          - pattern: '#[instrument(fields($FIELD = %$...X, ...), ...)]'
-          - pattern: '#[instrument(..., fields($FIELD = %$...X, ...))]'
-          - pattern: '#[instrument(..., fields($FIELD = %$...X, ...), ...)]'
-          - pattern: '#[instrument(fields(..., $FIELD = %$...X))]'
-          - pattern: '#[instrument(fields(..., $FIELD = %$...X), ...)]'
-          - pattern: '#[instrument(..., fields(..., $FIELD = %$...X))]'
-          - pattern: '#[instrument(..., fields(..., $FIELD = %$...X), ...)]'
-          - pattern: '#[instrument(fields(..., $FIELD = %$...X, ...))]'
-          - pattern: '#[instrument(fields(..., $FIELD = %$...X, ...), ...)]'
-          - pattern: '#[instrument(..., fields(..., $FIELD = %$...X, ...))]'
-          - pattern: '#[instrument(..., fields(..., $FIELD = %$...X, ...), ...)]'
+          - pattern: '#[$...ATTR(fields($FIELD = $...X))]'
+          - pattern: '#[$...ATTR(fields($FIELD = $...X, ...))]'
+          - pattern: '#[$...ATTR(fields(..., $FIELD = $...X))]'
+          - pattern: '#[$...ATTR(fields(..., $FIELD = $...X, ...))]'
+          - pattern: '#[$...ATTR(fields($FIELD = $...X), ...)]'
+          - pattern: '#[$...ATTR(fields($FIELD = $...X, ...), ...)]'
+          - pattern: '#[$...ATTR(fields(..., $FIELD = $...X), ...)]'
+          - pattern: '#[$...ATTR(fields(..., $FIELD = $...X, ...), ...)]'
+          - pattern: '#[$...ATTR(..., fields($FIELD = $...X))]'
+          - pattern: '#[$...ATTR(..., fields($FIELD = $...X, ...))]'
+          - pattern: '#[$...ATTR(..., fields(..., $FIELD = $...X))]'
+          - pattern: '#[$...ATTR(..., fields(..., $FIELD = $...X, ...))]'
+          - pattern: '#[$...ATTR(..., fields($FIELD = $...X), ...)]'
+          - pattern: '#[$...ATTR(..., fields($FIELD = $...X, ...), ...)]'
+          - pattern: '#[$...ATTR(..., fields(..., $FIELD = $...X), ...)]'
+          - pattern: '#[$...ATTR(..., fields(..., $FIELD = $...X, ...), ...)]'
       # extraction.rs's own regression test DOCUMENTS this exact vulnerable
       # shape, verbatim, inside a `///` line ("`#[instrument(fields(url =
       # %url))]` interpolated a raw..."). Generic mode has no concept of a
@@ -101,15 +117,12 @@ rules:
       - metavariable-regex:
           metavariable: $FIELD
           regex: '^(url|uri|endpoint|src|location|target|addr|host)$'
-      - metavariable-pattern:
+      # A REGEX allowlist here, not the sibling rule's `pattern-not` prefixes.
+      # Dropping the sigil from the patterns means `$...X` now captures it
+      # too, so the capture reads `%rdlp_redact::RedactedUrl::new(url)` and a
+      # prefix-anchored `pattern-not: rdlp_redact ...` no longer matches --
+      # measured: every one of the five real sanitized sites in-tree became a
+      # false positive. Substring matching is immune to the leading sigil.
+      - metavariable-regex:
           metavariable: $...X
-          patterns:
-            # Same sanitizer allowlist as raw-url-in-log-field, reused rather
-            # than re-derived: generic-mode pattern-not is prefix-matched, and
-            # surrounding it with ellipsis breaks that (see the comment
-            # above), so each form is enumerated rather than wrapped.
-            - pattern-not: RedactedUrl ...
-            - pattern-not: RedactedUrlBuf ...
-            - pattern-not: rdlp_redact ...
-            - pattern-not: sanitize_for_logging ...
-            - pattern-not: rdlp_security ...
+          regex: '^(?!.*(RedactedUrl|RedactedUrlBuf|rdlp_redact|sanitize_for_logging|rdlp_security)).*$'

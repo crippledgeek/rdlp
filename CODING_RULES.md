@@ -429,7 +429,10 @@ error, an `Event::Failed` reaching a background consumer — reaches the log
    construction outside `error.rs` (B1) and a `warn!`/`error!` call inside
    `commands/` (B2), and `scripts/semgrep/log-url-redaction.yml`'s
    `raw-url-in-instrument-field` rule closes the one path around both — an
-   unredacted URL in a `#[tracing::instrument(fields(...))]` span attribute.
+   unredacted URL in a `#[tracing::instrument(fields(...))]` span attribute,
+   under either attribute spelling and with any sigil (`%`, `?`, or none:
+   `&str` implements `tracing::Value`, so the sigil-less form compiles and
+   leaks identically).
 
 ## Code Reuse
 
