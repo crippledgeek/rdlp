@@ -383,10 +383,15 @@ error, an `Event::Failed` reaching a background consumer — reaches the log
 3. **Levels follow the variant, not per-site judgement.** WARN is an expected,
    user-facing failure (network, bad input, a job that failed) — most terminal
    records. ERROR is an internal/unexpected failure only (`AppError::internal`,
-   a panicking download task). INFO is reserved for operator-relevant success,
-   never a failure record. DEBUG is library breadcrumbs and demoted duplicates
-   (the CLI's verbose detail line, a cancelled-not-panicked `JoinError`). A call
-   site does not choose the level; the constructor it calls already fixed it.
+   a panicking download task). A failure of the *environment* rather than of the
+   app — no file manager installed, a folder picker left open past its timeout,
+   a response over a cap we impose — goes through `AppError::environment`, which
+   builds the same `Internal` variant at WARN: two constructors for one variant,
+   so a call site still picks a constructor and never a level. INFO is reserved
+   for operator-relevant success, never a failure record. DEBUG is library
+   breadcrumbs and demoted duplicates (the CLI's verbose detail line, a
+   cancelled-not-panicked `JoinError`). A call site does not choose the level;
+   the constructor it calls already fixed it.
 
 4. **Three terminal boundaries, and one deliberate non-boundary:**
    - A Tauri IPC command returning `Err(AppError)` — recorded by the

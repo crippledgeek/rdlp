@@ -90,8 +90,9 @@ fn derive_referer(url: &str) -> Option<String> {
 /// # Errors
 ///
 /// Returns [`AppError::InvalidInput`] if the URL is not HTTPS.
-/// Returns [`AppError::Internal`] on network failures, timeouts, or
-/// if the response exceeds `MAX_BODY_SIZE`.
+/// Returns [`AppError::NetworkError`] on a transport failure, timeout, or
+/// non-success status, and [`AppError::Internal`] (recorded at WARN, via
+/// `AppError::environment`) if the response exceeds `MAX_BODY_SIZE`.
 #[tauri::command]
 pub async fn proxy_thumbnail(url: String) -> Result<Response, AppError> {
     let action = || Action::with_subject("fetch_thumbnail", Subject::Url(RedactedUrl::new(&url)));
@@ -125,12 +126,17 @@ pub async fn proxy_thumbnail(url: String) -> Result<Response, AppError> {
         .header(wreq::header::REFERER, &referer)
         .send()
         .await
-        .map_err(|e| AppError::internal(action(), e))?;
+        // A CDN that refuses, times out, or resets IS a network failure —
+        // `network` records it at WARN and tells the frontend it may retry.
+        .map_err(|e| AppError::network(action(), e, true))?;
 
-    if !resp.status().is_success() {
-        return Err(AppError::internal(
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(AppError::network(
             action(),
-            format!("thumbnail fetch returned HTTP {}", resp.status().as_u16()),
+            format!("thumbnail fetch returned HTTP {}", status.as_u16()),
+            // Retryable for a 5xx; a 403/404 will not become a 200.
+            status.is_server_error(),
         ));
     }
 
@@ -138,7 +144,9 @@ pub async fn proxy_thumbnail(url: String) -> Result<Response, AppError> {
     if let Some(len) = resp.content_length()
         && usize::try_from(len).is_ok_and(|l| l > MAX_BODY_SIZE)
     {
-        return Err(AppError::internal(
+        // A cap WE impose being hit is not an internal bug: `environment`
+        // records it at WARN.
+        return Err(AppError::environment(
             action(),
             format!("thumbnail too large: {len} bytes (max {MAX_BODY_SIZE})"),
         ));
@@ -147,10 +155,10 @@ pub async fn proxy_thumbnail(url: String) -> Result<Response, AppError> {
     let bytes = resp
         .bytes()
         .await
-        .map_err(|e| AppError::internal(action(), e))?;
+        .map_err(|e| AppError::network(action(), e, true))?;
 
     if bytes.len() > MAX_BODY_SIZE {
-        return Err(AppError::internal(
+        return Err(AppError::environment(
             action(),
             format!(
                 "thumbnail too large: {} bytes (max {MAX_BODY_SIZE})",

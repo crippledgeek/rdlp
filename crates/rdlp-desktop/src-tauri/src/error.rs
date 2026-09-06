@@ -165,12 +165,43 @@ impl AppError {
     }
 
     /// Record and build an internal failure. ERROR: unexpected state.
+    ///
+    /// For a failure of the environment rather than of the app — a missing
+    /// file manager, a picker timeout, an over-cap response — use
+    /// [`AppError::environment`], which builds the same variant at WARN.
     #[must_use]
     pub fn internal(action: Action<'_>, reason: impl fmt::Display) -> Self {
         let e = Self::Internal {
             message: reason.to_string(),
         };
         record_failure(&action, Level::Error, &e);
+        e
+    }
+
+    /// Record and build an environmental failure. WARN: not a bug.
+    ///
+    /// Builds the same `Internal` variant as [`AppError::internal`] — the
+    /// frontend contract is unchanged — but records at WARN, because the
+    /// failure is in the environment the app runs in rather than in the app:
+    /// a file manager that is not installed, a D-Bus session that is not
+    /// running, a folder picker the user left open past its timeout, a
+    /// response larger than the cap we impose on it.
+    ///
+    /// The distinction matters because ERROR is a triage signal. Routing
+    /// these through `internal` put a `reveal` on a machine with no file
+    /// manager at the same level as a poisoned lock, which is the noise class
+    /// PR #699 removed. `internal` stays for genuine internal bugs.
+    ///
+    /// The level still follows the CONSTRUCTOR, never a per-site judgement —
+    /// there are now two constructors for the one variant, and a call site
+    /// picks between them by naming which kind of failure it has, not by
+    /// choosing a level.
+    #[must_use]
+    pub fn environment(action: Action<'_>, reason: impl fmt::Display) -> Self {
+        let e = Self::Internal {
+            message: reason.to_string(),
+        };
+        record_failure(&action, Level::Warn, &e);
         e
     }
 
@@ -593,6 +624,39 @@ mod boundary_record_tests {
                 "and is not ALSO recorded at WARN"
             );
         });
+    }
+
+    /// `environment` builds the SAME variant as `internal` — the frontend
+    /// contract is unchanged — but records at WARN, so a machine with no file
+    /// manager is not triaged as a bug in the app.
+    #[test]
+    fn an_environmental_failure_records_at_warn_not_error() {
+        testing_logger::setup();
+        let err = AppError::environment(Action::new("reveal"), "d-bus unavailable");
+
+        testing_logger::validate(|captured| {
+            assert_eq!(
+                captured
+                    .iter()
+                    .filter(|l| l.level == log::Level::Error)
+                    .count(),
+                0,
+                "an environmental failure must not reach ERROR"
+            );
+            let warns: Vec<_> = captured
+                .iter()
+                .filter(|l| l.level == log::Level::Warn)
+                .collect();
+            assert_eq!(warns.len(), 1, "exactly one terminal record");
+            let body = warns.first().map_or("", |l| l.body.as_str());
+            assert!(body.contains("action=reveal"), "got: {body}");
+            assert!(body.contains("d-bus unavailable"), "got: {body}");
+        });
+
+        assert!(
+            matches!(err, AppError::Internal { .. }),
+            "same wire shape as internal: {err:?}"
+        );
     }
 
     /// The record is redacted because `AppError`'s Display is, not because

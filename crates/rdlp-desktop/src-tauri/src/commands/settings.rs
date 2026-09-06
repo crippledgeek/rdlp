@@ -120,13 +120,13 @@ pub async fn pick_directory(app: AppHandle) -> Result<Option<String>, AppError> 
     let folder = tokio::time::timeout(Duration::from_secs(300), rx)
         .await
         .map_err(|_| {
-            AppError::internal(
+            AppError::environment(
                 Action::new("pick_directory"),
                 "folder picker timed out after 5 minutes",
             )
         })?
         .map_err(|_| {
-            AppError::internal(
+            AppError::environment(
                 Action::new("pick_directory"),
                 "folder picker channel closed unexpectedly",
             )
@@ -136,12 +136,12 @@ pub async fn pick_directory(app: AppHandle) -> Result<Option<String>, AppError> 
         Some(file_path) => {
             let path = file_path
                 .into_path()
-                .map_err(|e| AppError::internal(Action::new("pick_directory"), e))?;
+                .map_err(|e| AppError::environment(Action::new("pick_directory"), e))?;
 
             let path_str = path
                 .to_str()
                 .ok_or_else(|| {
-                    AppError::internal(
+                    AppError::environment(
                         Action::new("pick_directory"),
                         "selected path contains invalid UTF-8",
                     )
@@ -178,6 +178,9 @@ where
     F: FnOnce() -> R + Send + 'static,
     R: Send + 'static,
 {
+    // `internal`, not `environment`: a `JoinError` here means the blocking
+    // closure PANICKED, which is a bug in this process rather than a fact
+    // about the machine it runs on. ERROR is the right triage signal for it.
     tauri::async_runtime::spawn_blocking(f)
         .await
         .map_err(|e| AppError::internal(Action::new("reveal"), format!("reveal task failed: {e}")))
@@ -211,7 +214,7 @@ pub async fn reveal_in_folder(path: String) -> Result<(), AppError> {
     let path_buf = PathBuf::from(&path);
 
     if !path_buf.exists() {
-        return Err(AppError::internal(
+        return Err(AppError::environment(
             Action::with_subject("reveal", Subject::Path(&path)),
             "file not found",
         ));
@@ -226,7 +229,7 @@ pub async fn reveal_in_folder(path: String) -> Result<(), AppError> {
 
     reveal_off_runtime(move || tauri_plugin_opener::reveal_item_in_dir(&path_buf))
         .await?
-        .map_err(|e| AppError::internal(Action::with_subject("reveal", Subject::Path(&path)), e))
+        .map_err(|e| AppError::environment(Action::with_subject("reveal", Subject::Path(&path)), e))
 }
 
 #[cfg(test)]
@@ -234,46 +237,6 @@ pub async fn reveal_in_folder(path: String) -> Result<(), AppError> {
 mod tests {
     use super::reveal_off_runtime;
     use crate::error::AppError;
-    use rdlp_types::boundary::{Action, Subject};
-
-    /// A terminal reveal failure is RECORDED, not just returned.
-    ///
-    /// The failure used to be mapped into `AppError` and handed back with no
-    /// log at all, so the file showed the attempt and then nothing while only
-    /// the toast knew why (#696).
-    #[test]
-    fn a_reveal_failure_is_logged_once_at_warn() {
-        testing_logger::setup();
-        let err = AppError::internal(
-            Action::with_subject("reveal", Subject::Path("/tmp/v.mkv")),
-            "d-bus unavailable",
-        );
-
-        testing_logger::validate(|captured| {
-            let errs: Vec<_> = captured
-                .iter()
-                .filter(|l| l.level == log::Level::Error)
-                .collect();
-            assert_eq!(errs.len(), 1, "exactly one terminal record");
-            let body = errs.first().map_or("", |l| l.body.as_str());
-            assert!(body.contains("path=/tmp/v.mkv"), "names the target: {body}");
-            assert!(
-                body.contains("d-bus unavailable"),
-                "names the reason: {body}"
-            );
-            assert!(body.contains("action=reveal"), "names the action: {body}");
-            assert!(
-                body.contains("outcome=failed"),
-                "states the outcome: {body}"
-            );
-        });
-
-        // The path lives in the structured log record (asserted above), not in
-        // the frontend-facing `Display` — `Internal`'s message is the bare
-        // reason, matching every other constructor's shape.
-        let shown = format!("{err}");
-        assert!(shown.contains("d-bus unavailable"), "got: {shown}");
-    }
 
     /// A blocking closure that itself starts a runtime must survive.
     ///
@@ -322,15 +285,24 @@ mod tests {
         let msg = format!("{err}");
         assert!(msg.contains("file not found"), "got: {msg}");
 
-        // End-to-end: this branch must ROUTE THROUGH `AppError::internal`, not
-        // just return a similar message. Without this the test passes against
-        // a hand-rolled `AppError` that logs nothing. ERROR, not WARN: this
-        // builds an `Internal` variant, and the level follows the variant.
+        // End-to-end: this branch must ROUTE THROUGH `AppError::environment`,
+        // not just return a similar message. Without this the test passes
+        // against a hand-rolled `AppError` that logs nothing. WARN, not
+        // ERROR: a path that is gone is the environment, not a bug in the
+        // app, and ERROR is a triage signal. Nothing lands at ERROR at all.
         // The path lives in the structured log record, not in the Display.
         testing_logger::validate(|captured| {
+            assert_eq!(
+                captured
+                    .iter()
+                    .filter(|l| l.level == log::Level::Error)
+                    .count(),
+                0,
+                "an environmental failure must not reach ERROR"
+            );
             let errs: Vec<_> = captured
                 .iter()
-                .filter(|l| l.level == log::Level::Error)
+                .filter(|l| l.level == log::Level::Warn)
                 .collect();
             assert_eq!(errs.len(), 1, "the branch logs exactly once");
             let body = errs.first().map_or("", |l| l.body.as_str());
