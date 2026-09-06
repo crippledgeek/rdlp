@@ -173,6 +173,13 @@ pub fn run() {
                     // root above does not silently change what the file has
                     // always looked like. `chrono` rather than `time` because
                     // the desktop crate already depends on it.
+                    //
+                    // The UTC here is now hardcoded, where it used to follow
+                    // the builder. `.timezone_strategy(...)` still moves the
+                    // rotated file's NAME, but no longer reaches these lines —
+                    // so setting it to `UseLocal` would give a file stamped
+                    // local time whose every record reads UTC, and nothing
+                    // would fail. Change both together or neither.
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
                         file_name: None,
                     })
