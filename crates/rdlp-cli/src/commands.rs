@@ -4,7 +4,7 @@
 //! and the error exit helper.
 
 use anyhow::{Context, Result};
-use log::{error, warn};
+use log::{debug, error, warn};
 use rdlp_api::InfoDict;
 use rdlp_api::RdlpApiError;
 
@@ -104,11 +104,46 @@ pub const fn exit_code_for(e: &RdlpApiError) -> i32 {
     }
 }
 
+/// Emit the CLI's terminal record for a failed action.
+///
+/// Split from [`fail_with`] so it is testable — `fail_with` is `-> !` and
+/// exits the process. `e`'s Display is redacted per variant, so the reason
+/// carries no credential.
+pub fn record_failure(action: &str, e: &RdlpApiError) {
+    error!("action={action} outcome=failed reason={e}");
+}
+
 /// Log an `RdlpApiError` and exit with the appropriate structured code.
-pub fn fail_with(e: &RdlpApiError, verbose: bool) -> ! {
-    error!("Error: {e}");
+pub fn fail_with(action: &str, e: &RdlpApiError, verbose: bool) -> ! {
+    record_failure(action, e);
     if verbose {
-        error!("Debug info: {e:?}");
+        debug!("action={action} outcome=failed detail={e:?}");
     }
     std::process::exit(exit_code_for(e))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    /// The CLI's terminal record carries the same vocabulary as the desktop's.
+    #[test]
+    fn the_cli_terminal_record_names_action_and_outcome() {
+        testing_logger::setup();
+        let err = rdlp_api::RdlpApiError::InvalidInput {
+            message: "bad url".to_owned(),
+        };
+        super::record_failure("analyze", &err);
+
+        testing_logger::validate(|captured| {
+            let errs: Vec<_> = captured
+                .iter()
+                .filter(|l| l.level == log::Level::Error)
+                .collect();
+            assert_eq!(errs.len(), 1, "exactly one terminal record");
+            let body = errs.first().map_or("", |l| l.body.as_str());
+            assert!(body.contains("action=analyze"), "got: {body}");
+            assert!(body.contains("outcome=failed"), "got: {body}");
+            assert!(body.contains("bad url"), "got: {body}");
+        });
+    }
 }
