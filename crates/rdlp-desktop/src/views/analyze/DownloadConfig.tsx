@@ -198,7 +198,8 @@ export function DownloadConfig() {
     // `?? []` rather than a `= []` default on both: the default fires only on
     // undefined, and these two queries back the only commands the Cypress stub
     // left unregistered, so they are the pair a fabricated null has actually
-    // reached. See SystemSection for the full reasoning.
+    // reached. Both commands are infallible on the Rust side, so this is
+    // hardening — see SystemSection for the full reasoning.
     const { data: videoCodecsData } = useQuery(codecsQueryOptions(expertMode));
     const videoCodecs = videoCodecsData ?? [];
     const { data: audioCodecsData } = useQuery(
