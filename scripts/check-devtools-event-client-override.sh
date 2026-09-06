@@ -132,6 +132,16 @@ compare_lines() {
 # gate would otherwise sail straight past while checking version ranges.
 check_production_subpath() {
     local dir="$1" hits
+    # Assert the directory exists before scanning it. Without this the grep
+    # below errors on a moved or renamed `src`, `2>/dev/null` hides the message,
+    # `|| true` swallows the status, `hits` comes back empty and the check
+    # reports clean forever — the same silent self-disabling as the override
+    # parse that review caught, in the function added to close that gap.
+    if [ ! -d "$dir" ]; then
+        printf 'CANNOT RUN: %s is not a directory, so the /production subpath\n' "$dir" >&2
+        printf '       scan cannot run. Refusing to report clean without scanning.\n' >&2
+        return 2
+    fi
     hits="$(grep -rlF "$PKG/production" "$dir" 2>/dev/null || true)"
     if [ -n "$hits" ]; then
         printf 'STALE: something imports %s/production, which\n' "$PKG" >&2
@@ -229,6 +239,8 @@ FIXTURE
     check "root import allowed" "$rc" "0"
     rc=0; check_production_subpath "$tmp/src-trap" >/dev/null 2>&1 || rc=$?
     check "/production import rejected" "$rc" "1"
+    rc=0; check_production_subpath "$tmp/does-not-exist" >/dev/null 2>&1 || rc=$?
+    check "missing scan dir refuses to pass" "$rc" "2"
 
     # --- the comparison ---
     rc_case "today: declared 0.4 < override 0.5" '^0.4.1' '^0.5.0' 0
