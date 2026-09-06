@@ -137,7 +137,7 @@ pub async fn download_pre_resolved_fragments(
     fragments: &[Fragment],
     base_url: Option<&str>,
     expected_total: Option<u64>,
-    progress: Option<&dyn ProgressCallback>,
+    progress: Option<Arc<dyn ProgressCallback>>,
     output: &Path,
     format_url: Option<&str>,
     cancel: Option<&CancellationToken>,
@@ -231,17 +231,22 @@ pub async fn download_pre_resolved_fragments(
     // Build the AIMD adaptive controller in HlsSegments mode.
     // `HlsSegments` skips chunk-level adjustments (segment sizes are
     // server-determined) and tunes only connection count via the semaphore.
-    // Mirrors dash/download.rs:389-399 line-for-line.
+    // Mirrors the controller construction in `dash::download`'s
+    // `download_representation`. Not "line-for-line": that path threads its
+    // `log_callback` from an owned parameter, this one clones `progress`.
     //
-    // `log_callback` is `None` here (same as dash/download.rs:393) because
-    // `progress` is `Option<&dyn ProgressCallback>` (borrowed, non-`'static`)
-    // while `AdaptiveController::log_callback` requires `Arc<dyn ProgressCallback + 'static>`.
-    // AIMD log messages are still emitted via the `log` crate's `info!()` macro
-    // inside `AdaptiveController::new` regardless of `log_callback`.
+    // The controller gets the same `log_callback` the DASH path gives it, so
+    // its AIMD messages reach the UI's log channel on both. `progress` is an
+    // owned `Arc` for exactly this reason: `AdaptiveController::log_callback`
+    // needs `'static`, and the borrowed form this parameter used to take could
+    // not satisfy it. The per-adjustment messages log at DEBUG, so this
+    // callback is the only route by which an operator sees them at the
+    // desktop's default level.
     let concurrency = http.concurrent_fragments().max(1);
 
-    // total_size = 0: not meaningful for segment-based downloads (mirrors
-    // dash/download.rs:390). HlsSegments mode skips chunk-level adjustments
+    // total_size = 0: not meaningful for segment-based downloads (same choice
+    // in `download_representation`). HlsSegments mode skips chunk-level
+    // adjustments
     // anyway, so the value is unused; passing 0 keeps parity with DASH.
     let controller = Arc::new(AdaptiveController::new(
         0,
@@ -250,7 +255,7 @@ pub async fn download_pre_resolved_fragments(
             ..AdaptiveConfig::default()
         },
         ControllerMode::HlsSegments,
-        None,
+        progress.clone(),
     ));
     let sem = controller.semaphore().clone();
 
@@ -391,7 +396,8 @@ pub async fn download_pre_resolved_fragments(
         total_bytes += bytes.len() as u64;
 
         // Inform the AIMD controller of segment completion so it can tune
-        // the connection count. Mirrors dash/download.rs:426.
+        // the connection count. Mirrors `report_segment_complete` in
+        // `download_representation`.
         controller.report_segment_complete(bytes.len() as u64, fetch_elapsed, seg_dur);
 
         // Update progress accounting from the cumulative byte total. Feeding the
@@ -410,7 +416,7 @@ pub async fn download_pre_resolved_fragments(
         );
 
         // Emit progress (100ms throttle OR fragment-N boundary).
-        if let Some(cb) = progress
+        if let Some(cb) = progress.as_deref()
             && (now.duration_since(last_emit) >= PROGRESS_INTERVAL || frags_done == total_frags)
         {
             // Byte-extrapolation (yt-dlp): prefer a real Content-Length total;

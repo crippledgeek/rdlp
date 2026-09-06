@@ -18,13 +18,14 @@
 //! - **SlowStart**: Aggressively increases chunk level (+2) each adjustment
 //!   interval while throughput is growing. Exits to Steady on a throughput drop
 //!   or after 3 consecutive plateaus.
-//! - **Steady**: Uses classic AIMD — +1 level on stable throughput, −2 levels on
-//!   a >30% drop, hold on 10–30% drops.
+//! - **Steady**: Uses classic AIMD — +1 level when throughput is stable OR
+//!   improving (a drop of 10% or less), −2 levels on a drop above 30%, hold in
+//!   between.
 //!
 //! HLS mode skips chunk-level adjustments too (segments have fixed
 //! server-determined sizes), leaving it a pure fixed-concurrency gate.
 
-use log::info;
+use log::{debug, info};
 use rdlp_core::ProgressCallback;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
@@ -33,8 +34,9 @@ use tokio::sync::Semaphore;
 
 /// Power-of-two chunk size levels (bytes), from 64 KB to 8 MB.
 ///
-/// The level index is an index into this array. Level 0 = 64 KB (minimum),
-/// level 7 = 8 MB (maximum).
+/// The level index is an index into this array. Level 0 = 64 KB and level 7 =
+/// 8 MB are the array's bounds, not the controller's: it clamps to
+/// [`MIN_CHUNK_LEVEL`, 7], so levels 0 and 1 are never used at runtime.
 pub const CHUNK_LEVELS: [usize; 8] = [
     64 * 1024,       // 64 KB
     128 * 1024,      // 128 KB
@@ -49,9 +51,22 @@ pub const CHUNK_LEVELS: [usize; 8] = [
 /// Minimum chunk level for multiplicative decrease.
 ///
 /// Prevents the AIMD death spiral where ever-smaller chunks increase HTTP
-/// overhead, further reducing throughput, triggering more decreases. At level 2
-/// (256KB), per-request overhead is <1% of payload.
+/// overhead, further reducing throughput, triggering more decreases.
+///
+/// Level 2 was chosen in commit `ca741c90`, which introduced this floor and
+/// gives the reason in its message: at 256KB, HTTP per-request overhead is
+/// under 1% of payload. That figure carries no measurement source there and
+/// none has been added since — treat it as the recorded rationale, not as a
+/// verified number.
 const MIN_CHUNK_LEVEL: u8 = 2;
+
+/// Chunk levels shed by one multiplicative decrease.
+///
+/// Two levels. `CHUNK_LEVELS` doubles at every index, so this quarters the
+/// request size; −1 would be the classic AIMD halving. The value predates this
+/// comment and its rationale is not recorded — do not infer one from the
+/// arithmetic alone.
+const MD_CHUNK_DELTA: i8 = -2;
 
 /// Maximum number of throughput samples retained in history.
 const MAX_HISTORY: usize = 8;
@@ -62,7 +77,10 @@ const EWMA_ALPHA: f64 = 0.3;
 /// Threshold for "significant drop" (triggers multiplicative decrease).
 const MD_THRESHOLD: f64 = 0.30;
 
-/// Threshold for "mild noise" (within 10 %, hold steady).
+/// Lower bound of the hold band, which is `(0.10, 0.30]` — a drop strictly
+/// above this and up to and including `MD_THRESHOLD` holds the level. At or
+/// below this, throughput counts as stable or improving and the level steps up
+/// (+1); a negative ratio (improving) lands here too.
 const NOISE_THRESHOLD: f64 = 0.10;
 
 /// Number of consecutive plateaus in `SlowStart` before transitioning to Steady.
@@ -73,7 +91,9 @@ const SLOW_START_PLATEAU_LIMIT: usize = 3;
 /// Congestion-control phase for the adaptive controller.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
-    /// Aggressive ramp-up: chunk level grows by 2 each interval.
+    /// Aggressive ramp-up: chunk level grows by 2 each interval WHILE
+    /// throughput is growing. A plateau interval counts toward the exit
+    /// instead and moves the level not at all.
     SlowStart,
     /// AIMD steady state: chunk +1 level on stability, −2 levels on congestion.
     Steady,
@@ -119,7 +139,11 @@ pub struct AdaptiveConfig {
     pub max_connections: usize,
     /// How many completed chunks/segments to wait between AIMD adjustments.
     pub decision_interval: usize,
-    /// Index into [`CHUNK_LEVELS`] to use at startup.
+    /// Requested index into [`CHUNK_LEVELS`] at startup.
+    ///
+    /// Clamped to [`MIN_CHUNK_LEVEL`, 7] by `AdaptiveState::new`, so this is a
+    /// request rather than the level that runs — reporting it verbatim is the
+    /// defect `startup_summary_reports_the_clamped_level` guards against.
     pub initial_chunk_level: u8,
 }
 
@@ -205,17 +229,22 @@ impl AdaptiveController {
         mode: ControllerMode,
         log_callback: Option<Arc<dyn ProgressCallback>>,
     ) -> Self {
+        // Built from the state's level, not the config's: `AdaptiveState::new`
+        // clamps to [`MIN_CHUNK_LEVEL`, 7], so reporting the raw config value
+        // told the operator `chunk_level=0 (64KB)` for a controller that would
+        // run at 2 (256KB) — and indexing `CHUNK_LEVELS` with an out-of-range
+        // config value would panic before the clamp could help.
+        let state = AdaptiveState::new(config.initial_chunk_level);
         let msg = format!(
             "Adaptive controller: mode={mode:?}, size={:.1} MB, \
              connections={} (fixed), chunk_level={} ({}KB)",
             total_size as f64 / 1024.0 / 1024.0,
             config.max_connections,
-            config.initial_chunk_level,
-            CHUNK_LEVELS[config.initial_chunk_level as usize] / 1024,
+            state.current_chunk_level,
+            CHUNK_LEVELS[state.current_chunk_level as usize] / 1024,
         );
         info!("{msg}");
         let semaphore = Arc::new(Semaphore::new(config.max_connections.max(1)));
-        let state = AdaptiveState::new(config.initial_chunk_level);
         let ctrl = Self {
             state: Mutex::new(state),
             semaphore,
@@ -383,40 +412,39 @@ impl AdaptiveController {
     ) {
         let Some(prev) = prev_ewma else {
             // No previous measurement — stay in SlowStart and ramp chunk size up.
+            let note = self.apply_chunk_delta(state, 2);
             let msg = format!(
-                "Adaptive [SlowStart]: initial ramp — chunk +2 (ewma={:.1} MB/s)",
+                "Adaptive [SlowStart]: initial ramp (ewma={:.1} MB/s){note}",
                 current_ewma / 1024.0 / 1024.0,
             );
-            info!("{msg}");
+            debug!("{msg}");
             self.log(&msg);
-            self.bump_chunk_level(state, 2);
             return;
         };
 
         if current_ewma > prev {
             // Throughput is increasing — stay aggressive on chunk size.
+            let note = self.apply_chunk_delta(state, 2);
             let msg = format!(
-                "Adaptive [SlowStart]: throughput rising {:.1} → {:.1} MB/s — chunk +2",
+                "Adaptive [SlowStart]: throughput rising {:.1} → {:.1} MB/s{note}",
                 prev / 1024.0 / 1024.0,
                 current_ewma / 1024.0 / 1024.0,
             );
-            info!("{msg}");
+            debug!("{msg}");
             self.log(&msg);
             state.slow_start_plateaus = 0;
-            self.bump_chunk_level(state, 2);
         } else if current_ewma < prev {
             // Throughput dropped — transition to Steady and apply one MD.
+            let note = self.apply_md(state);
             let msg = format!(
-                "Adaptive [SlowStart → Steady]: throughput drop {:.1} → {:.1} MB/s — \
-                 applying multiplicative decrease",
+                "Adaptive [SlowStart → Steady]: throughput drop {:.1} → {:.1} MB/s{note}",
                 prev / 1024.0 / 1024.0,
                 current_ewma / 1024.0 / 1024.0,
             );
-            info!("{msg}");
+            debug!("{msg}");
             self.log(&msg);
             state.phase = Phase::Steady;
             state.slow_start_plateaus = 0;
-            self.apply_md(state);
         } else {
             // Plateau: throughput unchanged.
             state.slow_start_plateaus += 1;
@@ -427,7 +455,7 @@ impl AdaptiveController {
                     SLOW_START_PLATEAU_LIMIT,
                     current_ewma / 1024.0 / 1024.0,
                 );
-                info!("{msg}");
+                debug!("{msg}");
                 self.log(&msg);
                 state.phase = Phase::Steady;
                 state.slow_start_plateaus = 0;
@@ -437,14 +465,24 @@ impl AdaptiveController {
 
     /// Steady phase AIMD adjustments.
     fn adjust_steady(&self, state: &mut AdaptiveState, current_ewma: f64, prev_ewma: Option<f64>) {
-        let Some(prev) = prev_ewma else {
-            // First measurement in Steady — apply additive increase.
-            self.bump_chunk_level(state, 1);
-            return;
-        };
+        // `prev_ewma` is always `Some` here: `adjust` assigns `state.last_ewma`
+        // before dispatching, and the phase only becomes `Steady` inside
+        // `adjust_slow_start`, which runs after that assignment. Folding the
+        // `None` case into the zero case states the invariant instead of
+        // maintaining a branch nothing can reach — an earlier revision logged
+        // from it, describing a trace no run could ever produce.
+        debug_assert!(
+            prev_ewma.is_some(),
+            "adjust sets last_ewma before dispatching to Steady"
+        );
+        let prev = prev_ewma.unwrap_or(0.0);
 
         if prev == 0.0 {
-            self.bump_chunk_level(state, 1);
+            // No usable baseline — treat it as the stable case and step up.
+            let note = self.apply_chunk_delta(state, 1);
+            let msg = format!("Adaptive [Steady]: no prior throughput{note}");
+            debug!("{msg}");
+            self.log(&msg);
             return;
         }
 
@@ -452,27 +490,28 @@ impl AdaptiveController {
 
         if ratio > MD_THRESHOLD {
             // Throughput dropped > 30 % — multiplicative decrease.
+            let note = self.apply_md(state);
             let msg = format!(
-                "Adaptive [Steady]: throughput drop {:.0}% ({:.1} → {:.1} MB/s) — \
-                 multiplicative decrease",
+                "Adaptive [Steady]: throughput drop {:.0}% ({:.1} → {:.1} MB/s){note}",
                 ratio * 100.0,
                 prev / 1024.0 / 1024.0,
                 current_ewma / 1024.0 / 1024.0,
             );
-            info!("{msg}");
+            debug!("{msg}");
             self.log(&msg);
-            self.apply_md(state);
         } else if ratio > NOISE_THRESHOLD {
-            // 10–30 % drop — within noise, hold.
+            // Drop above 10 % and up to 30 % — noise, hold. Exclusive at the
+            // lower edge: at exactly 10 % this test is false and the level
+            // steps up instead (see `NOISE_THRESHOLD`).
         } else {
             // Stable or improving — additive increase (+1 level).
+            let note = self.apply_chunk_delta(state, 1);
             let msg = format!(
-                "Adaptive [Steady]: stable at {:.1} MB/s — chunk +1",
+                "Adaptive [Steady]: stable at {:.1} MB/s{note}",
                 current_ewma / 1024.0 / 1024.0,
             );
-            info!("{msg}");
+            debug!("{msg}");
             self.log(&msg);
-            self.bump_chunk_level(state, 1);
         }
     }
 
@@ -482,22 +521,68 @@ impl AdaptiveController {
     /// parallel requests share one TCP congestion window, so reducing the stream
     /// count does not relieve congestion (and would double-penalize a link whose
     /// TCP CWND has already halved). Chunk-size reduction is the correct response.
-    fn apply_md(&self, state: &mut AdaptiveState) {
-        let before_level = state.current_chunk_level;
-        self.bump_chunk_level(state, -(2i8));
-        let msg = format!(
-            "Adaptive MD: chunk level {} → {} ({}KB)",
-            before_level,
-            state.current_chunk_level,
-            CHUNK_LEVELS[state.current_chunk_level as usize] / 1024,
-        );
-        info!("{msg}");
-        self.log(&msg);
+    fn apply_md(&self, state: &mut AdaptiveState) -> String {
+        self.apply_chunk_delta(state, MD_CHUNK_DELTA)
+    }
+
+    /// Apply `delta` to the chunk level and describe what actually happened.
+    ///
+    /// The returned clause is a message's only claim about the chunk level, and
+    /// it reports the *applied* transition rather than the requested delta. The
+    /// two differ because the level clamps at both ends, and because
+    /// `HlsSegments` mode discards the adjustment entirely — there the clause is
+    /// empty.
+    ///
+    /// The saturation wording exists for one structural reason:
+    /// `AdaptiveConfig::default().initial_chunk_level` IS `MIN_CHUNK_LEVEL`, so
+    /// a −2 applied while the level sits at the floor moves nothing, and an
+    /// intent-derived clause would announce a cut that did not occur.
+    /// `chunk_clause_reports_saturation_at_the_floor` pins that arithmetic
+    /// directly; `floor_is_one_decrease_below_the_first_ramp` pins the path the
+    /// phase machine actually takes to a decrease that saturates: a ramp, one
+    /// decrease back to the floor, and a second that moves nothing — the
+    /// controller never requests a decrease at startup.
+    ///
+    /// How OFTEN saturation happens is deliberately not claimed here. Every
+    /// previous version of this comment tried to characterise where the level
+    /// spends its time, and each one was wrong in a new way; the branch needs no
+    /// frequency argument to justify it, so it makes none.
+    ///
+    /// These messages reach the UI's log pane through `log_callback`, so this
+    /// text is read by operators, not only by the log file.
+    fn apply_chunk_delta(&self, state: &mut AdaptiveState, delta: i8) -> String {
+        if self.mode == ControllerMode::HlsSegments {
+            return String::new();
+        }
+        let old_level = state.current_chunk_level;
+        self.bump_chunk_level(state, delta);
+        let new_level = state.current_chunk_level;
+        if new_level != old_level {
+            format!(
+                " — chunk level {} → {} ({}KB → {}KB)",
+                old_level,
+                new_level,
+                CHUNK_LEVELS[old_level as usize] / 1024,
+                CHUNK_LEVELS[new_level as usize] / 1024,
+            )
+        } else if delta < 0 {
+            format!(
+                " — chunk already at the minimum ({}KB)",
+                CHUNK_LEVELS[old_level as usize] / 1024,
+            )
+        } else {
+            format!(
+                " — chunk already at the maximum ({}KB)",
+                CHUNK_LEVELS[old_level as usize] / 1024,
+            )
+        }
     }
 
     /// Adjust the chunk level by `delta`, clamped to [`MIN_CHUNK_LEVEL`, 7].
     ///
-    /// In HLS mode the chunk level is not adjusted.
+    /// In HLS mode the chunk level is not adjusted. Pure state mutation —
+    /// [`Self::apply_chunk_delta`] is what reports the outcome, so that the
+    /// event is described in one place rather than three.
     fn bump_chunk_level(&self, state: &mut AdaptiveState, delta: i8) {
         if self.mode == ControllerMode::HlsSegments {
             return;
@@ -506,17 +591,6 @@ impl AdaptiveController {
         let new_level =
             (i16::from(old_level) + i16::from(delta)).clamp(i16::from(MIN_CHUNK_LEVEL), 7) as u8;
         state.current_chunk_level = new_level;
-        if new_level != old_level {
-            let msg = format!(
-                "Adaptive: chunk level {} → {} ({}KB → {}KB)",
-                old_level,
-                new_level,
-                CHUNK_LEVELS[old_level as usize] / 1024,
-                CHUNK_LEVELS[new_level as usize] / 1024,
-            );
-            info!("{msg}");
-            self.log(&msg);
-        }
     }
 }
 

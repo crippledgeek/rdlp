@@ -108,22 +108,35 @@ async fn multi_init_dedups_fetches() {
 
 // ---- Progress capture mock + tests (issue #272) ----
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 struct CaptureCallback {
     events: Mutex<Vec<DownloadProgress>>,
+    logs: Mutex<Vec<String>>,
 }
 
 impl CaptureCallback {
     fn new() -> Self {
         Self {
             events: Mutex::new(Vec::new()),
+            logs: Mutex::new(Vec::new()),
         }
     }
 
     fn events(&self) -> Vec<DownloadProgress> {
         self.events.lock().expect("lock").clone()
     }
+
+    fn logs(&self) -> Vec<String> {
+        self.logs.lock().expect("lock").clone()
+    }
+}
+
+/// Hand the mock to `download_pre_resolved_fragments`, which takes an owned
+/// `Arc<dyn ProgressCallback>` so the adaptive controller can keep a
+/// `'static` handle. The test keeps its own `Arc` to read `events()` back.
+fn as_progress(cb: &Arc<CaptureCallback>) -> Arc<dyn ProgressCallback> {
+    Arc::clone(cb) as Arc<dyn ProgressCallback>
 }
 
 impl ProgressCallback for CaptureCallback {
@@ -132,6 +145,9 @@ impl ProgressCallback for CaptureCallback {
     }
     fn on_complete(&self, _stats: &DownloadStats) {}
     fn on_error(&self, _msg: &str) {}
+    fn on_log(&self, msg: &str) {
+        self.logs.lock().expect("lock").push(msg.to_string());
+    }
 }
 
 fn frag(url: String) -> Fragment {
@@ -166,7 +182,7 @@ async fn fragment_progress_final_boundary_emit_covers_all_frags() {
         frag(format!("{}/f1", server.url())),
         frag(format!("{}/f2", server.url())),
     ];
-    let cb = CaptureCallback::new();
+    let cb = Arc::new(CaptureCallback::new());
     let tmp = tempfile::NamedTempFile::new().expect("tmp");
     let http = HttpDownloader::with_client(wreq::Client::new());
     let _stats = download_pre_resolved_fragments(
@@ -174,7 +190,7 @@ async fn fragment_progress_final_boundary_emit_covers_all_frags() {
         &frags,
         None,
         Some(300),
-        Some(&cb),
+        Some(as_progress(&cb)),
         tmp.path(),
         None,
         None,
@@ -226,7 +242,7 @@ async fn fragment_no_byte_total_uses_byte_extrapolation() {
     let frags: Vec<Fragment> = (0..4)
         .map(|i| frag(format!("{}/f{i}", server.url())))
         .collect();
-    let cb = CaptureCallback::new();
+    let cb = Arc::new(CaptureCallback::new());
     let tmp = tempfile::NamedTempFile::new().expect("tmp");
     let http = HttpDownloader::with_client(wreq::Client::new());
     let _ = download_pre_resolved_fragments(
@@ -234,7 +250,7 @@ async fn fragment_no_byte_total_uses_byte_extrapolation() {
         &frags,
         None,
         None, /* expected_total */
-        Some(&cb),
+        Some(as_progress(&cb)),
         tmp.path(),
         None,
         None,
@@ -275,7 +291,7 @@ async fn fragment_progress_cdn_overrun_saturates_at_one() {
         .create_async()
         .await;
     let frags = vec![frag(format!("{}/f1", server.url()))];
-    let cb = CaptureCallback::new();
+    let cb = Arc::new(CaptureCallback::new());
     let tmp = tempfile::NamedTempFile::new().expect("tmp");
     let http = HttpDownloader::with_client(wreq::Client::new());
     let _ = download_pre_resolved_fragments(
@@ -283,7 +299,7 @@ async fn fragment_progress_cdn_overrun_saturates_at_one() {
         &frags,
         None,
         Some(100),
-        Some(&cb),
+        Some(as_progress(&cb)),
         tmp.path(),
         None,
         None,
@@ -308,7 +324,7 @@ async fn fragment_progress_expected_total_larger_completes_under_one() {
         .create_async()
         .await;
     let frags = vec![frag(format!("{}/f1", server.url()))];
-    let cb = CaptureCallback::new();
+    let cb = Arc::new(CaptureCallback::new());
     let tmp = tempfile::NamedTempFile::new().expect("tmp");
     let http = HttpDownloader::with_client(wreq::Client::new());
     let _ = download_pre_resolved_fragments(
@@ -316,7 +332,7 @@ async fn fragment_progress_expected_total_larger_completes_under_one() {
         &frags,
         None,
         Some(1_000),
-        Some(&cb),
+        Some(as_progress(&cb)),
         tmp.path(),
         None,
         None,
@@ -342,7 +358,7 @@ async fn fragment_progress_expected_total_larger_completes_under_one() {
 #[tokio::test]
 async fn fragment_progress_zero_fragments_no_emit() {
     let frags: Vec<Fragment> = vec![];
-    let cb = CaptureCallback::new();
+    let cb = Arc::new(CaptureCallback::new());
     let tmp = tempfile::NamedTempFile::new().expect("tmp");
     let http = HttpDownloader::with_client(wreq::Client::new());
     let stats = download_pre_resolved_fragments(
@@ -350,7 +366,7 @@ async fn fragment_progress_zero_fragments_no_emit() {
         &frags,
         None,
         None,
-        Some(&cb),
+        Some(as_progress(&cb)),
         tmp.path(),
         None,
         None,
@@ -371,7 +387,7 @@ async fn fragment_progress_n_one_emits_exactly_once() {
         .create_async()
         .await;
     let frags = vec![frag(format!("{}/f1", server.url()))];
-    let cb = CaptureCallback::new();
+    let cb = Arc::new(CaptureCallback::new());
     let tmp = tempfile::NamedTempFile::new().expect("tmp");
     let http = HttpDownloader::with_client(wreq::Client::new());
     let _ = download_pre_resolved_fragments(
@@ -379,7 +395,7 @@ async fn fragment_progress_n_one_emits_exactly_once() {
         &frags,
         None,
         Some(100),
-        Some(&cb),
+        Some(as_progress(&cb)),
         tmp.path(),
         None,
         None,
@@ -2099,5 +2115,52 @@ async fn an_endless_dribble_is_cut_off_by_the_total_deadline() {
     assert!(
         elapsed < std::time::Duration::from_secs(10),
         "returned only after {elapsed:?}; the total deadline did not bound the dribble"
+    );
+}
+
+/// The HLS fragment path hands its `ProgressCallback` to the adaptive
+/// controller, so the controller's messages reach the UI's log channel.
+///
+/// This is the half of the AIMD log demotion that the `log::` level alone
+/// cannot cover. Those messages log at DEBUG, and the desktop's sink is fixed
+/// at INFO, so `log_callback` is the only route by which an operator sees
+/// them there. This path passed `None` until the callback was threaded
+/// through, which made it the one place where demoting to DEBUG genuinely
+/// lost information — DASH (`dash/download.rs`) and chunked HTTP
+/// (`http/parallel.rs`) already passed one.
+///
+/// Verified to fail against the unwired version: restoring `None` at the
+/// controller construction in `fragments.rs` empties `logs()` and trips the
+/// assertion below.
+#[tokio::test]
+async fn hls_path_forwards_adaptive_logs_to_the_callback() {
+    let mut server = mockito::Server::new_async().await;
+    let _f1 = server
+        .mock("GET", "/f1")
+        .with_body(vec![0u8; 100])
+        .create_async()
+        .await;
+    let frags = vec![frag(format!("{}/f1", server.url()))];
+    let cb = Arc::new(CaptureCallback::new());
+    let tmp = tempfile::NamedTempFile::new().expect("tmp");
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    let _stats = download_pre_resolved_fragments(
+        &http,
+        &frags,
+        None,
+        Some(100),
+        Some(as_progress(&cb)),
+        tmp.path(),
+        None,
+        None,
+    )
+    .await
+    .expect("download");
+
+    let logs = cb.logs();
+    assert!(
+        logs.iter().any(|m| m.starts_with("Adaptive controller:")),
+        "the controller's startup summary must reach the callback on the HLS \
+         path; got {logs:?}"
     );
 }

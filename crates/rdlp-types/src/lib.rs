@@ -34,6 +34,7 @@ mod enum_test_support;
 pub mod fixup_policy;
 pub mod format;
 pub mod info_dict;
+pub mod log_targets;
 pub mod match_filter;
 pub mod media_name;
 pub mod parse_error;

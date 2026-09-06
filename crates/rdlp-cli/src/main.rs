@@ -93,6 +93,33 @@ impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for SuspendingWriter {
     }
 }
 
+/// Build the default filter at `level`, quieting the third-party targets that
+/// would otherwise bury it.
+///
+/// Only [`rdlp_types::log_targets::ZBUS`] applies here. The desktop
+/// additionally filters [`rdlp_types::log_targets::TRACING_SPAN_LIFECYCLE`],
+/// which is a `log`-bridge artifact:
+/// this binary installs a `tracing` subscriber, so zbus's instrumentation
+/// arrives as real spans under their own `zbus::…` target and the directive
+/// below already covers them.
+fn default_filter(level: tracing::Level) -> EnvFilter {
+    // `EnvFilter::new` is lossy, NOT panicking: it routes through
+    // `parse_lossy`, which prints "ignoring `X`" to stderr and DROPS the bad
+    // directive. Whatever parsed is all that remains — the builder's `ERROR`
+    // default is added only when NOTHING parsed (`filter/env/builder.rs`,
+    // `from_directives`). So a malformed directive fails silently and in the
+    // worst direction: a bad level half leaves just `zbus=warn` standing and
+    // silences the rest of the tree outright, and a bad zbus half restores
+    // exactly the noise this filter exists to remove.
+    //
+    // That is why the parameter is a `tracing::Level` rather than a `&str`:
+    // no value of it can produce an invalid directive, so a config- or
+    // CLI-derived string cannot reintroduce the silent-degradation class.
+    // Typing the level cannot catch a mistake in the format string itself,
+    // which is what `filter_directive_parses` is for.
+    EnvFilter::new(format!("{level},{}=warn", rdlp_types::log_targets::ZBUS))
+}
+
 fn main() -> Result<()> {
     // Create optimized multi-threaded runtime for I/O-heavy workloads
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -147,10 +174,16 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
     let multi_progress = Arc::new(MultiProgress::new());
 
     if !config.quiet {
+        // Only `-v` consults `RUST_LOG`; without it the filter is fixed at
+        // INFO. That asymmetry is pre-existing. Where `RUST_LOG` IS consulted
+        // and parses, it is used verbatim — including if it turns the noisy
+        // targets back up — so the quieting applies only to the filters we
+        // synthesize ourselves.
         let filter = if config.verbose {
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("debug"))
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| default_filter(tracing::Level::DEBUG))
         } else {
-            EnvFilter::new("info")
+            default_filter(tracing::Level::INFO)
         };
 
         let writer = SuspendingWriter {
@@ -487,4 +520,37 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
     temp_registry.cleanup_all();
 
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `default_filter` builds its directive with `Level`'s `Display`, which
+    /// is uppercase (`INFO`), while the directive it is concatenated with is
+    /// lowercase. A directive `EnvFilter` cannot parse is dropped silently
+    /// (`parse_lossy`), not rejected, so a formatting mistake here would
+    /// produce a filter that looks fine and logs nothing — the parameter being
+    /// typed prevents an invalid *level*, never a mistake in this function.
+    ///
+    /// Asserts the full `zbus=warn` directive rather than the bare target:
+    /// `contains("zbus")` would pass on a bare `zbus` directive, which parses
+    /// and means TRACE — the precise noise regression this branch removes — and
+    /// would not notice the level half being mangled at all.
+    #[test]
+    fn filter_directive_parses() {
+        for level in [tracing::Level::INFO, tracing::Level::DEBUG] {
+            let rendered = default_filter(level).to_string();
+            assert!(
+                rendered.contains(&format!("{}=warn", rdlp_types::log_targets::ZBUS)),
+                "zbus must be pinned to warn, not merely present, got: {rendered}"
+            );
+            assert!(
+                rendered
+                    .to_lowercase()
+                    .contains(&level.to_string().to_lowercase()),
+                "the requested level must survive into the filter, got: {rendered}"
+            );
+        }
+    }
 }

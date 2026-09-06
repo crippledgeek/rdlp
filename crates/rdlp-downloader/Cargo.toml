@@ -37,6 +37,10 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 mockito = { workspace = true }
 proptest = "1.4"
+# Captures `log` records so a test can assert the adaptive controller's
+# per-adjustment chatter stays at DEBUG. At INFO it was 96 lines in a single
+# 287-line session (#693's log file), crowding out the records that matter.
+testing_logger = "0.1.1"
 rdlp-redact = { workspace = true }
 
 [lints.rust]

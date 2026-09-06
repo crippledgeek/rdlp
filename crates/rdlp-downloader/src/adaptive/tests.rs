@@ -1,4 +1,19 @@
 use super::*;
+use std::sync::{Arc, Mutex};
+
+/// Captures `on_log` so a test can assert on the controller's message text.
+struct RecordingCallback {
+    logs: Arc<Mutex<Vec<String>>>,
+}
+
+impl rdlp_core::ProgressCallback for RecordingCallback {
+    fn on_progress(&self, _p: &rdlp_core::DownloadProgress) {}
+    fn on_complete(&self, _s: &rdlp_core::DownloadStats) {}
+    fn on_error(&self, _e: &str) {}
+    fn on_log(&self, msg: &str) {
+        self.logs.lock().expect("lock").push(msg.to_string());
+    }
+}
 
 /// Build a default controller for HTTP mode with given `total_size`.
 fn make_controller(total_size: u64) -> AdaptiveController {
@@ -456,5 +471,303 @@ fn test_realtime_ratio_calculation() {
     assert!(
         (ratio - 4.0).abs() < 1e-6,
         "realtime_ratio should be 4.0, got {ratio}"
+    );
+}
+
+/// The controller's per-adjustment chatter stays at DEBUG.
+///
+/// It ran at INFO, which produced 96 lines in a single 287-line session of the
+/// desktop's log file — with a 5 MiB rotation window, sustained downloading
+/// could rotate a genuine WARN out of the file before anyone read it.
+///
+/// The messages are not lost. Every one still goes to `log_callback`, the
+/// channel the UI reads, so the `log::` record was a duplicate wherever a
+/// caller supplies a progress callback — which is all three controller
+/// construction sites (`http/parallel.rs`, `dash/download.rs`, and
+/// `fragments.rs`, which passed `None` until its callback was wired one
+/// commit later — the one path where the demotion would otherwise have lost
+/// them).
+/// On the CLI they also remain reachable with `-v`, whose filter admits DEBUG.
+///
+/// The startup summary (one line per controller, naming
+/// mode/size/connections) stays at INFO deliberately — that one is
+/// operator-relevant. It is one line per download only where a single
+/// controller is built; DASH constructs one per representation, so a download
+/// with separate audio emits two.
+#[test]
+fn per_adjustment_messages_are_debug_not_info() {
+    testing_logger::setup();
+    let ctrl = make_controller(64 * 1024 * 1024);
+
+    // Twice `AdaptiveConfig::default().decision_interval`, so `adjust` runs at
+    // least once however that default moves — deriving the count is what keeps
+    // it that way, where a hard-coded loop bound would silently stop reaching
+    // `adjust` the first time the interval was raised.
+    let chunks = 2 * AdaptiveConfig::default().decision_interval;
+    for _ in 0..chunks {
+        ctrl.report_chunk_complete(1024 * 1024, std::time::Duration::from_millis(500));
+    }
+
+    testing_logger::validate(|captured| {
+        let infos: Vec<&String> = captured
+            .iter()
+            .filter(|l| l.level == log::Level::Info)
+            .map(|l| &l.body)
+            .collect();
+        // The one-per-download summary may appear; nothing else may.
+        for body in &infos {
+            assert!(
+                body.starts_with("Adaptive controller:"),
+                "only the startup summary belongs at INFO, got: {body}"
+            );
+        }
+        assert!(
+            infos.len() <= 1,
+            "expected at most the startup summary at INFO, got {} lines",
+            infos.len()
+        );
+
+        // The positive half. Without it the upper bound above is satisfied
+        // just as well by an adjust path that logged nothing at all — by the
+        // call sites being deleted, or by `adjust` never being reached — so
+        // the test would keep passing while covering nothing.
+        let debugs = captured
+            .iter()
+            .filter(|l| l.level == log::Level::Debug)
+            .count();
+        assert!(
+            debugs >= 1,
+            "the adjust path must have logged at DEBUG; without a record here \
+             the INFO bound above proves nothing"
+        );
+    });
+}
+
+/// In `HlsSegments` mode the tuning messages must not claim a chunk change.
+///
+/// `bump_chunk_level` discards the adjustment there (segment sizes are
+/// server-determined), so a "chunk +2" clause describes something that did not
+/// happen. These messages reach the desktop's log pane through `log_callback`,
+/// so the text is read by operators — this became visible when the HLS path
+/// started passing a callback.
+#[test]
+fn hls_mode_messages_claim_no_chunk_change() {
+    let logged = Arc::new(Mutex::new(Vec::<String>::new()));
+    let sink = Arc::new(RecordingCallback {
+        logs: Arc::clone(&logged),
+    });
+    let ctrl = AdaptiveController::new(
+        0,
+        AdaptiveConfig::default(),
+        ControllerMode::HlsSegments,
+        Some(sink),
+    );
+
+    // Drive several decision intervals across rising, falling and flat
+    // throughput so every phase-transition message is exercised.
+    for bps in [4.0, 8.0, 8.0, 1.0, 1.0, 4.0] {
+        for _ in 0..AdaptiveConfig::default().decision_interval {
+            let bytes = (bps * 1024.0 * 1024.0) as u64;
+            ctrl.report_chunk_complete(bytes, std::time::Duration::from_secs(1));
+        }
+    }
+
+    let msgs = logged.lock().expect("lock").clone();
+    assert!(
+        msgs.len() > 1,
+        "expected tuning messages beyond the startup summary, got {msgs:?}"
+    );
+    for m in &msgs {
+        // Matches "chunk " rather than the "+"/"level" spellings: a partial
+        // regression restoring only the negative clause would slip past those
+        // and still tell an HLS operator the chunk size had changed.
+        assert!(
+            !m.contains("chunk "),
+            "HLS mode must not claim a chunk adjustment, got: {m}"
+        );
+    }
+}
+
+/// The chunk clause reports the transition that was applied.
+///
+/// Positive half of the pair below: when the level genuinely moves, the message
+/// names the real before/after rather than the requested delta.
+#[test]
+fn chunk_clause_reports_the_applied_transition() {
+    let ctrl = make_controller(64 * 1024 * 1024);
+    let mut state = ctrl.state.lock().unwrap();
+
+    // From the default (== MIN_CHUNK_LEVEL) an increase does move the level.
+    let note = ctrl.apply_chunk_delta(&mut state, 1);
+
+    assert!(
+        note.contains("chunk level 2 → 3"),
+        "expected the applied transition, got: {note}"
+    );
+    assert_eq!(
+        state.current_chunk_level,
+        MIN_CHUNK_LEVEL + 1,
+        "the clause must describe a transition that really happened"
+    );
+}
+
+/// At the floor the clause says so instead of claiming a decrease.
+///
+/// This is the regression the intent-derived version shipped: `MIN_CHUNK_LEVEL`
+/// is also the default starting level, so a −2 requested at the start clamps
+/// and moves nothing — while the message announced "chunk -2" regardless.
+/// Saturation is the state an operator most needs during a throughput collapse
+/// that nothing relieves, so it is reported rather than omitted.
+///
+/// No claim is made here about how often that happens; see `apply_chunk_delta`
+/// for why this comment set stopped making frequency arguments.
+///
+/// Fails against the intent-derived version, which had no floor branch at all.
+#[test]
+fn chunk_clause_reports_saturation_at_the_floor() {
+    let ctrl = make_controller(64 * 1024 * 1024);
+    let mut state = ctrl.state.lock().unwrap();
+    assert_eq!(
+        state.current_chunk_level, MIN_CHUNK_LEVEL,
+        "precondition: the default start IS the floor, so this delta has \
+         nowhere to go"
+    );
+
+    let note = ctrl.apply_chunk_delta(&mut state, MD_CHUNK_DELTA);
+
+    assert!(
+        note.contains("already at the minimum"),
+        "the floor must be reported, got: {note}"
+    );
+    assert!(
+        !note.contains('→'),
+        "no transition may be claimed when the level did not move, got: {note}"
+    );
+    assert_eq!(
+        state.current_chunk_level, MIN_CHUNK_LEVEL,
+        "the level must not have moved"
+    );
+}
+
+/// Pins the +2 ramp and the floor clamp through the controller's own phase
+/// machine.
+///
+/// The clause doc no longer narrates this sequence — repeated attempts to put
+/// it in prose were each wrong — so it is asserted here instead. The
+/// load-bearing half is that the FIRST adjustment of a real
+/// download ramps by +2 — so the ramp is driven through the controller's own
+/// phase machine (`report_chunk_complete` → `adjust` → `adjust_slow_start`'s
+/// `prev_ewma == None` arm) rather than by calling `apply_chunk_delta` with a
+/// hard-coded 2, which would leave the doc's claim unpinned if that arm's delta
+/// ever changed.
+#[test]
+fn floor_is_one_decrease_below_the_first_ramp() {
+    let ctrl = make_controller(64 * 1024 * 1024);
+    assert_eq!(
+        ctrl.state.lock().unwrap().current_chunk_level,
+        MIN_CHUNK_LEVEL,
+        "a default download starts on the floor"
+    );
+
+    // One full decision interval — the controller's first adjustment. The lock
+    // must NOT be held here: `report_chunk_complete` takes it itself.
+    drive(
+        &ctrl,
+        AdaptiveConfig::default().decision_interval,
+        10_000_000.0,
+    );
+    assert_eq!(
+        ctrl.state.lock().unwrap().current_chunk_level,
+        MIN_CHUNK_LEVEL + 2,
+        "the first adjustment takes the SlowStart ramp (+2)"
+    );
+
+    let mut state = ctrl.state.lock().unwrap();
+
+    // One decrease returns it to the floor — and says so.
+    let first = ctrl.apply_chunk_delta(&mut state, MD_CHUNK_DELTA);
+    assert_eq!(state.current_chunk_level, MIN_CHUNK_LEVEL);
+    assert!(
+        first.contains('→'),
+        "that decrease does move the level, got: {first}"
+    );
+
+    // A further decrease, with no increase in between, is the saturating one.
+    let second = ctrl.apply_chunk_delta(&mut state, MD_CHUNK_DELTA);
+    assert_eq!(state.current_chunk_level, MIN_CHUNK_LEVEL);
+    assert!(
+        second.contains("already at the minimum"),
+        "the next consecutive decrease saturates, got: {second}"
+    );
+}
+
+/// The startup summary names the level the controller will actually run.
+///
+/// `AdaptiveState::new` clamps to `[MIN_CHUNK_LEVEL, 7]`, but the summary was
+/// built from the raw config value — so a controller configured below the floor
+/// announced `chunk_level=0 (64KB)` while running at 2 (256KB). Operator-facing
+/// text describing a state the process is not in is the same defect this branch
+/// exists to remove, one layer down.
+#[test]
+fn startup_summary_reports_the_clamped_level() {
+    let logged = Arc::new(Mutex::new(Vec::<String>::new()));
+    let below_floor = AdaptiveConfig {
+        initial_chunk_level: 0,
+        ..AdaptiveConfig::default()
+    };
+    let _ctrl = AdaptiveController::new(
+        1024 * 1024,
+        below_floor,
+        ControllerMode::HttpChunked,
+        Some(Arc::new(RecordingCallback {
+            logs: Arc::clone(&logged),
+        })),
+    );
+
+    let summary = logged.lock().expect("lock")[0].clone();
+    assert!(
+        summary.contains(&format!("chunk_level={MIN_CHUNK_LEVEL}")),
+        "the summary must name the clamped level, got: {summary}"
+    );
+    assert!(
+        summary.contains(&format!(
+            "({}KB)",
+            CHUNK_LEVELS[MIN_CHUNK_LEVEL as usize] / 1024
+        )),
+        "and the byte size that goes with it, got: {summary}"
+    );
+}
+
+/// The clamp holds at the ceiling too — and that half used to panic.
+///
+/// Above-ceiling companion to `startup_summary_reports_the_clamped_level`. The
+/// pre-fix summary indexed `CHUNK_LEVELS` with the raw config value, so a level
+/// past the array's end panicked before the clamp could apply. This
+/// pins the case the fix's own comment cites; it fails by panic, not assertion,
+/// against the unpatched code.
+#[test]
+fn startup_summary_clamps_above_the_ceiling() {
+    let logged = Arc::new(Mutex::new(Vec::<String>::new()));
+    let above_ceiling = AdaptiveConfig {
+        initial_chunk_level: 9,
+        ..AdaptiveConfig::default()
+    };
+    let _ctrl = AdaptiveController::new(
+        1024 * 1024,
+        above_ceiling,
+        ControllerMode::HttpChunked,
+        Some(Arc::new(RecordingCallback {
+            logs: Arc::clone(&logged),
+        })),
+    );
+
+    let summary = logged.lock().expect("lock")[0].clone();
+    assert!(
+        summary.contains("chunk_level=7"),
+        "the summary must name the clamped ceiling, got: {summary}"
+    );
+    assert!(
+        summary.contains(&format!("({}KB)", CHUNK_LEVELS[7] / 1024)),
+        "and the byte size that goes with it, got: {summary}"
     );
 }
