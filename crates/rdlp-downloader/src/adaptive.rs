@@ -18,8 +18,9 @@
 //! - **SlowStart**: Aggressively increases chunk level (+2) each adjustment
 //!   interval while throughput is growing. Exits to Steady on a throughput drop
 //!   or after 3 consecutive plateaus.
-//! - **Steady**: Uses classic AIMD — +1 level on stable throughput, −2 levels on
-//!   a >30% drop, hold on 10–30% drops.
+//! - **Steady**: Uses classic AIMD — +1 level when throughput is stable OR
+//!   improving (a drop of 10% or less), −2 levels on a drop above 30%, hold in
+//!   between.
 //!
 //! HLS mode skips chunk-level adjustments too (segments have fixed
 //! server-determined sizes), leaving it a pure fixed-concurrency gate.
@@ -33,8 +34,9 @@ use tokio::sync::Semaphore;
 
 /// Power-of-two chunk size levels (bytes), from 64 KB to 8 MB.
 ///
-/// The level index is an index into this array. Level 0 = 64 KB (minimum),
-/// level 7 = 8 MB (maximum).
+/// The level index is an index into this array. Level 0 = 64 KB and level 7 =
+/// 8 MB are the array's bounds, not the controller's: it clamps to
+/// [`MIN_CHUNK_LEVEL`, 7], so levels 0 and 1 are never used at runtime.
 pub const CHUNK_LEVELS: [usize; 8] = [
     64 * 1024,       // 64 KB
     128 * 1024,      // 128 KB
@@ -49,8 +51,13 @@ pub const CHUNK_LEVELS: [usize; 8] = [
 /// Minimum chunk level for multiplicative decrease.
 ///
 /// Prevents the AIMD death spiral where ever-smaller chunks increase HTTP
-/// overhead, further reducing throughput, triggering more decreases. At level 2
-/// (256KB), per-request overhead is <1% of payload.
+/// overhead, further reducing throughput, triggering more decreases.
+///
+/// Level 2 was chosen in commit `ca741c90`, which introduced this floor and
+/// gives the reason in its message: at 256KB, HTTP per-request overhead is
+/// under 1% of payload. That figure carries no measurement source there and
+/// none has been added since — treat it as the recorded rationale, not as a
+/// verified number.
 const MIN_CHUNK_LEVEL: u8 = 2;
 
 /// Chunk levels shed by one multiplicative decrease.
@@ -70,10 +77,10 @@ const EWMA_ALPHA: f64 = 0.3;
 /// Threshold for "significant drop" (triggers multiplicative decrease).
 const MD_THRESHOLD: f64 = 0.30;
 
-/// Lower bound of the hold band. A drop ABOVE this and below `MD_THRESHOLD`
-/// is treated as noise and the level holds; at or below it, throughput counts
-/// as stable or improving and the level steps up (+1). Pre-existing wording
-/// said "within 10 %, hold steady", which named the one case that does not.
+/// Lower bound of the hold band, which is `(0.10, 0.30]` — a drop strictly
+/// above this and up to and including `MD_THRESHOLD` holds the level. At or
+/// below this, throughput counts as stable or improving and the level steps up
+/// (+1); a negative ratio (improving) lands here too.
 const NOISE_THRESHOLD: f64 = 0.10;
 
 /// Number of consecutive plateaus in `SlowStart` before transitioning to Steady.
@@ -132,7 +139,11 @@ pub struct AdaptiveConfig {
     pub max_connections: usize,
     /// How many completed chunks/segments to wait between AIMD adjustments.
     pub decision_interval: usize,
-    /// Index into [`CHUNK_LEVELS`] to use at startup.
+    /// Requested index into [`CHUNK_LEVELS`] at startup.
+    ///
+    /// Clamped to [`MIN_CHUNK_LEVEL`, 7] by `AdaptiveState::new`, so this is a
+    /// request rather than the level that runs — reporting it verbatim is the
+    /// defect `startup_summary_reports_the_clamped_level` guards against.
     pub initial_chunk_level: u8,
 }
 
@@ -522,9 +533,12 @@ impl AdaptiveController {
     ///
     /// The saturation wording exists for one structural reason:
     /// `AdaptiveConfig::default().initial_chunk_level` IS `MIN_CHUNK_LEVEL`, so
-    /// a −2 requested at the start moves nothing, and an intent-derived clause
-    /// would announce a cut that did not occur.
-    /// `chunk_clause_reports_saturation_at_the_floor` pins exactly that.
+    /// a −2 applied while the level sits at the floor moves nothing, and an
+    /// intent-derived clause would announce a cut that did not occur.
+    /// `chunk_clause_reports_saturation_at_the_floor` pins that arithmetic
+    /// directly; `floor_is_one_decrease_below_the_first_ramp` pins the path the
+    /// phase machine actually takes to reach it, which is a ramp followed by two
+    /// decreases — the controller never requests a decrease at startup.
     ///
     /// How OFTEN saturation happens is deliberately not claimed here. Every
     /// previous version of this comment tried to characterise where the level

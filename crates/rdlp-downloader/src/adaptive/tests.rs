@@ -625,8 +625,8 @@ fn chunk_clause_reports_saturation_at_the_floor() {
     let mut state = ctrl.state.lock().unwrap();
     assert_eq!(
         state.current_chunk_level, MIN_CHUNK_LEVEL,
-        "precondition: the default start IS the floor, which is what makes \
-         this the common case rather than an edge case"
+        "precondition: the default start IS the floor, so this delta has \
+         nowhere to go"
     );
 
     let note = ctrl.apply_chunk_delta(&mut state, MD_CHUNK_DELTA);
@@ -730,6 +730,40 @@ fn startup_summary_reports_the_clamped_level() {
             "({}KB)",
             CHUNK_LEVELS[MIN_CHUNK_LEVEL as usize] / 1024
         )),
+        "and the byte size that goes with it, got: {summary}"
+    );
+}
+
+/// The clamp holds at the ceiling too — and that half used to panic.
+///
+/// Above-ceiling companion to `startup_summary_reports_the_clamped_level`. The
+/// pre-fix summary indexed `CHUNK_LEVELS` with the raw config value, so a level
+/// past the array's end aborted the process before the clamp could apply. This
+/// pins the case the fix's own comment cites; it fails by panic, not assertion,
+/// against the unpatched code.
+#[test]
+fn startup_summary_clamps_above_the_ceiling() {
+    let logged = Arc::new(Mutex::new(Vec::<String>::new()));
+    let above_ceiling = AdaptiveConfig {
+        initial_chunk_level: 9,
+        ..AdaptiveConfig::default()
+    };
+    let _ctrl = AdaptiveController::new(
+        1024 * 1024,
+        above_ceiling,
+        ControllerMode::HttpChunked,
+        Some(Arc::new(RecordingCallback {
+            logs: Arc::clone(&logged),
+        })),
+    );
+
+    let summary = logged.lock().expect("lock")[0].clone();
+    assert!(
+        summary.contains("chunk_level=7"),
+        "the summary must name the clamped ceiling, got: {summary}"
+    );
+    assert!(
+        summary.contains(&format!("({}KB)", CHUNK_LEVELS[7] / 1024)),
         "and the byte size that goes with it, got: {summary}"
     );
 }
