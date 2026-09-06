@@ -6,9 +6,12 @@
 
 use std::fmt;
 
+use log::{error, warn};
 use rdlp_api::RdlpApiError;
 use rdlp_redact::redact_str as redact;
 use serde::Serialize;
+
+use crate::boundary::Action;
 
 /// Frontend-facing error type for Tauri IPC commands.
 ///
@@ -83,38 +86,146 @@ pub enum AppError {
     },
 }
 
-impl From<RdlpApiError> for AppError {
-    fn from(err: RdlpApiError) -> Self {
-        match &err {
-            RdlpApiError::InvalidInput { message } => Self::InvalidInput {
-                field: "url".to_owned(),
-                message: message.clone(),
-            },
-            // `url` is a `RedactedUrlBuf`, so Display already strips
-            // credentials; bound as `safe_url` to say so at the use site.
-            RdlpApiError::UnsupportedUrl { url: safe_url } => Self::InvalidInput {
-                field: "url".to_owned(),
-                message: format!("Unsupported URL: {safe_url}"),
-            },
-            RdlpApiError::ExtractError { .. }
-            | RdlpApiError::NetworkError {
-                status: Some(404), ..
-            } => Self::ExtractionFailed {
-                message: err.user_message().into_owned(),
-            },
-            RdlpApiError::NetworkError {
-                status: Some(429), ..
-            } => Self::RateLimited {
-                retry_after_ms: Some(5000),
-            },
-            RdlpApiError::NetworkError { .. } => Self::NetworkError {
-                message: err.user_message().into_owned(),
-                retryable: err.is_retryable(),
-            },
-            _ => Self::Internal {
-                message: err.user_message().into_owned(),
-            },
+/// Map an API error to its frontend shape, without recording anything.
+///
+/// Private: the only caller is [`AppError::from_api`], which pairs this
+/// mapping with the terminal record. There is deliberately no `From`
+/// impl here — a `?`-based conversion cannot log (it has no `Action`),
+/// so `commands/formats/mod.rs:68`'s `.map_err(AppError::from)?` no
+/// longer compiles once this impl is gone. That call site is fixed in a
+/// later task, not here.
+fn map_api(err: &RdlpApiError) -> AppError {
+    match err {
+        RdlpApiError::InvalidInput { message } => AppError::InvalidInput {
+            field: "url".to_owned(),
+            message: message.clone(),
+        },
+        // `url` is a `RedactedUrlBuf`, so Display already strips
+        // credentials; bound as `safe_url` to say so at the use site.
+        RdlpApiError::UnsupportedUrl { url: safe_url } => AppError::InvalidInput {
+            field: "url".to_owned(),
+            message: format!("Unsupported URL: {safe_url}"),
+        },
+        RdlpApiError::ExtractError { .. }
+        | RdlpApiError::NetworkError {
+            status: Some(404), ..
+        } => AppError::ExtractionFailed {
+            message: err.user_message().into_owned(),
+        },
+        RdlpApiError::NetworkError {
+            status: Some(429), ..
+        } => AppError::RateLimited {
+            retry_after_ms: Some(5000),
+        },
+        RdlpApiError::NetworkError { .. } => AppError::NetworkError {
+            message: err.user_message().into_owned(),
+            retryable: err.is_retryable(),
+        },
+        _ => AppError::Internal {
+            message: err.user_message().into_owned(),
+        },
+    }
+}
+
+/// Terminal-record constructors.
+///
+/// Every one of these logs the outcome as it builds the error. That is the
+/// point: the boundary record is not something a call site can forget,
+/// because there is no path to an `AppError` that does not write one.
+/// `scripts/check-boundary-log.sh` keeps the bypass closed.
+///
+/// The record interpolates `{self}` — the constructed error — rather than the
+/// incoming `reason`, because `AppError`'s `Display` redacts every `message`
+/// (see the impl below) and the incoming value is the unwrapped one.
+impl AppError {
+    /// Record and build an invalid-input failure. WARN: user-correctable.
+    #[must_use]
+    pub fn invalid_input(action: Action<'_>, field: &str, message: impl fmt::Display) -> Self {
+        let e = Self::InvalidInput {
+            field: field.to_owned(),
+            message: message.to_string(),
+        };
+        warn!("{action} outcome=failed reason={e}");
+        e
+    }
+
+    /// Record and build an internal failure. ERROR: unexpected state.
+    #[must_use]
+    pub fn internal(action: Action<'_>, reason: impl fmt::Display) -> Self {
+        let e = Self::Internal {
+            message: reason.to_string(),
+        };
+        error!("{action} outcome=failed reason={e}");
+        e
+    }
+
+    /// Record and build a search failure. WARN: expected, user-facing.
+    #[must_use]
+    pub fn search_failed(action: Action<'_>, reason: impl fmt::Display, retryable: bool) -> Self {
+        let e = Self::SearchFailed {
+            message: reason.to_string(),
+            retryable,
+        };
+        warn!("{action} outcome=failed reason={e}");
+        e
+    }
+
+    /// Record and build a network failure. WARN: expected, user-facing.
+    #[must_use]
+    pub fn network(action: Action<'_>, reason: impl fmt::Display, retryable: bool) -> Self {
+        let e = Self::NetworkError {
+            message: reason.to_string(),
+            retryable,
+        };
+        warn!("{action} outcome=failed reason={e}");
+        e
+    }
+
+    /// Record and build an extraction failure. WARN: expected, user-facing.
+    #[must_use]
+    pub fn extraction_failed(action: Action<'_>, reason: impl fmt::Display) -> Self {
+        let e = Self::ExtractionFailed {
+            message: reason.to_string(),
+        };
+        warn!("{action} outcome=failed reason={e}");
+        e
+    }
+
+    /// Record and build a download failure. The job id travels in `action`'s
+    /// [`Subject`](crate::boundary::Subject), not as a fourth parameter.
+    #[must_use]
+    pub fn download_failed(action: Action<'_>, reason: impl fmt::Display, retryable: bool) -> Self {
+        let e = Self::DownloadFailed {
+            job_id: String::new(),
+            message: reason.to_string(),
+            retryable,
+        };
+        warn!("{action} outcome=failed reason={e}");
+        e
+    }
+
+    /// Record and build a rate-limit outcome. WARN: expected, user-facing.
+    #[must_use]
+    pub fn rate_limited(action: Action<'_>, retry_after_ms: Option<u64>) -> Self {
+        let e = Self::RateLimited { retry_after_ms };
+        warn!("{action} outcome=failed reason={e}");
+        e
+    }
+
+    /// Map an API error to its frontend shape AND record it.
+    ///
+    /// This is the recording replacement for `From<RdlpApiError>`: the `From`
+    /// impl cannot log, because it has no way to learn the action, and the
+    /// module target names `error.rs` rather than the command.
+    #[must_use]
+    pub fn from_api(action: Action<'_>, err: &RdlpApiError) -> Self {
+        let e = map_api(err);
+        if matches!(e, Self::Internal { .. }) {
+            error!("{action} outcome=failed reason={e}");
+        } else {
+            warn!("{action} outcome=failed reason={e}");
         }
+        e
     }
 }
 
@@ -221,7 +332,7 @@ mod tests {
             message: "Too Many Requests".into(),
             status: Some(429),
         };
-        let app_err = AppError::from(api_err);
+        let app_err = AppError::from_api(Action::new("test"), &api_err);
         match app_err {
             AppError::RateLimited { retry_after_ms } => {
                 assert_eq!(retry_after_ms, Some(5000));
@@ -236,7 +347,7 @@ mod tests {
             message: "Not Found".into(),
             status: Some(404),
         };
-        let app_err = AppError::from(api_err);
+        let app_err = AppError::from_api(Action::new("test"), &api_err);
         match app_err {
             AppError::ExtractionFailed { message } => {
                 assert!(message.contains("not found"), "message: {message}");
@@ -252,7 +363,7 @@ mod tests {
             message: "Service Unavailable".into(),
             status: Some(503),
         };
-        let app_err = AppError::from(api_err);
+        let app_err = AppError::from_api(Action::new("test"), &api_err);
         match app_err {
             AppError::NetworkError { retryable, message } => {
                 assert!(retryable);
@@ -267,7 +378,7 @@ mod tests {
         let api_err = RdlpApiError::UnsupportedUrl {
             url: "https://unknown.example.com/video".into(),
         };
-        let app_err = AppError::from(api_err);
+        let app_err = AppError::from_api(Action::new("test"), &api_err);
         match app_err {
             AppError::InvalidInput { field, message } => {
                 assert_eq!(field, "url");
@@ -297,7 +408,7 @@ mod tests {
             message: "page not found".into(),
             source_url: RedactedUrlBuf::from("https://example.com"),
         };
-        let app_err = AppError::from(api_err);
+        let app_err = AppError::from_api(Action::new("test"), &api_err);
         match app_err {
             AppError::ExtractionFailed { message } => {
                 assert!(message.contains("page not found"));
@@ -311,7 +422,7 @@ mod tests {
         let api_err = RdlpApiError::InvalidInput {
             message: "empty URL".into(),
         };
-        let app_err = AppError::from(api_err);
+        let app_err = AppError::from_api(Action::new("test"), &api_err);
         match app_err {
             AppError::InvalidInput { field, message } => {
                 assert_eq!(field, "url");
@@ -326,7 +437,7 @@ mod tests {
         let api_err = RdlpApiError::IoError {
             message: "disk full".into(),
         };
-        let app_err = AppError::from(api_err);
+        let app_err = AppError::from_api(Action::new("test"), &api_err);
         match app_err {
             AppError::Internal { message } => {
                 assert!(message.contains("disk full"));
@@ -402,5 +513,125 @@ mod tests {
             dbg.contains("retryable"),
             "Debug dropped a field Display omits: {dbg}"
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod boundary_record_tests {
+    use super::AppError;
+    use crate::boundary::{Action, Subject};
+
+    /// Exactly one record, at WARN, carrying the full field vocabulary.
+    #[test]
+    fn a_constructed_boundary_error_records_once_at_warn() {
+        testing_logger::setup();
+        let err = AppError::search_failed(Action::new("search"), "upstream 503", true);
+
+        testing_logger::validate(|captured| {
+            let warns: Vec<_> = captured
+                .iter()
+                .filter(|l| l.level == log::Level::Warn)
+                .collect();
+            assert_eq!(warns.len(), 1, "exactly one terminal record");
+            let body = warns.first().map_or("", |l| l.body.as_str());
+            assert!(body.contains("action=search"), "names the action: {body}");
+            assert!(
+                body.contains("outcome=failed"),
+                "states the outcome: {body}"
+            );
+            assert!(body.contains("upstream 503"), "names the reason: {body}");
+        });
+
+        assert!(matches!(
+            err,
+            AppError::SearchFailed {
+                retryable: true,
+                ..
+            }
+        ));
+    }
+
+    /// `Internal` is the unexpected-state variant, so it is the one that
+    /// reaches ERROR. Everything else stays at WARN.
+    #[test]
+    fn an_internal_error_records_at_error_not_warn() {
+        testing_logger::setup();
+        let _ = AppError::internal(Action::new("save_settings"), "poisoned lock");
+
+        testing_logger::validate(|captured| {
+            assert_eq!(
+                captured
+                    .iter()
+                    .filter(|l| l.level == log::Level::Error)
+                    .count(),
+                1,
+                "internal state failure is ERROR"
+            );
+            assert_eq!(
+                captured
+                    .iter()
+                    .filter(|l| l.level == log::Level::Warn)
+                    .count(),
+                0,
+                "and is not ALSO recorded at WARN"
+            );
+        });
+    }
+
+    /// The record is redacted because `AppError`'s Display is, not because
+    /// the constructor remembered to redact. Mutating the constructor to log
+    /// the raw `reason` instead of `{self}` must fail this test.
+    #[test]
+    fn a_credential_in_the_reason_is_redacted_in_the_record() {
+        testing_logger::setup();
+        let _ = AppError::network(
+            Action::new("analyze"),
+            "connect failed for https://user:hunter2@example.com/v",
+            true,
+        );
+
+        testing_logger::validate(|captured| {
+            let body = captured.first().map_or("", |l| l.body.as_str());
+            assert!(
+                !body.contains("hunter2"),
+                "credential reached the log: {body}"
+            );
+        });
+    }
+
+    /// A job id travels as a Subject, not as a fourth parameter.
+    #[test]
+    fn a_download_failure_names_its_job() {
+        testing_logger::setup();
+        let _ = AppError::download_failed(
+            Action::with_subject("download", Subject::Job("job-7")),
+            "disk full",
+            false,
+        );
+
+        testing_logger::validate(|captured| {
+            let body = captured.first().map_or("", |l| l.body.as_str());
+            assert!(body.contains("job_id=job-7"), "names the job: {body}");
+        });
+    }
+
+    /// `from_api` maps AND records, so a `?`-converted API error cannot reach
+    /// the frontend unrecorded.
+    #[test]
+    fn from_api_records_the_mapped_outcome() {
+        testing_logger::setup();
+        let api = rdlp_api::RdlpApiError::InvalidInput {
+            message: "bad url".to_owned(),
+        };
+        let err = AppError::from_api(Action::new("analyze"), &api);
+
+        testing_logger::validate(|captured| {
+            assert_eq!(captured.len(), 1, "exactly one record");
+            let body = captured.first().map_or("", |l| l.body.as_str());
+            assert!(body.contains("action=analyze"), "got: {body}");
+            assert!(body.contains("outcome=failed"), "got: {body}");
+        });
+        assert!(matches!(err, AppError::InvalidInput { .. }));
     }
 }

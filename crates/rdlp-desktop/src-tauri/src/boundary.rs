@@ -14,13 +14,6 @@ use rdlp_redact::RedactedUrl;
 /// The `Url` arm holds a [`RedactedUrl`] rather than a `&str` so a raw URL
 /// cannot reach a record through this path — records persist to a file on
 /// disk, so a credential in one outlives the session that wrote it.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired to real call sites in Task 2 of #695; self-cleaning once used outside tests"
-    )
-)]
 #[derive(Clone, Copy)]
 pub enum Subject<'a> {
     /// No subject worth naming.
@@ -35,26 +28,12 @@ pub enum Subject<'a> {
 }
 
 /// What the boundary was doing when the outcome occurred.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired to real call sites in Task 2 of #695; self-cleaning once used outside tests"
-    )
-)]
 #[derive(Clone, Copy)]
 pub struct Action<'a> {
     name: &'a str,
     subject: Subject<'a>,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired to real call sites in Task 2 of #695; self-cleaning once used outside tests"
-    )
-)]
 impl<'a> Action<'a> {
     /// An action with no subject.
     #[must_use]
