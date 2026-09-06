@@ -11,6 +11,7 @@ use rdlp_api::request::NetworkOptions;
 
 use crate::error::AppError;
 use crate::state::AppSettings;
+use rdlp_types::boundary::Action;
 
 /// Build the [`NetworkOptions`] the persisted settings imply, validating the
 /// proxy at the IPC boundary.
@@ -63,10 +64,13 @@ pub(crate) fn settings_network_options(settings: &AppSettings) -> Result<Network
 /// back to no proxy on failure, so this is not the security boundary — it is
 /// what turns that silent fallback into an error the operator can act on.
 pub(crate) fn validate_proxy(proxy: &str) -> Result<(), AppError> {
-    rdlp_security::validate_proxy_url(proxy).map_err(|e| AppError::InvalidInput {
-        field: "proxy".to_owned(),
-        message: e.to_string(),
-    })
+    // `validate_proxy`, not `network_check`: the action names the operation
+    // that failed, and nothing in the tree is called `network_check`. This
+    // fires wherever settings are turned into `NetworkOptions` — analyze,
+    // search, and download — so the action is the only thing in the record
+    // that says which check refused.
+    rdlp_security::validate_proxy_url(proxy)
+        .map_err(|e| AppError::invalid_input(Action::new("validate_proxy"), "proxy", e))
 }
 
 #[cfg(test)]

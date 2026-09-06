@@ -4,9 +4,11 @@
 //! and the error exit helper.
 
 use anyhow::{Context, Result};
-use log::{error, warn};
+use log::{debug, error, warn};
 use rdlp_api::InfoDict;
 use rdlp_api::RdlpApiError;
+use rdlp_redact::text::sanitize_for_terminal;
+use rdlp_types::boundary::{Action, failure_record};
 
 /// Print all supported codecs
 pub fn print_codecs() {
@@ -104,11 +106,89 @@ pub const fn exit_code_for(e: &RdlpApiError) -> i32 {
     }
 }
 
-/// Log an `RdlpApiError` and exit with the appropriate structured code.
-pub fn fail_with(e: &RdlpApiError, verbose: bool) -> ! {
-    error!("Error: {e}");
+/// Emit the CLI's terminal record for a failed action.
+///
+/// Split from [`fail_with`] so it is testable — `fail_with` is `-> !` and
+/// exits the process. `e`'s Display is redacted per variant, so the reason
+/// carries no credential.
+///
+/// `action` is an [`Action`], not a `&str`: the vocabulary is shared with the
+/// desktop boundary so a call site cannot hand-roll `&format!("download
+/// {url}")` and slip an unredacted subject into the record. A bare `&str`
+/// does not compile.
+///
+/// `verbose`'s DEBUG line is a second record of the SAME causal event the
+/// ERROR line above it already carries — the convention forbids two records
+/// at ERROR for one outcome, so it is demoted to DEBUG rather than dropped.
+pub fn record_failure(action: Action<'_>, e: &RdlpApiError, verbose: bool) {
+    error!("{}", failure_record(&action, e));
     if verbose {
-        error!("Debug info: {e:?}");
+        // Same control-character strip `failure_record` applies to the line
+        // above: `Debug` redacts credentials but leaves an `ESC` or a newline
+        // from a remote-derived message intact, and this one goes to a TTY.
+        debug!(
+            "{action} outcome=failed detail={}",
+            sanitize_for_terminal(&format!("{e:?}"))
+        );
     }
+}
+
+/// Log an `RdlpApiError` and exit with the appropriate structured code.
+pub fn fail_with(action: Action<'_>, e: &RdlpApiError, verbose: bool) -> ! {
+    record_failure(action, e, verbose);
     std::process::exit(exit_code_for(e))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use rdlp_types::boundary::Action;
+
+    /// The CLI's terminal record carries the same vocabulary as the desktop's.
+    #[test]
+    fn the_cli_terminal_record_names_action_and_outcome() {
+        testing_logger::setup();
+        let err = rdlp_api::RdlpApiError::InvalidInput {
+            message: "bad url".to_owned(),
+        };
+        super::record_failure(Action::new("analyze"), &err, false);
+
+        testing_logger::validate(|captured| {
+            let errs: Vec<_> = captured
+                .iter()
+                .filter(|l| l.level == log::Level::Error)
+                .collect();
+            assert_eq!(errs.len(), 1, "exactly one terminal record");
+            let body = errs.first().map_or("", |l| l.body.as_str());
+            assert!(body.contains("action=analyze"), "got: {body}");
+            assert!(body.contains("outcome=failed"), "got: {body}");
+            assert!(body.contains("bad url"), "got: {body}");
+        });
+    }
+
+    /// The verbose detail line is a SECOND record of the same causal event,
+    /// so it must never land at ERROR alongside the terminal record — that
+    /// would be two ERROR-level records for one outcome, which is the
+    /// duplicate the ERROR-to-DEBUG demotion exists to prevent.
+    #[test]
+    fn verbose_detail_is_recorded_at_debug_not_a_second_error() {
+        testing_logger::setup();
+        let err = rdlp_api::RdlpApiError::InvalidInput {
+            message: "bad url".to_owned(),
+        };
+        super::record_failure(Action::new("analyze"), &err, true);
+
+        testing_logger::validate(|captured| {
+            let errs = captured
+                .iter()
+                .filter(|l| l.level == log::Level::Error)
+                .count();
+            let debugs = captured
+                .iter()
+                .filter(|l| l.level == log::Level::Debug)
+                .count();
+            assert_eq!(errs, 1, "exactly one terminal record at ERROR");
+            assert_eq!(debugs, 1, "exactly one detail record at DEBUG");
+        });
+    }
 }

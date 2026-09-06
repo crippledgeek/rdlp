@@ -7,7 +7,10 @@
 
 use tauri::ipc::Response;
 
+use rdlp_redact::RedactedUrl;
+
 use crate::error::AppError;
+use rdlp_types::boundary::{Action, Subject};
 
 /// Maximum response body size (5 MB).
 const MAX_BODY_SIZE: usize = 5 * 1024 * 1024;
@@ -87,22 +90,25 @@ fn derive_referer(url: &str) -> Option<String> {
 /// # Errors
 ///
 /// Returns [`AppError::InvalidInput`] if the URL is not HTTPS.
-/// Returns [`AppError::Internal`] on network failures, timeouts, or
-/// if the response exceeds `MAX_BODY_SIZE`.
+/// Returns [`AppError::NetworkError`] on a transport failure, timeout, or
+/// non-success status, and [`AppError::Internal`] (recorded at WARN, via
+/// `AppError::environment`) if the response exceeds `MAX_BODY_SIZE`.
 #[tauri::command]
 pub async fn proxy_thumbnail(url: String) -> Result<Response, AppError> {
+    let action = || Action::with_subject("fetch_thumbnail", Subject::Url(RedactedUrl::new(&url)));
+
     // Validate HTTPS
     if !url.starts_with("https://") {
-        return Err(AppError::InvalidInput {
-            field: "url".to_owned(),
-            message: "Thumbnail proxy only supports HTTPS URLs".to_owned(),
-        });
+        return Err(AppError::invalid_input(
+            action(),
+            "url",
+            "thumbnail proxy only supports HTTPS URLs",
+        ));
     }
 
     // SSRF gate: block requests to private/internal hosts.
-    rdlp_security::validate_url_security(&url).map_err(|e| AppError::InvalidInput {
-        field: "url".to_owned(),
-        message: format!("Thumbnail URL failed security validation: {e}"),
+    rdlp_security::validate_url_security(&url).map_err(|e| {
+        AppError::invalid_input(action(), "url", format!("failed security validation: {e}"))
     })?;
 
     let referer = derive_referer(&url).unwrap_or_default();
@@ -120,36 +126,45 @@ pub async fn proxy_thumbnail(url: String) -> Result<Response, AppError> {
         .header(wreq::header::REFERER, &referer)
         .send()
         .await
-        .map_err(|e| AppError::Internal {
-            message: format!("Thumbnail fetch failed: {e}"),
-        })?;
+        // A CDN that refuses, times out, or resets IS a network failure —
+        // `network` records it at WARN and tells the frontend it may retry.
+        .map_err(|e| AppError::network(action(), e, true))?;
 
-    if !resp.status().is_success() {
-        return Err(AppError::Internal {
-            message: format!("Thumbnail fetch returned HTTP {}", resp.status().as_u16()),
-        });
+    let status = resp.status();
+    if !status.is_success() {
+        return Err(AppError::network(
+            action(),
+            format!("thumbnail fetch returned HTTP {}", status.as_u16()),
+            // Retryable for a 5xx; a 403/404 will not become a 200.
+            status.is_server_error(),
+        ));
     }
 
     // Check Content-Length if available
     if let Some(len) = resp.content_length()
         && usize::try_from(len).is_ok_and(|l| l > MAX_BODY_SIZE)
     {
-        return Err(AppError::Internal {
-            message: format!("Thumbnail too large: {len} bytes (max {MAX_BODY_SIZE})"),
-        });
+        // A cap WE impose being hit is not an internal bug: `environment`
+        // records it at WARN.
+        return Err(AppError::environment(
+            action(),
+            format!("thumbnail too large: {len} bytes (max {MAX_BODY_SIZE})"),
+        ));
     }
 
-    let bytes = resp.bytes().await.map_err(|e| AppError::Internal {
-        message: format!("Failed to read thumbnail body: {e}"),
-    })?;
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| AppError::network(action(), e, true))?;
 
     if bytes.len() > MAX_BODY_SIZE {
-        return Err(AppError::Internal {
-            message: format!(
-                "Thumbnail too large: {} bytes (max {MAX_BODY_SIZE})",
+        return Err(AppError::environment(
+            action(),
+            format!(
+                "thumbnail too large: {} bytes (max {MAX_BODY_SIZE})",
                 bytes.len()
             ),
-        });
+        ));
     }
 
     Ok(Response::new(bytes.to_vec()))
@@ -158,6 +173,26 @@ pub async fn proxy_thumbnail(url: String) -> Result<Response, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A thumbnail fetch failure names its URL, redacted.
+    #[test]
+    fn a_thumbnail_failure_records_a_redacted_url() {
+        testing_logger::setup();
+        let raw = "https://user:hunter2@cdn.example.com/t.jpg";
+        let _ = AppError::network(
+            Action::with_subject("fetch_thumbnail", Subject::Url(RedactedUrl::new(raw))),
+            "connection reset",
+            true,
+        );
+
+        testing_logger::validate(|captured| {
+            let body = captured.first().map_or("", |l| l.body.as_str());
+            assert!(body.contains("action=fetch_thumbnail"), "got: {body}");
+            assert!(body.contains("outcome=failed"), "got: {body}");
+            assert!(body.contains("url="), "names the url: {body}");
+            assert!(!body.contains("hunter2"), "credential leaked: {body}");
+        });
+    }
 
     #[test]
     fn test_derive_referer_standard_url() {

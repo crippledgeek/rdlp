@@ -142,7 +142,7 @@ impl Orchestrator {
                 // `...exe.jpg`). These are category `Cf`, not `Cc`, so the control
                 // filter above does not catch them (#487). The zero-width joiner
                 // U+200D — also `Cf`, load-bearing for emoji — is intentionally kept.
-                if rdlp_security::text::is_bidi_control(c) {
+                if rdlp_redact::text::is_bidi_control(c) {
                     return None;
                 }
                 // Normalize non-ASCII whitespace (e.g. U+00A0 NO-BREAK SPACE from

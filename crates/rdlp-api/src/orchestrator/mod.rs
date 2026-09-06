@@ -376,7 +376,7 @@ impl Orchestrator {
     /// - `Ok(Some(path))` - Download completed successfully
     /// - `Ok(None)` - User cancelled operation
     /// - `Err` - Error occurred during any phase
-    #[instrument(skip(self), fields(url = %url))]
+    #[instrument(level = "debug", skip(self), fields(url = %rdlp_redact::RedactedUrl::new(url)))]
     async fn download_inner(&self, url: &str, interactive: bool) -> Result<Option<PathBuf>> {
         // Try playlist extraction first to check if this is a playlist
         let infos = self.extract_playlist(url).await?;
@@ -616,6 +616,95 @@ mod download_split_tests {
         o: &Orchestrator,
     ) -> impl std::future::Future<Output = Result<Option<std::path::PathBuf>>> + '_ {
         o.download_interactive("https://example.test")
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::items_after_test_module, clippy::unwrap_used)]
+mod download_inner_logging_tests {
+    use super::*;
+    use crate::events::Event;
+    use crate::handle::DownloadId;
+    use std::io;
+    use std::sync::{Arc, Mutex};
+    use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
+    use tracing_subscriber::fmt::MakeWriter;
+
+    #[derive(Clone, Default)]
+    struct CapturedOutput(Arc<Mutex<Vec<u8>>>);
+
+    impl io::Write for CapturedOutput {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for CapturedOutput {
+        type Writer = Self;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    fn test_orchestrator() -> Orchestrator {
+        let config = Arc::new(rdlp_types::Config::default());
+        let (tx, _rx) = mpsc::channel::<Event>(64);
+        let id = DownloadId::next();
+        let token = CancellationToken::new();
+        Orchestrator::new(config, tx, id, token, None)
+    }
+
+    /// `download_inner` was the third site carrying the same anti-pattern as
+    /// `extraction.rs`'s two spans — found by security review, not by the
+    /// original sweep. Coverage lives per-span rather than per-file for
+    /// exactly this reason: a file-level test would have stopped at two.
+    #[test]
+    fn the_download_inner_span_is_debug_and_redacted_in_real_output() {
+        let captured = CapturedOutput::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(captured.clone())
+            .with_max_level(tracing::Level::TRACE)
+            .with_ansi(false)
+            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NEW)
+            .finish();
+
+        let orchestrator = test_orchestrator();
+        let raw = "https://user:hunter2@example.invalid/v";
+
+        tracing::subscriber::with_default(subscriber, || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            rt.block_on(async {
+                let _ = orchestrator.download_inner(raw, false).await;
+            });
+        });
+
+        let output = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+        assert!(
+            output.contains("download_inner"),
+            "expected the span in the captured output: {output}"
+        );
+        assert!(
+            !output.contains("hunter2"),
+            "raw credential leaked into the span's recorded output: {output}"
+        );
+        assert!(
+            !output.contains("INFO"),
+            "expected the span at DEBUG, found an INFO record: {output}"
+        );
+        assert!(
+            output.contains("DEBUG"),
+            "expected at least one DEBUG-level record for the span: {output}"
+        );
     }
 }
 

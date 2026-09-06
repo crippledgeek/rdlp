@@ -13,6 +13,7 @@ use rdlp_api::{
 use crate::commands::network::settings_network_options;
 use crate::error::AppError;
 use crate::state::AppState;
+use rdlp_types::boundary::Action;
 
 /// Sanitize a user-provided query string.
 ///
@@ -20,14 +21,14 @@ use crate::state::AppState;
 /// length to 500 characters to prevent oversized or malformed queries from
 /// reaching the backend.
 ///
-/// Bidi-control stripping ([`rdlp_security::text::is_bidi_control`]) keeps this
+/// Bidi-control stripping ([`rdlp_redact::text::is_bidi_control`]) keeps this
 /// boundary consistent with the terminal and filesystem sanitizers; the
 /// zero-width joiner `U+200D` that legitimate emoji depend on is preserved.
 fn sanitize_query(input: &str) -> String {
     input
         .trim()
         .chars()
-        .filter(|c| !c.is_control() && !rdlp_security::text::is_bidi_control(*c))
+        .filter(|c| !c.is_control() && !rdlp_redact::text::is_bidi_control(*c))
         .take(500)
         .collect()
 }
@@ -65,10 +66,11 @@ pub async fn search_content(
     let sanitized = sanitize_query(&query);
     let has_category = filters.iter().any(|f| f.key == "category");
     if sanitized.is_empty() && !has_category {
-        return Err(AppError::InvalidInput {
-            field: "query".to_owned(),
-            message: "Search query must not be empty".to_owned(),
-        });
+        return Err(AppError::invalid_input(
+            Action::new("search"),
+            "query",
+            "search query must not be empty",
+        ));
     }
 
     // The shared client was built once from `config.toml`; the GUI's network
@@ -96,9 +98,9 @@ pub async fn search_content(
             .client
             .search_page(&site, &search_query, &network)
             .await
-            .map_err(|e| AppError::SearchFailed {
-                message: e.to_string(),
-                retryable: e.is_retryable(),
+            .map_err(|e| {
+                let retryable = e.is_retryable();
+                AppError::search_failed(Action::new("search"), e, retryable)
             })
     } else {
         // Collect-all mode: existing behavior, capped at 40
@@ -113,9 +115,9 @@ pub async fn search_content(
             .client
             .search(&site, &search_query, &network)
             .await
-            .map_err(|e| AppError::SearchFailed {
-                message: e.to_string(),
-                retryable: e.is_retryable(),
+            .map_err(|e| {
+                let retryable = e.is_retryable();
+                AppError::search_failed(Action::new("search"), e, retryable)
             })?;
 
         Ok(SearchPageResponse {
@@ -161,9 +163,9 @@ pub async fn enrich_search_result(
         .client
         .enrich_search_result(&site, preview, &network)
         .await
-        .map_err(|e| AppError::SearchFailed {
-            message: e.to_string(),
-            retryable: e.is_retryable(),
+        .map_err(|e| {
+            let retryable = e.is_retryable();
+            AppError::search_failed(Action::new("enrich_search_result"), e, retryable)
         })
 }
 
@@ -209,15 +211,30 @@ pub async fn search_filters(
     state
         .client
         .search_filters(&site)
-        .map_err(|e| AppError::InvalidInput {
-            field: "site".to_owned(),
-            message: e.to_string(),
-        })
+        .map_err(|e| AppError::invalid_input(Action::new("search_filters"), "site", e))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every search failure is recorded — this path had none at all.
+    #[test]
+    fn a_search_failure_is_recorded() {
+        testing_logger::setup();
+        let _ = AppError::search_failed(Action::new("search"), "cloudflare challenge", true);
+
+        testing_logger::validate(|captured| {
+            let warns: Vec<_> = captured
+                .iter()
+                .filter(|l| l.level == log::Level::Warn)
+                .collect();
+            assert_eq!(warns.len(), 1, "exactly one terminal record");
+            let body = warns.first().map_or("", |l| l.body.as_str());
+            assert!(body.contains("action=search"), "got: {body}");
+            assert!(body.contains("cloudflare challenge"), "got: {body}");
+        });
+    }
 
     #[test]
     fn test_sanitize_query_trims() {

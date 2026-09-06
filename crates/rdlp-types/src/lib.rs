@@ -25,6 +25,7 @@
 #![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 
 pub mod audio_format;
+pub mod boundary;
 pub mod browser_emulation;
 pub mod browser_type;
 pub mod config;
@@ -53,6 +54,7 @@ pub mod vpx_deadline;
 
 // Re-export main types
 pub use audio_format::AudioFormat;
+pub use boundary::{Action, Subject};
 pub use browser_emulation::BrowserEmulation;
 pub use browser_type::BrowserType;
 pub use config::{Config, ConfigValidationError};

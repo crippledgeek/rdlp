@@ -86,7 +86,7 @@ impl InfoExtractor for GenericExtractor {
         })?;
 
         let domain = parsed_url.host_str().unwrap_or("unknown");
-        log::info!(
+        log::debug!(
             "No site-specific extractor for {}, trying generic extraction",
             domain
         );

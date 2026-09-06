@@ -52,6 +52,7 @@ wiremock = "0.6"
 async-trait = { workspace = true }
 regex = { workspace = true }
 rdlp-plugin-manifest = { path = "../rdlp-plugin-manifest" }
+testing_logger = "0.1.1"
 
 # `indexing_slicing`, `pedantic`, and `nursery` are applied binary-only
 # via `#![warn(...)]` in `src/main.rs` and `src/lib.rs` — do NOT lift
