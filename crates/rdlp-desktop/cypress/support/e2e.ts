@@ -17,6 +17,29 @@ import "cypress-axe";
  */
 type InvokeHandler = (args: Record<string, unknown>) => unknown;
 
+/**
+ * Commands that fell through to the unregistered-command fallback during the
+ * current test. Asserted empty in `afterEach` — see the comment there for why
+ * rejecting alone is not enough to surface a harness gap.
+ */
+const unregisteredCommands = new Set<string>();
+
+/**
+ * The error both report paths raise — the invoke fallback (which rejects the
+ * call) and the `afterEach` gate (which fails the test). One builder rather
+ * than two message literals: they state the same fact, so a change to the
+ * guidance has to reach both by construction.
+ */
+function unregisteredCommandError(commands: readonly string[]): Error {
+    const subject =
+        commands.length === 1 ? "command" : `${commands.length} commands`;
+    return new Error(
+        `[Tauri mock] Unregistered ${subject} invoked: ${commands.join(", ")}. ` +
+            `Register a handler in cypress/support/e2e.ts, or pass one via ` +
+            `setupTauriMock()/cy.visitWithMock() overrides.`,
+    );
+}
+
 const defaultHandlers: Record<string, InvokeHandler> = {
     search_providers: () => [
         { name: "redtube", display_name: "RedTube" },
@@ -134,20 +157,45 @@ const defaultHandlers: Record<string, InvokeHandler> = {
         duration: 600,
     }),
 
+    // Search results render <Thumbnail>, which routes every external HTTPS URL
+    // straight through the Rust proxy (Thumbnail.tsx:54) rather than attempting
+    // a direct <img> load. Unregistered, this fell through the fallback: the
+    // old one fabricated a null that `new Uint8Array(null)` turned into an
+    // empty blob, so the thumbnails were broken images the specs never noticed.
+    //
+    // Real bytes, not an empty buffer — a 1x1 transparent PNG — so the <img>
+    // actually decodes. There is no safety net if it does not: the proxy-success
+    // branch renders a bare <img> with no onError (Thumbnail.tsx:133), and the
+    // bg-muted placeholder needs `proxyFailed` from the QUERY, which a decode
+    // failure never sets. An undecodable blob is therefore a permanently broken
+    // image that no assertion here can tell apart from a rendered one.
+    proxy_thumbnail: () => {
+        const PNG_1X1_BASE64 =
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk" +
+            "YPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
+        const binary = atob(PNG_1X1_BASE64);
+        const bytes = new Uint8Array(binary.length);
+        for (let i = 0; i < binary.length; i++) {
+            bytes[i] = binary.charCodeAt(i);
+        }
+        return bytes.buffer;
+    },
+
     start_download: () => "job-test-123",
 
     queue: () => [],
 
-    get_history: () => [],
-
-    // Registered so the Settings view has codec data. Unregistered, these fell
-    // through to the `Promise.resolve(null)` fallback below — and null is a
-    // value the real contract cannot produce: both commands are INFALLIBLE,
-    // returning a plain `Vec<_>` (src-tauri/src/commands/codecs.rs:15,27), so
-    // not even an error path yields one. `SystemSection` destructures with
-    // `= []`, which defaults only on undefined, so the fabricated null reached
-    // `.length` and crashed the whole Settings view. The a11y spec failed on
-    // that, and it read as an app bug rather than a harness one.
+    // Registered so the Settings view has codec data. Unregistered, these once
+    // fell through to a fallback that resolved `null` — a value the real
+    // contract cannot produce: both commands are INFALLIBLE, returning a plain
+    // `Vec<_>` (src-tauri/src/commands/codecs.rs:15,27), so not even an error
+    // path yields one. `SystemSection` defaulted with a `= []` destructuring,
+    // which fires only on undefined, so the fabricated null reached `.length`
+    // and crashed the whole Settings view; the a11y spec failed on it and it
+    // read as an app bug rather than a harness one (#709). Both halves of that
+    // are now fixed — the section uses `?? []` and the fallback rejects — so
+    // this registration is what keeps the section MOUNTED, not what keeps it
+    // from crashing.
     //
     // These return one codec each rather than `[]` ON PURPOSE. `SystemSection`
     // opens with `if (codecs.length === 0) return null`, so an empty array
@@ -227,9 +275,20 @@ function setupTauriMock(
                     return Promise.reject(err);
                 }
             }
-            // Unhandled commands resolve to null to prevent test hangs
-            cy.log(`[Tauri mock] Unhandled command: ${command}`);
-            return Promise.resolve(null);
+            // An unregistered command REJECTS, mirroring what the real Tauri
+            // runtime does when a command is not on the invoke_handler. The
+            // previous fallback resolved `null` for every command alike, and
+            // for a VALUE-RETURNING one that is a value the contract cannot
+            // produce — it returns a concrete type or an error. (The void
+            // commands genuinely do resolve null: `update_settings` above is a
+            // faithful fixture for `Result<(), AppError>`. They were never the
+            // problem; blanketing them together was.) `invokeTyped<T>` does not
+            // validate `T`, so the fabricated null flowed into component code
+            // typed as if it could not exist, crashed the whole Settings view
+            // once (#709), and read as an application bug for long enough to
+            // nearly ship a fourteen-site sweep for it.
+            unregisteredCommands.add(command);
+            return Promise.reject(unregisteredCommandError([command]));
         },
         // Additional internals stubs that Tauri plugins may read
         transformCallback(callback: (data: unknown) => void, once?: boolean): number {
@@ -257,11 +316,34 @@ function setupTauriMock(
 // ---------------------------------------------------------------------------
 
 beforeEach(() => {
+    unregisteredCommands.clear();
     cy.visit("/", {
         onBeforeLoad(win) {
             setupTauriMock(win);
         },
     });
+});
+
+// Rejecting is necessary but NOT sufficient to surface a harness gap, and this
+// was measured rather than assumed: unregistering `available_codecs` and
+// running the a11y spec against the rejecting fallback left all 8 tests GREEN.
+// The rejection lands in a TanStack Query error state, `data` is undefined,
+// `SystemSection` falls to `?? []` and returns null on the empty check — so the
+// section simply vanishes and nothing asserts on its absence. Silent in a
+// different way than the fabricated null was, but still silent.
+//
+// So the fallback also fails the run, naming the command. Note the blast
+// radius: this is a Mocha HOOK failure, so it aborts the remaining tests in
+// the describe rather than failing only the test that provoked it. That is
+// the right trade for a harness gate — every one of those tests was running
+// against a stub with a hole in it — but it is wider than one test, and the
+// aborted tests are reported as skipped rather than failed.
+afterEach(() => {
+    const missing = [...unregisteredCommands];
+    unregisteredCommands.clear();
+    if (missing.length > 0) {
+        throw unregisteredCommandError(missing);
+    }
 });
 
 // ---------------------------------------------------------------------------
