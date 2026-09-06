@@ -43,8 +43,20 @@ strictDepBuilds: true
 # depends on 0.4.3 — verified with `pnpm why`, and by measuring the built bundle.
 overrides:
   # `^0.5.0`, not `>=0.5.0`: an open-ended floor would silently adopt a future
-  # 0.6/1.0 whose API form-core may not match. This line is a behaviour fix, so
-  # it should track a version pair that was actually tested together. If
-  # form-core later requires a newer line, this override will conflict loudly
-  # rather than resolve to something unverified.
+  # 0.6/1.0 whose API form-core may not match. This line changes runtime
+  # behaviour, so it should track a pair that was actually tested together.
+  #
+  # Nothing will tell you when that stops being true. An override is an
+  # UNCONDITIONAL replacement — pnpm neither errors nor warns when the forced
+  # version falls outside a dependent's declared range. This entry is its own
+  # proof: form-core declares `^0.4.1`, which for a 0.x package excludes 0.5.0
+  # entirely, and the install resolves silently anyway. So if form-core later
+  # moves to `^0.6.0`, this line will quietly DOWNGRADE it rather than
+  # complain. The failure mode is staleness, not conflict — hence the revisit
+  # trigger recorded in crates/rdlp-desktop/CLAUDE.md.
+  #
+  # One assumption holds the whole thing up: that consumers import the package
+  # ROOT, which is what carries the NODE_ENV switch. 0.5.0 also publishes a
+  # `/production` subpath that deliberately re-exports the REAL client and is
+  # never stripped. Anything importing that subpath silently defeats this.
   "@tanstack/devtools-event-client": "^0.5.0"
