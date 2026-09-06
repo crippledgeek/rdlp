@@ -1,64 +1,17 @@
 // LogViewer: virtualized monospace log viewer.
-// Uses TanStack Virtual for rows, ref-based ring buffer (max 5000 entries).
-// Subscribes to download log events via a shared log buffer.
+// Uses TanStack Virtual for rows.
+//
+// The entries themselves live in `stores/logStore`, alongside the app's other
+// TanStack stores, because two event registrars write to them and this
+// component only reads.
 
-import {
-    useRef,
-    useState,
-    useCallback,
-    useEffect,
-    useSyncExternalStore,
-} from "react";
+import { useRef, useState, useCallback, useEffect } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { useStore } from "@tanstack/react-store";
 import { X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-
-// ─── Ring buffer ────────────────────────────────────────────────────────────
-
-export interface LogEntry {
-    id: number;
-    timestamp: number;
-    level: "info" | "warn" | "debug" | "error";
-    jobId: string | null;
-    message: string;
-}
-
-const MAX_ENTRIES = 5000;
-
-let _entries: LogEntry[] = [];
-let _nextId = 0;
-const _listeners = new Set<() => void>();
-
-function _notify() {
-    for (const l of _listeners) l();
-}
-
-export function appendLog(
-    level: LogEntry["level"],
-    message: string,
-    jobId: string | null = null,
-): void {
-    const entry: LogEntry = { id: _nextId++, timestamp: Date.now(), level, jobId, message };
-    _entries = _entries.length >= MAX_ENTRIES
-        ? [..._entries.slice(_entries.length - MAX_ENTRIES + 1), entry]
-        : [..._entries, entry];
-    _notify();
-}
-
-export function clearLogs(): void {
-    _entries = [];
-    _notify();
-}
-
-function subscribeToLogs(cb: () => void): () => void {
-    _listeners.add(cb);
-    return () => _listeners.delete(cb);
-}
-
-function getLogSnapshot(): LogEntry[] {
-    return _entries;
-}
+import { logStore, clearLogs } from "@/stores/logStore";
 
 // ─── Component ───────────────────────────────────────────────────────────────
 
@@ -92,7 +45,7 @@ function formatTime(ts: number): string {
 }
 
 export function LogViewer() {
-    const allEntries = useSyncExternalStore(subscribeToLogs, getLogSnapshot);
+    const allEntries = useStore(logStore, (state) => state.entries);
     const [activeFilters, setActiveFilters] = useState<Set<SeverityFilter>>(
         new Set(["info", "warn", "error", "debug"]),
     );
