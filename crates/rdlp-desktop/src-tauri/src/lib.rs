@@ -127,18 +127,38 @@ pub fn run() {
         // depended on `log` with no backend at all, so every `info!`/`warn!`
         // in the desktop crate was discarded.
         //
-        // `Stdout` covers `pnpm tauri dev`; `LogDir` gives a file to attach to
-        // a bug report, at `$XDG_DATA_HOME/com.rdlp.desktop/logs` on Linux,
-        // rotated by the plugin's own `max_file_size` handling. `Webview`
-        // forwards records to the devtools console, where a frontend bug is
-        // usually being read anyway — `main.tsx` calls `attachConsole()` to
-        // receive them. That is an event listener, not a plugin command, so it
-        // needs no `log:` capability entry.
+        // Two sinks, and deliberately no stdout one. `LogDir` gives a file to
+        // attach to a bug report, at `$XDG_DATA_HOME/com.rdlp.desktop/logs` on
+        // Linux, rotated by the plugin's own `max_file_size` handling.
+        // `Webview` emits each record as the `log://log` event, which has two
+        // subscribers: `events/registerLogEvents.ts` feeds the in-app Log
+        // Viewer, and `main.tsx` calls `attachConsole()` to mirror records into
+        // the devtools console. Both are event listeners rather than plugin
+        // commands, so neither needs a `log:` capability entry.
+        //
+        // A terminal is not one of the places a desktop user reads logs: under
+        // a bundled launch there is no attached console at all, so the records
+        // a `Stdout` target wrote were discarded everywhere except
+        // `pnpm tauri dev`. The Log Viewer is the surface that replaces it, and
+        // until it subscribed to `log://log` it showed only per-job
+        // `download-log` messages — no facade record had ever reached it.
         .plugin(
             tauri_plugin_log::Builder::new()
                 .targets([
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
-                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
+                    // Formatted for a pane that renders its own timestamp and
+                    // level badge: emitting the builder's default
+                    // `[date][time][target][LEVEL] msg` would print both twice
+                    // in every row. The target survives because it is the one
+                    // part the pane cannot recover — which crate spoke.
+                    //
+                    // Applied per-target, so `LogDir` below keeps the full
+                    // default prefix. A file has no surrounding UI to carry
+                    // that context.
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview).format(
+                        |out, message, record| {
+                            out.finish(format_args!("[{}] {message}", record.target()));
+                        },
+                    ),
                     tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
                         file_name: None,
                     }),

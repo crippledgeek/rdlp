@@ -15,6 +15,7 @@ import type {
     DownloadOptions,
     DownloadProgressPayload,
     FormatListResponse,
+    LogRecordPayload,
     PostProcessProgressPayload,
     SearchFilter,
     SearchFilterDescriptor,
@@ -142,6 +143,20 @@ export function onDownloadLog(
     return listen<DownloadLogPayload>("download-log", (event) =>
         callback(event.payload),
     );
+}
+
+/**
+ * Subscribe to Rust `log` facade records forwarded by tauri-plugin-log's
+ * `Webview` target. Returns an unlisten function.
+ *
+ * Distinct from `onDownloadLog`, which carries per-job download messages. This
+ * one carries everything any crate logs, and is what makes the Log Viewer a
+ * log sink rather than a download-message stream.
+ */
+export function onLogRecord(
+    callback: (payload: LogRecordPayload) => void,
+): Promise<UnlistenFn> {
+    return listen<LogRecordPayload>("log://log", (event) => callback(event.payload));
 }
 
 /** Subscribe to post-processing progress events. Returns an unlisten function. */
