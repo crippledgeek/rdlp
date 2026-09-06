@@ -10,6 +10,9 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
+use rdlp_redact::RedactedUrl;
+
+use crate::boundary::{Action, Subject};
 use crate::error::AppError;
 use crate::events;
 use crate::state::{AppState, DownloadJob, JobStatus, SavedDownloadOptions};
@@ -148,22 +151,24 @@ fn validate_recode_threads(threads: Option<u32>) -> Result<(), AppError> {
     match threads {
         None => Ok(()),
         Some(t) if (1..=rdlp_types::config::MAX_RECODE_THREADS).contains(&t) => Ok(()),
-        Some(t) => Err(AppError::InvalidInput {
-            field: "recode_threads".to_owned(),
-            message: format!(
+        Some(t) => Err(AppError::invalid_input(
+            Action::new("download"),
+            "recode_threads",
+            format!(
                 "recode_threads must be 1..={} (got {t})",
                 rdlp_types::config::MAX_RECODE_THREADS
             ),
-        }),
+        )),
     }
 }
 
 fn validate_recode_preset(preset: Option<&str>) -> Result<(), AppError> {
     match preset {
-        Some(p) if p.len() > MAX_RECODE_PRESET_LEN => Err(AppError::InvalidInput {
-            field: "recode_preset".to_owned(),
-            message: format!("preset name too long (max {MAX_RECODE_PRESET_LEN} bytes)"),
-        }),
+        Some(p) if p.len() > MAX_RECODE_PRESET_LEN => Err(AppError::invalid_input(
+            Action::new("download"),
+            "recode_preset",
+            format!("preset name too long (max {MAX_RECODE_PRESET_LEN} bytes)"),
+        )),
         _ => Ok(()),
     }
 }
@@ -283,9 +288,12 @@ pub async fn start_download(
     app: AppHandle,
 ) -> Result<String, AppError> {
     // Validate URL at the boundary
-    rdlp_security::validate_url_security(&url).map_err(|e| AppError::InvalidInput {
-        field: "url".to_owned(),
-        message: e.to_string(),
+    rdlp_security::validate_url_security(&url).map_err(|e| {
+        AppError::invalid_input(
+            Action::with_subject("download", Subject::Url(RedactedUrl::new(&url))),
+            "url",
+            e,
+        )
     })?;
 
     // Generate a unique job ID
@@ -324,10 +332,7 @@ pub async fn start_download(
         options.recode_cpu_used,
         options.recode_speed_level,
     )
-    .map_err(|e| AppError::InvalidInput {
-        field: "recode_speed_control".to_owned(),
-        message: e.to_string(),
-    })?;
+    .map_err(|e| AppError::invalid_input(Action::new("download"), "recode_speed_control", e))?;
 
     // Save a serializable snapshot of the options for retry (before any partial moves).
     let saved_options = serde_json::to_value(&options)
@@ -1285,13 +1290,13 @@ pub async fn cancel_download(job_id: String, state: State<'_, AppState>) -> Resu
             .queue
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        queue
-            .take_cancel(&job_id)
-            .ok_or_else(|| AppError::DownloadFailed {
-                job_id: job_id.clone(),
-                message: "No active cancel function for this job".to_owned(),
-                retryable: false,
-            })?
+        queue.take_cancel(&job_id).ok_or_else(|| {
+            AppError::download_failed(
+                Action::with_subject("cancel_download", Subject::Job(&job_id)),
+                "no active cancel function for this job",
+                false,
+            )
+        })?
     };
 
     // Only invoke the cancel token. The background event loop handles
@@ -1355,11 +1360,11 @@ pub async fn remove_job(job_id: String, state: State<'_, AppState>) -> Result<()
         .remove_job(&job_id);
 
     if !removed {
-        return Err(AppError::DownloadFailed {
-            job_id,
-            message: "Job not found or still active".to_owned(),
-            retryable: false,
-        });
+        return Err(AppError::download_failed(
+            Action::with_subject("remove_job", Subject::Job(&job_id)),
+            "job not found or still active",
+            false,
+        ));
     }
 
     Ok(())
@@ -1418,10 +1423,12 @@ pub async fn job_options(
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .get_job(&job_id)
-        .ok_or_else(|| AppError::DownloadFailed {
-            job_id: job_id.clone(),
-            message: "Job not found".to_owned(),
-            retryable: false,
+        .ok_or_else(|| {
+            AppError::download_failed(
+                Action::with_subject("job_options", Subject::Job(&job_id)),
+                "job not found",
+                false,
+            )
         })?
         .options
         .as_ref()

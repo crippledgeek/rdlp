@@ -15,6 +15,7 @@ use rdlp_types::protocol::DownloadProtocol;
 use rdlp_types::{Format, FormatSelector};
 use tauri::State;
 
+use crate::boundary::Action;
 use crate::error::AppError;
 use crate::state::AppState;
 
@@ -44,10 +45,8 @@ pub async fn formats(
     state: State<'_, AppState>,
 ) -> Result<FormatListResponse, AppError> {
     // 1. SSRF / URL validation
-    rdlp_security::validate_url_security(&url).map_err(|e| AppError::InvalidInput {
-        field: "url".to_owned(),
-        message: e.to_string(),
-    })?;
+    rdlp_security::validate_url_security(&url)
+        .map_err(|e| AppError::invalid_input(Action::new("analyze"), "url", e))?;
 
     // 2. Extract metadata. The shared client was built once from
     // `config.toml`; the GUI's network settings live in `AppSettings`, so
@@ -65,7 +64,7 @@ pub async fn formats(
         .client
         .extract_info(&url, &network)
         .await
-        .map_err(AppError::from)?;
+        .map_err(|e| AppError::from_api(Action::new("analyze"), &e))?;
 
     // 3. Detect playlist vs single video
     let is_playlist = info_dicts.len() > 1;
@@ -98,21 +97,15 @@ pub async fn formats(
             entries,
         };
 
-        let first = info_dicts
-            .into_iter()
-            .next()
-            .ok_or_else(|| AppError::ExtractionFailed {
-                message: "No metadata returned for URL".to_owned(),
-            })?;
+        let first = info_dicts.into_iter().next().ok_or_else(|| {
+            AppError::extraction_failed(Action::new("analyze"), "no metadata returned")
+        })?;
 
         (first, Some(playlist_info))
     } else {
-        let first = info_dicts
-            .into_iter()
-            .next()
-            .ok_or_else(|| AppError::ExtractionFailed {
-                message: "No metadata returned for URL".to_owned(),
-            })?;
+        let first = info_dicts.into_iter().next().ok_or_else(|| {
+            AppError::extraction_failed(Action::new("analyze"), "no metadata returned")
+        })?;
         (first, None)
     };
 
@@ -199,10 +192,8 @@ pub async fn validate_format_expression(
     // `spawn_blocking` threshold per the TLS Phase 1 async audit
     // (Finding 5.R1); panic isolation for this site is now provided by
     // the global `std::panic::set_hook` installed in `run()`.
-    let selector = FormatSelector::parse(&expression).map_err(|e| AppError::InvalidInput {
-        field: "expression".to_owned(),
-        message: e.to_string(),
-    })?;
+    let selector = FormatSelector::parse(&expression)
+        .map_err(|e| AppError::invalid_input(Action::new("analyze"), "expression", e))?;
 
     if formats.is_empty() {
         return Ok(Vec::new());
@@ -244,6 +235,20 @@ pub async fn validate_format_expression(
 #[allow(clippy::indexing_slicing)]
 mod tests {
     use super::*;
+
+    /// Analyze returning no metadata is a recorded outcome, not a silent one.
+    #[test]
+    fn an_empty_analyze_result_is_recorded() {
+        testing_logger::setup();
+        let _ = AppError::extraction_failed(Action::new("analyze"), "no metadata returned");
+
+        testing_logger::validate(|captured| {
+            let body = captured.first().map_or("", |l| l.body.as_str());
+            assert!(body.contains("action=analyze"), "got: {body}");
+            assert!(body.contains("outcome=failed"), "got: {body}");
+            assert!(body.contains("no metadata returned"), "got: {body}");
+        });
+    }
 
     #[test]
     fn test_format_info_serialization() {

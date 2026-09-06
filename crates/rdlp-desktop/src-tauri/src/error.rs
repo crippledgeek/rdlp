@@ -193,7 +193,7 @@ impl AppError {
     }
 
     /// Record and build a download failure. The job id travels in `action`'s
-    /// [`Subject`](crate::boundary::Subject), not as a fourth parameter.
+    /// `Subject` (`crate::boundary::Subject`), not as a fourth parameter.
     #[must_use]
     pub fn download_failed(action: Action<'_>, reason: impl fmt::Display, retryable: bool) -> Self {
         let e = Self::DownloadFailed {
