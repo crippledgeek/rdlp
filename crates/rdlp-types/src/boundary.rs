@@ -15,6 +15,7 @@
 use std::fmt;
 
 use rdlp_redact::RedactedUrl;
+use rdlp_security::text::sanitize_for_terminal;
 
 /// What a boundary action acted on. At most one per record.
 ///
@@ -73,13 +74,24 @@ impl<'a> Action<'a> {
 }
 
 impl fmt::Display for Action<'_> {
+    /// Every rendered field passes through [`sanitize_for_terminal`].
+    ///
+    /// A subject is attacker-influenced at every arm — a path derived from a
+    /// remote title (#698), a `job_id` arriving over IPC, a URL from a page —
+    /// and a record goes both to a terminal and to a rotating file. An
+    /// unstripped `ESC [` is a terminal command (CWE-150) and an unstripped
+    /// newline forges a second `action=… outcome=…` line in the file
+    /// (CWE-117). Stripping here covers every subject at one site, rather
+    /// than asking ~30 call sites to remember.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "action={}", self.name)?;
+        write!(f, "action={}", sanitize_for_terminal(self.name))?;
         match &self.subject {
             Subject::None => Ok(()),
-            Subject::Path(p) => write!(f, " path={p}"),
-            Subject::Url(u) => write!(f, " url={u}"),
-            Subject::Job(j) => write!(f, " job_id={j}"),
+            Subject::Path(p) => write!(f, " path={}", sanitize_for_terminal(p)),
+            // `RedactedUrl`'s Display strips credentials; this strips the
+            // control characters it is not concerned with.
+            Subject::Url(u) => write!(f, " url={}", sanitize_for_terminal(&u.to_string())),
+            Subject::Job(j) => write!(f, " job_id={}", sanitize_for_terminal(j)),
         }
     }
 }
@@ -107,7 +119,15 @@ impl fmt::Display for Action<'_> {
 /// "Boundary Logging" rule 5.
 #[must_use]
 pub fn failure_record(action: &Action<'_>, reason: &impl fmt::Display) -> String {
-    format!("{action} outcome=failed reason={reason}")
+    // `reason` carries free text from remote sources (an extractor message
+    // quoting page content, a filename built from a title) and from IPC. Its
+    // `Display` redacts credentials; it does not strip control characters, so
+    // a newline in it would forge a second record line. `action`'s own fields
+    // are stripped by its `Display`.
+    format!(
+        "{action} outcome=failed reason={}",
+        sanitize_for_terminal(&reason.to_string())
+    )
 }
 
 #[cfg(test)]
@@ -148,5 +168,35 @@ mod tests {
             failure_record(&a, &"disk full"),
             "action=download job_id=job-7 outcome=failed reason=disk full"
         );
+    }
+
+    /// A newline in the reason cannot forge a second record.
+    ///
+    /// The reason is assembled from remote-derived text at several sites — a
+    /// filename built from a page title (#698), an extractor message quoting
+    /// page content — and the desktop log rotates to a file, so a `\n` here
+    /// would write a whole extra `action=… outcome=…` line that a reader has
+    /// no way to tell from a real one (CWE-117).
+    #[test]
+    fn a_newline_in_the_reason_cannot_forge_a_second_record() {
+        let body = failure_record(
+            &Action::new("download"),
+            &"disk full\naction=login outcome=succeeded user=root",
+        );
+        assert!(!body.contains('\n'), "log injection: {body:?}");
+        assert!(body.contains("disk full"), "over-stripped: {body:?}");
+    }
+
+    /// An escape sequence in a path is inert by the time it is rendered.
+    ///
+    /// Paths reach the record from IPC and from remote-derived filenames, and
+    /// the CLI sink writes to a terminal, where a bare `ESC [` is a command
+    /// rather than text (CWE-150).
+    #[test]
+    fn an_escape_sequence_in_a_path_subject_is_neutralised() {
+        let a = Action::with_subject("reveal", Subject::Path("/tmp/\u{1b}[2Jv.mkv"));
+        let shown = a.to_string();
+        assert!(!shown.contains('\u{1b}'), "ESC survived: {shown:?}");
+        assert_eq!(shown, "action=reveal path=/tmp/[2Jv.mkv");
     }
 }

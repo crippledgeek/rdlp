@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use log::{debug, error, warn};
 use rdlp_api::InfoDict;
 use rdlp_api::RdlpApiError;
+use rdlp_security::text::sanitize_for_terminal;
 use rdlp_types::boundary::{Action, failure_record};
 
 /// Print all supported codecs
@@ -122,7 +123,13 @@ pub const fn exit_code_for(e: &RdlpApiError) -> i32 {
 pub fn record_failure(action: Action<'_>, e: &RdlpApiError, verbose: bool) {
     error!("{}", failure_record(&action, e));
     if verbose {
-        debug!("{action} outcome=failed detail={e:?}");
+        // Same control-character strip `failure_record` applies to the line
+        // above: `Debug` redacts credentials but leaves an `ESC` or a newline
+        // from a remote-derived message intact, and this one goes to a TTY.
+        debug!(
+            "{action} outcome=failed detail={}",
+            sanitize_for_terminal(&format!("{e:?}"))
+        );
     }
 }
 

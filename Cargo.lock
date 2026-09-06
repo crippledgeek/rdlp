@@ -6639,6 +6639,7 @@ name = "rdlp-types"
 version = "0.1.0"
 dependencies = [
  "rdlp-redact",
+ "rdlp-security",
  "regex",
  "serde",
  "serde_json",
