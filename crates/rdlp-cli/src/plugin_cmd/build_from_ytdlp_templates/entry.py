@@ -241,7 +241,7 @@ class ExtractorPlugin(_ExtractorPluginProtocol):
         return PluginInfo(
             name=primary.__name__.lower(),
             version="0.1.0",
-            wit_version="0.1.0",
+            wit_version="0.5.0",
             matches=[],  # populated from manifest at install time
             url_regex=getattr(primary, "_VALID_URL", None),
             priority=150,

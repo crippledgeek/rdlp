@@ -28,7 +28,7 @@ class ExtractorPlugin(_ExtractorPluginProtocol):
         return PluginInfo(
             name="hello-world",
             version="0.1.0",
-            wit_version="0.1.0",
+            wit_version="0.5.0",
             matches=["https://example.com/*"],
             url_regex=None,
             priority=150,

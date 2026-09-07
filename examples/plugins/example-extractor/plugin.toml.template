@@ -3,7 +3,7 @@
 
 name = "example"
 version = "0.1.0"
-wit_version = "0.1.0"
+wit_version = "0.5.0"
 matches = ["https://example.com/video/*"]
 url_regex = "^https://example\\.com/video/(?P<id>\\d+)"
 priority = 150

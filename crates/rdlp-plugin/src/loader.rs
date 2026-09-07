@@ -27,7 +27,7 @@ use std::sync::Arc;
 /// (patch differences are considered backward-compatible within the same
 /// minor).
 // TODO(#327): derive from WIT file at build time
-pub const HOST_WIT_VERSION: &str = "0.4.0";
+pub const HOST_WIT_VERSION: &str = "0.5.0";
 
 /// Compare a plugin's declared WIT version against the host's `HOST_WIT_VERSION`.
 /// Thin 2-arg wrapper around [`check_wit_version_against`] that bakes the host
@@ -284,19 +284,81 @@ mod tests {
     use super::{HOST_WIT_VERSION, check_wit_version, check_wit_version_against};
     use crate::PluginError;
 
+    /// Pull the version out of a `package rdlp:plugin@X.Y.Z;` directive.
+    fn package_version(wit_source: &str, file: &str) -> String {
+        wit_source
+            .lines()
+            .find_map(|line| {
+                line.trim()
+                    .strip_prefix("package rdlp:plugin@")?
+                    .strip_suffix(';')
+                    .map(str::to_owned)
+            })
+            .unwrap_or_else(|| panic!("{file} must declare `package rdlp:plugin@X.Y.Z;`"))
+    }
+
     #[test]
     fn host_constant_matches_current_contract() {
         // Sanity: the host constant is itself a valid semver string.
-        let parsed = semver::Version::parse(HOST_WIT_VERSION)
-            .expect("HOST_WIT_VERSION must parse as semver");
-        // The host constant must match the WIT package directive in the .wit
-        // sources; if a future bump moves the WIT contract, this assertion
-        // surfaces the drift loudly.
-        assert_eq!(
-            (parsed.major, parsed.minor, parsed.patch),
-            (0, 4, 0),
-            "HOST_WIT_VERSION must track `package rdlp:plugin@X.Y.Z` in crates/rdlp-plugin/wit/*.wit"
-        );
+        semver::Version::parse(HOST_WIT_VERSION).expect("HOST_WIT_VERSION must parse as semver");
+
+        // Read the contract rather than restating it. This assertion used to
+        // compare against a hardcoded (0, 4, 0) tuple, which meant it passed
+        // whenever someone updated the tuple and the constant together while
+        // leaving the WIT package directive behind — the one drift it names
+        // itself for catching. Every `.wit` in the contract is checked,
+        // because `wit-bindgen` resolves them as one package and a single
+        // stale directive breaks the build in a way that reads as unrelated.
+        for (file, source) in [
+            ("types.wit", include_str!("../wit/types.wit")),
+            ("host.wit", include_str!("../wit/host.wit")),
+            ("extractor.wit", include_str!("../wit/extractor.wit")),
+        ] {
+            assert_eq!(
+                package_version(source, file),
+                HOST_WIT_VERSION,
+                "HOST_WIT_VERSION must track `package rdlp:plugin@X.Y.Z` in crates/rdlp-plugin/wit/{file}"
+            );
+        }
+    }
+
+    /// The checked-in example manifests declare the version the loader gates
+    /// on, so a stale one is a plugin that cannot load.
+    ///
+    /// This is not hypothetical: all three sat at `0.1.0` from the 0.2.0 bump
+    /// until the 0.5.0 one, because nothing compared them against the host and
+    /// no test loads a plugin through its template. They are documentation
+    /// that had silently stopped being true.
+    #[test]
+    fn example_manifest_templates_declare_the_host_version() {
+        for (file, source) in [
+            (
+                "examples/plugins/example-extractor/plugin.toml.template",
+                include_str!("../../../examples/plugins/example-extractor/plugin.toml.template"),
+            ),
+            (
+                "examples/plugins/example-extractor/plugin.sigstore.toml.template",
+                include_str!(
+                    "../../../examples/plugins/example-extractor/plugin.sigstore.toml.template"
+                ),
+            ),
+            (
+                "examples/plugins/ytdlp-hello-world/plugin.toml.template",
+                include_str!("../../../examples/plugins/ytdlp-hello-world/plugin.toml.template"),
+            ),
+        ] {
+            let declared = source
+                .lines()
+                .find_map(|line| line.trim().strip_prefix("wit_version = "))
+                .map_or_else(
+                    || panic!("{file} must declare wit_version"),
+                    |v| v.trim_matches('"'),
+                );
+            assert_eq!(
+                declared, HOST_WIT_VERSION,
+                "{file} declares a WIT version the loader would reject"
+            );
+        }
     }
 
     #[test]

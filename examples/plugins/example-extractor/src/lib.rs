@@ -20,7 +20,7 @@ impl Guest for Component {
         PluginInfo {
             name: "example".into(),
             version: "0.1.0".into(),
-            wit_version: "0.1.0".into(),
+            wit_version: "0.5.0".into(),
             matches: vec!["https://example.com/video/*".into()],
             url_regex: Some(r"^https://example\.com/video/(?P<id>\d+)".into()),
             priority: 150,
