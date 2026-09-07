@@ -104,7 +104,12 @@ pub(crate) fn parse_moviefap_xml(xml_text: &str) -> Vec<VideoMetadata> {
                 return None;
             }
 
-            let video_url = video_url.replace("&amp;", "&");
+            // The XML is read by regex, so nothing decoded it. Use the
+            // library rather than replacing one spelling of one entity: the
+            // former `.replace("&amp;", "&")` left a numeric `&#38;` in the
+            // URL. Measured: `html_escape` requires the semicolon, so query
+            // keys like `&copy=` and `&times=` are not corrupted.
+            let video_url = crate::utils::decode_html_entities(video_url);
             let height = quality_str.trim_end_matches('p').parse::<u32>().ok();
             let width = height.map(|h| (h * 16) / 9);
             let ext = extract_extension_from_url(&video_url);

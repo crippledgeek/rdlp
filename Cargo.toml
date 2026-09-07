@@ -61,7 +61,7 @@ tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = "0.1"
 
 # HTML entity decoding (single-pass, WHATWG-complete) — shared by rdlp-extractor + rdlp-plugin
-html-escape = "0.2.13"
+html-escape = "0.2.15"
 
 # IP network arithmetic — the IANA special-purpose registry as a const table.
 # Already in the lock file transitively; `Ipv4Net::new_assert` is const, which

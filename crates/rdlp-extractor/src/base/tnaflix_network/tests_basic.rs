@@ -183,3 +183,54 @@ fn test_parse_moviefap_xml_with_html_entities() {
     let (_, url, _, _, _) = &video_data[0];
     assert_eq!(url, "http://example.com/video.mp4?key=abc&token=xyz");
 }
+
+/// A bare `&` earlier in the query must not stop a later `&amp;` decoding.
+///
+/// This is the case where swapping the hand-rolled `.replace("&amp;", "&")`
+/// for the library was briefly a REGRESSION: on html-escape 0.2.13 the bare
+/// `&` in `?a=1&b=2` swallowed the `&amp;` after it and the URL came back
+/// unchanged, where the replace had always decoded it. Fixed by pinning
+/// 0.2.15; this test fails on 0.2.13.
+#[test]
+fn test_parse_moviefap_xml_decodes_amp_after_a_bare_ampersand() {
+    let base = TnaFlixNetworkBase::new();
+
+    let xml = r#"
+        <item>
+            <res>720p</res>
+            <videoLink>http://example.com/v.mp4?a=1&b=2&amp;c=3</videoLink>
+        </item>
+    "#;
+
+    let video_data = base.parse_moviefap_xml(xml);
+    assert_eq!(video_data.len(), 1);
+
+    let (_, url, _, _, _) = &video_data[0];
+    assert_eq!(url, "http://example.com/v.mp4?a=1&b=2&c=3");
+}
+
+/// The XML is read by regex, so the parser never decoded it — and a site is
+/// free to write `&` as a NUMERIC reference rather than `&amp;`. The former
+/// hand-rolled `.replace("&amp;", "&")` handled exactly one spelling and left
+/// `&#38;` in the URL, which then goes to the network verbatim.
+///
+/// Named references that are also plausible query keys are checked here too:
+/// `html_escape` requires the semicolon, so `&copy=` and `&times=` survive —
+/// measured, because decoding those would corrupt a working URL.
+#[test]
+fn test_parse_moviefap_xml_decodes_numeric_and_spares_query_keys() {
+    let base = TnaFlixNetworkBase::new();
+
+    let xml = r#"
+        <item>
+            <res>720p</res>
+            <videoLink>http://example.com/v.mp4?a=1&#38;copy=2&times=3</videoLink>
+        </item>
+    "#;
+
+    let video_data = base.parse_moviefap_xml(xml);
+    assert_eq!(video_data.len(), 1);
+
+    let (_, url, _, _, _) = &video_data[0];
+    assert_eq!(url, "http://example.com/v.mp4?a=1&copy=2&times=3");
+}
