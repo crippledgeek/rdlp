@@ -130,10 +130,144 @@ pub fn decode_html_entities(text: &str) -> String {
     html_escape::decode_html_entities(text).into_owned()
 }
 
+/// Repair a URL that was read out of an HTML attribute.
+///
+/// The URL half of the single decode boundary. Display text gets
+/// [`decode_html_entities`]; a URL gets this instead, and the difference is
+/// the whole point — a full decoder is actively wrong on a URL:
+///
+/// - `&sol;` becomes `/`, inventing path structure out of query text;
+/// - `?copyright=1` loses its `copy`, because WHATWG's legacy rules decode
+///   some references without their terminating semicolon;
+/// - `&lt;` becomes `<`, which is not a character a URL may carry unencoded.
+///
+/// Only `&` needs undoing, because only `&` is both escaped by an attribute
+/// serializer (`& < > " '`) and legal unencoded in a URL. Every reference form
+/// for it is handled: the named `amp`, the legacy uppercase `AMP`, and the
+/// numeric `#38` / `#x26` with optional leading zeros and either hex case.
+///
+/// The terminating semicolon is required, so a query key spelled `?&amp=1`
+/// survives. Anything a caller genuinely means as data is percent-encoded
+/// (`%26amp%3B`) and is not matched either.
+///
+/// Why here and not in the extractor: an `&` inside an HTML attribute is
+/// serialized `&amp;`, so *every* scraped URL carries it — native extractor
+/// and WASM plugin alike. Asking each site to remember is the failure that
+/// put `&quot;` into real filenames (#698); this is the same lesson applied
+/// to the fields that boundary deliberately skips.
+#[must_use]
+pub fn repair_url_entities(url: &str) -> String {
+    RE_AMPERSAND_REF.replace_all(url, "&").into_owned()
+}
+
+/// Every HTML reference for `&`, and nothing else. See [`repair_url_entities`].
+///
+/// The pattern is a fixed literal, so the `Err` arm is unreachable in any build
+/// whose tests run: `repair_url_entities_tests` forces this `LazyLock`, and a
+/// malformed pattern would fail the suite rather than reach a user. Same shape,
+/// and same rationale, as `rdlp-crypto`'s `HEX_PATH_PATTERN`.
+#[allow(clippy::expect_used)]
+static RE_AMPERSAND_REF: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+    regex::Regex::new(r"&(?:amp;|AMP;|#0*38;|#[xX]0*26;)")
+        .expect("valid ampersand-reference pattern")
+});
+
 /// Decode entities across a list of display strings.
 fn decode_each(values: &mut [String]) {
     for v in values {
         *v = decode_html_entities(v);
+    }
+}
+
+#[cfg(test)]
+mod repair_url_entities_tests {
+    use super::repair_url_entities;
+
+    /// The case the whole boundary exists for: an `&` inside an HTML
+    /// attribute is serialized `&amp;`, so every scraped URL carries it.
+    #[test]
+    fn undoes_the_named_reference() {
+        assert_eq!(
+            repair_url_entities("https://x.com/y.jpg?a=1&amp;b=2"),
+            "https://x.com/y.jpg?a=1&b=2"
+        );
+    }
+
+    /// Every form a serializer can emit: the legacy uppercase name, and the
+    /// numeric forms in decimal and hex, with and without leading zeros, in
+    /// either hex case.
+    #[test]
+    fn undoes_every_reference_form() {
+        for reference in [
+            "&amp;", "&AMP;", "&#38;", "&#038;", "&#x26;", "&#X26;", "&#x0026;",
+        ] {
+            assert_eq!(
+                repair_url_entities(&format!("https://x.com/?a=1{reference}b=2")),
+                "https://x.com/?a=1&b=2",
+                "form {reference} must be undone"
+            );
+        }
+    }
+
+    /// The semicolon terminates a reference. Without it this is a literal
+    /// query key, and rewriting it would corrupt the URL — the case a full
+    /// decoder gets wrong, since WHATWG's legacy rules decode semicolon-less
+    /// names.
+    #[test]
+    fn keeps_semicolonless_text() {
+        assert_eq!(
+            repair_url_entities("https://x.com/?&amp=1&amp;b=2"),
+            "https://x.com/?&amp=1&b=2"
+        );
+    }
+
+    /// `&Amp;` is not a valid reference — HTML defines `amp` and the legacy
+    /// `AMP`, not the mixed case.
+    #[test]
+    fn keeps_invalid_mixed_case_reference() {
+        assert_eq!(
+            repair_url_entities("https://x.com/?a=1&Amp;b=2"),
+            "https://x.com/?a=1&Amp;b=2"
+        );
+    }
+
+    /// The reason this is not `decode_html_entities`: a full decoder invents
+    /// path structure out of `&sol;`, eats the `copy` in `?copyright=1`, and
+    /// unescapes `&lt;` into a character a URL may not carry unencoded.
+    #[test]
+    fn repairs_only_the_ampersand() {
+        assert_eq!(
+            repair_url_entities("https://x.com/?copyright=1&amp;p=a&sol;&sol;b&amp;q=&lt;"),
+            "https://x.com/?copyright=1&p=a&sol;&sol;b&q=&lt;"
+        );
+    }
+
+    /// Percent-encoded data is not a reference and must survive: a caller who
+    /// genuinely means the text `&amp;` encodes it.
+    #[test]
+    fn keeps_percent_encoded_text() {
+        assert_eq!(
+            repair_url_entities("https://x.com/?q=%26amp%3B"),
+            "https://x.com/?q=%26amp%3B"
+        );
+    }
+
+    /// One pass only. The repair is NOT idempotent — which is why it belongs
+    /// at a single boundary, exactly like the display decoder it sits beside.
+    #[test]
+    fn does_not_double_repair() {
+        assert_eq!(
+            repair_url_entities("https://x.com/?a=1&amp;amp;b=2"),
+            "https://x.com/?a=1&amp;b=2"
+        );
+    }
+
+    #[test]
+    fn leaves_a_clean_url_untouched() {
+        assert_eq!(
+            repair_url_entities("https://x.com/y.jpg?a=1&b=2"),
+            "https://x.com/y.jpg?a=1&b=2"
+        );
     }
 }
 

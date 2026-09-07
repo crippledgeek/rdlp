@@ -1,4 +1,4 @@
-package rdlp:plugin@0.4.0;
+package rdlp:plugin@0.5.0;
 
 interface host-fetch {
     record request {
@@ -157,11 +157,12 @@ interface host-extract-helpers {
     /// single-pass decodes composing into one double decode (a literal
     /// `&amp;lt;` would become `<`).
     ///
-    /// A plugin that puts this value somewhere the host does NOT decode —
-    /// any URL field, since there `&` is a query separator — must undo the
-    /// `&amp;` itself. See the Python shim's `_og_search_thumbnail` for the
-    /// narrow replacement to copy, and note that a full entity decoder is
-    /// the wrong tool for a URL.
+    /// A value destined for `info-dict.url`, `.thumbnail`, or a
+    /// `subtitle-track.url` is not left to you either: the host runs a
+    /// narrower repair on those, undoing `&amp;` and only `&amp;`, because in
+    /// a URL `&` is a query separator and a full decoder would invent
+    /// structure (`&sol;` to `/`). See `og-search-property` for why a
+    /// `format`'s `url` is deliberately not among them.
     html-search-regex: func(pattern: string, haystack: string, re-flags: regex-flags)
                     -> option<string>;
 
@@ -172,8 +173,18 @@ interface host-extract-helpers {
     /// VERBATIM — entities are not decoded; see `html-search-regex` for why,
     /// and for what a plugin must do when the property is a URL. `og:image`
     /// is the common case: an `&` inside an HTML attribute is serialized
-    /// `&amp;`, so the raw value carries it and the host will not strip it
-    /// from a URL field.
+    /// `&amp;`, so the raw value carries it. For the fields of `info-dict`
+    /// that this plugin can set and that end up as metadata URLs — `url`
+    /// (which the host stores as `webpage_url`), `thumbnail`, and each
+    /// `subtitle-track`'s `url` — you do not need to undo it: the host repairs
+    /// that one entity there (`rdlp_types::repair_url_entities`), at the same
+    /// boundary that decodes display text.
+    ///
+    /// A `format`'s own `url` is NOT repaired: those come from manifests and
+    /// APIs with their own escaping rules, so a blanket repair would double up
+    /// on a producer that already decoded — `dash_mpd` decodes an MPD's
+    /// entities before rdlp ever sees the URL. If you build a format URL out
+    /// of HTML yourself, undo `&amp;` yourself.
     og-search-property: func(prop: string, html: string) -> option<string>;
 
     rta-search: func(html: string) -> option<u8>;

@@ -228,6 +228,15 @@ class TestOgSearchTitle:
 
 
 class TestOgSearchThumbnail:
+    """A passthrough over `og:image`, with no repair of its own.
+
+    The `&amp;` an HTML attribute serializer puts in the URL is undone once by
+    the host, on every URL-valued field of the info-dict this extractor returns
+    (`rdlp_types::repair_url_entities`, tested in `crates/rdlp-types/src/lib.rs`
+    and at both boundaries). This class used to hold a copy of those cases,
+    against a copy of the implementation — the duplication the boundary removed.
+    """
+
     def test_extracts_image(self):
         ie = _ExampleIE()
         html = '<meta property="og:image" content="https://cdn.example/x.jpg">'
@@ -237,68 +246,15 @@ class TestOgSearchThumbnail:
         ie = _ExampleIE()
         assert ie._og_search_thumbnail('<html></html>') is None
 
-    def test_decodes_amp_in_query_string(self):
-        # The behaviour this helper exists to get right: an `&` inside an
-        # HTML attribute is serialized `&amp;`, and the host's decode
-        # boundary skips every `*_url`, so nothing else would fix it.
+    def test_returns_the_attribute_verbatim(self):
+        # Verbatim, like every other OG helper since #716 — the repair happens
+        # at the boundary, not here, so a second pass can never compose.
         ie = _ExampleIE()
         html = (
             '<meta property="og:image" '
             'content="https://cdn.example/x.jpg?a=1&amp;b=2">'
         )
-        assert ie._og_search_thumbnail(html) == 'https://cdn.example/x.jpg?a=1&b=2'
-
-    def test_does_not_double_decode(self):
-        # One pass only: `&amp;amp;` is a literal `&amp;` in the URL, not `&`.
-        ie = _ExampleIE()
-        html = (
-            '<meta property="og:image" '
-            'content="https://cdn.example/x.jpg?a=1&amp;amp;b=2">'
-        )
-        assert (
-            ie._og_search_thumbnail(html)
-            == 'https://cdn.example/x.jpg?a=1&amp;b=2'
-        )
-
-    def test_decodes_numeric_and_uppercase_ampersand_refs(self):
-        # An attribute serializer may write `&` as any of its references, not
-        # just the canonical `&amp;`. All forms html.unescape accepts as an
-        # ampersand are undone; `&Amp;`, which is NOT a valid reference, is
-        # not — verified against the stdlib for each form.
-        ie = _ExampleIE()
-        for ref in ('&amp;', '&AMP;', '&#38;', '&#038;', '&#x26;', '&#X26;'):
-            html_doc = (
-                '<meta property="og:image" '
-                f'content="https://cdn.example/x.jpg?a=1{ref}b=2">'
-            )
-            assert (
-                ie._og_search_thumbnail(html_doc)
-                == 'https://cdn.example/x.jpg?a=1&b=2'
-            ), ref
-
-        not_a_ref = (
-            '<meta property="og:image" '
-            'content="https://cdn.example/x.jpg?a=1&Amp;b=2">'
-        )
-        assert (
-            ie._og_search_thumbnail(not_a_ref)
-            == 'https://cdn.example/x.jpg?a=1&Amp;b=2'
-        )
-
-    def test_leaves_semicolonless_entity_names_alone(self):
-        # Measured hazard: `html.unescape` implements WHATWG legacy
-        # semicolon-less references and turns `&copy=2` into `©=2`, and
-        # `&sol;&sol;` into `//`. A query key must survive verbatim, which is
-        # why this decodes `&amp;` alone rather than calling a full decoder.
-        ie = _ExampleIE()
-        html = (
-            '<meta property="og:image" '
-            'content="https://cdn.example/x.jpg?copyright=1&copy=2&sol;s">'
-        )
-        assert (
-            ie._og_search_thumbnail(html)
-            == 'https://cdn.example/x.jpg?copyright=1&copy=2&sol;s'
-        )
+        assert ie._og_search_thumbnail(html) == 'https://cdn.example/x.jpg?a=1&amp;b=2'
 
 
 # -----------------------------------------------------------------------------

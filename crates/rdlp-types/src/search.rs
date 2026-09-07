@@ -132,6 +132,20 @@ impl SearchResultPreview {
     /// distinguishes the two without asking each implementation to remember:
     /// unchanged fields keep their single decode, replaced ones get theirs.
     pub fn decode_fields_changed_from(&mut self, before: &Self) {
+        // The URL repair is no more idempotent than the decoder — a second
+        // pass takes `&amp;amp;` to `&` — so it is gated on change too.
+        if self.video_url != before.video_url {
+            self.video_url = crate::repair_url_entities(&self.video_url);
+        }
+        if self.thumbnail_url != before.thumbnail_url {
+            self.thumbnail_url = self
+                .thumbnail_url
+                .as_deref()
+                .map(crate::repair_url_entities);
+        }
+        if self.uploader_url != before.uploader_url {
+            self.uploader_url = self.uploader_url.as_deref().map(crate::repair_url_entities);
+        }
         if self.title != before.title {
             self.title = crate::decode_html_entities(&self.title);
         }
@@ -147,9 +161,19 @@ impl SearchResultPreview {
     ///
     /// The search-side half of the single decode boundary (#698); the
     /// orchestrator calls it on every preview a search extractor returns.
-    /// `video_url`, `thumbnail_url` and `uploader_url` are left alone — `&`
-    /// there is a query separator, not text a person reads.
+    ///
+    /// `video_url`, `thumbnail_url` and `uploader_url` do not get the display
+    /// decoder — `&` there is a query separator, not text a person reads — but
+    /// they are not left alone either: they get `repair_url_entities`, which
+    /// undoes the `&amp;` an HTML attribute serializer puts in every scraped
+    /// URL and nothing else.
     pub fn decode_text_fields(&mut self) {
+        self.video_url = crate::repair_url_entities(&self.video_url);
+        self.thumbnail_url = self
+            .thumbnail_url
+            .as_deref()
+            .map(crate::repair_url_entities);
+        self.uploader_url = self.uploader_url.as_deref().map(crate::repair_url_entities);
         self.title = crate::decode_html_entities(&self.title);
         self.uploader = self.uploader.as_deref().map(crate::decode_html_entities);
         crate::decode_each(&mut self.actors);
@@ -343,6 +367,10 @@ mod preview_decode_tests {
         after.decode_fields_changed_from(&before);
         assert_eq!(after.title, "AT&amp;T");
         assert_eq!(after.uploader.as_deref(), Some("Tom &amp; Co"));
+        // The URL repair is gated the same way and for a sharper reason: it
+        // is not idempotent, so a second pass here would take this already
+        // repaired `&amp;amp;` down to a bare `&`.
+        assert_eq!(after.video_url, before.video_url);
     }
 
     /// A field the enrichment REPLACED is newly-extracted text that nothing
@@ -353,27 +381,53 @@ mod preview_decode_tests {
         let mut after = before.clone();
         after.uploader = Some("Fresh &amp; New".to_string());
         after.actors = vec!["A &#039;B&#039;".to_string()];
+        after.video_url = "https://x.test/fresh?a=1&amp;b=2".to_string();
         after.decode_fields_changed_from(&before);
         assert_eq!(after.uploader.as_deref(), Some("Fresh & New"));
+        // a replaced URL is newly-scraped and does get repaired
+        assert_eq!(after.video_url, "https://x.test/fresh?a=1&b=2");
         assert_eq!(after.actors, vec!["A 'B'".to_string()]);
         // untouched by this enrichment, so left exactly as it arrived
         assert_eq!(after.title, before.title);
     }
 
-    /// URLs keep their `&amp;`: decoding one would rewrite a query separator.
+    /// The half that must not regress, and that `repairs_the_ampersand_in_urls`
+    /// cannot pin on its own: every assertion there is `&amp;` -> `&`, which
+    /// `decode_html_entities` also produces, so that test stays green if the
+    /// boundary is switched back to the display decoder. These inputs do not.
     #[test]
-    fn leaves_urls_alone() {
+    fn does_not_run_the_display_decoder_over_a_url() {
         let mut p = preview();
+        p.video_url = "https://x.test/?p=a&sol;b&amp;q=&lt;".to_string();
+        p.thumbnail_url = Some("https://x.test/t.jpg?p=a&sol;b".to_string());
+        p.uploader_url = Some("https://x.test/u?p=a&sol;b".to_string());
         p.decode_text_fields();
-        assert_eq!(p.video_url, "https://x.test/v?a=1&amp;b=2");
+        assert_eq!(p.video_url, "https://x.test/?p=a&sol;b&q=&lt;");
         assert_eq!(
             p.thumbnail_url.as_deref(),
-            Some("https://x.test/t.jpg?a=1&amp;b=2")
+            Some("https://x.test/t.jpg?p=a&sol;b")
         );
+        // Asserted separately: without this, switching `uploader_url` alone to
+        // the display decoder passes both this test and its sibling.
         assert_eq!(
             p.uploader_url.as_deref(),
-            Some("https://x.test/u?a=1&amp;b=2")
+            Some("https://x.test/u?p=a&sol;b")
         );
+    }
+
+    /// URLs get the narrow repair, never the display decoder — the `&amp;`
+    /// an attribute serializer forced on them becomes a real separator, and
+    /// nothing else changes.
+    #[test]
+    fn repairs_the_ampersand_in_urls() {
+        let mut p = preview();
+        p.decode_text_fields();
+        assert_eq!(p.video_url, "https://x.test/v?a=1&b=2");
+        assert_eq!(
+            p.thumbnail_url.as_deref(),
+            Some("https://x.test/t.jpg?a=1&b=2")
+        );
+        assert_eq!(p.uploader_url.as_deref(), Some("https://x.test/u?a=1&b=2"));
     }
 
     /// The same API returned `Wife & Friend Pov Handjob` unencoded in another

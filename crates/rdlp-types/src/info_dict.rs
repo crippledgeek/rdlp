@@ -188,9 +188,23 @@ impl InfoDict {
     /// so no extractor has to remember — which is the failure that put
     /// `&quot;` and `&#039;` into real filenames.
     ///
-    /// Fields NOT touched, deliberately: `id`, every `*_url` and `*_id`, and
-    /// the numeric fields. In a URL `&` is a query separator, and an id is an
-    /// opaque site token rather than text a person reads.
+    /// Ids and the numeric fields are NOT touched: an id is an opaque site
+    /// token rather than text a person reads.
+    ///
+    /// The METADATA url fields — `webpage_url`, `thumbnail`, `thumbnails[]`,
+    /// `uploader_url`, `channel_url`, and subtitle `track.url` — do NOT get
+    /// the display decoder: in a URL `&` is a query separator, and decoding
+    /// `&sol;` or `&lt;` there would invent structure. They get
+    /// `repair_url_entities` instead, which undoes the one entity an HTML
+    /// attribute serializer forces on them.
+    ///
+    /// `formats[].url` and the fragment URLs are deliberately NOT repaired
+    /// here. Those are produced by manifest and API parsers with their own
+    /// escaping rules, so a repair at this boundary would double up wherever
+    /// a producer already decoded, on the one path where a wrong URL is a
+    /// failed download rather than a blemish. Where a producer genuinely does
+    /// not decode — `MovieFap`'s regex-read XML — the repair is applied there,
+    /// at the point that producer's encoding is known.
     ///
     /// `formats[].format_note` is also left alone: it is synthesized in-tree
     /// from resolution and codec data rather than scraped, so it carries no
@@ -198,6 +212,15 @@ impl InfoDict {
     /// being non-display — if a plugin ever sets it from page text, it
     /// belongs in the list above.
     pub fn decode_text_fields(&mut self) {
+        self.webpage_url = crate::repair_url_entities(&self.webpage_url);
+        self.thumbnail = self.thumbnail.as_deref().map(crate::repair_url_entities);
+        self.uploader_url = self.uploader_url.as_deref().map(crate::repair_url_entities);
+        self.channel_url = self.channel_url.as_deref().map(crate::repair_url_entities);
+        if let Some(thumbnails) = self.thumbnails.as_mut() {
+            for thumbnail in thumbnails {
+                thumbnail.url = crate::repair_url_entities(&thumbnail.url);
+            }
+        }
         self.title = crate::decode_html_entities(&self.title);
         self.description = self.description.as_deref().map(crate::decode_html_entities);
         self.uploader = self.uploader.as_deref().map(crate::decode_html_entities);
@@ -234,8 +257,11 @@ impl InfoDict {
             .flat_map(|m| m.values_mut())
             .flatten()
         {
-            // `name` only — `url` and `ext` are not display text.
+            // `name` is display text and gets the decoder; `url` gets the
+            // narrower URL repair, for the same reason every other URL field
+            // does. `ext` is neither.
             track.name = track.name.as_deref().map(crate::decode_html_entities);
+            track.url = crate::repair_url_entities(&track.url);
         }
     }
 
@@ -553,23 +579,58 @@ mod decode_text_fields_tests {
             .and_then(|v| v.first())
             .expect("track present");
         assert_eq!(track.name.as_deref(), Some("English 'full'"));
-        // the track URL is not display text and keeps its separator
-        assert_eq!(track.url, "https://x.test/s.vtt?a=1&amp;b=2");
+        // the track URL is not display text: it gets the narrow repair, so the
+        // separator is a real `&` and never a decoded `&sol;`
+        assert_eq!(track.url, "https://x.test/s.vtt?a=1&b=2");
     }
 
-    /// Ids and URLs are NOT decoded: `&` in a query string is a separator,
-    /// and an id is an opaque site token rather than text a person reads.
+    /// Ids are NOT touched at all: an id is an opaque site token rather than
+    /// text a person reads.
     #[test]
-    fn leaves_ids_and_urls_alone() {
-        let mut info = InfoDict::new("a&amp;b", "t", "e", "https://x.test/?a=1&amp;b=2");
-        info.uploader_url = Some("https://x.test/u?a=1&amp;b=2".to_string());
+    fn leaves_ids_alone() {
+        let mut info = InfoDict::new("a&amp;b", "t", "e", "https://x.test/v");
+        info.uploader_id = Some("u&amp;v".to_string());
+        info.channel_id = Some("c&amp;d".to_string());
         info.decode_text_fields();
         assert_eq!(info.id, "a&amp;b");
-        assert_eq!(info.webpage_url, "https://x.test/?a=1&amp;b=2");
+        assert_eq!(info.uploader_id.as_deref(), Some("u&amp;v"));
+        assert_eq!(info.channel_id.as_deref(), Some("c&amp;d"));
+    }
+
+    /// URLs get the narrow repair, not the display decoder. Every scraped URL
+    /// carries `&amp;` because it was read out of an HTML attribute, and
+    /// before this ran here each extractor had to remember — which is the
+    /// failure #698 is about, applied to the fields that boundary skipped.
+    #[test]
+    fn repairs_the_ampersand_in_every_url_field() {
+        let mut info = InfoDict::new("id", "t", "e", "https://x.test/?a=1&amp;b=2");
+        info.thumbnail = Some("https://x.test/t.jpg?a=1&amp;b=2".to_string());
+        info.uploader_url = Some("https://x.test/u?a=1&amp;b=2".to_string());
+        info.channel_url = Some("https://x.test/c?a=1&amp;b=2".to_string());
+        info.decode_text_fields();
+        assert_eq!(info.webpage_url, "https://x.test/?a=1&b=2");
+        assert_eq!(
+            info.thumbnail.as_deref(),
+            Some("https://x.test/t.jpg?a=1&b=2")
+        );
         assert_eq!(
             info.uploader_url.as_deref(),
-            Some("https://x.test/u?a=1&amp;b=2")
+            Some("https://x.test/u?a=1&b=2")
         );
+        assert_eq!(
+            info.channel_url.as_deref(),
+            Some("https://x.test/c?a=1&b=2")
+        );
+    }
+
+    /// The repair is NOT the display decoder, and the difference is the point:
+    /// `&sol;` would invent a path separator and `&lt;` a character a URL may
+    /// not carry unencoded. Only `&` is touched.
+    #[test]
+    fn does_not_run_the_display_decoder_over_a_url() {
+        let mut info = InfoDict::new("id", "t", "e", "https://x.test/?p=a&sol;b&amp;q=&lt;");
+        info.decode_text_fields();
+        assert_eq!(info.webpage_url, "https://x.test/?p=a&sol;b&q=&lt;");
     }
 
     /// Running the boundary over already-decoded text is a no-op, which is

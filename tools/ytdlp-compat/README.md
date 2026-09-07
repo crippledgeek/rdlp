@@ -85,10 +85,10 @@ cp foo/plugin.wasm plugin.toml ~/.config/rdlp/plugins/foo/
 No source edits to `foo.py`. The fake `yt_dlp/` package staged at
 build time resolves all upstream relative imports.
 
-**WIT v0.3 host helpers:**
+**WIT v0.5 host helpers:**
 
 - `search-regex`, `html-search-regex`, `html-search-meta` — regex / OG / meta primitives
-- `og-search-property` — OG property + entity unescape
+- `og-search-property` — OG property, returned **verbatim**: entities are not decoded here, because the host handles them once when an `info-dict` crosses the boundary — display text gets a full decode, and the metadata URLs a plugin can set — the info-dict's `url` (stored as `webpage_url`), `thumbnail`, and each subtitle track's `url` — get a narrower repair that undoes `&amp;` and nothing else (`rdlp_types::repair_url_entities`). Format URLs are not repaired: manifest parsers such as `dash_mpd` already decode their own entities. Undo `&amp;` yourself if you build a format URL out of HTML
 - `extract-m3u8` — HLS master playlist parsing (lossless dict round-trip)
 - `extract-mpd` — DASH MPD manifest parsing with segment extraction; subtitles slot now populated from text AdaptationSet sidecar tracks (fragmented text tracks deferred — log-warn + skip)
 - `fetch-options { headers, query, body }` record shared by `extract-m3u8` and `extract-mpd`; Python kwargs (`headers`, `query`, `data`) are mapped via `_make_fetch_options()` in `_host.py`

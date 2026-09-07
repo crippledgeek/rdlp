@@ -146,8 +146,9 @@ impl Orchestrator {
             .map_err(OrchestratorError::ExtractionFailed)?;
 
         // Same boundary as `extract_video` — see there. Every path that
-        // returns an InfoDict decodes, or the boundary is not one.
-        info.decode_text_fields();
+        // returns an InfoDict decodes, or the boundary is not one. This path
+        // additionally needs the echo guard; see the function's own docs.
+        decode_lazy_result(&mut info, url);
 
         debug!(formats = info.formats.len(); "Lazily resolved formats");
 
@@ -375,6 +376,40 @@ impl Orchestrator {
     }
 }
 
+/// Run the decode boundary over a lazily-resolved `InfoDict`, keeping the
+/// caller's own `url` where the extractor echoed it back.
+///
+/// `extract_lazy_formats` is called by the three playlist paths
+/// (`playlist/episode.rs`, `playlist/resume.rs`, `playlist/helpers.rs`), each
+/// passing a `webpage_url` their own `decode_text_fields` already repaired. An
+/// extractor typically echoes its input straight into the fresh dict, so
+/// running the boundary over that echo is a SECOND pass over one value. Unlike
+/// a title -- re-scraped fresh every time and never fed back in --
+/// `webpage_url` is threaded back as an extraction input, which is what makes
+/// this path different in kind.
+///
+/// The URL repair is not idempotent (`&amp;amp;` to `&amp;` to `&`), so a
+/// second pass corrupts a doubly-encoded URL. The URL we were given is
+/// canonical: where the extractor echoed it, keep it. Every other field is
+/// freshly scraped and wants the boundary as normal.
+///
+/// Equality detects an ECHO, not a DERIVATION. An extractor that normalises
+/// its input -- appends a trailing slash, lowercases the host, drops a
+/// tracking parameter -- returns a value derived from the already-repaired URL
+/// that is not equal to it, and gets the second pass anyway. The trigger stays
+/// as narrow as before (a doubly-encoded source), and closing it properly
+/// wants a `RepairedUrl` newtype threaded from the boundary rather than a
+/// wider comparison here; that is a refactor out of proportion to the bug.
+/// `SearchResultPreview::decode_fields_changed_from` has the same residual.
+fn decode_lazy_result(info: &mut rdlp_types::InfoDict, url: &str) {
+    let echoed_input = info.webpage_url == url;
+    info.decode_text_fields();
+    if echoed_input {
+        info.webpage_url.clear();
+        info.webpage_url.push_str(url);
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::missing_docs_in_private_items)]
 mod tests {
@@ -386,6 +421,30 @@ mod tests {
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
     use tracing_subscriber::fmt::MakeWriter;
+
+    /// The echo guard, both branches. A value the extractor echoed back must
+    /// not be repaired a second time; a genuinely fresh one must be.
+    #[test]
+    fn an_echoed_webpage_url_is_not_repaired_twice() {
+        // What the playlist path holds: already past its own boundary, so this
+        // `&amp;` is the single-pass result of a `&amp;amp;` source.
+        let url = "https://x.test/v?a=1&amp;b=2";
+        let mut info = rdlp_types::InfoDict::new("id", "t", "e", url);
+        decode_lazy_result(&mut info, url);
+        assert_eq!(
+            info.webpage_url, url,
+            "an echoed input must survive the second boundary pass unchanged"
+        );
+    }
+
+    #[test]
+    fn a_freshly_scraped_webpage_url_is_repaired() {
+        let url = "https://x.test/v?a=1&b=2";
+        let mut info =
+            rdlp_types::InfoDict::new("id", "t", "e", "https://x.test/canonical?a=1&amp;b=2");
+        decode_lazy_result(&mut info, url);
+        assert_eq!(info.webpage_url, "https://x.test/canonical?a=1&b=2");
+    }
 
     /// The span field carries a redacted URL, not the raw one.
     ///
