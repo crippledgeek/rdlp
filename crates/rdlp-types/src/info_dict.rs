@@ -181,6 +181,64 @@ pub struct InfoDict {
 }
 
 impl InfoDict {
+    /// Decode HTML entities across every display string this carries.
+    ///
+    /// The single boundary for entity decoding on the extraction path (#698).
+    /// The orchestrator calls it once on each `InfoDict` an extractor returns,
+    /// so no extractor has to remember — which is the failure that put
+    /// `&quot;` and `&#039;` into real filenames.
+    ///
+    /// Fields NOT touched, deliberately: `id`, every `*_url` and `*_id`, and
+    /// the numeric fields. In a URL `&` is a query separator, and an id is an
+    /// opaque site token rather than text a person reads.
+    ///
+    /// `formats[].format_note` is also left alone: it is synthesized in-tree
+    /// from resolution and codec data rather than scraped, so it carries no
+    /// entities. That is an argument about provenance, not about the field
+    /// being non-display — if a plugin ever sets it from page text, it
+    /// belongs in the list above.
+    pub fn decode_text_fields(&mut self) {
+        self.title = crate::decode_html_entities(&self.title);
+        self.description = self.description.as_deref().map(crate::decode_html_entities);
+        self.uploader = self.uploader.as_deref().map(crate::decode_html_entities);
+        self.channel = self.channel.as_deref().map(crate::decode_html_entities);
+        self.playlist = self.playlist.as_deref().map(crate::decode_html_entities);
+        self.playlist_title = self
+            .playlist_title
+            .as_deref()
+            .map(crate::decode_html_entities);
+        self.artist = self.artist.as_deref().map(crate::decode_html_entities);
+        self.album = self.album.as_deref().map(crate::decode_html_entities);
+        self.track = self.track.as_deref().map(crate::decode_html_entities);
+        crate::decode_each(&mut self.actors);
+        if let Some(tags) = self.tags.as_mut() {
+            crate::decode_each(tags);
+        }
+        if let Some(categories) = self.categories.as_mut() {
+            crate::decode_each(categories);
+        }
+        // Nested display strings. `chapters[].title` is the one that reaches
+        // a file: `MetadataStage::build_chapters` writes it into the output
+        // container, so an entity there lands in the artifact — the same
+        // failure #698 is about, one level down. No in-tree extractor
+        // populates chapters today, but a plugin can.
+        if let Some(chapters) = self.chapters.as_mut() {
+            for chapter in chapters {
+                chapter.title = crate::decode_html_entities(&chapter.title);
+            }
+        }
+        for track in self
+            .subtitles
+            .iter_mut()
+            .chain(self.automatic_captions.iter_mut())
+            .flat_map(|m| m.values_mut())
+            .flatten()
+        {
+            // `name` only — `url` and `ext` are not display text.
+            track.name = track.name.as_deref().map(crate::decode_html_entities);
+        }
+    }
+
     /// Create a new `InfoDict` with required fields
     #[must_use]
     pub fn new(
@@ -382,5 +440,146 @@ mod tests {
 
         assert_eq!(info.id, deserialized.id);
         assert_eq!(info.title, deserialized.title);
+    }
+}
+
+#[cfg(test)]
+mod decode_text_fields_tests {
+    use super::InfoDict;
+
+    /// The filename from #698, verbatim off the filesystem.
+    #[test]
+    fn decodes_the_title_that_reached_a_real_filename() {
+        let mut info = InfoDict::new(
+            "2914100",
+            "&quot;PLEASE, JUST DON&#039;T TELL MY PARENTS!&quot; My stepsister",
+            "pornoxo",
+            "https://example.com/v",
+        );
+        info.decode_text_fields();
+        assert_eq!(
+            info.title,
+            "\"PLEASE, JUST DON'T TELL MY PARENTS!\" My stepsister"
+        );
+    }
+
+    /// `uploader` and `playlist_title` become DIRECTORY components under the
+    /// default output template, so the same defect lands in a folder name.
+    #[test]
+    fn decodes_the_fields_that_become_directories() {
+        let mut info = InfoDict::new("id", "t", "e", "https://example.com/v");
+        info.uploader = Some("Tom &amp; Jerry&#039;s Studio".to_string());
+        info.playlist_title = Some("Season &#8211; One".to_string());
+        info.decode_text_fields();
+        assert_eq!(info.uploader.as_deref(), Some("Tom & Jerry's Studio"));
+        assert_eq!(info.playlist_title.as_deref(), Some("Season \u{2013} One"));
+    }
+
+    /// The six fields the other tests do not reach. Without this, deleting
+    /// any of their lines from `decode_text_fields` leaves the suite green —
+    /// and `description` and `channel` are both operator-visible and
+    /// addressable from the output template.
+    #[test]
+    fn decodes_every_remaining_display_field() {
+        let mut info = InfoDict::new("id", "t", "e", "https://example.com/v");
+        info.description = Some("A &amp; B".to_string());
+        info.channel = Some("Chan &#039;n Co".to_string());
+        info.playlist = Some("List &amp; More".to_string());
+        info.artist = Some("Artist &amp; Co".to_string());
+        info.album = Some("Album &#8211; One".to_string());
+        info.track = Some("Track &quot;X&quot;".to_string());
+        info.decode_text_fields();
+        assert_eq!(info.description.as_deref(), Some("A & B"));
+        assert_eq!(info.channel.as_deref(), Some("Chan 'n Co"));
+        assert_eq!(info.playlist.as_deref(), Some("List & More"));
+        assert_eq!(info.artist.as_deref(), Some("Artist & Co"));
+        assert_eq!(info.album.as_deref(), Some("Album \u{2013} One"));
+        assert_eq!(info.track.as_deref(), Some("Track \"X\""));
+    }
+
+    /// Lists of display text decode too.
+    #[test]
+    fn decodes_actors_tags_and_categories() {
+        let mut info = InfoDict::new("id", "t", "e", "https://example.com/v");
+        info.actors = vec!["A &amp; B".to_string()];
+        info.tags = Some(vec!["rock &amp; roll".to_string()]);
+        info.categories = Some(vec!["mom &#039;n pop".to_string()]);
+        info.decode_text_fields();
+        assert_eq!(info.actors, vec!["A & B".to_string()]);
+        assert_eq!(info.tags.as_deref(), Some(&["rock & roll".to_string()][..]));
+        assert_eq!(
+            info.categories.as_deref(),
+            Some(&["mom 'n pop".to_string()][..])
+        );
+    }
+
+    /// Nested display strings decode too. `chapters[].title` is written into
+    /// the output container by the metadata stage, so an entity there reaches
+    /// the artifact on disk.
+    #[test]
+    fn decodes_nested_display_strings() {
+        use super::{Chapter, Subtitle};
+        use std::collections::HashMap;
+
+        let mut info = InfoDict::new("id", "t", "e", "https://example.com/v");
+        info.chapters = Some(vec![Chapter {
+            title: "Intro &amp; Credits".to_string(),
+            start_time: 0.0,
+            end_time: 1.0,
+        }]);
+        let mut subs = HashMap::new();
+        subs.insert(
+            "en".to_string(),
+            vec![Subtitle {
+                url: "https://x.test/s.vtt?a=1&amp;b=2".to_string(),
+                ext: "vtt".to_string(),
+                name: Some("English &#039;full&#039;".to_string()),
+            }],
+        );
+        info.subtitles = Some(subs);
+
+        info.decode_text_fields();
+
+        let chapter = info
+            .chapters
+            .as_ref()
+            .and_then(|c| c.first())
+            .expect("chapter present");
+        assert_eq!(chapter.title, "Intro & Credits");
+        let track = info
+            .subtitles
+            .as_ref()
+            .and_then(|m| m.get("en"))
+            .and_then(|v| v.first())
+            .expect("track present");
+        assert_eq!(track.name.as_deref(), Some("English 'full'"));
+        // the track URL is not display text and keeps its separator
+        assert_eq!(track.url, "https://x.test/s.vtt?a=1&amp;b=2");
+    }
+
+    /// Ids and URLs are NOT decoded: `&` in a query string is a separator,
+    /// and an id is an opaque site token rather than text a person reads.
+    #[test]
+    fn leaves_ids_and_urls_alone() {
+        let mut info = InfoDict::new("a&amp;b", "t", "e", "https://x.test/?a=1&amp;b=2");
+        info.uploader_url = Some("https://x.test/u?a=1&amp;b=2".to_string());
+        info.decode_text_fields();
+        assert_eq!(info.id, "a&amp;b");
+        assert_eq!(info.webpage_url, "https://x.test/?a=1&amp;b=2");
+        assert_eq!(
+            info.uploader_url.as_deref(),
+            Some("https://x.test/u?a=1&amp;b=2")
+        );
+    }
+
+    /// Running the boundary over already-decoded text is a no-op, which is
+    /// what makes it safe to apply unconditionally to every extractor's
+    /// output — including the majority whose titles the HTML parser already
+    /// decoded.
+    #[test]
+    fn is_a_no_op_for_text_with_nothing_to_decode() {
+        let mut info = InfoDict::new("id", "Tom & Jerry: 100% fun", "e", "https://example.com/v");
+        info.decode_text_fields();
+        assert_eq!(info.title, "Tom & Jerry: 100% fun");
     }
 }

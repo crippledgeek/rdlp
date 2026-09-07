@@ -3,7 +3,6 @@
 //! Handles fetching and parsing the episode list from the AJAX API,
 //! including individual episode info lookup and full episode list parsing.
 
-use crate::utils::decode_html_entities;
 use anyhow::Context as _;
 use lazy_regex::{Lazy, Regex, lazy_regex};
 use log::debug;
@@ -109,7 +108,7 @@ fn parse_episode_info(html: &str, episode_data_id: &str) -> Option<EpisodeInfo> 
 
         let title = EP_TITLE_ATTR
             .captures(block)
-            .map(|c| decode_html_entities(&c[1]))
+            .map(|c| c[1].to_string())
             .filter(|t| !t.is_empty());
 
         return Some(EpisodeInfo { number, title });
@@ -132,7 +131,7 @@ pub fn parse_all_episodes(html: &str) -> Vec<EpisodeListEntry> {
 
             let title = EP_TITLE_ATTR
                 .captures(block)
-                .map(|c| decode_html_entities(&c[1]))
+                .map(|c| c[1].to_string())
                 .filter(|t| !t.is_empty());
 
             Some(EpisodeListEntry {
@@ -285,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_episode_title_html_entities() {
+    fn parse_returns_the_title_attribute_undecoded() {
         let html = r#"
             <a href="/watch/sailor-moon-1067?ep=40198"
                title="Usagi&#39;s Disaster: Beware of the Clock of Confusion"
@@ -296,18 +295,46 @@ mod tests {
             </a>
         "#;
 
+        // Verbatim. This parser used to decode, and no longer does: entity
+        // decoding happens once, at the orchestrator boundary
+        // (`InfoDict::decode_text_fields`, #698). Decoding here as well would
+        // be two single-pass decodes, which compose into the double-decode the
+        // boundary exists to prevent — so this assertion is what stops the
+        // second pass coming back.
         let info = parse_episode_info(html, "40198").unwrap();
         assert_eq!(info.number, "15");
         assert_eq!(
             info.title.as_deref(),
-            Some("Usagi's Disaster: Beware of the Clock of Confusion")
+            Some("Usagi&#39;s Disaster: Beware of the Clock of Confusion")
         );
 
         let episodes = parse_all_episodes(html);
         assert_eq!(episodes.len(), 1);
         assert_eq!(
             episodes[0].info.title.as_deref(),
-            Some("Usagi's Disaster: Beware of the Clock of Confusion")
+            Some("Usagi&#39;s Disaster: Beware of the Clock of Confusion")
         );
+    }
+
+    /// End to end: the composed episode title reaches the user decoded,
+    /// because the boundary decodes it. This is the behaviour the old
+    /// parse-layer assertion was really protecting, asserted where it now
+    /// happens — so the test above is a relocation, not a relaxation.
+    #[test]
+    fn composed_episode_title_is_decoded_by_the_boundary() {
+        let html = r#"<a title="Usagi&#39;s Disaster" class="item ep-item"
+               data-number="15" data-id="40198"></a>"#;
+        let info = parse_episode_info(html, "40198").unwrap();
+        let composed = format!(
+            "Sailor Moon - Episode {} - {}",
+            info.number,
+            info.title.as_deref().unwrap()
+        );
+
+        let mut dict =
+            rdlp_types::InfoDict::new("40198", composed, "9anime", "https://9animetv.to/x");
+        dict.decode_text_fields();
+
+        assert_eq!(dict.title, "Sailor Moon - Episode 15 - Usagi's Disaster");
     }
 }

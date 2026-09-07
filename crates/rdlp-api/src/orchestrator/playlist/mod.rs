@@ -162,7 +162,12 @@ impl Orchestrator {
                     "Previously failed episodes will be retried"
                 );
                 for ep in &saved.failed_episodes {
-                    warn!("  [{}] {}: {}", ep.position, ep.title, ep.last_error);
+                    warn!(
+                        "  [{}] {}: {}",
+                        ep.position,
+                        rdlp_redact::text::sanitize_for_terminal(&ep.title),
+                        ep.last_error
+                    );
                 }
             }
         }

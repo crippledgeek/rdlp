@@ -118,6 +118,44 @@ pub struct SearchResultPreview {
     pub upload_date: Option<String>,
 }
 
+impl SearchResultPreview {
+    /// Decode only the display strings an enrichment pass actually replaced.
+    ///
+    /// A preview handed to `enrich` has already been through the boundary at
+    /// `search`/`search_page`. Most `enrich` implementations return it
+    /// unchanged (the trait default does), so decoding the result wholesale
+    /// would be a SECOND pass over already-decoded text — the composition
+    /// this boundary exists to prevent, taking `AT&amp;amp;T` to `AT&T`.
+    ///
+    /// But an implementation that fetches the video page extracts genuinely
+    /// new, still-encoded text. Comparing against the pre-enrichment value
+    /// distinguishes the two without asking each implementation to remember:
+    /// unchanged fields keep their single decode, replaced ones get theirs.
+    pub fn decode_fields_changed_from(&mut self, before: &Self) {
+        if self.title != before.title {
+            self.title = crate::decode_html_entities(&self.title);
+        }
+        if self.uploader != before.uploader {
+            self.uploader = self.uploader.as_deref().map(crate::decode_html_entities);
+        }
+        if self.actors != before.actors {
+            crate::decode_each(&mut self.actors);
+        }
+    }
+
+    /// Decode HTML entities across every display string this carries.
+    ///
+    /// The search-side half of the single decode boundary (#698); the
+    /// orchestrator calls it on every preview a search extractor returns.
+    /// `video_url`, `thumbnail_url` and `uploader_url` are left alone — `&`
+    /// there is a query separator, not text a person reads.
+    pub fn decode_text_fields(&mut self) {
+        self.title = crate::decode_html_entities(&self.title);
+        self.uploader = self.uploader.as_deref().map(crate::decode_html_entities);
+        crate::decode_each(&mut self.actors);
+    }
+}
+
 /// Information about a site that supports search.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchSiteInfo {
@@ -258,5 +296,94 @@ mod filter_ctor_tests {
         let d = SearchFilterDescriptor::new("tags", "Tags", vec![], None);
         assert_eq!(d.default, None);
         assert!(d.allowed_values.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod preview_decode_tests {
+    use super::SearchResultPreview;
+
+    fn preview() -> SearchResultPreview {
+        SearchResultPreview {
+            video_url: "https://x.test/v?a=1&amp;b=2".to_string(),
+            title: "ROCK &amp; ROLL STRIPPER".to_string(),
+            thumbnail_url: Some("https://x.test/t.jpg?a=1&amp;b=2".to_string()),
+            duration: None,
+            uploader: Some("Tom &amp; Jerry".to_string()),
+            uploader_url: Some("https://x.test/u?a=1&amp;b=2".to_string()),
+            actors: vec!["A &#039;B&#039; C".to_string()],
+            view_count: None,
+            upload_date: None,
+        }
+    }
+
+    /// Search previews are the second surface of the boundary. The title here
+    /// is a real string returned by abxxx's live search API on 2026-09-06 —
+    /// that API entity-encodes some records and not others.
+    #[test]
+    fn decodes_display_text() {
+        let mut p = preview();
+        p.decode_text_fields();
+        assert_eq!(p.title, "ROCK & ROLL STRIPPER");
+        assert_eq!(p.uploader.as_deref(), Some("Tom & Jerry"));
+        assert_eq!(p.actors, vec!["A 'B' C".to_string()]);
+    }
+
+    /// A pass-through enrichment must NOT decode again. The trait's default
+    /// `enrich` returns its input unchanged, so this is the common case: an
+    /// already-decoded title containing literal `&amp;` text has to survive.
+    #[test]
+    fn unchanged_fields_are_not_decoded_again() {
+        let before = SearchResultPreview {
+            title: "AT&amp;T".to_string(),
+            uploader: Some("Tom &amp; Co".to_string()),
+            ..preview()
+        };
+        let mut after = before.clone();
+        after.decode_fields_changed_from(&before);
+        assert_eq!(after.title, "AT&amp;T");
+        assert_eq!(after.uploader.as_deref(), Some("Tom &amp; Co"));
+    }
+
+    /// A field the enrichment REPLACED is newly-extracted text that nothing
+    /// has decoded yet, so it does get decoded.
+    #[test]
+    fn replaced_fields_are_decoded() {
+        let before = preview();
+        let mut after = before.clone();
+        after.uploader = Some("Fresh &amp; New".to_string());
+        after.actors = vec!["A &#039;B&#039;".to_string()];
+        after.decode_fields_changed_from(&before);
+        assert_eq!(after.uploader.as_deref(), Some("Fresh & New"));
+        assert_eq!(after.actors, vec!["A 'B'".to_string()]);
+        // untouched by this enrichment, so left exactly as it arrived
+        assert_eq!(after.title, before.title);
+    }
+
+    /// URLs keep their `&amp;`: decoding one would rewrite a query separator.
+    #[test]
+    fn leaves_urls_alone() {
+        let mut p = preview();
+        p.decode_text_fields();
+        assert_eq!(p.video_url, "https://x.test/v?a=1&amp;b=2");
+        assert_eq!(
+            p.thumbnail_url.as_deref(),
+            Some("https://x.test/t.jpg?a=1&amp;b=2")
+        );
+        assert_eq!(
+            p.uploader_url.as_deref(),
+            Some("https://x.test/u?a=1&amp;b=2")
+        );
+    }
+
+    /// The same API returned `Wife & Friend Pov Handjob` unencoded in another
+    /// query, so a mixed feed has to survive: a lone `&` is not a character
+    /// reference and passes through untouched.
+    #[test]
+    fn leaves_unencoded_titles_unchanged() {
+        let mut p = preview();
+        p.title = "Wife & Friend Pov Handjob".to_string();
+        p.decode_text_fields();
+        assert_eq!(p.title, "Wife & Friend Pov Handjob");
     }
 }

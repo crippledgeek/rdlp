@@ -23,7 +23,7 @@ pub(super) fn wp_post_to_preview(post: WpPost, duration: Option<f64>) -> SearchR
                 .into_iter()
                 .flatten()
                 .filter(|t| t.taxonomy == "actors")
-                .map(|t| html_entities_decode(&t.name))
+                .map(|t| t.name)
                 .collect();
 
             (thumb, actors)
@@ -33,7 +33,8 @@ pub(super) fn wp_post_to_preview(post: WpPost, duration: Option<f64>) -> SearchR
 
     let upload_date = post.date.split('T').next().map(|s| s.to_string());
 
-    let title = html_entities_decode(&post.title.rendered);
+    // Decoded once at the orchestrator boundary, not here (#698).
+    let title = post.title.rendered;
 
     SearchResultPreview {
         title,
@@ -102,17 +103,6 @@ pub(super) fn scrape_durations_from_html(
     }
 
     map
-}
-
-/// Decode HTML entities in a WP REST API title in a single pass.
-///
-/// Delegates to [`html_escape::decode_html_entities`] (full WHATWG named set +
-/// numeric/hex references), so entities like `&#8211;` → `–` and `&#8217;` →
-/// `’` decode to their true code points without the double-decoding the former
-/// hand-rolled sequential `.replace()` chain was prone to.
-#[must_use]
-pub(super) fn html_entities_decode(s: &str) -> String {
-    html_escape::decode_html_entities(s).into_owned()
 }
 
 // ============================================================================
@@ -288,37 +278,4 @@ pub(super) fn meta_content(html: &Html, selector: &Selector) -> Option<String> {
         .and_then(|el| el.value().attr("content"))
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::html_entities_decode;
-
-    /// Positive: the WP-REST punctuation entities this decoder was written for
-    /// still decode to the same characters (en/em dash, ampersand, plain text).
-    #[test]
-    fn decodes_wp_rest_punctuation_entities() {
-        assert_eq!(html_entities_decode("A &#8211; B"), "A \u{2013} B");
-        assert_eq!(html_entities_decode("A &#8212; B"), "A \u{2014} B");
-        assert_eq!(html_entities_decode("Tom &amp; Jerry"), "Tom & Jerry");
-        assert_eq!(html_entities_decode("plain title"), "plain title");
-    }
-
-    /// Curly-quote entities now decode to their true WHATWG code points (U+2019
-    /// RIGHT SINGLE QUOTATION MARK) rather than the old ASCII-apostrophe
-    /// approximation. Fails against the old decoder (`&#8217;`→`'` 0x27).
-    #[test]
-    fn decodes_curly_quotes_to_true_code_points() {
-        assert_eq!(html_entities_decode("it&#8217;s"), "it\u{2019}s");
-        assert_eq!(html_entities_decode("&#8216;q&#8217;"), "\u{2018}q\u{2019}");
-    }
-
-    /// Regression: single-pass decode — an already-escaped `&amp;lt;` must stay
-    /// `&lt;`, not collapse to `<`. Fails against the old sequential-`.replace()`
-    /// decoder (`&amp;`→`&` ran before `&lt;`→`<`, double-decoding to `<`).
-    #[test]
-    fn does_not_double_decode() {
-        assert_eq!(html_entities_decode("&amp;lt;"), "&lt;");
-        assert_eq!(html_entities_decode("&amp;#8211;"), "&#8211;");
-    }
 }

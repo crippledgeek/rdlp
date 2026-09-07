@@ -36,9 +36,14 @@ class TestCleanHtml:
     def test_p_to_p_becomes_newline(self):
         assert clean_html('<p>a</p><p>b</p>') == 'a\nb'
 
-    def test_unescapes_html_entities(self):
-        assert clean_html('Tom &amp; Jerry') == 'Tom & Jerry'
-        assert clean_html('&lt;tag&gt;') == '<tag>'
+    def test_returns_entities_verbatim(self):
+        # Diverges from yt-dlp deliberately: the host decodes display text
+        # once at its boundary (`InfoDict::decode_text_fields`), so
+        # unescaping here too would be two single-pass decodes composing
+        # into a double decode — `&amp;lt;` would become `<`.
+        assert clean_html('Tom &amp; Jerry') == 'Tom &amp; Jerry'
+        assert clean_html('<p>A &amp;lt; B</p>') == 'A &amp;lt; B'
+        assert clean_html('&lt;tag&gt;') == '&lt;tag&gt;'
 
     def test_strips_attributes_inside_tags(self):
         assert clean_html('<a href="x" class="y">link</a>') == 'link'
@@ -99,7 +104,8 @@ class TestHtmlSearchRegex:
         )
         assert result == 'Foo Bar'
 
-    def test_unescapes_entities(self):
+    def test_returns_entities_verbatim(self):
+        # Follows `clean_html`, which this delegates to — see the note there.
         ie = _XxxIE()
         html = '<title>Tom &amp; Jerry - Cartoons</title>'
         result = ie._html_search_regex(
@@ -107,7 +113,7 @@ class TestHtmlSearchRegex:
             html,
             'title',
         )
-        assert result == 'Tom & Jerry'
+        assert result == 'Tom &amp; Jerry'
 
     def test_passes_through_default_on_miss(self):
         ie = _XxxIE()

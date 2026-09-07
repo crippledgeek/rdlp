@@ -149,11 +149,31 @@ interface host-extract-helpers {
     search-regex: func(pattern: string, haystack: string, re-flags: regex-flags)
                     -> option<string>;
 
+    /// Search `haystack` and return the first capture group, tags stripped.
+    ///
+    /// The result is returned VERBATIM — HTML entities are NOT decoded. The
+    /// host decodes display text exactly once, when the `info-dict` a plugin
+    /// returns crosses the boundary, so decoding here as well would be two
+    /// single-pass decodes composing into one double decode (a literal
+    /// `&amp;lt;` would become `<`).
+    ///
+    /// A plugin that puts this value somewhere the host does NOT decode —
+    /// any URL field, since there `&` is a query separator — must undo the
+    /// `&amp;` itself. See the Python shim's `_og_search_thumbnail` for the
+    /// narrow replacement to copy, and note that a full entity decoder is
+    /// the wrong tool for a URL.
     html-search-regex: func(pattern: string, haystack: string, re-flags: regex-flags)
                     -> option<string>;
 
     html-search-meta: func(name: string, html: string) -> option<string>;
 
+    /// Return the `content` of the `og:<prop>` meta tag.
+    ///
+    /// VERBATIM — entities are not decoded; see `html-search-regex` for why,
+    /// and for what a plugin must do when the property is a URL. `og:image`
+    /// is the common case: an `&` inside an HTML attribute is serialized
+    /// `&amp;`, so the raw value carries it and the host will not strip it
+    /// from a URL field.
     og-search-property: func(prop: string, html: string) -> option<string>;
 
     rta-search: func(html: string) -> option<u8>;
