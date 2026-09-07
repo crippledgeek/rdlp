@@ -8,7 +8,6 @@ helpers are fully unit-testable in plain Python.
 import collections.abc as _collections_abc
 import datetime
 import email.utils
-import html as _html
 import json as _json
 import re as _re
 from typing import Any
@@ -612,6 +611,12 @@ def _legacy_search_regex(pattern, string, name, default, fatal, flags, group):
     return default
 
 
+# The ampersand references an HTML attribute serializer can emit. Used to
+# undo just that one character in extracted URLs — see `_og_search_thumbnail`
+# for why a full entity decoder is wrong there.
+_AMPERSAND_REF = _re.compile(r'&(?:amp;|AMP;|#0*38;|#[xX]0*26;)')
+
+
 class InfoExtractor:
     """Base class for yt-dlp-style extractors. I/O helpers added in Tasks 6-7.
 
@@ -1081,7 +1086,10 @@ class InfoExtractor:
                 )
                 if escaped is None:
                     return None
-                return _html.unescape(escaped)
+                # Verbatim, matching the Rust host helper this falls back
+                # from: display text is decoded once at the host boundary,
+                # so unescaping here would be a second pass.
+                return escaped
             if result is not None:
                 return result
         # Mirror the existing default-handling
@@ -1104,14 +1112,39 @@ class InfoExtractor:
 
     def _og_search_thumbnail(self, html_text, **kargs):
         """yt-dlp's `_og_search_thumbnail` (`extractor/common.py:1492-1493`).
-        Always non-fatal."""
-        return self._og_search_property(
+        Always non-fatal.
+
+        Undoes ONE entity, unlike its display-text siblings.
+        `og_search_property` reads a raw attribute value, and an `&` inside
+        one is written `&amp;` — so `content="…?a=1&amp;b=2"` yields a URL
+        with a literal `&amp;` in the query. The host's decode boundary
+        deliberately skips every `*_url` field (there `&` is a separator), so
+        nothing downstream would fix it. Display properties need nothing here
+        precisely because that boundary does decode them.
+
+        Deliberately NOT `html.unescape`, which was measured against this
+        input class and is wrong for it: the stdlib implements WHATWG's
+        legacy semicolon-less references, so `?copyright=1&copy=2` decodes to
+        `?copyright=1©=2` and `?x=1&sol;&sol;h` to `?x=1//h` — corrupting a
+        query key and reconstructing URL structure. The Rust side can use its
+        full decoder safely only because that crate requires the terminating
+        semicolon.
+
+        Attribute serialization escapes `& < > " '`, and only `&` occurs
+        unencoded in a URL — but it can be written as any of its references,
+        so all of them are undone: `&amp;`, the legacy uppercase `&AMP;`, and
+        the numeric `&#38;`/`&#x26;` with optional leading zeros and either
+        hex case. Verified to agree with `html.unescape` on every one of those
+        AND on `&Amp;`, which is NOT a valid reference and must survive. The
+        semicolon is required, so a query key like `?&amp=1` is left alone."""
+        url = self._og_search_property(
             'image',
             html_text,
             'thumbnail URL',
             fatal=False,
             **kargs,
         )
+        return _AMPERSAND_REF.sub('&', url) if url is not None else None
 
     # --- JSON search --------------------------------------------------------
 

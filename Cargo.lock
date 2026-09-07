@@ -6480,7 +6480,6 @@ dependencies = [
  "dash-mpd",
  "futures",
  "hex",
- "html-escape",
  "inventory",
  "lazy-regex",
  "log",
@@ -6563,7 +6562,6 @@ dependencies = [
  "ed25519-dalek",
  "futures-util",
  "hex",
- "html-escape",
  "log",
  "percent-encoding",
  "psl",
@@ -6689,6 +6687,7 @@ dependencies = [
 name = "rdlp-types"
 version = "0.1.0"
 dependencies = [
+ "html-escape",
  "rdlp-redact",
  "regex",
  "serde",

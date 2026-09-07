@@ -121,7 +121,7 @@ async fn html_search_regex_strips_tags() {
 }
 
 #[tokio::test]
-async fn html_search_regex_unescapes_entities() {
+async fn html_search_regex_returns_entities_verbatim() {
     let mut c = ctx();
     let r = c
         .html_search_regex(
@@ -130,7 +130,11 @@ async fn html_search_regex_unescapes_entities() {
             crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
         )
         .await;
-    assert_eq!(r, Some("Tom & Jerry".to_string()));
+    // Returned VERBATIM. The shim used to unescape here, matching yt-dlp;
+    // it no longer does, because `InfoDict::decode_text_fields` decodes
+    // whatever a plugin returns and two single-pass decodes compose into the
+    // double-decode the boundary exists to prevent (#698).
+    assert_eq!(r, Some("Tom &amp; Jerry".to_string()));
 }
 
 #[tokio::test]
@@ -226,7 +230,7 @@ async fn og_search_property_extracts_image() {
 }
 
 #[tokio::test]
-async fn og_search_property_unescapes_entities() {
+async fn og_search_property_returns_entities_verbatim() {
     let mut c = ctx();
     let r = c
         .og_search_property(
@@ -234,7 +238,8 @@ async fn og_search_property_unescapes_entities() {
             r#"<meta property="og:title" content="A &amp; B"/>"#.to_string(),
         )
         .await;
-    assert_eq!(r, Some("A & B".to_string()));
+    // Verbatim — see `html_search_regex_returns_entities_verbatim` above.
+    assert_eq!(r, Some("A &amp; B".to_string()));
 }
 
 #[tokio::test]

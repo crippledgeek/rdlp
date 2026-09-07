@@ -65,16 +65,27 @@ fn build_regex(
     builder.build()
 }
 
-/// Strip HTML tags + collapse whitespace + unescape entities.
-/// Mirrors yt-dlp's `clean_html` (`utils/_utils.py:527-540`).
+/// Strip HTML tags and collapse whitespace.
+///
+/// SECOND IMPLEMENTATION, deliberately: the same contract exists in Python at
+/// `tools/ytdlp-compat/rdlp_ytdlp_compat/_utils.py::clean_html`. They cannot
+/// be merged — a Python plugin calls that one directly, a WASM plugin reaches
+/// this one over WIT — so the four regexes below are duplicated by necessity
+/// and must stay identical to it. Both were changed together to stop
+/// unescaping; a change to one without the other is a drift bug.
+///
+/// Shaped after yt-dlp's `clean_html` (`utils/_utils.py:527-540`) with ONE
+/// deliberate divergence: yt-dlp unescapes entities here, and this does not.
+/// Whatever a plugin returns as a display field is decoded downstream by
+/// `InfoDict::decode_text_fields`, so decoding here too would be two
+/// independent single-pass decodes — which compose into exactly the
+/// double-decode the boundary exists to avoid, taking a literal `&amp;lt;`
+/// to `<`. Parity with yt-dlp is the means here; decoding once is the end.
 fn clean_html(html: &str) -> String {
     let collapsed = RE_WHITESPACE.replace_all(html, " ");
     let no_br = RE_BR.replace_all(&collapsed, "\n");
     let no_p = RE_P.replace_all(&no_br, "\n");
-    let no_tags = RE_TAGS.replace_all(&no_p, "");
-    html_escape::decode_html_entities(&no_tags)
-        .trim()
-        .to_string()
+    RE_TAGS.replace_all(&no_p, "").trim().to_string()
 }
 
 /// Wire `host:extract-helpers` into a linker.
@@ -185,8 +196,9 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
             };
             if let Some(m) = re.captures(&html)
                 && let Some(s) = (1..m.len()).find_map(|i| {
-                    m.get(i)
-                        .map(|g| html_escape::decode_html_entities(g.as_str()).into_owned())
+                    // Not decoded here — see `clean_html` for why the
+                    // boundary is the only decoder.
+                    m.get(i).map(|g| g.as_str().to_owned())
                 })
             {
                 return Some(s);

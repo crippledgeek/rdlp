@@ -9,6 +9,18 @@ use rdlp_redact::RedactedUrlBuf;
 use rdlp_types::{SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchResultPreview};
 use tracing::instrument;
 
+/// Apply the decode boundary to a page of search previews.
+///
+/// Search previews are the second surface of the boundary described on
+/// `Orchestrator::extract_video` (#698) — see there for why decoding happens
+/// here rather than at each extraction site. Both the all-pages and
+/// single-page search paths run this, so the two share one loop.
+fn decode_previews(previews: &mut [SearchResultPreview]) {
+    for preview in previews {
+        preview.decode_text_fields();
+    }
+}
+
 impl Orchestrator {
     /// Extract video information from URL
     ///
@@ -37,14 +49,45 @@ impl Orchestrator {
             .await
             .map_err(OrchestratorError::ExtractionFailed)?;
 
+        // The single decode boundary (#698). Sites serve display text
+        // entity-encoded — in markup, in JSON-LD and `window.*` script blobs,
+        // and in some JSON APIs — and every extractor's result passes through
+        // here, plugin-supplied ones included. Doing it per extractor is what
+        // failed: `PornoXO` did not, and `&quot;`/`&#039;` reached filenames.
+        //
+        // Unconditional, and safe to be: decoding text with no entities
+        // returns it unchanged, so this is a no-op for titles the HTML parser
+        // already decoded. Measured over the recorded live pages in this repo
+        // — 2668 title attributes, 106 encoded at source, NONE still
+        // entity-like after one decode — so the second pass this performs on
+        // parser-decoded text changes nothing in practice.
+        info.decode_text_fields();
+
         // Log extracted metadata
-        debug!("Title: {}", info.title);
+        // Decoding can put a real control character into the title, so it is
+        // sanitized before reaching a log sink, matching the CLI's print
+        // boundary. Measured on the pinned html-escape 0.2.15: `&#10;`
+        // decodes to LF (log forging, CWE-117) and `&#155;`/`&#x9b;` decode
+        // to U+009B CSI, a live escape-sequence introducer. `&#27;` (ESC)
+        // does NOT decode there — 0.2.15 rejects C0 references — but it did
+        // on 0.2.13 and would again on a downgrade, which is why the floor
+        // and this sanitization are separate defences.
+        debug!(
+            "Title: {}",
+            rdlp_redact::text::sanitize_for_terminal(&info.title)
+        );
 
         if let Some(ref uploader) = info.uploader {
-            debug!("Uploader: {uploader}");
+            debug!(
+                "Uploader: {}",
+                rdlp_redact::text::sanitize_for_terminal(uploader)
+            );
         }
         if let Some(ref channel) = info.channel {
-            debug!("Channel: {channel}");
+            debug!(
+                "Channel: {}",
+                rdlp_redact::text::sanitize_for_terminal(channel)
+            );
         }
         if let Some(duration) = info.duration {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
@@ -102,6 +145,10 @@ impl Orchestrator {
             .await
             .map_err(OrchestratorError::ExtractionFailed)?;
 
+        // Same boundary as `extract_video` — see there. Every path that
+        // returns an InfoDict decodes, or the boundary is not one.
+        info.decode_text_fields();
+
         debug!(formats = info.formats.len(); "Lazily resolved formats");
 
         // Auto-set Referer header on all formats
@@ -146,21 +193,37 @@ impl Orchestrator {
         debug!("Using extractor: {}", extractor.name());
         debug!("Extracting playlist information...");
 
-        let infos = extractor
+        let mut infos = extractor
             .extract_playlist(url, &self.extraction_context)
             .await
             .map_err(OrchestratorError::ExtractionFailed)?;
 
+        // Same boundary as `extract_video`. This path is NOT niche: it backs
+        // `extract_info`, so it serves `--dump-json`, `--print`, `--simulate`,
+        // `--list-formats`, the desktop's analyze view, and match-filter
+        // evaluation — and it wraps single videos too, not only playlists.
+        // Missing it meant a filter matched a raw title while the file it
+        // named was decoded.
+        for info in &mut infos {
+            info.decode_text_fields();
+        }
+
         if infos.len() == 1 {
             if let Some(first) = infos.first() {
-                debug!("Single video: {}", first.title);
+                debug!(
+                    "Single video: {}",
+                    rdlp_redact::text::sanitize_for_terminal(&first.title)
+                );
             }
         } else {
             let playlist_title = infos
                 .first()
                 .and_then(|i| i.playlist_title.as_deref())
                 .unwrap_or("Unnamed Playlist");
-            info!("Playlist: {playlist_title}");
+            info!(
+                "Playlist: {}",
+                rdlp_redact::text::sanitize_for_terminal(playlist_title)
+            );
             debug!("Found {} videos", infos.len());
         }
 
@@ -194,7 +257,7 @@ impl Orchestrator {
 
         info!(site = extractor_name, query = query.query.as_str(); "Starting search");
 
-        let results = tokio::select! {
+        let mut results = tokio::select! {
             res = extractor.search(query, &self.extraction_context) => {
                 res.map_err(OrchestratorError::ExtractionFailed)?
             }
@@ -205,6 +268,8 @@ impl Orchestrator {
         };
 
         info!(site = extractor_name, count = results.len(); "Search complete");
+
+        decode_previews(&mut results);
 
         Ok(results)
     }
@@ -229,7 +294,7 @@ impl Orchestrator {
 
         info!(site = extractor_name, query = query.query.as_str(); "Starting paginated search");
 
-        let response = tokio::select! {
+        let mut response = tokio::select! {
             res = extractor.search_page(query, &self.extraction_context) => {
                 res.map_err(OrchestratorError::ExtractionFailed)?
             }
@@ -240,6 +305,8 @@ impl Orchestrator {
         };
 
         info!(site = extractor_name, count = response.results.len(), page = response.page; "Search page complete");
+
+        decode_previews(&mut response.results);
 
         Ok(response)
     }
@@ -272,9 +339,19 @@ impl Orchestrator {
                 ))
             })?;
 
+        // The input already passed the boundary at `search`/`search_page`, so
+        // only what `enrich` REPLACES needs decoding — the trait default
+        // returns its input untouched, and decoding that again would be the
+        // double pass this boundary exists to prevent.
+        let before = preview.clone();
+
         tokio::select! {
             res = extractor.enrich(preview, &self.extraction_context) => {
-                res.map_err(OrchestratorError::ExtractionFailed)
+                res.map(|mut enriched| {
+                    enriched.decode_fields_changed_from(&before);
+                    enriched
+                })
+                .map_err(OrchestratorError::ExtractionFailed)
             }
             () = self.cancel_token.cancelled() => {
                 debug!("Search-result enrichment cancelled by token");

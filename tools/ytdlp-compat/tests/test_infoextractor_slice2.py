@@ -217,10 +217,14 @@ class TestOgSearchTitle:
         ie = _ExampleIE()
         assert ie._og_search_title('<html><head></head></html>') is None
 
-    def test_unescapes_html_entities(self):
+    def test_returns_entities_verbatim(self):
+        # Display text comes back encoded: the host decodes it once at its
+        # boundary (`InfoDict::decode_text_fields`), so unescaping here too
+        # would be two single-pass decodes composing into a double decode.
+        # The Rust host helper pins the same contract.
         ie = _ExampleIE()
         html = '<meta property="og:title" content="A &amp; B">'
-        assert ie._og_search_title(html) == 'A & B'
+        assert ie._og_search_title(html) == 'A &amp; B'
 
 
 class TestOgSearchThumbnail:
@@ -232,6 +236,69 @@ class TestOgSearchThumbnail:
     def test_missing_returns_none(self):
         ie = _ExampleIE()
         assert ie._og_search_thumbnail('<html></html>') is None
+
+    def test_decodes_amp_in_query_string(self):
+        # The behaviour this helper exists to get right: an `&` inside an
+        # HTML attribute is serialized `&amp;`, and the host's decode
+        # boundary skips every `*_url`, so nothing else would fix it.
+        ie = _ExampleIE()
+        html = (
+            '<meta property="og:image" '
+            'content="https://cdn.example/x.jpg?a=1&amp;b=2">'
+        )
+        assert ie._og_search_thumbnail(html) == 'https://cdn.example/x.jpg?a=1&b=2'
+
+    def test_does_not_double_decode(self):
+        # One pass only: `&amp;amp;` is a literal `&amp;` in the URL, not `&`.
+        ie = _ExampleIE()
+        html = (
+            '<meta property="og:image" '
+            'content="https://cdn.example/x.jpg?a=1&amp;amp;b=2">'
+        )
+        assert (
+            ie._og_search_thumbnail(html)
+            == 'https://cdn.example/x.jpg?a=1&amp;b=2'
+        )
+
+    def test_decodes_numeric_and_uppercase_ampersand_refs(self):
+        # An attribute serializer may write `&` as any of its references, not
+        # just the canonical `&amp;`. All forms html.unescape accepts as an
+        # ampersand are undone; `&Amp;`, which is NOT a valid reference, is
+        # not — verified against the stdlib for each form.
+        ie = _ExampleIE()
+        for ref in ('&amp;', '&AMP;', '&#38;', '&#038;', '&#x26;', '&#X26;'):
+            html_doc = (
+                '<meta property="og:image" '
+                f'content="https://cdn.example/x.jpg?a=1{ref}b=2">'
+            )
+            assert (
+                ie._og_search_thumbnail(html_doc)
+                == 'https://cdn.example/x.jpg?a=1&b=2'
+            ), ref
+
+        not_a_ref = (
+            '<meta property="og:image" '
+            'content="https://cdn.example/x.jpg?a=1&Amp;b=2">'
+        )
+        assert (
+            ie._og_search_thumbnail(not_a_ref)
+            == 'https://cdn.example/x.jpg?a=1&Amp;b=2'
+        )
+
+    def test_leaves_semicolonless_entity_names_alone(self):
+        # Measured hazard: `html.unescape` implements WHATWG legacy
+        # semicolon-less references and turns `&copy=2` into `©=2`, and
+        # `&sol;&sol;` into `//`. A query key must survive verbatim, which is
+        # why this decodes `&amp;` alone rather than calling a full decoder.
+        ie = _ExampleIE()
+        html = (
+            '<meta property="og:image" '
+            'content="https://cdn.example/x.jpg?copyright=1&copy=2&sol;s">'
+        )
+        assert (
+            ie._og_search_thumbnail(html)
+            == 'https://cdn.example/x.jpg?copyright=1&copy=2&sol;s'
+        )
 
 
 # -----------------------------------------------------------------------------

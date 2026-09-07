@@ -523,7 +523,7 @@ mod tests {
         // HTML entities inside a string value must survive verbatim through the
         // serde fast path — neither serde_json nor boa decodes HTML entities, so
         // switching parsers must not change this. Entity decoding happens later,
-        // at the dedicated decode_html_entities/sanitize layer.
+        // at the orchestrator's decode boundary (`InfoDict::decode_text_fields`).
         let engine = BoaJsEngine::new();
         let html = r#"<script>window.initials = {"videoModel": {"title": "A &amp; B &#39;q&#39;"}};</script>"#;
         let result = extract_initials(html, &engine).await;

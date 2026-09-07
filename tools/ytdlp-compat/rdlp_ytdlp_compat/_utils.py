@@ -30,7 +30,6 @@ Plus `sanitize_path(s, force=False)` for full path-string sanitisation
 """
 
 import datetime
-import html as _stdlib_html
 import re
 import unicodedata
 from typing import Any
@@ -154,15 +153,26 @@ def dict_get(d: dict[Any, Any], key_or_keys: Any, default: Any = None, skip_fals
 def clean_html(html: str | None) -> str | None:
     """yt-dlp's `clean_html` (`_utils.py:527-540` @ tag 2026.03.17).
     Strip HTML tags, collapse whitespace, convert `<br>` to newlines,
-    convert `</p><p>` to newlines, unescape entities. `None` passes
-    through (callers pass `_search_regex(..., default=None)` results)."""
+    convert `</p><p>` to newlines. `None` passes through (callers pass
+    `_search_regex(..., default=None)` results).
+
+    SECOND IMPLEMENTATION, deliberately: the same contract exists in Rust at
+    `crates/rdlp-plugin/src/host/extract_helpers.rs::clean_html`. They cannot
+    be merged — a WASM plugin reaches that one over WIT, a Python plugin calls
+    this one directly — so the four regexes below are duplicated by necessity
+    and must stay identical to it.
+
+    Diverges from yt-dlp in one way, matching the host's `clean_html`: it
+    does NOT unescape entities. Whatever a plugin returns as a display field
+    is decoded once by the host boundary, and unescaping here as well would
+    be two single-pass decodes composing into a double decode — taking a
+    literal `&amp;lt;` to `<`."""
     if html is None:
         return html
     html = re.sub(r'\s+', ' ', html)
     html = re.sub(r'(?u)\s?<\s?br\s?/?\s?>\s?', '\n', html)
     html = re.sub(r'(?u)<\s?/\s?p\s?>\s?<\s?p[^>]*>', '\n', html)
     html = re.sub(r'<.*?>', '', html)
-    html = _stdlib_html.unescape(html)
     return html.strip()
 
 

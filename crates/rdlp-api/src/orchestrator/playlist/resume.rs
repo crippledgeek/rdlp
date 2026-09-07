@@ -303,7 +303,10 @@ impl Orchestrator {
             .filter(|info| missing_subs.contains_key(&Self::sanitize_filename(&info.title)))
             .for_each(|info| {
                 let pos = info.playlist_index.unwrap_or(0);
-                warn!("  [{pos}/{total}] {}: no subtitle files found", info.title);
+                warn!(
+                    "  [{pos}/{total}] {}: no subtitle files found",
+                    rdlp_redact::text::sanitize_for_terminal(&info.title)
+                );
             });
     }
 }

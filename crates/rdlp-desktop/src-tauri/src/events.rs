@@ -234,7 +234,13 @@ pub fn emit_event(app: &AppHandle, job_id: &str, event: &Event) {
             let payload = DownloadLogPayload {
                 job_id: job_id.to_owned(),
                 level: LogLevel::Info,
-                message: format!("Metadata ready: {}", info.title),
+                // Sanitized like the CLI's twin handler: the title is
+                // decoded by the time it reaches here, and a decoded `&#10;`
+                // would forge an extra line in the Log Viewer.
+                message: format!(
+                    "Metadata ready: {}",
+                    rdlp_redact::text::sanitize_for_terminal(&info.title)
+                ),
             };
 
             if let Err(e) = app.emit("download-log", &payload) {

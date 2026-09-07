@@ -424,8 +424,10 @@ impl Orchestrator {
         if !self.config.match_filters.is_empty() {
             let info = single_info;
             if !check_match_filters(&self.config.match_filters, info) {
+                // `:?` not `=`: Debug-escaping neutralizes a control character
+                // the decode can produce, such as `&#10;` or `&#155;`.
                 info!(
-                    title = info.title.as_str();
+                    title:? = info.title;
                     "Does not pass match filter, skipping"
                 );
                 return Ok(None);

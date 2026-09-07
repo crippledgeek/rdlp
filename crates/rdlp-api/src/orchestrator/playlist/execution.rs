@@ -52,7 +52,11 @@ impl Orchestrator {
                 if !self.config.match_filters.is_empty()
                     && !super::super::check_match_filters(&self.config.match_filters, ep)
                 {
-                    log::info!(title = ep.title.as_str(); "Does not pass match filter, skipping");
+                    // `:?` not `=`, matching this file's other title kv site:
+                    // Debug-escaping neutralizes a control character the
+                    // decode can produce — `&#10;` (LF) and `&#155;` (CSI)
+                    // both decode on the pinned version.
+                    log::info!(title:? = ep.title; "Does not pass match filter, skipping");
                     return None;
                 }
                 Some((i, ep.clone()))
@@ -348,7 +352,10 @@ impl Orchestrator {
         if !failed.is_empty() {
             error!("Failed: {}", failed.len());
             for (pos, title, err) in failed {
-                error!("  [{pos}/{total}] {title}: {err}");
+                error!(
+                    "  [{pos}/{total}] {}: {err}",
+                    rdlp_redact::text::sanitize_for_terminal(title)
+                );
             }
         }
 
