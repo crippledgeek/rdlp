@@ -71,7 +71,32 @@ def test_og_search_property_calls_host(monkeypatch, ie):
 
     monkeypatch.setattr(_host, 'og_search_property', lambda prop, html: 'Title')
     assert ie._og_search_title('<html/>') == 'Title'
-    assert ie._og_search_thumbnail('<html/>') == 'Title'
+
+
+def test_og_search_thumbnail_is_a_passthrough(monkeypatch, ie):
+    """No repair at this layer: the host undoes `&amp;` once, on every URL
+    field of the info-dict, so the shim returns what it found. `default=` is
+    honoured by `_og_search_property`'s own tail, as for every OG helper."""
+    from rdlp_ytdlp_compat import _host
+
+    monkeypatch.setattr(
+        _host, 'og_search_property', lambda prop, html: 'https://cdn.example/x.jpg?a=1&amp;b=2'
+    )
+    assert ie._og_search_thumbnail('<html/>') == 'https://cdn.example/x.jpg?a=1&amp;b=2'
+
+
+def test_og_search_thumbnail_honours_default(monkeypatch, ie):
+    from rdlp_ytdlp_compat import _host
+
+    monkeypatch.setattr(_host, 'og_search_property', lambda prop, html: None)
+    assert ie._og_search_thumbnail('<html/>', default='fallback.jpg') == 'fallback.jpg'
+
+
+def test_og_search_thumbnail_missing_without_default_is_none(monkeypatch, ie):
+    from rdlp_ytdlp_compat import _host
+
+    monkeypatch.setattr(_host, 'og_search_property', lambda prop, html: None)
+    assert ie._og_search_thumbnail('<html/>') is None
 
 
 def test_rta_search_calls_host(monkeypatch):

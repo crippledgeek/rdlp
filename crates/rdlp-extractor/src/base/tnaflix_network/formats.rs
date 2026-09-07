@@ -104,12 +104,19 @@ pub(crate) fn parse_moviefap_xml(xml_text: &str) -> Vec<VideoMetadata> {
                 return None;
             }
 
-            // The XML is read by regex, so nothing decoded it. Use the
-            // library rather than replacing one spelling of one entity: the
-            // former `.replace("&amp;", "&")` left a numeric `&#38;` in the
-            // URL. Measured: `html_escape` requires the semicolon, so query
-            // keys like `&copy=` and `&times=` are not corrupted.
-            let video_url = rdlp_types::decode_html_entities(video_url);
+            // The XML is read by regex, so nothing decoded it, and a site is
+            // free to spell `&` as `&amp;` or numerically. This is the URL
+            // repair, NOT the display decoder: the two differ on `&sol;`,
+            // which a full decoder turns into a path separator, and on
+            // `&lt;`, which it turns into a character a URL may not carry
+            // unencoded. Both were live here until the repair existed.
+            //
+            // This is a format URL, so it is not covered by the orchestrator's
+            // decode boundary (which repairs the display-adjacent metadata
+            // URLs) -- it is fixed at the point the site's own encoding is
+            // known, and shares that boundary's implementation rather than
+            // carrying a third copy of it.
+            let video_url = rdlp_types::repair_url_entities(video_url);
             let height = quality_str.trim_end_matches('p').parse::<u32>().ok();
             let width = height.map(|h| (h * 16) / 9);
             let ext = extract_extension_from_url(&video_url);
