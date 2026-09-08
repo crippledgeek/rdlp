@@ -124,14 +124,20 @@ impl Orchestrator {
     ///
     /// Produces paths like `/output/dir/Title.video.f137.mp4` for the video
     /// stream and `/output/dir/Title.audio.f140.m4a` for the audio stream.
+    ///
+    /// # Security
+    ///
+    /// `format.format_id` and `format.ext` are both extractor-populated from
+    /// remote data, so this is the same stem+parent+`format!`+`join` shape as
+    /// the subtitle sidecar. It shares
+    /// [`container_resolver::sidecar_path`](super::container_resolver::sidecar_path)
+    /// rather than repeating it, so the sanitization cannot drift between the
+    /// two.
     fn merge_stream_path(base_output_path: &Path, format: &Format, label: &str) -> PathBuf {
-        let stem = base_output_path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("output");
-        let ext = &format.ext;
-        let dir = base_output_path.parent().unwrap_or_else(|| Path::new("."));
-        dir.join(format!("{stem}.{label}.{}.{ext}", format.format_id))
+        super::container_resolver::sidecar_path(
+            base_output_path,
+            &format!("{label}.{}.{}", format.format_id, format.ext),
+        )
     }
 
     /// Clean up a partially downloaded merge stream file.
@@ -143,5 +149,46 @@ impl Orchestrator {
                 debug!(path:? = path.display(); "Cleaned up merge temp file");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `format_id` and `ext` are extractor-populated from remote data, so
+    /// `merge_stream_path` carries the same injection surface as the
+    /// subtitle sidecar. It shares `sidecar_path`, so this asserts the
+    /// shared guarantee reaches it — on the resolved path, not a substring.
+    #[test]
+    fn merge_stream_path_neutralizes_hostile_format_metadata() {
+        let format = Format::new(
+            "../../etc",
+            "https://example.test/v.mp4",
+            "cron.d/pwn",
+            rdlp_types::DownloadProtocol::Https,
+        );
+        let path =
+            Orchestrator::merge_stream_path(Path::new("/tmp/out/video.mkv"), &format, "video");
+        assert_eq!(path.parent(), Some(Path::new("/tmp/out")));
+        assert!(
+            !path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir)),
+            "retains a `..` component: {path:?}"
+        );
+    }
+
+    #[test]
+    fn merge_stream_path_preserves_ordinary_format_metadata() {
+        let format = Format::new(
+            "f137",
+            "https://example.test/v.mp4",
+            "mp4",
+            rdlp_types::DownloadProtocol::Https,
+        );
+        let path =
+            Orchestrator::merge_stream_path(Path::new("/tmp/out/Title.mkv"), &format, "video");
+        assert_eq!(path, PathBuf::from("/tmp/out/Title.video.f137.mp4"));
     }
 }

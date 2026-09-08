@@ -275,12 +275,16 @@ fn test_empty_subtitles_returns_empty() {
 
 #[test]
 fn test_subtitle_filename_format() {
-    // Verify the filename pattern: stem.lang.ext
-    let stem = "My Video";
-    let lang = "en";
-    let ext = "srt";
-    let filename = format!("{stem}.{lang}.{ext}");
-    assert_eq!(filename, "My Video.en.srt");
+    // Verify the filename pattern `stem.lang.ext` as the download path
+    // actually builds it. This used to assert on a local `format!`, which
+    // pinned nothing — the construction moved behind `sidecar_path` when it
+    // gained suffix sanitization, and a self-contained `format!` would have
+    // stayed green through any change to it.
+    let path = crate::orchestrator::container_resolver::sidecar_path(
+        std::path::Path::new("/tmp/out/My Video.mkv"),
+        "en.srt",
+    );
+    assert_eq!(path, std::path::PathBuf::from("/tmp/out/My Video.en.srt"));
 }
 
 #[test]
