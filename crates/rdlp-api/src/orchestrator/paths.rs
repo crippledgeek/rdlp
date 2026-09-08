@@ -127,6 +127,26 @@ impl Orchestrator {
     ///
     /// This function is critical for security. Never use unsanitized filenames
     /// directly from external sources (video titles, URLs, etc.).
+    /// Defuse rdlp's reserved temp-file markers wherever they appear in a
+    /// file name.
+    ///
+    /// Only the leading dot of each marker becomes an underscore, so the
+    /// visible text is preserved while the strip logic (`strip_temp_marker`
+    /// searches for the *dotted* form anywhere in the name) can never mistake
+    /// it for a real marker.
+    ///
+    /// Applied twice, at two different points, because the markers are
+    /// dot-prefixed and a name is assembled from parts: `sanitize_filename`
+    /// covers a marker written inside one part, and
+    /// [`container_resolver::sidecar_path`](super::container_resolver::sidecar_path)
+    /// re-applies it to the *joined* name, where the joining dot can
+    /// reconstitute a marker that neither part contained.
+    pub(super) fn neutralize_temp_markers(name: &str) -> String {
+        name.replace(super::naming::PART_MARKER, "_rdlp-part")
+            .replace(super::naming::TMP_MARKER, "_rdlp-tmp-")
+            .replace(super::naming::BAK_MARKER, "_rdlp-bak-")
+    }
+
     pub(super) fn sanitize_filename(name: &str) -> String {
         // Step 1: Replace invalid filesystem characters and filter control characters
         let sanitized: String = name
@@ -161,14 +181,9 @@ impl Orchestrator {
             .collect();
 
         // Step 1.5 (#406): neutralize the reserved temp-file markers so a user
-        // title containing them cannot collide with the download/pipeline naming
-        // scheme. Only the leading dot of each marker is changed to an
-        // underscore, so the visible title text is preserved while the strip
-        // logic (marker-search on the dotted form) can never mistake it for a
-        // real marker.
-        let sanitized = sanitized
-            .replace(super::naming::PART_MARKER, "_rdlp-part")
-            .replace(super::naming::TMP_MARKER, "_rdlp-tmp-");
+        // title containing them cannot collide with the download/pipeline
+        // naming scheme.
+        let sanitized = Self::neutralize_temp_markers(&sanitized);
 
         // Step 2: Trim leading/trailing dots and spaces (problematic on Windows)
         let trimmed = sanitized.trim_matches(|c| c == '.' || c == ' ');

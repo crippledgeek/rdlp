@@ -5,15 +5,35 @@ use log::{debug, warn};
 use rdlp_types::InfoDict;
 use std::path::{Path, PathBuf};
 
-/// Has an earlier track in this same run already claimed `sub_path`?
+/// Has an earlier track in this same run already claimed `sub_path`? Warns
+/// and returns `true` when so, so both download loops share one copy of the
+/// skip policy rather than a copy each.
 ///
-/// Sanitization is many-to-one: `en/x` and `en:x` both become `en_x`. The
-/// `exists()` resume check cannot distinguish that collision from a file
-/// left by a previous run, and recording it would hand the caller a second
-/// language pointing at the first one's file — which is then embedded as
-/// the wrong track. Only a path claimed during *this* loop is a collision.
-fn collides_with_earlier_track(downloaded: &[(String, PathBuf)], sub_path: &Path) -> bool {
-    downloaded.iter().any(|(_, path)| path == sub_path)
+/// Two tracks can land on one path for more than one reason — sanitization
+/// is many-to-one (`en/x` and `en:x` both become `en_x`), and the selection
+/// stage does not deduplicate, so `--sub-langs en,eng` against a single
+/// `English` track selects it twice under the `len() <= 3` prefix match.
+/// The observation is what matters and what is reported; the cause is not
+/// established here.
+///
+/// Either way the `exists()` resume check below cannot tell this apart from
+/// a file left by a *previous* run, and recording it would hand the caller a
+/// second language pointing at the first one's file — which is then embedded
+/// as the wrong track.
+fn path_claimed_by_earlier_track(
+    downloaded: &[(String, PathBuf)],
+    sub_path: &Path,
+    lang: &str,
+) -> bool {
+    let claimed = downloaded.iter().any(|(_, path)| path == sub_path);
+    if claimed {
+        warn!(
+            lang:% = lang,
+            path:? = sub_path.display();
+            "Subtitle path already claimed by an earlier track in this run; skipping"
+        );
+    }
+    claimed
 }
 
 impl Orchestrator {
@@ -74,12 +94,7 @@ impl Orchestrator {
                 &format!("{lang}.{}", sub.ext),
             );
 
-            if collides_with_earlier_track(&downloaded, &sub_path) {
-                warn!(
-                    lang:% = lang,
-                    path:? = sub_path.display();
-                    "Subtitle filename collides with an earlier track after sanitization; skipping"
-                );
+            if path_claimed_by_earlier_track(&downloaded, &sub_path, lang) {
                 continue;
             }
 
@@ -204,12 +219,7 @@ impl Orchestrator {
                 &format!("{}.{}", track.language, track.ext),
             );
 
-            if collides_with_earlier_track(&downloaded, &sub_path) {
-                warn!(
-                    lang:% = track.language,
-                    path:? = sub_path.display();
-                    "Subtitle filename collides with an earlier track after sanitization; skipping"
-                );
+            if path_claimed_by_earlier_track(&downloaded, &sub_path, &track.language) {
                 continue;
             }
 
@@ -300,12 +310,12 @@ mod tests {
     //! guarantee directly: any URL the validator rejects MUST also be
     //! rejected by the call this module makes.
 
-    use super::collides_with_earlier_track;
+    use super::path_claimed_by_earlier_track;
     use crate::orchestrator::container_resolver::sidecar_path;
     use std::path::{Path, PathBuf};
 
     /// Two distinct languages that sanitize to one filename must be seen as
-    /// a collision, and two that don't must not be.
+    /// already-claimed, and two that don't must not be.
     ///
     /// Routed through the real `sidecar_path` rather than hand-written
     /// paths, so it also pins the many-to-one property the guard exists
@@ -319,11 +329,11 @@ mod tests {
         let downloaded: Vec<(String, PathBuf)> = vec![("en/x".to_string(), first)];
 
         assert!(
-            collides_with_earlier_track(&downloaded, &second),
+            path_claimed_by_earlier_track(&downloaded, &second, "en:x"),
             "`en:x` would be recorded pointing at `en/x`'s file"
         );
         assert!(
-            !collides_with_earlier_track(&downloaded, &sidecar_path(base, "pt-BR.srt")),
+            !path_claimed_by_earlier_track(&downloaded, &sidecar_path(base, "pt-BR.srt"), "pt-BR"),
             "a genuinely distinct language is not a collision"
         );
     }

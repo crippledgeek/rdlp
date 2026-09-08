@@ -107,7 +107,10 @@ const UNKNOWN_SEGMENT: &str = "und";
 /// `suffix` to form a sidecar filename. Replaces manual stem+parent+join
 /// patterns for subtitles, thumbnails, and other companion files.
 ///
-/// `suffix` can be `"jpg"`, `"en.srt"`, `"rdlp_state.json"`, etc.
+/// `suffix` can be `"jpg"`, `"en.srt"`, `"video.f137.mp4"`, etc. It may NOT
+/// be a name rdlp reserves for itself — a suffix composing the session-state
+/// file or a temp marker is defused rather than honoured (see below), so this
+/// is not the route to build one of those.
 ///
 /// # Security
 ///
@@ -131,38 +134,60 @@ pub fn sidecar_path(base_path: &Path, suffix: &str) -> PathBuf {
     let parent = base_path.parent().unwrap_or_else(|| Path::new("."));
     let sanitized = super::Orchestrator::sanitize_filename(suffix);
 
-    // `sanitize_filename` only ever removes characters, so a `.`-delimited
-    // segment can disappear entirely — an empty, dot-only or space-only
-    // subtitle language turns `.mkv` into `mkv`. That collapse is what lets
-    // a subtitle impersonate a different sidecar species, so restore a
-    // placeholder segment whenever the count drops.
+    // `sanitize_filename` never *inserts* a `.`, and has two ways of taking
+    // one away: it trims leading/trailing dots, and it rewrites a marker's
+    // dot to an underscore. So a drop in the `.`-delimited segment count
+    // means a segment vanished — an empty, dot-only or space-only subtitle
+    // language turns `.mkv` into `mkv`. That collapse is what lets a subtitle
+    // impersonate a different sidecar species, so restore a placeholder.
     let restored = if sanitized.split('.').count() < suffix.split('.').count() {
         format!("{UNKNOWN_SEGMENT}.{sanitized}")
     } else {
         sanitized
     };
 
-    if restored != suffix {
+    // The session-state file is an exact whole-name spelling rather than a
+    // substring anyone searches for, so one placeholder segment in front is
+    // enough to break the collision. `language="rdlp_state", ext="json"` is
+    // byte-identical through the sanitizer and reaches this on its own.
+    let restored = if format!("{stem}.{restored}")
+        == format!("{stem}{}", super::session_state::STATE_SUFFIX)
+    {
+        format!("{UNKNOWN_SEGMENT}.{restored}")
+    } else {
+        restored
+    };
+
+    // The temp markers are dot-PREFIXED and searched for at any position, so
+    // a placeholder segment would not help — `und.rdlp-part.mp4` still spells
+    // one. Re-run the marker rewrite on the JOINED name instead: a suffix that
+    // merely starts with `rdlp-part` carries no marker when `sanitize_filename`
+    // inspects it, and the dot joined in here reconstitutes one. Left
+    // unguarded, `language="rdlp-part", ext="mp4"` composes exactly
+    // `naming::part_path`, which resume probes and then trusts the bytes of.
+    let compose =
+        |sfx: &str| super::Orchestrator::neutralize_temp_markers(&format!("{stem}.{sfx}"));
+
+    // Belt-and-braces: a sidecar must never *be* the file it accompanies.
+    // `thumbnail.rs` passes a bare, dotless suffix today (`sidecar_path(media_file,
+    // &ext)`), so a thumbnail whose detected extension matches the media
+    // container's is exactly this case — not a hypothetical future caller.
+    let mut file_name = compose(&restored);
+    if parent.join(&file_name) == base_path {
+        file_name = compose(&format!("{UNKNOWN_SEGMENT}.{restored}"));
+    }
+
+    if file_name != format!("{stem}.{suffix}") {
         // Otherwise the file silently appears under a name the operator
         // never asked for, and a colliding track looks like a resume hit.
         warn!(
             requested:% = suffix.escape_debug(),
-            used:% = restored;
-            "Sidecar suffix was sanitized"
+            used:% = file_name.escape_debug();
+            "Sidecar name was sanitized"
         );
     }
 
-    let path = parent.join(format!("{stem}.{restored}"));
-
-    // Belt-and-braces: a sidecar must never *be* the file it accompanies.
-    // The segment restore above already prevents the reachable route here
-    // (`.mkv` → `und.mkv`); this catches any future caller that passes a
-    // bare suffix equal to `base_path`'s own extension.
-    if path == base_path {
-        parent.join(format!("{stem}.{UNKNOWN_SEGMENT}.{restored}"))
-    } else {
-        path
-    }
+    parent.join(file_name)
 }
 
 #[cfg(test)]
@@ -472,10 +497,94 @@ mod tests {
             ("pt-BR.srt", "/tmp/out/video.pt-BR.srt"),
             ("zh-Hans.vtt", "/tmp/out/video.zh-Hans.vtt"),
             ("jpg", "/tmp/out/video.jpg"),
-            ("rdlp_state.json", "/tmp/out/video.rdlp_state.json"),
+            // `rdlp_state.json` used to be listed here as a legitimate
+            // pass-through. It is not: it composes the session-state file's
+            // exact name, so this test was pinning the defect the reserved-name
+            // guard below now closes.
+            ("srt", "/tmp/out/video.srt"),
         ] {
             assert_eq!(sidecar_path(&base, suffix), PathBuf::from(expected));
         }
+    }
+
+    // ── sidecar_path reserved-name tests ────────────────────
+    //
+    // `sanitize_filename` neutralizes a temp marker only where it can SEE
+    // one, and the markers are dot-prefixed. A suffix that merely *starts*
+    // with `rdlp-part` carries no marker until `sidecar_path` joins the stem
+    // on with a dot — so the sanitizer is a no-op, the segment count never
+    // drops, and the composed name is a file rdlp owns.
+
+    #[test]
+    fn sidecar_path_cannot_forge_a_part_file() {
+        let base = PathBuf::from("/tmp/out/Title.mp4");
+        // language = "rdlp-part", ext = "mp4"
+        let path = sidecar_path(&base, "rdlp-part.mp4");
+        assert_ne!(
+            path,
+            crate::orchestrator::naming::part_path(&base),
+            "composed the resume-probed in-progress name"
+        );
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap();
+        assert!(
+            !name.contains(crate::orchestrator::naming::PART_MARKER),
+            "name still spells the part marker: {name:?}"
+        );
+    }
+
+    #[test]
+    fn sidecar_path_cannot_forge_pipeline_or_backup_names() {
+        let base = PathBuf::from("/tmp/out/Title.mp4");
+        for (suffix, marker) in [
+            (
+                "rdlp-tmp-abc123.mp4",
+                crate::orchestrator::naming::TMP_MARKER,
+            ),
+            (
+                "rdlp-bak-abc123.mp4",
+                crate::orchestrator::naming::BAK_MARKER,
+            ),
+        ] {
+            let path = sidecar_path(&base, suffix);
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap();
+            assert!(
+                !name.contains(marker),
+                "name still spells {marker}: {name:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn sidecar_path_cannot_forge_the_session_state_file() {
+        let base = PathBuf::from("/tmp/out/Title.mp4");
+        // language = "rdlp_state", ext = "json" — byte-identical through the
+        // sanitizer, so only the exact-name guard catches it.
+        let path = sidecar_path(&base, "rdlp_state.json");
+        assert_ne!(
+            path,
+            crate::orchestrator::session_state::single_video_state_path(
+                Path::new("/tmp/out"),
+                "Title"
+            ),
+            "composed the session-state file's own name"
+        );
+    }
+
+    /// The marker rewrite must not fire on an ordinary name that merely
+    /// mentions rdlp.
+    ///
+    /// `rdlp_part` (underscore) is deliberately not `rdlp-partial`: the
+    /// marker is matched as a substring, so `.rdlp-partial` *does* contain
+    /// `.rdlp-part` and is rewritten. That over-match is `sanitize_filename`'s
+    /// pre-existing behaviour for titles, unchanged here — asserting it were
+    /// untouched would be asserting a fiction.
+    #[test]
+    fn sidecar_path_leaves_marker_lookalikes_alone() {
+        let base = PathBuf::from("/tmp/out/Title.mp4");
+        assert_eq!(
+            sidecar_path(&base, "rdlp_part.srt"),
+            PathBuf::from("/tmp/out/Title.rdlp_part.srt")
+        );
     }
 
     // ── output_stub tests ───────────────────────────────────
