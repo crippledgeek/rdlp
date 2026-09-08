@@ -39,7 +39,14 @@ pub struct DownloadOptions {
     /// Whether to download subtitles.
     pub subtitles: bool,
     /// Subtitle language codes (e.g. `["en", "sv"]`).
-    pub subtitle_langs: Vec<String>,
+    ///
+    /// `None` = the user made no per-download choice, so
+    /// `settings.default_subtitle_langs` applies. `Some(vec![])` is an
+    /// explicit "no languages" and suppresses the settings default — a
+    /// distinction the previous bare `Vec<String>` could not express, which
+    /// left `default_subtitle_langs` inert (#589).
+    #[serde(default)]
+    pub subtitle_langs: Option<Vec<String>>,
     /// Container format to remux into (e.g. `Mp4`, `Mkv`).
     pub remux: Option<ContainerFormat>,
     /// Audio format to extract (e.g. `Mp3`, `Opus`).
@@ -175,6 +182,10 @@ fn validate_recode_preset(preset: Option<&str>) -> Result<(), AppError> {
 
 /// Merge per-download subtitle options with the app settings defaults.
 ///
+/// `sub_langs` is the one field with a real two-layer merge here:
+/// `options.subtitle_langs` is `None` when the user made no per-download
+/// choice, in which case `settings.default_subtitle_langs` applies (#589).
+///
 /// `write_subs` reads the global `settings.write_subtitles` only —
 /// `options.subtitles` has no per-download UI control yet (tracked in
 /// follow-up #606), so it is intentionally not consulted here.
@@ -197,7 +208,10 @@ fn build_subtitle_options(
     SubtitleOptions {
         write_subs: Some(settings.write_subtitles),
         write_auto_subs: Some(settings.write_auto_subtitles),
-        sub_langs: options.subtitle_langs.clone(),
+        sub_langs: options
+            .subtitle_langs
+            .clone()
+            .unwrap_or_else(|| settings.default_subtitle_langs.clone()),
         sub_format: settings.default_subtitle_format,
         embed_subs: embed_subtitles.then_some(true),
         strict_subs: Some(settings.strict_subs),
@@ -600,7 +614,7 @@ mod tests {
             format: None,
             output_dir: None,
             subtitles: false,
-            subtitle_langs: Vec::new(),
+            subtitle_langs: None,
             remux: None,
             extract_audio: None,
             embed_thumbnail: true,
@@ -1244,7 +1258,7 @@ mod tests {
     #[test]
     fn test_subtitle_langs_and_format_pass_through() {
         let options = DownloadOptions {
-            subtitle_langs: vec!["en".to_owned(), "sv".to_owned()],
+            subtitle_langs: Some(vec!["en".to_owned(), "sv".to_owned()]),
             ..default_download_options()
         };
         let settings = AppSettings {
@@ -1265,6 +1279,66 @@ mod tests {
 
         let result_embed = build_subtitle_options(&options, &settings, true);
         assert_eq!(result_embed.embed_subs, Some(true));
+    }
+
+    /// Settings layer applies when the per-download layer says nothing.
+    ///
+    /// This is the defect in #589: the GUI persisted
+    /// `default_subtitle_langs` and no download ever requested them.
+    #[test]
+    fn subtitle_langs_unspecified_inherits_settings_default() {
+        let options = DownloadOptions {
+            subtitle_langs: None,
+            ..default_download_options()
+        };
+        let settings = AppSettings {
+            default_subtitle_langs: vec!["en".to_owned(), "sv".to_owned()],
+            ..AppSettings::default()
+        };
+
+        let result = build_subtitle_options(&options, &settings, false);
+        assert_eq!(result.sub_langs, vec!["en".to_owned(), "sv".to_owned()]);
+    }
+
+    /// An explicit per-download selection still wins over the settings default.
+    #[test]
+    fn subtitle_langs_explicit_overrides_settings_default() {
+        let options = DownloadOptions {
+            subtitle_langs: Some(vec!["ja".to_owned()]),
+            ..default_download_options()
+        };
+        let settings = AppSettings {
+            default_subtitle_langs: vec!["en".to_owned(), "sv".to_owned()],
+            ..AppSettings::default()
+        };
+
+        let result = build_subtitle_options(&options, &settings, false);
+        assert_eq!(result.sub_langs, vec!["ja".to_owned()]);
+    }
+
+    /// An explicit *empty* selection is distinguishable from "unspecified".
+    ///
+    /// This is the boundary the old `Vec<String>` shape collapsed: with a bare
+    /// vec, `[]` and "the user chose nothing" are the same value, so either the
+    /// settings default can never apply (the shipped bug) or an explicit
+    /// "no subtitles" silently re-acquires it.
+    #[test]
+    fn subtitle_langs_explicit_empty_suppresses_settings_default() {
+        let options = DownloadOptions {
+            subtitle_langs: Some(Vec::new()),
+            ..default_download_options()
+        };
+        let settings = AppSettings {
+            default_subtitle_langs: vec!["en".to_owned(), "sv".to_owned()],
+            ..AppSettings::default()
+        };
+
+        let result = build_subtitle_options(&options, &settings, false);
+        assert!(
+            result.sub_langs.is_empty(),
+            "explicit empty must not inherit the settings default, got {:?}",
+            result.sub_langs
+        );
     }
 }
 

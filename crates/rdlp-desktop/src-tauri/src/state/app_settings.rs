@@ -159,16 +159,66 @@ pub struct AppSettings {
 
 /// Upper bound on `parse_and_validate`'s reset-and-revalidate loop.
 ///
-/// `reset_invalid_field`'s `OutOfRange` arm matches exactly 9 numeric fields
-/// (`socket_timeout`, `read_timeout`, `pool_idle_timeout`, `download_timeout`,
-/// `merge_timeout`, `concurrent_fragments`, `buffer_size`, `parallel_threshold`,
-/// `hls_head_probe_timeout`); each loop iteration resets a distinct field to
-/// `None` (which is always in-range), so a legitimately hand-edited file can
-/// require at most 9 iterations to converge. This bound exists so the loop's
-/// termination is structural rather than incidental on `AppSettings::default()`
-/// happening to validate — see the `debug_assert!` in `parse_and_validate` and
-/// Finding 5 in `task-9-report.md`.
-const MAX_RESET_ITERATIONS: u32 = 9;
+/// The bound is the total number of fields [`AppSettings::reset_invalid_field`]
+/// can reset, across **every** [`SettingsValidationError`] variant — not just
+/// the `OutOfRange` arm. Each iteration clears exactly one distinct field to a
+/// value that always validates, so that count is also the worst-case number of
+/// iterations a hand-edited file can require:
+///
+/// | variant | fields |
+/// |---|---|
+/// | `CookiesFileTraversal` | `cookies_file` |
+/// | `InvalidProxy` | `proxy` |
+/// | `OutOfRange` | `socket_timeout`, `read_timeout`, `pool_idle_timeout`, `download_timeout`, `merge_timeout`, `concurrent_fragments`, `buffer_size`, `parallel_threshold`, `hls_head_probe_timeout`, `default_subtitle_langs` |
+///
+/// 2 + 10 = 12. Deriving it from the `OutOfRange` arm alone is what made the
+/// previous value of 9 too low — it omitted the two non-numeric variants, which
+/// `validate_security` reports *first*, so the bound was already short by two
+/// before `default_subtitle_langs` made it short by three.
+///
+/// Being short is not a cosmetic error: on exhaustion `parse_and_validate`
+/// falls back to `Self::default()`, discarding `output_dir`, cookies, proxy and
+/// every other setting — exactly the whole-record clobber that function's own
+/// comment says the per-field reset exists to prevent.
+///
+/// The bound exists so the loop's termination is structural rather than
+/// incidental on `AppSettings::default()` happening to validate — see the
+/// `debug_assert!` in `parse_and_validate`.
+///
+/// # What the guards below do and do not catch
+///
+/// Both guards are anchored to a **hand-maintained** count, so neither detects
+/// a newly-added field on its own:
+///
+/// * The `const` assertion prevents [`MAX_RESET_ITERATIONS`] being *lowered*
+///   below [`RESETTABLE_FIELD_COUNT`] — verified by mutation: setting it to 11
+///   fails the build. It does **not** fire when an arm is added to
+///   `reset_invalid_field`, because `RESETTABLE_FIELD_COUNT` is a literal whose
+///   only use is this assertion, so an eleventh arm leaves `12 >= 12` true and
+///   the build green (also verified by mutation, 2026-09-08).
+/// * `parse_and_validate_converges_with_every_resettable_field_invalid` drives
+///   all twelve fields at once, but from a hand-written JSON fixture — a
+///   thirteenth field would leave it passing while exercising only twelve.
+///
+/// A `macro_rules!` list generating both the match arms and the count would
+/// close that gap; for a match this size it costs more legibility than it buys,
+/// so the seam is instead a pointer comment at the match itself telling an
+/// author adding an arm to raise the count here.
+const MAX_RESET_ITERATIONS: u32 = 12;
+
+/// Number of distinct fields [`AppSettings::reset_invalid_field`] can reset —
+/// the derivation of [`MAX_RESET_ITERATIONS`], tabulated in its docs.
+///
+/// Hand-maintained: raise it when you add an arm to `reset_invalid_field`. See
+/// that function's match for the pointer comment, and [`MAX_RESET_ITERATIONS`]
+/// for what the assertion below does and does not catch.
+const RESETTABLE_FIELD_COUNT: u32 = 12;
+
+const _: () = assert!(
+    MAX_RESET_ITERATIONS >= RESETTABLE_FIELD_COUNT,
+    "MAX_RESET_ITERATIONS must cover every field reset_invalid_field can reset, \
+     or parse_and_validate falls back to Self::default() and discards the record"
+);
 
 impl AppSettings {
     /// Return the path to the settings file on disk.
@@ -301,6 +351,12 @@ impl AppSettings {
     /// respective non-numeric field to `None` directly, since they carry no `field`
     /// name to dispatch on.
     fn reset_invalid_field(&mut self, err: &SettingsValidationError) {
+        // ADDING AN ARM HERE? Raise `RESETTABLE_FIELD_COUNT` (and
+        // `MAX_RESET_ITERATIONS` with it) — nothing detects a new arm
+        // automatically, and a bound short of the field count makes
+        // `parse_and_validate` discard the user's whole settings record.
+        // Add the field to `ALL_INVALID_SETTINGS_JSON` too; that fixture is
+        // hand-written and would otherwise keep passing while missing it.
         match err {
             SettingsValidationError::CookiesFileTraversal => self.cookies_file = None,
             SettingsValidationError::InvalidProxy(_) => self.proxy = None,
@@ -314,6 +370,9 @@ impl AppSettings {
                 "buffer_size" => self.buffer_size = None,
                 "parallel_threshold" => self.parallel_threshold = None,
                 "hls_head_probe_timeout" => self.hls_head_probe_timeout = None,
+                // Not an `Option`: its default (and "inherit"/unset value) is
+                // the empty list, so that is what "reset to default" means.
+                "default_subtitle_langs" => self.default_subtitle_langs = Vec::new(),
                 other => {
                     // Unreachable in practice (every `OutOfRange` field above is listed).
                     // Fail safe rather than looping forever on an unmatched field: fall
@@ -447,6 +506,37 @@ impl std::error::Error for SettingsValidationError {}
 /// manually in the other crate.
 const MAX_BYTE_SETTING: u64 = 1024 * 1024 * 1024;
 
+/// Maximum number of entries in `default_subtitle_langs`.
+///
+/// The list is compared against every subtitle track of every download
+/// (O(langs x tracks)) and each unmatched entry produces a warning string and a
+/// `warn!` line, so an unbounded hand-edited list is both a log flood and a CPU
+/// amplifier. 64 is far above any real workflow — the IANA registry has
+/// thousands of tags, but a user selecting more than a handful of subtitle
+/// languages per download is not a use case this GUI offers a control for
+/// (`GeneralSection.tsx` is a single comma-separated input).
+const MAX_SUBTITLE_LANGS: usize = 64;
+
+/// Maximum length of one `default_subtitle_langs` entry, in bytes.
+///
+/// The field's input domain is wider than a language code: `track_matches_lang`
+/// (`rdlp-api/src/orchestrator/subtitle_pipeline/mod.rs`) accepts a BCP-47 tag,
+/// the literal `all`, **or the track's display name** matched in full and
+/// case-insensitively — so entering a site's own label is a supported way to
+/// select a track. Real labels exceed a tag-sized cap:
+/// `Portuguese (Brazil) (auto-generated)` and
+/// `Chinese (Traditional, Hong Kong SAR)` are both 36 bytes, and a CJK label
+/// far shorter in characters costs 3 bytes per character here.
+///
+/// BCP-47 itself does not help bound this: RFC 5646 §2.1 caps each *subtag* at
+/// 8 characters but places no limit on total tag length —
+/// `en-US-u-ca-gregory-nu-latn-hc-h12-fw-mon` is 40 bytes and well-formed.
+///
+/// 100 admits every realistic label and tag while keeping the log-flood guard
+/// intact: 100 x [`MAX_SUBTITLE_LANGS`] is 6.4 KB worst case, which is the
+/// property the cap exists for.
+const MAX_SUBTITLE_LANG_LEN: usize = 100;
+
 impl AppSettings {
     /// Validate security-sensitive fields before persisting.
     ///
@@ -543,6 +633,41 @@ impl AppSettings {
             });
         }
 
+        // `default_subtitle_langs` is the only unbounded collection that
+        // reaches a download (#589 wired it into `build_subtitle_options`).
+        // Every entry is matched against every subtitle track and each
+        // unmatched one is logged, so the size bounds are a log-flood and
+        // CPU guard, not cosmetics.
+        if self.default_subtitle_langs.len() > MAX_SUBTITLE_LANGS {
+            return Err(SettingsValidationError::OutOfRange {
+                field: "default_subtitle_langs",
+                reason: "must contain at most 64 languages",
+            });
+        }
+        for lang in &self.default_subtitle_langs {
+            if lang.len() > MAX_SUBTITLE_LANG_LEN {
+                return Err(SettingsValidationError::OutOfRange {
+                    field: "default_subtitle_langs",
+                    reason: "each language tag or track name must be at most 100 bytes",
+                });
+            }
+            // Rejected, not stripped: a language tag has no legitimate control
+            // or bidi character, so there is no user intent a repair could
+            // preserve — and the value reaches an operator-visible `warn!`
+            // when it matches no track, where a newline forges a log line and
+            // a bidi override reorders one. `reason` is a static string, so
+            // the offending value is never interpolated into that log either.
+            if lang
+                .chars()
+                .any(|c| c.is_control() || rdlp_redact::text::is_bidi_control(c))
+            {
+                return Err(SettingsValidationError::OutOfRange {
+                    field: "default_subtitle_langs",
+                    reason: "language tags must not contain control or bidi characters",
+                });
+            }
+        }
+
         Ok(())
     }
 }
@@ -615,6 +740,197 @@ mod tests {
         };
         let err = s.validate_security().expect_err("must reject");
         assert!(err.to_string().contains("pool_idle_timeout"));
+    }
+
+    // ------------------------------------------------------------------ //
+    // default_subtitle_langs — the only unbounded collection that reaches a
+    // download. Each unmatched language costs a warning string and a `warn!`
+    // line per download, and matching is O(langs x tracks), so an unbounded
+    // hand-edited list is a log-flood and CPU amplifier. Controls and bidi
+    // marks are rejected rather than stripped: a BCP-47 tag has no legitimate
+    // use for either, so there is no user intent for a repair to preserve, and
+    // rejecting keeps them out of the log line entirely.
+    // ------------------------------------------------------------------ //
+
+    /// Build `n` distinct, well-formed language tags.
+    fn langs(n: usize) -> Vec<String> {
+        (0..n).map(|i| format!("l{i}")).collect()
+    }
+
+    #[test]
+    fn validate_security_accepts_subtitle_langs_at_count_cap() {
+        let s = AppSettings {
+            default_subtitle_langs: langs(MAX_SUBTITLE_LANGS),
+            ..AppSettings::default()
+        };
+        assert!(s.validate_security().is_ok(), "the cap itself must pass");
+    }
+
+    #[test]
+    fn validate_security_rejects_subtitle_langs_above_count_cap() {
+        let s = AppSettings {
+            default_subtitle_langs: langs(MAX_SUBTITLE_LANGS + 1),
+            ..AppSettings::default()
+        };
+        let err = s.validate_security().expect_err("must reject");
+        assert!(err.to_string().contains("default_subtitle_langs"));
+    }
+
+    #[test]
+    fn validate_security_accepts_subtitle_lang_at_length_cap() {
+        let s = AppSettings {
+            default_subtitle_langs: vec!["a".repeat(MAX_SUBTITLE_LANG_LEN)],
+            ..AppSettings::default()
+        };
+        assert!(s.validate_security().is_ok(), "the cap itself must pass");
+    }
+
+    #[test]
+    fn validate_security_rejects_subtitle_lang_above_length_cap() {
+        let s = AppSettings {
+            default_subtitle_langs: vec!["a".repeat(MAX_SUBTITLE_LANG_LEN + 1)],
+            ..AppSettings::default()
+        };
+        let err = s.validate_security().expect_err("must reject");
+        assert!(err.to_string().contains("default_subtitle_langs"));
+    }
+
+    #[test]
+    fn validate_security_rejects_subtitle_lang_with_control_char() {
+        for bad in ["en\n", "en\r\nInjected: line", "e\u{0}n", "en\t"] {
+            let s = AppSettings {
+                default_subtitle_langs: vec![bad.to_owned()],
+                ..AppSettings::default()
+            };
+            assert!(
+                s.validate_security().is_err(),
+                "control character must be rejected: {bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_security_rejects_subtitle_lang_with_bidi_control() {
+        let s = AppSettings {
+            // U+202E RIGHT-TO-LEFT OVERRIDE — the log-spoofing character the
+            // terminal sanitizer also strips.
+            default_subtitle_langs: vec!["en\u{202e}".to_owned()],
+            ..AppSettings::default()
+        };
+        assert!(s.validate_security().is_err());
+    }
+
+    #[test]
+    fn validate_security_accepts_ordinary_language_tags() {
+        let s = AppSettings {
+            default_subtitle_langs: vec![
+                "en".to_owned(),
+                "sv".to_owned(),
+                "zh-Hans-CN".to_owned(),
+                "all".to_owned(),
+            ],
+            ..AppSettings::default()
+        };
+        assert!(s.validate_security().is_ok());
+    }
+
+    /// The cap must not refuse legitimate input. `track_matches_lang` matches a
+    /// track's full display name, so these are all real, supported values —
+    /// each exceeds a tag-sized cap, and the CJK entry shows why the byte
+    /// length (not the character count) is what has to fit.
+    #[test]
+    fn validate_security_accepts_real_track_display_names() {
+        for name in [
+            "Portuguese (Brazil) (auto-generated)",
+            "Chinese (Traditional, Hong Kong SAR)",
+            "en-US-u-ca-gregory-nu-latn-hc-h12-fw-mon",
+            "中文（繁體，香港特別行政區）（自動生成）",
+        ] {
+            let s = AppSettings {
+                default_subtitle_langs: vec![name.to_owned()],
+                ..AppSettings::default()
+            };
+            assert!(
+                s.validate_security().is_ok(),
+                "must accept the {}-byte value {name:?}",
+                name.len()
+            );
+        }
+    }
+
+    /// The load path repairs the offending field only — a hand-edited file
+    /// with a bad language list must not cost the user every other setting.
+    #[test]
+    fn parse_and_validate_resets_only_subtitle_langs() {
+        let json = r#"{"output_dir":"/tmp/keepme","embed_thumbnail":true,"embed_metadata":false,"verbose":false,"default_subtitle_langs":["en\n","sv"],"proxy":"http://proxy.example.com:8080","socket_timeout":42}"#;
+        let s = AppSettings::parse_and_validate(json, std::path::Path::new("/tmp/settings.json"));
+        assert!(
+            s.default_subtitle_langs.is_empty(),
+            "offending field resets to its default"
+        );
+        assert_eq!(s.output_dir, PathBuf::from("/tmp/keepme"));
+        assert_eq!(s.socket_timeout, Some(42));
+        assert_eq!(s.proxy.as_deref(), Some("http://proxy.example.com:8080"));
+    }
+
+    /// Every field `reset_invalid_field` can reset, invalid at once.
+    ///
+    /// One JSON document carrying all twelve — the two non-numeric variants
+    /// (`cookies_file`, `proxy`) plus the ten `OutOfRange` fields — because the
+    /// reset loop clears exactly one per iteration and `MAX_RESET_ITERATIONS`
+    /// has to cover the whole set, not just the numeric arm. `output_dir` is
+    /// the witness: exhausting the bound falls back to `Self::default()`, which
+    /// is the whole-record clobber `parse_and_validate`'s design comment says
+    /// must never happen.
+    const ALL_INVALID_SETTINGS_JSON: &str = r#"{
+        "output_dir": "/tmp/keepme",
+        "embed_thumbnail": true,
+        "embed_metadata": false,
+        "verbose": false,
+        "cookies_file": "/tmp/../etc/passwd",
+        "proxy": "http://192.168.1.1:3128",
+        "socket_timeout": 0,
+        "read_timeout": 0,
+        "pool_idle_timeout": 3601,
+        "download_timeout": 0,
+        "merge_timeout": 0,
+        "concurrent_fragments": 0,
+        "buffer_size": 0,
+        "parallel_threshold": 0,
+        "hls_head_probe_timeout": 0,
+        "default_subtitle_langs": ["en\n"]
+    }"#;
+
+    #[test]
+    fn parse_and_validate_converges_with_every_resettable_field_invalid() {
+        let s = AppSettings::parse_and_validate(
+            ALL_INVALID_SETTINGS_JSON,
+            std::path::Path::new("/tmp/settings.json"),
+        );
+
+        // The witness: a surviving output_dir proves the loop converged by
+        // resetting fields one at a time rather than exhausting the bound and
+        // falling back to a full default record.
+        assert_eq!(
+            s.output_dir,
+            PathBuf::from("/tmp/keepme"),
+            "loop exhausted MAX_RESET_ITERATIONS and clobbered the whole record"
+        );
+
+        // Every offending field is at its default, and nothing else was touched.
+        assert!(s.cookies_file.is_none());
+        assert!(s.proxy.is_none());
+        assert!(s.socket_timeout.is_none());
+        assert!(s.read_timeout.is_none());
+        assert!(s.pool_idle_timeout.is_none());
+        assert!(s.download_timeout.is_none());
+        assert!(s.merge_timeout.is_none());
+        assert!(s.concurrent_fragments.is_none());
+        assert!(s.buffer_size.is_none());
+        assert!(s.parallel_threshold.is_none());
+        assert!(s.hls_head_probe_timeout.is_none());
+        assert!(s.default_subtitle_langs.is_empty());
+        assert!(s.embed_thumbnail, "a non-offending field must survive");
     }
 
     #[test]
@@ -1167,12 +1483,17 @@ mod tests {
         assert!(zero.validate_security().is_err());
     }
 
-    /// Finding 5 boundary guard: exactly `MAX_RESET_ITERATIONS` (9) simultaneously
-    /// out-of-range fields — one per `OutOfRange` arm `reset_invalid_field` matches —
-    /// MUST resolve entirely via the per-field reset path, not the iteration-cap
-    /// fail-safe. `validate_security` reports fields in the same fixed order
-    /// `reset_invalid_field` matches them, so this pins the exact boundary the loop
-    /// bound must accommodate: 9 legitimate iterations is normal, not exhaustion.
+    /// Isolates the `OutOfRange` path: all **ten** of its fields invalid at once
+    /// MUST resolve via the per-field reset, not the iteration-cap fail-safe.
+    ///
+    /// This is no longer the boundary test — ten is comfortably under the bound
+    /// of twelve, so it cannot detect a `MAX_RESET_ITERATIONS` that is too low.
+    /// `parse_and_validate_converges_with_every_resettable_field_invalid` is the
+    /// boundary test, because it also drives the two non-`OutOfRange` variants
+    /// (`CookiesFileTraversal`, `InvalidProxy`), which consume an iteration each
+    /// and which `validate_security` reports *first*. What this test still buys
+    /// is coverage of the `OutOfRange` arm on its own, which that one does not
+    /// isolate.
     #[test]
     fn test_max_simultaneous_out_of_range_fields_resolves_without_full_reset() {
         let json = r#"{
@@ -1180,7 +1501,7 @@ mod tests {
             "embed_thumbnail": true,
             "embed_metadata": false,
             "verbose": false,
-            "default_subtitle_langs": [],
+            "default_subtitle_langs": ["en\n"],
             "socket_timeout": 0,
             "read_timeout": 0,
             "pool_idle_timeout": 99999,
@@ -1202,19 +1523,20 @@ mod tests {
         assert_eq!(settings.buffer_size, None);
         assert_eq!(settings.parallel_threshold, None);
         assert_eq!(settings.hls_head_probe_timeout, None);
+        assert!(settings.default_subtitle_langs.is_empty());
         // The per-field reset path preserves untouched fields; a fallback to
         // `Self::default()` would have discarded this custom `output_dir` too.
         assert_eq!(
             settings.output_dir,
             PathBuf::from("/home/user/Videos"),
-            "9 legitimate iterations must resolve per-field, not trip the \
+            "10 legitimate iterations must resolve per-field, not trip the \
              MAX_RESET_ITERATIONS fail-safe (which would also reset output_dir)"
         );
     }
 
     /// Finding 5 regression guard: `reset_invalid_field`'s `other =>` fail-safe arm
     /// (an `OutOfRange` field name absent from the match — unreachable via the
-    /// public API since `validate_security` only ever reports the 9 matched names,
+    /// public API, since every name `validate_security` emits has a matching arm,
     /// but defensive against a future field being added to one side and not the
     /// other) must still terminate by falling back to a fully valid default record.
     #[test]

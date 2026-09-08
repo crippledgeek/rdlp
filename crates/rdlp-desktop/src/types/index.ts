@@ -299,7 +299,10 @@ export interface DownloadOptions {
     format: string | null;
     outputDir: string | null;
     subtitles: boolean;
-    subtitleLangs: string[];
+    /** `null` = no per-download choice; the backend applies
+     *  `AppSettings.default_subtitle_langs`. `[]` is an explicit
+     *  "no languages" and suppresses that default. */
+    subtitleLangs: string[] | null;
     remux: ContainerFormat | null;
     extractAudio: AudioFormat | null;
     embedThumbnail: boolean;

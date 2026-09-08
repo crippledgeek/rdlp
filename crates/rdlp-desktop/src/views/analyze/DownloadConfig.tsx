@@ -13,6 +13,7 @@ import { audioCodecsQueryOptions } from "@/api/audioCodecs";
 import { uiStore, setView } from "@/stores/uiStore";
 import { formatsQueryOptions } from "@/api/formats";
 import { settingsQueryOptions, pickDirectory } from "@/api/settings";
+import { DEFAULT_EMBED_THUMBNAIL } from "@/lib/settingsDefaults";
 import { startDownload } from "@/api/downloads";
 import { StreamBadge } from "@/components/StreamBadge";
 import { Button } from "@/components/ui/button";
@@ -115,7 +116,7 @@ export function DownloadConfig() {
             recodeCpuUsed: "",
             recodeSpeedLevel: "",
             extractAudio: "",
-            embedThumbnail: settings?.embed_thumbnail ?? true,
+            embedThumbnail: settings?.embed_thumbnail ?? DEFAULT_EMBED_THUMBNAIL,
             embedSubtitles: settings?.embed_subtitles ?? false,
             normalizeAudio: settings?.normalize_audio ?? false,
             expertMode: false as boolean,
@@ -139,7 +140,9 @@ export function DownloadConfig() {
                     format: formatArg,
                     outputDir: value.outputPath || settings?.output_dir || null,
                     subtitles: false,
-                    subtitleLangs: [],
+                    // null, not []: there is no per-download language picker,
+                    // so the settings default must apply (#589).
+                    subtitleLangs: null,
                     remux: (value.remux || null) as DownloadOptions["remux"],
                     extractAudio: (value.extractAudio || null) as DownloadOptions["extractAudio"],
                     embedThumbnail: value.embedThumbnail,

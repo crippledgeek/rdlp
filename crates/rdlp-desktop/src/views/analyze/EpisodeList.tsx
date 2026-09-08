@@ -2,6 +2,7 @@
 // Uses Jolly GridList for selection + keyboard nav, TanStack Virtual for DOM windowing.
 
 import { useRef, useMemo, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { type Selection } from "react-aria-components";
 import { useState } from "react";
@@ -14,6 +15,8 @@ import { Thumbnail } from "@/components/Thumbnail";
 import { setAnalyzeUrl, setActiveView } from "@/stores/uiStore";
 import { uiStore } from "@/stores/uiStore";
 import { startDownload } from "@/api/downloads";
+import { settingsQueryOptions } from "@/api/settings";
+import { playlistDownloadOptions } from "./playlistDownloadOptions";
 import type { PlaylistEntry, PlaylistContext, DownloadOptions } from "@/types";
 import { cn } from "@/lib/utils";
 
@@ -39,6 +42,7 @@ const OVERSCAN = 10;
 export function EpisodeList({ episodes, playlistUrl, playlistTitle }: EpisodeListProps) {
     const parentRef = useRef<HTMLDivElement>(null);
     const [selectedKeys, setSelectedKeys] = useState<Selection>(new Set<string>());
+    const { data: settings } = useQuery(settingsQueryOptions());
 
     const selectedCount = useMemo(() => {
         if (selectedKeys === "all") return episodes.length;
@@ -91,38 +95,10 @@ export function EpisodeList({ episodes, playlistUrl, playlistTitle }: EpisodeLis
         // Generate a shared playlist batch ID
         const playlistId = crypto.randomUUID();
 
-        // Default options for batch download (settings defaults apply on backend)
-        const defaultOptions: DownloadOptions = {
-            format: null,
-            outputDir: null,
-            subtitles: false,
-            subtitleLangs: [],
-            remux: null,
-            extractAudio: null,
-            embedThumbnail: true,
-            audioMultistreams: false,
-            recodeVideo: null,
-            normalizeAudio: null,
-            loudnorm: null,
-            loudnormPreset: null,
-            loudnormTargetI: null,
-            loudnormTargetTp: null,
-            loudnormTargetLra: null,
-            loudnormDynamic: null,
-            loudnormPrecompress: null,
-            normalizeBoost: null,
-            normalizeBoostDb: null,
-            embedSubtitles: null,
-            videoEncoder: null,
-            recodeAudio: null,
-            recodeContainer: null,
-            recodeThreads: null,
-            recodePreset: null,
-            recodeDeadline: null,
-            recodeCpuUsed: null,
-            recodeSpeedLevel: null,
-            verbose: null,
-        };
+        // Default options for batch download. Most fields are left unspecified
+        // for the backend to resolve against AppSettings; `embedThumbnail` is
+        // merged here because the backend consumes it unconditionally.
+        const defaultOptions: DownloadOptions = playlistDownloadOptions(settings);
 
         // Fire start_download for each selected episode
         for (const ep of selected) {
@@ -137,7 +113,7 @@ export function EpisodeList({ episodes, playlistUrl, playlistTitle }: EpisodeLis
 
         // Switch to Queue view to show the batch
         setActiveView("queue");
-    }, [selectedKeys, episodes, playlistTitle]);
+    }, [selectedKeys, episodes, playlistTitle, settings]);
 
     return (
         <div className="flex flex-col h-full overflow-hidden">
