@@ -238,6 +238,32 @@ impl PostProcessError {
         }
     }
 
+    /// True if this is the audio-only-container policy refusal (#577),
+    /// including when it arrives wrapped in [`Self::Other`].
+    ///
+    /// The distinction callers need: this is rdlp declining a *request* it can
+    /// see is wrong, not a failure to carry one out. The input was never
+    /// touched and is still exactly as it was, so a caller that would
+    /// otherwise clean up after a failed stage must preserve it instead —
+    /// `RemuxStage`/`RecodeStage`/`MergeStage` use this to keep the user's
+    /// completed download rather than letting `FileTracker`'s cancel-`Drop`
+    /// delete it.
+    ///
+    /// The `Other` arm is not defensive: `remux_sync` and friends return
+    /// `anyhow::Result`, so the typed variant reaches the async wrapper's
+    /// `Result<_, PostProcessError>` through `#[from] anyhow::Error` and lands
+    /// as `Other(anyhow(AudioOnlyContainerRejectsVideo))` every time.
+    #[must_use]
+    pub fn is_audio_only_container_refusal(&self) -> bool {
+        match self {
+            Self::AudioOnlyContainerRejectsVideo { .. } => true,
+            Self::Other(e) => e
+                .downcast_ref::<Self>()
+                .is_some_and(Self::is_audio_only_container_refusal),
+            _ => false,
+        }
+    }
+
     /// True if this is a mux write error (ENOMEM / ENOSPC from the muxer).
     #[must_use]
     pub const fn is_mux_write_error(&self) -> bool {

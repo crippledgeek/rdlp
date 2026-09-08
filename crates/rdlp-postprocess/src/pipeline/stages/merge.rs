@@ -20,6 +20,7 @@ use rdlp_ffmpeg::{FFmpegRunner, RemuxOptions};
 
 use rdlp_types::ContainerFormat;
 
+use super::policy_refusal::keep_download_on_policy_refusal;
 use crate::pipeline::{PipelineMessage, PipelineStage};
 
 /// Merges separate video + audio streams into a single container.
@@ -241,7 +242,8 @@ impl PipelineStage for MergeStage {
             Arc::new(move |frac| cb.on_progress(rdlp_types::Progress::from_f64(frac)))
         });
 
-        self.ffmpeg
+        if let Err(e) = self
+            .ffmpeg
             .merge(
                 &video_file,
                 &audio_file,
@@ -251,7 +253,10 @@ impl PipelineStage for MergeStage {
                 Some(msg.cancel.clone()),
             )
             .await
-            .context("merge stage failed")?;
+        {
+            keep_download_on_policy_refusal(&e, &mut msg, "MergeStage");
+            return Err(anyhow::Error::new(e).context("merge stage failed"));
+        }
 
         info!("MergeStage: merged to {}", output_path.display());
 

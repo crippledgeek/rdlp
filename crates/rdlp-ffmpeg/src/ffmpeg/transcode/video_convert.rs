@@ -48,6 +48,40 @@ impl FFmpegRunner {
         let input = input.as_ref().to_path_buf();
         let output = output.as_ref().to_path_buf();
         let opts = opts.clone();
+
+        // #577: refuse an audio-only target BEFORE any transcode work. The
+        // `remux_only` branch would be caught by `remux_sync`'s own guard, but
+        // the transcode branch is the dangerous one — it does not stream-copy,
+        // so nothing downstream would ever notice; it would spend a full encode
+        // producing exactly the artifact #577 forbids (`--recode-video=wma` on
+        // vp9 takes that path).
+        //
+        // In its own `spawn_blocking`, not inside the conversion's: adding ANY
+        // local to a frame on the conversion task's stack makes the libxavs2
+        // transcode in `recode_new_codecs` (bf=7) SIGSEGV — reproduced with an
+        // inert `black_box(output.to_string_lossy())` in the same position, and
+        // with this guard instrumented to prove it does no FFmpeg work at all
+        // for an `.mkv` target (it returns at the extension check). The
+        // fragility is latent in the xavs2 encode rather than caused by the
+        // guard, and it deserves its own issue; a separate blocking task gets a
+        // separate stack and does not perturb it. The `.await` also keeps the
+        // synchronous `format::input` this may perform off the async worker.
+        //
+        // Checked against `input` rather than the salvage-repaired copy: only
+        // the container is repaired, never the stream set, so the answer is the
+        // same and the guard stays ahead of the salvage work too.
+        {
+            let guard_input = input.clone();
+            let guard_output = output.clone();
+            Self::spawn_blocking("convert_video_target_guard", move || {
+                crate::ffmpeg::audio_only_container::reject_video_source_into_audio_only(
+                    &guard_input,
+                    &guard_output,
+                )
+            })
+            .await?;
+        }
+
         Self::spawn_blocking("convert_video", move || {
             let (effective_input, salvage_temp) = prepare_input_with_salvage(&input, true)?;
 

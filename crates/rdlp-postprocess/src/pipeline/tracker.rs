@@ -131,6 +131,39 @@ impl FileTracker {
         Self::with_borrowed(files, borrowed, temp_registry)
     }
 
+    /// Reclassify the live working set as user-owned, so the cancel-`Drop`
+    /// below will not delete it — the #414 "delete what we created, preserve
+    /// what the user brought us" rule, applied to a file rdlp created but has
+    /// no right to destroy.
+    ///
+    /// For a **policy refusal**: rdlp declining a request it can see is wrong
+    /// (#577's audio-only remux target), rather than failing to carry one out.
+    /// The download completed, the media on disk is intact and untouched, and
+    /// the only thing that went wrong is a flag the operator can correct and
+    /// re-run — so losing the download to it is the worst possible outcome.
+    /// Contrast a genuine processing failure, where the working set really is
+    /// suspect and the existing cancel-cleanup is right.
+    ///
+    /// Each file is also released from the [`TempRegistry`]: registration is
+    /// what `cleanup_all()` (CLI/desktop exit) and `cleanup_stale()` (next
+    /// startup) sweep, so preserving from `Drop` alone would still lose the
+    /// file minutes later.
+    ///
+    /// **Known residue:** the survivor keeps its `*.rdlp-tmp-{uuid}.*` name.
+    /// The single rename to the user-visible name is the orchestrator's, on
+    /// the success path only (#406 Option X), and is not reachable from a
+    /// failing stage. Callers log the kept path so the operator can find it.
+    pub fn preserve_current_files(&mut self) {
+        for raw in &self.current_files {
+            self.temp_registry.release(raw.as_path());
+            // Safe: mirrors `new_borrowing`'s canonicalize, in a sync stage
+            // path (`process` is async but performs no await here).
+            #[allow(clippy::disallowed_methods)]
+            let canonical = std::fs::canonicalize(raw).ok();
+            self.borrowed.push((raw.clone(), canonical));
+        }
+    }
+
     /// Whether `path` is a borrowed (user-owned) input that must never be
     /// deleted or released by this tracker (#414, #416 M2).
     ///

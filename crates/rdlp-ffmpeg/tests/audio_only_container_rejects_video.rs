@@ -31,6 +31,9 @@ use std::process::Command;
 use std::sync::OnceLock;
 
 use rdlp_ffmpeg::{FFmpegRunner, RemuxOptions, video_alternative_for};
+
+mod common;
+use common::decoded_audio_frames;
 use rdlp_types::ContainerFormat;
 use strum::IntoEnumIterator as _;
 
@@ -85,6 +88,8 @@ struct Fixtures {
     cover_flac: PathBuf,
     /// mp3 audio + an `ATTACHED_PIC` mjpeg cover (an ID3v2 APIC frame).
     cover_mp3: PathBuf,
+    /// aac audio and nothing else — no video stream of any kind.
+    audio_only_m4a: PathBuf,
 }
 
 static FIXTURES: OnceLock<Fixtures> = OnceLock::new();
@@ -183,11 +188,20 @@ fn fixtures() -> &'static Fixtures {
             &dir.join("cover.mp3"),
         );
 
+        let audio_only_m4a = run_ffmpeg(
+            "audio_only_m4a",
+            &[
+                "-f", "lavfi", "-i", "sine=d=1", "-c:a", "aac", "-b:a", "64k",
+            ],
+            &dir.join("audio_only.m4a"),
+        );
+
         Fixtures {
             dir,
             video_mp4,
             cover_flac,
             cover_mp3,
+            audio_only_m4a,
         }
     })
 }
@@ -256,22 +270,75 @@ async fn wma_target_refuses_a_real_video_stream() {
 /// Positive control: the same source into a video-capable container still
 /// remuxes, and the video survives. Pins the guard to audio-only targets
 /// rather than to "any remux of a video-bearing input".
+///
+/// `.mov`, deliberately, NOT `.mkv`: an `.mkv` target returns via
+/// `remux_mkv_raw_ffi` *before* the guard runs, so an mkv control would pass
+/// even if `video_alternative_for` wrongly returned `Some` for every
+/// container. `.mov` takes the generic path and actually executes the guard's
+/// `None` branch.
 #[tokio::test]
-async fn mkv_target_still_remuxes_video() {
+async fn video_capable_target_still_remuxes_video() {
     if !require_ffmpeg() {
         return;
     }
-    let dst = fixtures().dir.join("video_to.mkv");
+    let dst = fixtures().dir.join("video_to.mov");
     let runner = FFmpegRunner::new().expect("FFmpegRunner::new");
 
     runner
         .remux(&fixtures().video_mp4, &dst, &RemuxOptions::default(), None)
         .await
-        .unwrap_or_else(|e| panic!("mkv is video-capable; this remux must succeed: {e:#}"));
+        .unwrap_or_else(|e| panic!("mov is video-capable; this remux must succeed: {e:#}"));
 
     assert!(
         has_real_video(&dst),
         "the video stream must survive a remux into a video-capable container"
+    );
+}
+
+/// The guard's commonest path, and the one nothing else covers: an input with
+/// **no video stream at all** into an audio-only target is ordinary work and
+/// must succeed. `--remux=wma` on an audio-only download is exactly the case
+/// `.wma` exists for.
+///
+/// Without this, a guard mutated to refuse whenever the target is audio-only —
+/// ignoring the input entirely — is caught only by the two cover-art tests,
+/// i.e. by the carve-out rather than by the rule.
+#[tokio::test]
+async fn an_audio_only_source_still_remuxes_into_an_audio_only_target() {
+    if !require_ffmpeg() {
+        return;
+    }
+    assert!(
+        !has_real_video(&fixtures().audio_only_m4a),
+        "fixture precondition: this source must carry no video stream at all"
+    );
+
+    let dst = fixtures().dir.join("audio_to.wma");
+    let _ = std::fs::remove_file(&dst);
+    let runner = FFmpegRunner::new().expect("FFmpegRunner::new");
+
+    runner
+        .remux(
+            &fixtures().audio_only_m4a,
+            &dst,
+            &RemuxOptions::default(),
+            None,
+        )
+        .await
+        .unwrap_or_else(|e| panic!("an audio-only source into .wma must succeed: {e:#}"));
+
+    // Decoded frames, not `len() > 0`: a failed mux still leaves a non-empty
+    // header on disk, so a size check scores a failure as a success. An exact
+    // count equality with the source would be wrong here — measured, the
+    // `.wma` decodes 45 frames against the `.m4a`'s 44, because AAC priming
+    // samples do not survive the container change.
+    assert!(
+        decoded_audio_frames(&dst).is_some_and(|frames| frames > 0),
+        "the remuxed audio must actually decode, not merely exist"
+    );
+    assert!(
+        !has_real_video(&dst),
+        "no video stream should have appeared from nowhere"
     );
 }
 

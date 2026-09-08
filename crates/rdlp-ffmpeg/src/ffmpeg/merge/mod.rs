@@ -134,6 +134,16 @@ impl FFmpegRunner {
                 )
             })?;
 
+        // #577: a merge takes its target container from
+        // `postprocess.merge_output_format`, which is caller-chosen exactly as
+        // `--remux` is, and writes through its own muxer rather than
+        // `remux_sync`'s — so the guard has to be applied here too or an
+        // audio-only `merge_output_format` writes video into a `.wma` the way
+        // `--remux=wma` used to. Before `format::output`, which would
+        // create/truncate the file. `Mkv` is never refused, so the raw-FFI
+        // branch above cannot bypass a live refusal.
+        crate::ffmpeg::audio_only_container::reject_video_into_audio_only(&ictx_video, output)?;
+
         let mut octx = ffmpeg_the_third::format::output(output)
             .map_err(PostProcessError::from)
             .with_context(|| format!("failed to open output for merge {}", output.display()))?;

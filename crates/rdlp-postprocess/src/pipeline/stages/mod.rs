@@ -12,6 +12,7 @@ pub mod fixup;
 pub mod merge;
 pub mod metadata;
 pub mod normalize;
+mod policy_refusal;
 pub mod recode;
 mod recode_audio_only;
 pub mod remux;

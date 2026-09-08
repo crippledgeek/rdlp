@@ -16,6 +16,7 @@ use rdlp_ffmpeg::{FFmpegRunner, PostProcessError, VideoConvertOptions};
 use rdlp_types::rule::{Rule, always};
 use rdlp_types::{AudioEncoderName, CodecName, ContainerFormat, RecodeAudioMode, VideoEncoderName};
 
+use super::policy_refusal::keep_download_on_policy_refusal;
 use crate::pipeline::stages::recode_audio_only;
 use crate::pipeline::{PipelineMessage, PipelineStage};
 
@@ -701,7 +702,8 @@ impl PipelineStage for RecodeStage {
             None
         };
 
-        self.ffmpeg
+        if let Err(e) = self
+            .ffmpeg
             .convert_video(
                 &input_file,
                 &output_path,
@@ -711,7 +713,10 @@ impl PipelineStage for RecodeStage {
                 Some(msg.cancel.clone()),
             )
             .await
-            .context("recode stage failed")?;
+        {
+            keep_download_on_policy_refusal(&e, &mut msg, "RecodeStage");
+            return Err(anyhow::Error::new(e).context("recode stage failed"));
+        }
 
         // Capture the encoding_tool for downstream pass-through stages.
         {
