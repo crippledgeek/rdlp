@@ -1,23 +1,30 @@
-//! Shared assertions for the string-projection guards on the format enums.
+//! Shared assertions for the vocabulary, projection and wire-format guards on
+//! the enums that cross a user-facing boundary.
 //!
-//! `ContainerFormat`, `AudioFormat` and `SubtitleFormat` each derive
-//! `strum::Display` over a variant table that also lists parse aliases, and each
-//! needs the same three guarantees pinned:
+//! Six enums use these: `ContainerFormat`, `AudioFormat` and `SubtitleFormat`
+//! (which name a string projection — an extension or a codec), plus
+//! `FixupPolicy`, `BrowserType` and `SubtitleKind`. The latter three have no
+//! projection at all, which is why the guarantees below are not all expressed
+//! in terms of one.
 //!
-//! 1. every variant's `Display` output parses back to that variant,
-//! 2. `Display` renders the projection the enum actually names — **not**
-//!    whichever `#[strum(serialize = ...)]` spelling happens to be longest,
-//!    which is what strum picks absent an explicit `to_string` (#545, #580), and
-//! 3. promoting a spelling to `to_string` did not drop any other spelling from
-//!    the `FromStr` table.
+//! Four guarantees are pinned here, each for a failure that shipped:
 //!
-//! Which projection guarantee 2 asserts differs per enum — `ContainerFormat`
-//! and `SubtitleFormat` name file extensions, while `AudioFormat` names codecs
-//! and its `as_ext()` deliberately returns the *container* the codec is carried
-//! in — so the projection is passed in as a function rather than hardcoded here.
-//! Callers supply it; this module supplies the loop, the iteration source and
-//! the failure message.
-
+//! 1. **Vocabulary parity.** The serde surface and `FromStr` accept the same
+//!    spellings. Before #540, `#[serde(rename_all)]` honoured neither strum's
+//!    aliases nor its `ascii_case_insensitive`, so `remux_container = "3gp"`
+//!    was a parse error in `config.toml` while `--remux=3gp` worked.
+//! 2. **A diagnostic that names the rejected value**, since delegating
+//!    `Deserialize` to `FromStr` moves the message to `FromStr::Err`.
+//! 3. **`Display` renders the projection the enum names** — not whichever
+//!    `#[strum(serialize = ...)]` spelling happens to be longest, which is what
+//!    strum picks absent an explicit `to_string` (#545, #580). Which projection
+//!    is asserted differs per enum, so callers pass it in.
+//! 4. **The serialized form does not move.** It is a wire contract — a
+//!    persisted config, or a TypeScript union over Tauri IPC — so unlike the
+//!    others it is asserted against hardcoded literals rather than a
+//!    projection: an expectation derived from the type under test cannot prove
+//!    the type still agrees with what is already on disk.
+//!
 use std::fmt::{Debug, Display};
 use std::str::FromStr;
 
@@ -127,6 +134,50 @@ where
             parsed.as_ref() == Some(&variant),
             "serde accepts {spelling:?} for {variant:?}, but FromStr rejects it — \
              delegating Deserialize to FromStr would break persisted configs"
+        );
+    }
+}
+
+/// Asserts the serialized spelling of every variant, and that `expected`
+/// covers every variant.
+///
+/// The delegation of `Deserialize` to `FromStr` (#540/#583/#586) widens the
+/// *read* vocabulary only. The serialized form stays a wire contract: dropping
+/// `#[serde(rename_all)]` would emit `"Never"` in place of `"never"` and
+/// silently break persisted configs, and nothing else in the derive list would
+/// complain.
+///
+/// Takes an explicit `(variant, spelling)` list rather than a projection
+/// function, because the enums needing this guard do not share one: `as_str()`
+/// exists on `BrowserType` and `SubtitleKind` but not on `FixupPolicy`, and
+/// `Display` equals the wire spelling for `FixupPolicy` while differing for
+/// `BrowserType` (whose longest alias is `google-chrome`, not `chrome`).
+/// Asserting against `Display` would therefore pin a coincidence of strum's
+/// longest-`serialize` rule rather than the contract.
+///
+/// The coverage half is what a hand-written `assert_eq!` per variant cannot do:
+/// iterating `EnumIter` means a newly added variant fails this test until its
+/// wire spelling is stated, instead of shipping unasserted.
+pub fn assert_serialize_spellings<T>(expected: &[(T, &str)])
+where
+    T: IntoEnumIterator + Serialize + PartialEq + Debug + Copy,
+{
+    for variant in T::iter() {
+        let (_, spelling) = expected
+            .iter()
+            .find(|(candidate, _)| *candidate == variant)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{variant:?} has no expected wire spelling — a new variant must \
+                     state its serialized form here, since only Deserialize was widened"
+                )
+            });
+
+        let serialized = serde_json::to_string(&variant).expect("variant must serialize");
+        assert_eq!(
+            serialized,
+            format!("\"{spelling}\""),
+            "the wire value for {variant:?} must not change; only Deserialize was widened"
         );
     }
 }

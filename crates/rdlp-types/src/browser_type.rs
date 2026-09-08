@@ -51,7 +51,11 @@ pub enum BrowserType {
 }
 
 impl BrowserType {
-    /// Canonical name for display and matching.
+    /// Canonical wire and matching name.
+    ///
+    /// Not what `Display` renders: absent an explicit `to_string`, strum picks
+    /// the longest `serialize` spelling, so `Chrome` displays as
+    /// `google-chrome` while this returns — and the wire carries — `chrome`.
     #[inline]
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
@@ -66,8 +70,8 @@ impl BrowserType {
 mod tests {
     use super::*;
     use crate::enum_test_support::{
-        assert_serde_spellings_are_parseable, assert_toml_accepts_every_from_str_spelling,
-        assert_toml_rejects_unknown_spelling,
+        assert_serde_spellings_are_parseable, assert_serialize_spellings,
+        assert_toml_accepts_every_from_str_spelling, assert_toml_rejects_unknown_spelling,
     };
 
     /// Back-compat precondition for the #583 delegation, and the drift guard
@@ -106,13 +110,16 @@ mod tests {
     }
 
     /// #583 widens `Deserialize` only; the serialized form must not move.
+    ///
+    /// Deliberately not asserted against `Display`: strum renders the longest
+    /// `serialize` spelling, which for `Chrome` is `google-chrome`, not the
+    /// `chrome` the wire carries.
     #[test]
     fn test_serialize_still_emits_the_wire_spelling() {
-        assert_eq!(
-            serde_json::to_string(&BrowserType::Chrome).expect("serialize"),
-            "\"chrome\"",
-            "the wire value must not change; only Deserialize was widened"
-        );
+        assert_serialize_spellings(&[
+            (BrowserType::Chrome, "chrome"),
+            (BrowserType::Firefox, "firefox"),
+        ]);
     }
 
     #[test]
