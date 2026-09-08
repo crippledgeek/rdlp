@@ -123,17 +123,23 @@ static FFMPEG_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 /// # Errors
 ///
 /// Returns [`PostProcessError::FFmpegInitFailed`] if `ffmpeg_the_third::init()`
-/// fails (e.g. required shared libraries are missing or incompatible), or if
-/// the loaded `libavcodec` belongs to a different ABI generation than the
+/// fails (e.g. required shared libraries are missing or incompatible), or if a
+/// loaded `FFmpeg` library belongs to a different ABI generation than the
 /// bindings were generated against (see the `abi` module).
 pub fn ensure_init() -> Result<()> {
     let result = FFMPEG_INIT.get_or_init(|| {
         // Before init, not after: an ABI mismatch links cleanly and then makes
         // every struct field access read the wrong offset, and `init()` is
-        // itself such an access. Failing rather than warning is deliberate —
-        // there is no correct work to do past this point, and a warning on a
-        // silent path (desktop, scripted runs) is a warning nobody sees.
-        abi::check_linked_avcodec_abi().map_err(|e| e.to_string())?;
+        // itself such an access.
+        //
+        // This returns an error rather than logging one because a mismatch is
+        // not a degraded mode — there is no correct work to do past this point.
+        // How loudly that lands depends on the caller: the `?`-propagating
+        // entry points (`metadata.rs`, `merge/mod.rs`, `remux.rs`, the CLI)
+        // abort with it, while the self-initializing helpers whose signatures
+        // cannot carry an error go through `init_or_report` and continue after
+        // logging. Those are the ones this check binds least tightly.
+        abi::check_linked_ffmpeg_abi().map_err(|e| e.to_string())?;
 
         ffmpeg_the_third::init().map_err(|e| format!("ffmpeg_the_third::init() failed: {e}"))?;
         // Suppress FFmpeg's internal diagnostic messages (e.g. mpegts stream timing warnings).
@@ -147,6 +153,20 @@ pub fn ensure_init() -> Result<()> {
         Err(msg) => Err(PostProcessError::FFmpegInitFailed {
             message: msg.clone(),
         }),
+    }
+}
+
+/// Initialize `FFmpeg`, reporting a failure instead of propagating it.
+///
+/// For the self-initializing helpers whose signatures cannot carry the error —
+/// they return a `Vec`, a `&'static str`, or an unrelated error type — and
+/// which previously discarded it with `.ok()`. They still proceed, because
+/// making them fallible would change five public signatures; the point is that
+/// an ABI mismatch leaves a trace instead of being read as an empty codec
+/// table or a wrong default.
+pub fn init_or_report() {
+    if let Err(e) = ensure_init() {
+        log::error!("{e}");
     }
 }
 
