@@ -97,12 +97,22 @@ pub fn output_stub(
 /// patterns for subtitles, thumbnails, and other companion files.
 ///
 /// `suffix` can be `"jpg"`, `"en.srt"`, `"rdlp_state.json"`, etc.
+///
+/// # Security
+///
+/// `suffix` is remote-controlled on the subtitle path — it is built from
+/// `{track.language}.{track.ext}`, and `language` is the raw
+/// `InfoDict.subtitles` map key, which some extractors take verbatim from
+/// site JSON. It is sanitized here rather than at each call site, so the
+/// returned path is always a single file directly inside `base_path`'s
+/// parent: no injected components, no `..`, no absolute jump.
 pub fn sidecar_path(base_path: &Path, suffix: &str) -> PathBuf {
     let stem = base_path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("video");
     let parent = base_path.parent().unwrap_or_else(|| Path::new("."));
+    let suffix = super::Orchestrator::sanitize_filename(suffix);
     parent.join(format!("{stem}.{suffix}"))
 }
 
@@ -275,6 +285,80 @@ mod tests {
     fn test_sidecar_path_no_parent() {
         let base = PathBuf::from("video.mp4");
         assert_eq!(sidecar_path(&base, "jpg"), PathBuf::from("video.jpg"));
+    }
+
+    // ── sidecar_path suffix-injection tests ─────────────────
+    //
+    // `suffix` is remote-controlled: for subtitles it is
+    // `{track.language}.{track.ext}`, and `language` is the raw
+    // `InfoDict.subtitles` map key (for 9anime, the site's JSON
+    // `track.label` verbatim). A separator or `..` in it would otherwise
+    // reach the `tokio::fs::write` target in `subtitle/download.rs`.
+
+    /// The sidecar must be a single file directly inside the base path's
+    /// parent — asserted on the resolved path, not on a substring.
+    fn assert_inside_parent(path: &Path, parent: &Path) {
+        assert_eq!(path.parent(), Some(parent), "escaped parent dir: {path:?}");
+        assert!(
+            !path
+                .components()
+                .any(|c| matches!(c, std::path::Component::ParentDir)),
+            "retains a `..` component: {path:?}"
+        );
+        assert!(
+            path.file_name().is_some_and(|n| !n.is_empty()),
+            "no file name: {path:?}"
+        );
+    }
+
+    #[test]
+    fn sidecar_path_neutralizes_traversal_suffix() {
+        let base = PathBuf::from("/tmp/out/video.mkv");
+        // language = "en/../../pwn", ext = "vtt"
+        let path = sidecar_path(&base, "en/../../pwn.vtt");
+        assert_inside_parent(&path, Path::new("/tmp/out"));
+    }
+
+    #[test]
+    fn sidecar_path_neutralizes_absolute_suffix() {
+        let base = PathBuf::from("/tmp/out/video.mkv");
+        let path = sidecar_path(&base, "/etc/cron.d/pwn.vtt");
+        assert_inside_parent(&path, Path::new("/tmp/out"));
+    }
+
+    #[test]
+    fn sidecar_path_neutralizes_windows_separator_suffix() {
+        let base = PathBuf::from("/tmp/out/video.mkv");
+        let path = sidecar_path(&base, r"en\..\..\pwn.vtt");
+        assert_inside_parent(&path, Path::new("/tmp/out"));
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap();
+        assert!(!name.contains('\\'), "kept a backslash: {name}");
+    }
+
+    #[test]
+    fn sidecar_path_strips_nul_and_control_characters() {
+        let base = PathBuf::from("/tmp/out/video.mkv");
+        let path = sidecar_path(&base, "en\u{0}\u{7}\u{1b}[31m.srt");
+        assert_inside_parent(&path, Path::new("/tmp/out"));
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap();
+        assert!(
+            !name.chars().any(|c| c == '\0' || c.is_control()),
+            "kept a control character: {name:?}"
+        );
+    }
+
+    #[test]
+    fn sidecar_path_preserves_legitimate_language_tags() {
+        let base = PathBuf::from("/tmp/out/video.mkv");
+        for (suffix, expected) in [
+            ("en.srt", "/tmp/out/video.en.srt"),
+            ("pt-BR.srt", "/tmp/out/video.pt-BR.srt"),
+            ("zh-Hans.vtt", "/tmp/out/video.zh-Hans.vtt"),
+            ("jpg", "/tmp/out/video.jpg"),
+            ("rdlp_state.json", "/tmp/out/video.rdlp_state.json"),
+        ] {
+            assert_eq!(sidecar_path(&base, suffix), PathBuf::from(expected));
+        }
     }
 
     // ── output_stub tests ───────────────────────────────────
