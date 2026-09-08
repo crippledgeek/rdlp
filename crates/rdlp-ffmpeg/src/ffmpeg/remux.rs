@@ -34,6 +34,30 @@ use super::ffi_helpers::cleanup_partial_output;
 use super::log_capture::LogSuppressGuard;
 use super::{FFmpegRunner, RemuxOptions, ensure_init};
 
+/// The codec name of the first stream that is *real* video — a video-medium
+/// stream WITHOUT the `ATTACHED_PIC` disposition — or `None` if the input has
+/// none.
+///
+/// The disposition check is the whole point. Cover art is carried as a
+/// video-codec stream (mjpeg/png), and rdlp writes one into audio containers
+/// on purpose — `ThumbnailEmbedStrategy`'s `Id3Apic` / `FlacAttachedPic` /
+/// `Mp4FamilyAttachedPic` arms all do. `MediaInfo::has_video` cannot tell the
+/// two apart (it counts an attached picture as video), so a guard built on it
+/// would refuse every thumbnail-bearing audio file.
+/// `AV_DISPOSITION_ATTACHED_PIC` is `FFmpeg`'s own flag for the distinction,
+/// and the same one `ffi_helpers::set_attached_pic_disposition` sets on the
+/// write side.
+fn first_real_video_codec(ictx: &ffmpeg_the_third::format::context::Input) -> Option<String> {
+    ictx.streams()
+        .find(|ist| {
+            ist.parameters().medium() == ffmpeg_the_third::media::Type::Video
+                && !ist
+                    .disposition()
+                    .contains(ffmpeg_the_third::format::stream::Disposition::ATTACHED_PIC)
+        })
+        .map(|ist| ist.parameters().id().name().to_string())
+}
+
 impl FFmpegRunner {
     /// Remux a file (stream copy, no re-encoding) with optional faststart.
     ///
@@ -105,6 +129,29 @@ impl FFmpegRunner {
         let mut ictx = ffmpeg_the_third::format::input(input)
             .map_err(PostProcessError::from)
             .with_context(|| format!("failed to open input for remux {}", input.display()))?;
+
+        // #577: refuse, rather than silently stream-copy a video track into a
+        // container rdlp treats as audio-only. Sits after the input is open
+        // (the stream dispositions are the whole question) and before
+        // `format::output`, which creates/truncates the file on disk — a
+        // refusal must leave nothing behind.
+        //
+        // The MKV raw-FFI path above bypasses this, which is correct rather
+        // than a hole: it is reached only for `ContainerFormat::Mkv`, which is
+        // video-capable, so the guard could never fire there. `.mka` — the
+        // Matroska *audio* spelling, and one of the twelve refused — parses to
+        // `ContainerFormat::Mka`, so it takes this generic path.
+        if let Some(target) = rdlp_types::ContainerFormat::from_path(output)
+            && let Some(alternative) = super::video_alternative_for(target)
+            && let Some(codec) = first_real_video_codec(&ictx)
+        {
+            return Err(PostProcessError::AudioOnlyContainerRejectsVideo {
+                container: target,
+                codec,
+                alternative,
+            }
+            .into());
+        }
 
         let mut octx = ffmpeg_the_third::format::output(output)
             .map_err(PostProcessError::from)

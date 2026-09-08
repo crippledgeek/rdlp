@@ -40,6 +40,13 @@ const DEFAULT_VIDEO_CODEC: CodecName = CodecName::from_static(DEFAULT_VIDEO_CODE
 /// Policy per container. Exhaustive with no `_` arm: a new [`ContainerFormat`]
 /// variant must be classified here or the build fails.
 ///
+/// `pub(crate)` rather than private because this classification is now also
+/// the *record* the remux guard's refusal set is checked against
+/// ([`super::audio_only_container::video_alternative_for`], #577) — that
+/// module reads the policy here instead of forming a second opinion about
+/// which containers are audio-only, which is precisely how the deleted
+/// `ContainerFormat::is_audio_only()` drifted (#618).
+///
 /// The 12 containers below are classified `Policy::NotATarget` (for the
 /// video stream kind) rather than `FromMuxer`. That classification is
 /// deliberately a *policy* statement ("rdlp does not target video at this
@@ -91,7 +98,7 @@ const DEFAULT_VIDEO_CODEC: CodecName = CodecName::from_static(DEFAULT_VIDEO_CODE
 // within a passing test binary, so this is a comment, not a test (Minor-7 of
 // PR-3's review: the prior anchor test's name promised an exhaustiveness
 // check its body could not perform).
-const fn video_default_for(container: ContainerFormat) -> ContainerDefault<Video> {
+pub(crate) const fn video_default_for(container: ContainerFormat) -> ContainerDefault<Video> {
     match container {
         // `AVOutputFormat.video_codec` is a legacy lowest-common-denominator
         // default, not a recommendation. Citations below name the FFmpeg

@@ -193,6 +193,29 @@ pub enum PostProcessError {
         medium: Medium,
     },
 
+    /// The remux target is a container rdlp treats as audio-only, but the
+    /// input carries a real video stream (an `ATTACHED_PIC` cover is not one
+    /// — see `remux_sync`'s guard).
+    ///
+    /// Distinct from [`Self::IncompatibleContainerCodec`], which is a
+    /// muxer-capability answer with a deliberately generic remediation. This
+    /// one is an rdlp *policy* refusal, so it can name the container the user
+    /// should have asked for: the alternative comes from
+    /// [`video_alternative_for`](crate::ffmpeg::video_alternative_for), which
+    /// only ever yields a video-capable container.
+    #[error(
+        "{container} is an audio-only container and cannot carry the input's {codec} video stream; \
+         remux to {alternative} instead, or extract the audio if that is what you wanted"
+    )]
+    AudioOnlyContainerRejectsVideo {
+        /// The target container the user asked for (e.g. `wma`).
+        container: rdlp_types::ContainerFormat,
+        /// The input's video codec, as `FFmpeg` names it (e.g. `h264`).
+        codec: String,
+        /// The video-capable container to use instead (e.g. `wmv`).
+        alternative: rdlp_types::ContainerFormat,
+    },
+
     /// Catch-all for errors with context chains from internal operations.
     #[error(transparent)]
     Other(#[from] anyhow::Error),
