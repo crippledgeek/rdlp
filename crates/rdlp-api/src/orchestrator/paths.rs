@@ -146,9 +146,53 @@ impl Orchestrator {
     ///
     /// [`strip_temp_marker`]: super::naming::strip_temp_marker
     pub(super) fn neutralize_temp_markers(name: &str) -> String {
-        name.replace(super::naming::PART_MARKER, "_rdlp-part")
-            .replace(super::naming::TMP_MARKER, "_rdlp-tmp-")
-            .replace(super::naming::BAK_MARKER, "_rdlp-bak-")
+        let out = Self::defuse_reserved_token(name, super::naming::PART_MARKER);
+        let out = Self::defuse_reserved_token(&out, super::naming::TMP_MARKER);
+        Self::defuse_reserved_token(&out, super::naming::BAK_MARKER)
+    }
+
+    /// Rewrite the leading `.` of every occurrence of `token` in `name` to
+    /// `_`, **ignoring ASCII case**.
+    ///
+    /// The shared scan behind [`Self::neutralize_temp_markers`] and the
+    /// session-state defusing in
+    /// [`container_resolver::sidecar_path`](super::container_resolver::sidecar_path),
+    /// so the two cannot fork into separate implementations of the same walk.
+    ///
+    /// # Why case-insensitive
+    ///
+    /// NTFS and default-configured APFS fold case, so `Title.RDLP-PART.mp4`
+    /// and `Title.rdlp-part.mp4` are one file — and the second is
+    /// `naming::part_path`, which `detect_resume_point` stats and then trusts
+    /// the bytes of. A case-sensitive `str::replace` sees nothing to defuse
+    /// and one uppercase letter walks past the guard. Note this is the
+    /// opposite direction from the deliberate over-match documented on
+    /// [`Self::neutralize_temp_markers`]: there the neutralizer must match
+    /// *wider* than the literal because `strip_temp_marker` does; here the
+    /// arbiter is the filesystem, not the stripper. `WINDOWS_RESERVED_NAMES`
+    /// is already matched with `eq_ignore_ascii_case` below — reserved names
+    /// folded case while reserved markers did not.
+    ///
+    /// ASCII-only on purpose: [`str::to_ascii_lowercase`] is length- and
+    /// index-preserving, so offsets found in the folded haystack address the
+    /// same bytes of `name`, and swapping one `.` for one `_` keeps them
+    /// valid for the rest of the walk. A Unicode fold can change byte length
+    /// and would invalidate both. Every token is ASCII, so nothing is lost.
+    pub(super) fn defuse_reserved_token(name: &str, token: &str) -> String {
+        debug_assert!(
+            token.starts_with('.') && token.is_ascii() && token == token.to_ascii_lowercase(),
+            "reserved token must be a lowercase ASCII string starting with `.`: {token:?}"
+        );
+        let haystack = name.to_ascii_lowercase();
+        let mut out = name.to_owned();
+        let mut from = 0;
+        while let Some(at) = haystack[from..].find(token).map(|i| i + from) {
+            // Only the marker's leading dot changes, so the visible text is
+            // preserved and the byte length is unchanged.
+            out.replace_range(at..=at, "_");
+            from = at + token.len();
+        }
+        out
     }
 
     /// Sanitize filename for safe filesystem usage

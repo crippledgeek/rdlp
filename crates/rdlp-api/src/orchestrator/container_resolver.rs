@@ -177,9 +177,10 @@ pub fn sidecar_path(base_path: &Path, suffix: &str) -> PathBuf {
         let joined = super::Orchestrator::neutralize_temp_markers(&format!("{stem}.{sfx}"));
         // The state file is not a temp marker, so it is not the sanitizer's
         // business — but it is the same shape, and `single_video_state_path`
-        // builds it with its own join and never routes through here.
-        let state = super::session_state::STATE_SUFFIX;
-        joined.replace(state, &state.replacen('.', "_", 1))
+        // builds it with its own join and never routes through here. Same
+        // case-insensitive scan, so `.RDLP_STATE.JSON` cannot slip past on a
+        // case-folding filesystem either.
+        super::Orchestrator::defuse_reserved_token(&joined, super::session_state::STATE_SUFFIX)
     };
 
     // Belt-and-braces: a sidecar must never *be* the file it accompanies.
@@ -532,6 +533,46 @@ mod tests {
     // with `rdlp-part` carries no marker until `sidecar_path` joins the stem
     // on with a dot — so the sanitizer is a no-op, the segment count never
     // drops, and the composed name is a file rdlp owns.
+
+    /// On NTFS and default-configured APFS these two paths are ONE file, so
+    /// a plain `assert_ne!` on `PathBuf` would pass for the wrong reason —
+    /// it compares bytes, and the filesystem does not.
+    fn assert_not_same_file_ignoring_case(actual: &Path, reserved: &Path) {
+        assert_ne!(
+            actual.to_string_lossy().to_ascii_lowercase(),
+            reserved.to_string_lossy().to_ascii_lowercase(),
+            "same file on a case-folding filesystem: {actual:?} vs {reserved:?}"
+        );
+    }
+
+    /// The markers are lowercase literals, so a case-sensitive scan defuses
+    /// nothing here — and the OS, not the stripper, decides the collision.
+    #[test]
+    fn sidecar_path_cannot_forge_a_part_file_in_another_case() {
+        let base = PathBuf::from("/tmp/out/Title.mp4");
+        for suffix in ["RDLP-PART.mp4", "Rdlp-Part.mp4", "rDlP-pArT.mp4"] {
+            let path = sidecar_path(&base, suffix);
+            assert_not_same_file_ignoring_case(
+                &path,
+                &crate::orchestrator::naming::part_path(&base),
+            );
+        }
+    }
+
+    #[test]
+    fn sidecar_path_cannot_forge_the_state_file_in_another_case() {
+        let base = PathBuf::from("/tmp/out/Title.mp4");
+        for suffix in ["RDLP_STATE.JSON", "en.Rdlp_State.Json"] {
+            let path = sidecar_path(&base, suffix);
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap();
+            assert!(
+                !name
+                    .to_ascii_lowercase()
+                    .ends_with(crate::orchestrator::session_state::STATE_SUFFIX),
+                "case-folds onto the state-file spelling: {name:?}"
+            );
+        }
+    }
 
     #[test]
     fn sidecar_path_cannot_forge_a_part_file() {

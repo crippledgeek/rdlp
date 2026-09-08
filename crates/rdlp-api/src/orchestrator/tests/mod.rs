@@ -136,6 +136,31 @@ fn test_sanitize_filename_windows_reserved() {
     assert_eq!(Orchestrator::sanitize_filename("CONSOLE"), "CONSOLE");
 }
 
+/// A title carrying a temp marker is defused whatever case it is written in.
+///
+/// `WINDOWS_RESERVED_NAMES` above is matched with `eq_ignore_ascii_case`, so
+/// reserved *names* already folded case; the markers did not, and NTFS /
+/// default APFS fold both. A title is the same attacker-influenced surface
+/// as a subtitle language.
+#[test]
+fn test_sanitize_filename_defuses_temp_markers_in_any_case() {
+    for title in [
+        "My Video.rdlp-part.mp4",
+        "My Video.RDLP-PART.mp4",
+        "My Video.Rdlp-Part.mp4",
+        "My Video.RDLP-TMP-abc.mp4",
+        "My Video.RDLP-BAK-abc.mp4",
+    ] {
+        let sanitized = Orchestrator::sanitize_filename(title).to_ascii_lowercase();
+        for marker in [".rdlp-part", ".rdlp-tmp-", ".rdlp-bak-"] {
+            assert!(
+                !sanitized.contains(marker),
+                "{title:?} still spells {marker} after sanitizing: {sanitized:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn test_sanitize_filename_leading_trailing_dots_spaces() {
     let orchestrator = create_test_orchestrator();
