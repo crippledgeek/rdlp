@@ -39,6 +39,7 @@
 // policy" section in the module docstring above.
 #![allow(unsafe_code)]
 
+mod abi;
 mod audio_codecs;
 pub mod audio_encoder_registry;
 pub(crate) mod codec_registry;
@@ -122,9 +123,18 @@ static FFMPEG_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 /// # Errors
 ///
 /// Returns [`PostProcessError::FFmpegInitFailed`] if `ffmpeg_the_third::init()`
-/// fails (e.g. required shared libraries are missing or incompatible).
+/// fails (e.g. required shared libraries are missing or incompatible), or if
+/// the loaded `libavcodec` belongs to a different ABI generation than the
+/// bindings were generated against (see the `abi` module).
 pub fn ensure_init() -> Result<()> {
     let result = FFMPEG_INIT.get_or_init(|| {
+        // Before init, not after: an ABI mismatch links cleanly and then makes
+        // every struct field access read the wrong offset, and `init()` is
+        // itself such an access. Failing rather than warning is deliberate —
+        // there is no correct work to do past this point, and a warning on a
+        // silent path (desktop, scripted runs) is a warning nobody sees.
+        abi::check_linked_avcodec_abi().map_err(|e| e.to_string())?;
+
         ffmpeg_the_third::init().map_err(|e| format!("ffmpeg_the_third::init() failed: {e}"))?;
         // Suppress FFmpeg's internal diagnostic messages (e.g. mpegts stream timing warnings).
         // Only show actual errors -- we handle logging ourselves.
