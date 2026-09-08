@@ -8,6 +8,7 @@ pub mod errors;
 mod eta;
 mod execution;
 mod extraction;
+mod gated_plan;
 mod interactive;
 mod merge_download;
 pub mod naming;
@@ -24,6 +25,8 @@ mod subtitle_pipeline;
 mod template;
 mod thumbnail;
 
+#[cfg(test)]
+mod test_support;
 #[cfg(test)]
 mod tests;
 
@@ -322,8 +325,15 @@ impl Orchestrator {
                 // download, so a 50-item desktop queue would otherwise repeat
                 // this multi-line block 50 times. Each affected run still says
                 // what it cost, at its own call site.
+                //
+                // Through `redact` like the error variant one layer up: a
+                // no-op for versions and a build prefix, and two sites
+                // rendering the same value differently is the drift the
+                // redaction gate exists to prevent.
                 static REPORTED: std::sync::Once = std::sync::Once::new();
-                REPORTED.call_once(|| error!("{mismatches}"));
+                REPORTED.call_once(|| {
+                    error!("{}", rdlp_redact::redact_str(&mismatches.to_string()));
+                });
                 return PipelineAvailability::AbiMismatch(mismatches);
             }
             Err(e) => {

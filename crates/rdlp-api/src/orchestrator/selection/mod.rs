@@ -30,8 +30,8 @@ impl Orchestrator {
     ///
     /// | Condition | Default |
     /// |-----------|---------|
-    /// | FFmpeg available, no multistreams | `bv*+ba/b` |
-    /// | FFmpeg available, multistreams | `bv+ba/b` |
+    /// | FFmpeg installed, no multistreams | `bv*+ba/b` |
+    /// | FFmpeg installed, multistreams | `bv+ba/b` |
     /// | FFmpeg not installed | `b/bv+ba` |
     /// | User explicit `-f` | User's value |
     pub(super) fn resolve_effective_selector(&self) -> Cow<'_, str> {
@@ -125,6 +125,13 @@ impl Orchestrator {
         let Some(mismatches) = self.pipeline.abi_mismatch() else {
             return Ok(());
         };
+        if self.config.output_to_stdout {
+            // Stdout mode skips post-processing entirely, with or without a
+            // working FFmpeg, so an unusable one costs this run nothing and
+            // refusing it would be a false refusal. (A merge is already
+            // rejected on this path for its own reasons, in `DownloadPhase`.)
+            return Ok(());
+        }
         if plan.requires_ffmpeg() || self.postprocessing_alters_the_media() {
             return Err(OrchestratorError::FFmpegAbiMismatch(mismatches.clone()));
         }

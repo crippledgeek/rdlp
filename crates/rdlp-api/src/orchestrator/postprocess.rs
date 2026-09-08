@@ -136,9 +136,12 @@ impl Orchestrator {
     /// which options happen to be set: skipping a remux, a recode, an audio
     /// extract or a normalize yields a file that is not what was asked for —
     /// the wrong container, the wrong codec, no audio track. Skipping an
-    /// embedded thumbnail, a metadata tag, embedded subtitles or a fixup
-    /// yields the right media with something missing around it, which the
-    /// warning in `run_postprocessing` covers.
+    /// embedded thumbnail, a metadata tag or embedded subtitles yields the
+    /// right media with something missing around it, which the warning in
+    /// `run_postprocessing` covers. `fixup` sits with those not because it
+    /// cannot change the media — `DetectOrWarn` repairs a broken file — but
+    /// because it is a conditional repair that is on by default, so treating
+    /// it as a request would refuse every unconfigured download.
     ///
     /// Config defaults are why the line cannot be "did the user ask": both
     /// `embed_thumbnail` and `fixup` are on in [`Config::default`], so a
@@ -174,8 +177,8 @@ impl Orchestrator {
         keep_inputs: bool,
     ) -> Result<Vec<PathBuf>> {
         debug!(
-            "[PostProcess] Called: is_hls={is_hls}, pipeline={}",
-            self.pipeline.is_ready()
+            "[PostProcess] Called: is_hls={is_hls}, pipeline={:?}",
+            self.pipeline
         );
 
         let Some(pipeline) = self.pipeline.pipeline() else {
@@ -196,6 +199,20 @@ impl Orchestrator {
             if let Some(mismatches) = self.pipeline.abi_mismatch() {
                 if keep_inputs && self.postprocessing_alters_the_media() {
                     return Err(OrchestratorError::FFmpegAbiMismatch(mismatches.clone()));
+                }
+                // More than one file means a merge, and the caller finalizes
+                // only the first — so reaching here with a skewed FFmpeg would
+                // hand back a video and abandon its audio. `GatedPlan` makes
+                // that unreachable: a merge plan cannot enter the download on a
+                // skewed machine. If it ever does, the gate has been defeated
+                // and that is worth saying loudly, because the symptom on its
+                // own looks like a successful download.
+                if files.len() > 1 {
+                    error!(
+                        "BUG: a merge reached post-processing with an unusable FFmpeg; \
+                         the pre-download gate was bypassed. Streams are left unmerged \
+                         rather than one of them being presented as the result"
+                    );
                 }
                 if needed {
                     warn!(

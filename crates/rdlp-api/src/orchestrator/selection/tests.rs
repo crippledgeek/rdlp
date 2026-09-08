@@ -1,14 +1,12 @@
 //! Tests for format selection logic
 #![allow(clippy::indexing_slicing, clippy::match_wildcard_for_single_variants)]
 
-use crate::events::Event;
-use crate::handle::DownloadId;
-use crate::orchestrator::{DownloadPlan, Orchestrator};
-use rdlp_types::Codec;
-use rdlp_types::{Config, DownloadProtocol, Format, InfoDict};
-use std::sync::Arc;
-use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
+use crate::orchestrator::DownloadPlan;
+use crate::orchestrator::test_support::{
+    make_audio_only, make_combined, make_video_only, orchestrator_with_config,
+    test_info_with_formats,
+};
+use rdlp_types::{Config, Format};
 
 /// Unwrap a `DownloadPlan::Single`, panicking on `Merge`.
 fn unwrap_single(plan: DownloadPlan) -> Format {
@@ -16,56 +14,6 @@ fn unwrap_single(plan: DownloadPlan) -> Format {
         DownloadPlan::Single(f) => f,
         other => panic!("Expected Single, got {other}"),
     }
-}
-
-/// Create orchestrator with specific config for testing.
-fn orchestrator_with_config(config: Config) -> Orchestrator {
-    let (tx, _rx) = mpsc::channel::<Event>(64);
-    Orchestrator::new(
-        Arc::new(config),
-        tx,
-        DownloadId::next(),
-        CancellationToken::new(),
-        None,
-    )
-}
-
-fn make_combined(id: &str, height: u32, quality: i32) -> Format {
-    let mut f = Format::new(id, format!("url_{id}"), "mp4", DownloadProtocol::Https);
-    f.vcodec = Codec::from("h264".to_string());
-    f.acodec = Codec::from("aac".to_string());
-    f.height = Some(height);
-    f.quality = Some(quality);
-    f.tbr = Some(f64::from(height) * 2.0);
-    f
-}
-
-fn make_video_only(id: &str, height: u32) -> Format {
-    let mut f = Format::new(id, format!("url_{id}"), "mp4", DownloadProtocol::Https);
-    f.vcodec = Codec::from("h264".to_string());
-    f.acodec = Codec::Absent;
-    f.height = Some(height);
-    f.vbr = Some(f64::from(height) * 1.5);
-    f
-}
-
-fn make_audio_only(id: &str, abr: f64) -> Format {
-    let mut f = Format::new(id, format!("url_{id}"), "m4a", DownloadProtocol::Https);
-    f.vcodec = Codec::Absent;
-    f.acodec = Codec::from("aac".to_string());
-    f.abr = Some(abr);
-    f
-}
-
-fn test_info_with_formats(formats: Vec<Format>) -> InfoDict {
-    let mut info = InfoDict::new(
-        "test_id",
-        "Test Video",
-        "TestExtractor",
-        "https://example.com/video",
-    );
-    info.formats = formats;
-    info
 }
 
 #[tokio::test]

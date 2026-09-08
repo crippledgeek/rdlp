@@ -5,6 +5,7 @@ mod download_state;
 pub use download_state::DownloadState;
 
 use super::DownloadPlan;
+use super::gated_plan::GatedPlan;
 use super::session_state::{self, SessionState, SingleVideoState};
 use super::{
     Orchestrator,
@@ -62,8 +63,12 @@ pub enum DownloadPhase {
         format: Box<Format>,
         /// Subtitles selected for download (empty if none)
         subtitle_selection: Vec<(String, rdlp_types::Subtitle)>,
-        /// Download plan (single or merge)
-        plan: Box<DownloadPlan>,
+        /// Download plan, checked against the linked `FFmpeg`.
+        ///
+        /// [`GatedPlan`] rather than a bare plan so the check cannot be
+        /// skipped: its only constructor performs it, and this is the single
+        /// door into the download (rdlp#727).
+        plan: GatedPlan,
     },
     /// Downloading with progress tracking
     Downloading {
@@ -117,22 +122,6 @@ impl fmt::Display for DownloadPhase {
 }
 
 impl DownloadPhase {
-    /// Refuse to enter the download when the plan needs `FFmpeg` and the
-    /// linked `FFmpeg` is unusable.
-    ///
-    /// Sited on the transition rather than on either producer of a plan
-    /// because there are two: `select_format`, and the reconstruction from a
-    /// saved session, which reaches `Preparing` without passing through it.
-    /// A resumed merge therefore used to download both streams and finalize
-    /// only the video seam — the silently audio-less file this branch exists
-    /// to prevent (rdlp#727). Every plan enters the download through here.
-    pub(super) fn refusing_an_unusable_ffmpeg(self, orchestrator: &Orchestrator) -> Result<Self> {
-        if let Self::Preparing { ref plan, .. } = self {
-            orchestrator.refuse_plan_needing_unusable_ffmpeg(plan)?;
-        }
-        Ok(self)
-    }
-
     /// Advance to the next phase in the download workflow
     ///
     /// # State Transitions
@@ -234,13 +223,12 @@ impl DownloadPhase {
                         } else {
                             DownloadPlan::Single(format.clone())
                         };
-                        return Self::Preparing {
+                        return Ok(Self::Preparing {
                             info: Box::new(info),
                             format: Box::new(format),
                             subtitle_selection,
-                            plan: Box::new(plan),
-                        }
-                        .refusing_an_unusable_ffmpeg(orchestrator);
+                            plan: GatedPlan::new(orchestrator, Box::new(plan))?,
+                        });
                     }
                     warn!(
                         format_id = saved.format_id.as_str();
@@ -321,13 +309,12 @@ impl DownloadPhase {
                     state.save(&state_path).await;
                 }
 
-                Self::Preparing {
+                Ok(Self::Preparing {
                     info,
                     format,
                     subtitle_selection,
-                    plan,
-                }
-                .refusing_an_unusable_ffmpeg(orchestrator)
+                    plan: GatedPlan::new(orchestrator, plan)?,
+                })
             }
 
             Self::Preparing {
@@ -336,6 +323,7 @@ impl DownloadPhase {
                 subtitle_selection,
                 plan,
             } => {
+                let plan = plan.into_inner();
                 // Stdout mode: skip path generation and resume detection.
                 // Reject merge plans early — the Downloading phase would
                 // also reject, but failing here gives a clearer context.

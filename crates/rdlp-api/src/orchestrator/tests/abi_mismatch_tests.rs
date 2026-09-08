@@ -16,93 +16,29 @@
 use super::*;
 use crate::orchestrator::DownloadPlan;
 use crate::orchestrator::errors::OrchestratorError;
+use crate::orchestrator::gated_plan::GatedPlan;
 use crate::orchestrator::pipeline_availability::PipelineAvailability;
 use crate::orchestrator::pipeline_availability::fixture::{
     A_PREFIX, COMPILED_MAJOR, LINKED_MAJOR, mismatches,
 };
-use rdlp_types::{Codec, ContainerFormat, DownloadProtocol, Format, PostProcess};
+use crate::orchestrator::test_support::{
+    make_audio_only, make_combined, make_hls, make_video_only, orchestrator_with,
+    test_info_with_formats,
+};
+use rdlp_types::{ContainerFormat, PostProcess};
 
 /// An orchestrator whose `FFmpeg` is present but ABI-skewed.
 fn skewed_orchestrator(config: Config) -> Orchestrator {
-    let (tx, _rx) = mpsc::channel::<Event>(64);
-    let mut orch = Orchestrator::new(
-        Arc::new(config),
-        tx,
-        DownloadId::next(),
-        CancellationToken::new(),
-        None,
-    );
-    orch.pipeline = PipelineAvailability::AbiMismatch(mismatches());
-    orch
+    orchestrator_with(config, PipelineAvailability::AbiMismatch(mismatches()))
 }
 
 /// The metadata a post-process run carries; none of these tests read it.
 fn test_info() -> InfoDict {
-    InfoDict::new("id", "title", "test", "https://example.test/v")
+    test_info_with_formats(Vec::new())
 }
 
 fn one_file() -> Vec<PathBuf> {
     vec![PathBuf::from("/tmp/rdlp-test-video.mkv")]
-}
-
-/// A combined progressive format — needs nothing from `FFmpeg`.
-fn progressive() -> Format {
-    let mut f = Format::new(
-        "c720",
-        "https://example.test/v.mp4",
-        "mp4",
-        DownloadProtocol::Https,
-    );
-    f.vcodec = Codec::from("h264".to_string());
-    f.acodec = Codec::from("aac".to_string());
-    f.height = Some(720);
-    f
-}
-
-/// The same, delivered over HLS — the pipeline remuxes it regardless of config.
-fn hls() -> Format {
-    let mut f = Format::new(
-        "hls720",
-        "https://example.test/v.m3u8",
-        "mp4",
-        DownloadProtocol::M3u8Native,
-    );
-    f.vcodec = Codec::from("h264".to_string());
-    f.acodec = Codec::from("aac".to_string());
-    f.height = Some(720);
-    f
-}
-
-fn video_only() -> Format {
-    let mut f = Format::new(
-        "v1080",
-        "https://example.test/v",
-        "mp4",
-        DownloadProtocol::Https,
-    );
-    f.vcodec = Codec::from("h264".to_string());
-    f.acodec = Codec::Absent;
-    f.height = Some(1080);
-    f
-}
-
-fn audio_only() -> Format {
-    let mut f = Format::new(
-        "a256",
-        "https://example.test/a",
-        "m4a",
-        DownloadProtocol::Https,
-    );
-    f.vcodec = Codec::Absent;
-    f.acodec = Codec::from("aac".to_string());
-    f.abr = Some(256.0);
-    f
-}
-
-fn info_with(formats: Vec<Format>) -> InfoDict {
-    let mut info = test_info();
-    info.formats = formats;
-    info
 }
 
 // ── Rule 1: refused before the download, where refusing costs nothing ────────
@@ -115,7 +51,13 @@ async fn a_merge_plan_is_refused_before_anything_is_downloaded() {
     let orch = skewed_orchestrator(Config::default());
 
     let result = orch
-        .select_format(&info_with(vec![video_only(), audio_only()]), false)
+        .select_format(
+            &test_info_with_formats(vec![
+                make_video_only("v1080", 1080),
+                make_audio_only("a256", 256.0),
+            ]),
+            false,
+        )
         .await;
 
     assert!(
@@ -128,7 +70,12 @@ async fn a_merge_plan_is_refused_before_anything_is_downloaded() {
 async fn an_hls_plan_is_refused_before_anything_is_downloaded() {
     let orch = skewed_orchestrator(Config::default());
 
-    let result = orch.select_format(&info_with(vec![hls()]), false).await;
+    let result = orch
+        .select_format(
+            &test_info_with_formats(vec![make_hls("hls720", 720)]),
+            false,
+        )
+        .await;
 
     assert!(
         matches!(result, Err(OrchestratorError::FFmpegAbiMismatch(_))),
@@ -163,7 +110,10 @@ async fn every_media_altering_option_is_refused_before_the_download() {
         let orch = skewed_orchestrator(config);
 
         let result = orch
-            .select_format(&info_with(vec![progressive()]), false)
+            .select_format(
+                &test_info_with_formats(vec![make_combined("c720", 720, 2)]),
+                false,
+            )
             .await;
 
         assert!(
@@ -191,7 +141,10 @@ async fn a_plain_progressive_download_is_not_refused() {
     let orch = skewed_orchestrator(config);
 
     let plan = orch
-        .select_format(&info_with(vec![progressive()]), false)
+        .select_format(
+            &test_info_with_formats(vec![make_combined("c720", 720, 2)]),
+            false,
+        )
         .await
         .expect("nothing here needs FFmpeg");
 
@@ -199,7 +152,7 @@ async fn a_plain_progressive_download_is_not_refused() {
 }
 
 #[tokio::test]
-async fn a_working_ffmpeg_refuses_nothing() {
+async fn a_missing_ffmpeg_refuses_nothing() {
     // Mutation guard: the refusal must be reached via the mismatch, not by the
     // pipeline merely being absent — `FfmpegUnavailable` degrades as always.
     let (tx, _rx) = mpsc::channel::<Event>(64);
@@ -215,7 +168,10 @@ async fn a_working_ffmpeg_refuses_nothing() {
     orch.pipeline = PipelineAvailability::FfmpegUnavailable;
 
     let plan = orch
-        .select_format(&info_with(vec![progressive()]), false)
+        .select_format(
+            &test_info_with_formats(vec![make_combined("c720", 720, 2)]),
+            false,
+        )
         .await
         .expect("a missing FFmpeg degrades, it does not refuse");
 
@@ -226,41 +182,36 @@ async fn a_working_ffmpeg_refuses_nothing() {
 fn the_plan_answers_for_its_own_shape() {
     assert!(
         DownloadPlan::Merge {
-            video: video_only(),
-            audio: audio_only(),
+            video: make_video_only("v1080", 1080),
+            audio: make_audio_only("a256", 256.0),
         }
         .requires_ffmpeg(),
         "two streams need joining"
     );
     assert!(
-        DownloadPlan::Single(hls()).requires_ffmpeg(),
+        DownloadPlan::Single(make_hls("hls720", 720)).requires_ffmpeg(),
         "HLS needs remuxing"
     );
     assert!(
-        !DownloadPlan::Single(progressive()).requires_ffmpeg(),
+        !DownloadPlan::Single(make_combined("c720", 720, 2)).requires_ffmpeg(),
         "a progressive file is already what was asked for"
     );
 }
 
 #[test]
-fn the_resume_transition_is_gated_too() {
+fn a_resumed_plan_cannot_reach_the_download_ungated() {
     // `select_format` is not the only producer of a plan: resuming a saved
-    // session reconstructs one directly and reaches `Preparing` without it.
-    // A resumed merge therefore downloaded both streams and finalized only the
-    // video seam — the audio-less file this branch exists to prevent. The gate
-    // is on the transition, so both producers pass it.
+    // session reconstructs one directly. That path once skipped the check, and
+    // a resumed merge downloaded both streams while only the video was
+    // finalized. `GatedPlan` is why it cannot skip it again — this constructor
+    // is the only way to fill `Preparing`'s plan field, and it checks.
     let orch = skewed_orchestrator(Config::default());
-    let resumed_merge = DownloadPhase::Preparing {
-        info: Box::new(test_info()),
-        format: Box::new(video_only()),
-        subtitle_selection: Vec::new(),
-        plan: Box::new(DownloadPlan::Merge {
-            video: video_only(),
-            audio: audio_only(),
-        }),
+    let merge = DownloadPlan::Merge {
+        video: make_video_only("v1080", 1080),
+        audio: make_audio_only("a256", 256.0),
     };
 
-    let result = resumed_merge.refusing_an_unusable_ffmpeg(&orch);
+    let result = GatedPlan::new(&orch, Box::new(merge));
 
     assert!(
         matches!(result, Err(OrchestratorError::FFmpegAbiMismatch(_))),
@@ -269,18 +220,13 @@ fn the_resume_transition_is_gated_too() {
 }
 
 #[test]
-fn the_resume_transition_lets_an_unaffected_plan_through() {
+fn the_gate_lets_an_unaffected_plan_through() {
     let orch = skewed_orchestrator(Config::default());
-    let resumed_single = DownloadPhase::Preparing {
-        info: Box::new(test_info()),
-        format: Box::new(progressive()),
-        subtitle_selection: Vec::new(),
-        plan: Box::new(DownloadPlan::Single(progressive())),
-    };
+    let single = DownloadPlan::Single(make_combined("c720", 720, 2));
 
     assert!(
-        resumed_single.refusing_an_unusable_ffmpeg(&orch).is_ok(),
-        "a resumed progressive download needs nothing from FFmpeg"
+        GatedPlan::new(&orch, Box::new(single)).is_ok(),
+        "a progressive download needs nothing from FFmpeg"
     );
 }
 
@@ -306,8 +252,11 @@ async fn a_run_holding_downloaded_bytes_is_never_failed() {
 
 #[tokio::test]
 async fn a_merge_that_slips_through_hands_back_both_streams() {
-    // Belt and braces for the same rule: even the shape that motivated the
-    // pre-download refusal must not lose a file if it ever reaches here.
+    // Honest about what this does and does not guarantee: the FUNCTION returns
+    // both streams, but the caller finalizes only the first, so a run reaching
+    // here would still produce a video without its audio. That is why the path
+    // is closed by `GatedPlan` before the download rather than repaired here,
+    // and why reaching it now logs a BUG line. This pins the function's half.
     let orch = skewed_orchestrator(Config::default());
     let files = vec![
         PathBuf::from("/tmp/rdlp-test.rdlp-tmp-abc.video.mkv"),
@@ -365,6 +314,26 @@ async fn a_missing_ffmpeg_still_degrades_gracefully() {
     assert_eq!(result, files);
 }
 
+#[tokio::test]
+async fn stdout_mode_is_not_refused() {
+    // Stdout mode never post-processes, so an unusable FFmpeg costs it nothing
+    // and refusing would block a download that would have worked.
+    let orch = skewed_orchestrator(Config {
+        output_to_stdout: true,
+        ..Default::default()
+    });
+
+    let plan = orch
+        .select_format(
+            &test_info_with_formats(vec![make_hls("hls720", 720)]),
+            false,
+        )
+        .await
+        .expect("stdout mode asks nothing of FFmpeg");
+
+    assert!(plan.is_some());
+}
+
 // ── The remedy survives to every surface that shows it ───────────────────────
 
 #[tokio::test]
@@ -374,7 +343,10 @@ async fn the_refusal_carries_the_remedy_intact() {
     let orch = skewed_orchestrator(config);
 
     let err = orch
-        .select_format(&info_with(vec![progressive()]), false)
+        .select_format(
+            &test_info_with_formats(vec![make_combined("c720", 720, 2)]),
+            false,
+        )
         .await
         .expect_err("a requested remux against a skewed FFmpeg must be refused");
     let message = err.to_string();
