@@ -15,7 +15,9 @@
 //!   delete `current_files` — i.e. the media that just finished downloading,
 //!   over a flag the operator could have fixed and re-run.
 //!
-//! Self-skips when the system `ffmpeg` CLI is absent (fixtures only).
+//! Fails closed when the system `ffmpeg` CLI is absent (fixtures only) —
+//! see `require_ffmpeg` for why this suite does not take the local self-skip
+//! convention.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::disallowed_methods)]
 
 use std::sync::Arc;
@@ -28,9 +30,64 @@ use rdlp_types::ContainerFormat;
 
 mod common;
 use common::{
-    FIXTURE_FAILED, MsgOptions, build_av_fixture, build_video_fixture, ffmpeg_cli_available,
-    make_msg,
+    FIXTURE_FAILED, MsgOptions, build_audio_fixture, build_av_fixture, build_video_fixture,
+    build_vp9_fixture, ffmpeg_cli_available, make_msg,
 };
+
+/// Require the `ffmpeg` CLI, and FAIL rather than skip when it is missing
+/// unless `RDLP_ALLOW_SKIP_FFMPEG_TESTS` opts in — the same fail-closed policy
+/// as `rdlp-ffmpeg/tests/audio_only_container_rejects_video.rs`, deliberately
+/// adopted here against this crate's local self-skip convention.
+///
+/// The convention exists for suites whose property is a warning or a container
+/// choice. This suite's property is that a refusal does not delete the user's
+/// completed download; a machine that silently skips it reports green while
+/// leaving the most expensive failure in the change unverified. Where the two
+/// conventions disagree, the cost of the property being wrong decides.
+fn require_ffmpeg() -> bool {
+    if ffmpeg_cli_available() {
+        return true;
+    }
+    if std::env::var_os("RDLP_ALLOW_SKIP_FFMPEG_TESTS").is_some() {
+        eprintln!("[SKIP] ffmpeg CLI not available (RDLP_ALLOW_SKIP_FFMPEG_TESTS set)");
+        return false;
+    }
+    panic!(
+        "ffmpeg not found on PATH. This suite builds real fixtures to prove a policy \
+         refusal never costs the user their download. Set RDLP_ALLOW_SKIP_FFMPEG_TESTS=1 \
+         to explicitly opt into skipping it."
+    );
+}
+
+/// The files `preserve_current_files` moved out of the `.rdlp-tmp-` namespace,
+/// newest-name-sorted for stable assertions.
+///
+/// The stage consumes the `PipelineMessage` when it fails, so the survivor
+/// cannot be read back from the tracker — the output directory is the only
+/// observable, which is also exactly what the operator has. Asserting on
+/// non-empty content, not mere existence: a zero-byte file would satisfy
+/// `exists()` and be worthless.
+fn kept_survivors(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let mut kept: Vec<std::path::PathBuf> = std::fs::read_dir(dir)
+        .expect("read the output dir")
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.contains(".rdlp-kept-"))
+        })
+        .collect();
+    for path in &kept {
+        assert!(
+            std::fs::metadata(path).is_ok_and(|m| m.len() > 0),
+            "kept survivor {} is empty — preserved in name only",
+            path.display()
+        );
+    }
+    kept.sort();
+    kept
+}
 
 /// Assert an error names both the container the user asked for and the one
 /// the refusal points at — the two halves that make the message actionable.
@@ -50,8 +107,7 @@ fn assert_names_wma_and_wmv(err: &anyhow::Error, label: &str) {
 /// out of scope.
 #[tokio::test]
 async fn remux_refuses_and_keeps_the_download() {
-    if !ffmpeg_cli_available() {
-        eprintln!("[SKIP] ffmpeg CLI not available");
+    if !require_ffmpeg() {
         return;
     }
     let dir = TempDir::new().unwrap();
@@ -73,10 +129,17 @@ async fn remux_refuses_and_keeps_the_download() {
     };
     assert_names_wma_and_wmv(&err, "remux");
 
-    assert!(
-        media.exists(),
+    // The download must survive — moved out of the temp namespace so the stale
+    // sweep cannot take it later, not left where it was.
+    assert_eq!(
+        kept_survivors(dir.path()).len(),
+        1,
         "the completed download must survive a policy refusal — it is intact, \
          untouched, and the operator only needs to re-run with a different flag"
+    );
+    assert!(
+        !media.exists(),
+        "the temp-named original must be gone, not duplicated"
     );
 }
 
@@ -87,8 +150,7 @@ async fn remux_refuses_and_keeps_the_download() {
 /// `.wma` without ever touching the remux path.
 #[tokio::test]
 async fn recode_refuses_the_transcode_branch_and_keeps_the_download() {
-    if !ffmpeg_cli_available() {
-        eprintln!("[SKIP] ffmpeg CLI not available");
+    if !require_ffmpeg() {
         return;
     }
     if rdlp_ffmpeg::ffmpeg::video_codecs::resolve_encoder("vp9").is_none() {
@@ -97,7 +159,7 @@ async fn recode_refuses_the_transcode_branch_and_keeps_the_download() {
     }
     let dir = TempDir::new().unwrap();
     let media = dir.path().join("video.rdlp-tmp-577.webm");
-    build_vp9_fixture(&media);
+    build_vp9_fixture(&media).expect(FIXTURE_FAILED);
 
     let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
     let stage = RecodeStage::new(ffmpeg);
@@ -112,8 +174,9 @@ async fn recode_refuses_the_transcode_branch_and_keeps_the_download() {
     };
     assert_names_wma_and_wmv(&err, "recode");
 
-    assert!(
-        media.exists(),
+    assert_eq!(
+        kept_survivors(dir.path()).len(),
+        1,
         "a refused recode must not cost the user their download"
     );
 }
@@ -123,15 +186,14 @@ async fn recode_refuses_the_transcode_branch_and_keeps_the_download() {
 /// `remux_sync`, so it needs — and now has — the same guard.
 #[tokio::test]
 async fn merge_refuses_an_audio_only_output_format_and_keeps_the_inputs() {
-    if !ffmpeg_cli_available() {
-        eprintln!("[SKIP] ffmpeg CLI not available");
+    if !require_ffmpeg() {
         return;
     }
     let dir = TempDir::new().unwrap();
     let video = dir.path().join("video.rdlp-tmp-577.mp4");
     let audio = dir.path().join("audio.rdlp-tmp-577.m4a");
     build_video_fixture(&video, "mp4").expect(FIXTURE_FAILED);
-    build_audio_fixture(&audio);
+    build_audio_fixture(&audio).expect(FIXTURE_FAILED);
 
     let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
     let stage = MergeStage::new(ffmpeg);
@@ -150,8 +212,9 @@ async fn merge_refuses_an_audio_only_output_format_and_keeps_the_inputs() {
     };
     assert_names_wma_and_wmv(&err, "merge");
 
-    assert!(
-        video.exists() && audio.exists(),
+    assert_eq!(
+        kept_survivors(dir.path()).len(),
+        2,
         "a refused merge must not cost the user either downloaded stream"
     );
 }
@@ -161,13 +224,12 @@ async fn merge_refuses_an_audio_only_output_format_and_keeps_the_inputs() {
 /// by a guard that looks only at the target container.
 #[tokio::test]
 async fn remux_of_an_audio_only_source_into_wma_still_succeeds() {
-    if !ffmpeg_cli_available() {
-        eprintln!("[SKIP] ffmpeg CLI not available");
+    if !require_ffmpeg() {
         return;
     }
     let dir = TempDir::new().unwrap();
     let media = dir.path().join("audio.rdlp-tmp-577.m4a");
-    build_audio_fixture(&media);
+    build_audio_fixture(&media).expect(FIXTURE_FAILED);
 
     let ffmpeg = Arc::new(FFmpegRunner::new().expect("FFmpeg required"));
     let stage = RemuxStage::new(ffmpeg);
@@ -186,29 +248,4 @@ async fn remux_of_an_audio_only_source_into_wma_still_succeeds() {
         "wma",
         "the remux must have produced the .wma the user asked for"
     );
-}
-
-/// A vp9 source: `RecodeStage`'s ASF rule lists no vp9, so this cannot be
-/// stream-copied and takes the transcode branch.
-fn build_vp9_fixture(path: &std::path::Path) {
-    let status = std::process::Command::new("ffmpeg")
-        .args(["-y", "-loglevel", "error"])
-        .args(["-f", "lavfi", "-i", "testsrc=d=1:s=160x120:r=10"])
-        .args(["-c:v", "libvpx-vp9", "-pix_fmt", "yuv420p", "-b:v", "50k"])
-        .arg(path)
-        .status()
-        .expect("failed to spawn ffmpeg");
-    assert!(status.success(), "{FIXTURE_FAILED} (vp9)");
-}
-
-/// An audio-only AAC source — no video stream of any kind.
-fn build_audio_fixture(path: &std::path::Path) {
-    let status = std::process::Command::new("ffmpeg")
-        .args(["-y", "-loglevel", "error"])
-        .args(["-f", "lavfi", "-i", "sine=d=1"])
-        .args(["-c:a", "aac", "-b:a", "64k"])
-        .arg(path)
-        .status()
-        .expect("failed to spawn ffmpeg");
-    assert!(status.success(), "{FIXTURE_FAILED} (audio-only)");
 }

@@ -25,10 +25,11 @@ use crate::pipeline::PipelineMessage;
 /// a processing failure. A no-op for every other error, so the existing
 /// cancel-cleanup behaviour is unchanged.
 ///
-/// `stage` names the caller in the log line: the survivor keeps its temp name
-/// (the final rename is the orchestrator's, success-path only — #406), so
-/// telling the operator exactly which file was kept is the difference between
-/// a recoverable run and a puzzling one.
+/// `stage` names the caller in the log line, and the line names the path the
+/// survivor was moved to (`preserve_current_files` renames it out of the
+/// `.rdlp-tmp-` namespace so the stale sweep cannot take it). That path is not
+/// the clean output name — the pipeline never knows it on a failing run — so
+/// logging it is the difference between a recoverable run and a puzzling one.
 pub fn keep_download_on_policy_refusal(
     error: &PostProcessError,
     msg: &mut PipelineMessage,
@@ -103,16 +104,76 @@ mod tests {
     }
 
     /// A policy refusal preserves the working set: the tracker must no longer
-    /// consider the file deletable.
+    /// consider the file deletable, and `current_files` must name where it
+    /// actually went.
     #[test]
     fn a_refusal_preserves_the_current_files() {
-        let (_dir, mut msg, file) = msg_with_a_real_file();
+        let (_dir, mut msg, original) = msg_with_a_real_file();
         keep_download_on_policy_refusal(&refusal(), &mut msg, "RemuxStage");
+
+        let kept = msg.tracker.current_files.clone();
+        assert_eq!(kept.len(), 1, "the working set must not lose an entry");
+        let kept = kept[0].clone();
+        assert_ne!(
+            kept, original,
+            "the survivor must have been moved out of the temp namespace"
+        );
+
         drop(msg);
         assert!(
-            file.exists(),
+            kept.exists(),
             "a policy refusal must not cost the user their download"
         );
+        assert!(
+            !original.exists(),
+            "the temp-named original must not be left behind as a duplicate"
+        );
+    }
+
+    /// The stale sweep is the second half of the same data-loss story, and the
+    /// half a `Drop`-only fix misses. `cleanup_stale` does NOT consult the
+    /// registry — it `read_dir`s the output directory and matches
+    /// `name.contains(".rdlp-tmp-")`, sparing a file only while another
+    /// process holds its `.lock`. A preserved survivor has had its lock
+    /// released, so if it kept the temp name it would be deleted here the
+    /// moment it aged past the window: at CLI startup, desktop startup, or
+    /// desktop exit.
+    ///
+    /// Fails against a `preserve_current_files` that keeps the temp name.
+    /// Same trap and same remedy as #416-M1's `.rdlp-bak-` sidecar.
+    #[test]
+    fn a_preserved_survivor_outlives_the_stale_sweep() {
+        let (dir, mut msg, _original) = msg_with_a_real_file();
+        keep_download_on_policy_refusal(&refusal(), &mut msg, "RemuxStage");
+        let kept = msg.tracker.current_files[0].clone();
+        drop(msg);
+
+        age_past_the_sweep_window(&kept);
+        TempRegistry::cleanup_stale(dir.path());
+
+        assert!(
+            kept.exists(),
+            "the kept download must survive the stale sweep at {}",
+            kept.display()
+        );
+    }
+
+    /// Backdate `path`'s mtime well past `cleanup_stale`'s one-hour window, so
+    /// the sweep judges it stale rather than "created moments ago".
+    ///
+    /// Two hours, not one: the threshold is `age >= one_hour` measured against
+    /// wall-clock `now`, so a value exactly on the boundary would make the test
+    /// depend on which side of the comparison the clock lands.
+    fn age_past_the_sweep_window(path: &std::path::Path) {
+        const WELL_PAST_THE_WINDOW: std::time::Duration = std::time::Duration::from_hours(2);
+
+        let backdated = std::time::SystemTime::now() - WELL_PAST_THE_WINDOW;
+        let file = std::fs::File::options()
+            .write(true)
+            .open(path)
+            .expect("open the kept file to backdate it");
+        file.set_times(std::fs::FileTimes::new().set_modified(backdated))
+            .expect("backdate the kept file's mtime");
     }
 
     /// The negative half: an ordinary processing failure keeps the existing
@@ -123,6 +184,11 @@ mod tests {
         let (_dir, mut msg, file) = msg_with_a_real_file();
         let err = PostProcessError::ffmpeg_failed("encoder exploded");
         keep_download_on_policy_refusal(&err, &mut msg, "RemuxStage");
+        assert_eq!(
+            msg.tracker.current_files,
+            vec![file.clone()],
+            "an ordinary failure must not rename anything either"
+        );
         drop(msg);
         assert!(
             !file.exists(),

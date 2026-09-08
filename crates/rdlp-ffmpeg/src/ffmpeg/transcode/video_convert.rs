@@ -56,16 +56,24 @@ impl FFmpegRunner {
         // producing exactly the artifact #577 forbids (`--recode-video=wma` on
         // vp9 takes that path).
         //
-        // In its own `spawn_blocking`, not inside the conversion's: adding ANY
-        // local to a frame on the conversion task's stack makes the libxavs2
-        // transcode in `recode_new_codecs` (bf=7) SIGSEGV — reproduced with an
-        // inert `black_box(output.to_string_lossy())` in the same position, and
-        // with this guard instrumented to prove it does no FFmpeg work at all
-        // for an `.mkv` target (it returns at the extension check). The
-        // fragility is latent in the xavs2 encode rather than caused by the
-        // guard, and it deserves its own issue; a separate blocking task gets a
-        // separate stack and does not perturb it. The `.await` also keeps the
-        // synchronous `format::input` this may perform off the async worker.
+        // DO NOT move this into `convert_video_sync`, where it would read more
+        // naturally. Doing so SIGSEGVs `tests/recode_new_codecs.rs` at its
+        // `libxavs2 -> mkv` case — a failure whose name has nothing to do with
+        // #577 and which reads like flaky infrastructure or a bad FFmpeg build,
+        // so it is worth knowing in advance that this line is the cause.
+        //
+        // Adding ANY local to a frame on the conversion task's stack triggers
+        // it: reproduced with an inert `black_box(output.to_string_lossy())` in
+        // the same position, and with this guard instrumented to prove it does
+        // no FFmpeg work at all for an `.mkv` target (it returns at the
+        // extension check). So the fragility is latent in the xavs2 encode
+        // rather than caused by the guard — tracked as **#725**, which carries
+        // this evidence; the reviewer's read there is memory corruption rather
+        // than a layout quirk, which makes the separate task a workaround that
+        // hides a symptom, not a fix. A separate blocking task gets a separate
+        // stack and does not perturb the conversion's. The `.await` also keeps
+        // the synchronous `format::input` this may perform off the async
+        // worker.
         //
         // Checked against `input` rather than the salvage-repaired copy: only
         // the container is repaired, never the stream set, so the answer is the

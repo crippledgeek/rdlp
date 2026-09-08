@@ -142,6 +142,16 @@ impl FFmpegRunner {
         // `--remux=wma` used to. Before `format::output`, which would
         // create/truncate the file. `Mkv` is never refused, so the raw-FFI
         // branch above cannot bypass a live refusal.
+        //
+        // On the record: the guard asks for the first video stream that is NOT
+        // an attached picture, while the mux below then copies
+        // `streams().best(Video)` — so a video input carrying ONLY cover art
+        // would pass the guard and have that cover copied as its "video"
+        // stream. Left as is deliberately: `MergeStage` is dispatched on a real
+        // video+audio format split, so an input whose only video stream is a
+        // thumbnail does not occur, and widening the guard to `best(Video)`
+        // would refuse the cover-art carve-out this whole change exists to
+        // protect.
         crate::ffmpeg::audio_only_container::reject_video_into_audio_only(&ictx_video, output)?;
 
         let mut octx = ffmpeg_the_third::format::output(output)

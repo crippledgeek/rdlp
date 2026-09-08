@@ -25,6 +25,33 @@ fn is_temp_named(path: &Path) -> bool {
         .is_some_and(|n| n.contains(TEMP_MARKER))
 }
 
+/// The marker that replaces [`TEMP_MARKER`] on a file
+/// [`FileTracker::preserve_current_files`] has decided to keep.
+///
+/// A distinct marker rather than no marker: it keeps the survivor
+/// collision-free and greppable, while `contains(".rdlp-tmp-")` — the only
+/// thing `TempRegistry::cleanup_stale` matches on — becomes false. Same
+/// reasoning as `rdlp-api`'s `.rdlp-bak-` sidecar (#416-M1).
+const KEPT_MARKER: &str = ".rdlp-kept-";
+
+/// The path a temp-named survivor is moved to so the stale sweep can no longer
+/// see it: `{stem}.rdlp-tmp-{uuid}.{ext}` → `{stem}.rdlp-kept-{uuid}.{ext}`.
+///
+/// `None` when `path` carries no temp marker — it is already outside the swept
+/// namespace, so there is nothing to move and renaming would only obscure a
+/// name someone else chose.
+///
+/// A plain marker swap, so the uuid and the extension both survive: the uuid
+/// keeps the new name as collision-free as the old one, and the extension has
+/// to stay last or the kept file stops opening in a player.
+fn kept_path(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name()?.to_str()?;
+    if !name.contains(TEMP_MARKER) {
+        return None;
+    }
+    Some(path.with_file_name(name.replace(TEMP_MARKER, KEPT_MARKER)))
+}
+
 /// Tracks current and temporary file paths for a single post-processing job.
 ///
 /// After each stage produces output, the stage calls [`Self::replace`] to promote
@@ -144,24 +171,72 @@ impl FileTracker {
     /// Contrast a genuine processing failure, where the working set really is
     /// suspect and the existing cancel-cleanup is right.
     ///
-    /// Each file is also released from the [`TempRegistry`]: registration is
-    /// what `cleanup_all()` (CLI/desktop exit) and `cleanup_stale()` (next
-    /// startup) sweep, so preserving from `Drop` alone would still lose the
-    /// file minutes later.
+    /// **Surviving `Drop` is not enough — the survivor must also leave the
+    /// `.rdlp-tmp-` namespace.** Both sweepers key on that marker:
+    /// `TempRegistry::cleanup_all()` deletes what is still registered (CLI and
+    /// desktop exit), and [`TempRegistry::cleanup_stale`] marker-scans
+    /// `name.contains(".rdlp-tmp-")` in the output directory, sparing a file
+    /// only while another process holds its `.lock`. Releasing the registry
+    /// entry removes that sidecar, so a released-but-still-marker-named file
+    /// is deleted by the next sweep once its mtime is an hour old — at CLI
+    /// startup, desktop startup, or desktop exit. Preserving without renaming
+    /// would defer the data loss by an hour, not prevent it.
     ///
-    /// **Known residue:** the survivor keeps its `*.rdlp-tmp-{uuid}.*` name.
-    /// The single rename to the user-visible name is the orchestrator's, on
-    /// the success path only (#406 Option X), and is not reachable from a
-    /// failing stage. Callers log the kept path so the operator can find it.
+    /// So each file is renamed to `{stem}.rdlp-kept-{uuid}.{ext}` first, then
+    /// released. This is the remedy #416-M1 already established for the same
+    /// trap, verbatim from `rdlp-api`'s `finalize_part_replace_windows`: *"The
+    /// backup is intentionally NOT named `.rdlp-tmp-*`: `TempRegistry::
+    /// cleanup_stale` marker-scans `.rdlp-tmp-` names and would delete the
+    /// user's sole in-window copy."* The uuid is carried over from the temp
+    /// name rather than freshly generated, so the survivor inherits its
+    /// collision-freedom and the two names stay greppable as a pair. The
+    /// extension is preserved as the last component, so the kept file still
+    /// opens in a player.
+    ///
+    /// `current_files` is updated to the new paths — callers log them, and a
+    /// stale entry would name a file that no longer exists. If the rename
+    /// fails the original path is preserved instead: still safe from `Drop`,
+    /// still exposed to the stale sweep, and warned about, which is strictly
+    /// better than losing it now.
+    ///
+    /// The clean user-visible name is deliberately NOT used: the pipeline
+    /// cannot know it (the orchestrator derives it from the output template on
+    /// the success path — #406 Option X), and renaming onto a guess would
+    /// atomically replace an unrelated existing file on POSIX. A marker name
+    /// that survives beats a pretty name that might clobber.
     pub fn preserve_current_files(&mut self) {
-        for raw in &self.current_files {
-            self.temp_registry.release(raw.as_path());
-            // Safe: mirrors `new_borrowing`'s canonicalize, in a sync stage
-            // path (`process` is async but performs no await here).
-            #[allow(clippy::disallowed_methods)]
-            let canonical = std::fs::canonicalize(raw).ok();
-            self.borrowed.push((raw.clone(), canonical));
-        }
+        let preserved: Vec<PathBuf> = std::mem::take(&mut self.current_files)
+            .into_iter()
+            .map(|raw| {
+                let kept = kept_path(&raw).map_or_else(
+                    || raw.clone(),
+                    |kept| {
+                        // Safe: sync rename in a stage path; mirrors the
+                        // sibling `std::fs` uses in this file (`process` is
+                        // async but performs no await around this call).
+                        #[allow(clippy::disallowed_methods)]
+                        match std::fs::rename(&raw, &kept) {
+                            Ok(()) => kept,
+                            Err(e) => {
+                                log::warn!(
+                                    "FileTracker: could not move {} out of the temp namespace \
+                                     ({e}); it is kept but a stale sweep may still remove it",
+                                    raw.display()
+                                );
+                                raw.clone()
+                            }
+                        }
+                    },
+                );
+                // Release the ORIGINAL path: that is what `register` recorded,
+                // and its `.lock` sidecar names the old file.
+                self.temp_registry.release(raw.as_path());
+                let canonical = std::fs::canonicalize(&kept).ok();
+                self.borrowed.push((kept.clone(), canonical));
+                kept
+            })
+            .collect();
+        self.current_files = preserved;
     }
 
     /// Whether `path` is a borrowed (user-owned) input that must never be
