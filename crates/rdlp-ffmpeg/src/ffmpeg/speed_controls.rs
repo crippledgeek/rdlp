@@ -278,7 +278,12 @@ pub(crate) const fn video_default_for(container: ContainerFormat) -> ContainerDe
 /// here, matching the two siblings in this module that already call `FFmpeg`).
 #[must_use]
 pub fn default_codec_for_container(container: ContainerFormat) -> &'static str {
-    super::ensure_init().ok();
+    // `declared_codec` below reads `AVCodecDescriptor.name` through the
+    // bindings' layouts, so an ABI mismatch must not reach it. This is the
+    // same answer `Policy::NotATarget` already gives.
+    if !super::init_ok() {
+        return DEFAULT_VIDEO_CODEC_STR;
+    }
     let default = video_default_for(container);
     match default.policy() {
         // `codec` may hold a `Cow::Owned` in the general case (`Policy::Override`
@@ -311,7 +316,12 @@ pub fn resolve_recode_encoder(
     recode_video: Option<&str>,
     recode_container: Option<&str>,
 ) -> Option<&'static str> {
-    super::ensure_init().ok();
+    // `resolve_encoder` performs a runtime FFI encoder lookup, so an ABI
+    // mismatch must not reach it. `None` is "no encoder resolved", which every
+    // caller already handles.
+    if !super::init_ok() {
+        return None;
+    }
     // `resolve_encoder` resolves only ever through `VIDEO_REGISTRY`'s
     // `from_static` table entries, so its result always recovers as
     // `&'static str` — see `MediaName::into_static`. Keeps this function's
@@ -457,7 +467,19 @@ pub fn validate_speed_controls(
     cpu_used: Option<i32>,
     speed_level: Option<u32>,
 ) -> Result<(), SpeedControlError> {
-    super::ensure_init().ok();
+    // Validation queries the linked encoders over FFI. With a mismatched ABI
+    // there is nothing trustworthy to validate against, so accept rather than
+    // reject on a reading of wrong offsets — the media paths abort on the same
+    // sticky error long before anything is encoded.
+    //
+    // That is fail-open validation, and its safety is borrowed entirely from
+    // `ensure_init`'s `OnceLock` being sticky: the first Err is cached, so a
+    // caller that gets `Ok(())` here cannot then reach a *successful* init
+    // later. If init ever becomes retryable, this stops being a safe default
+    // and becomes a validation bypass — change it here at the same time.
+    if !super::init_ok() {
+        return Ok(());
+    }
     let Some(enc) = encoder else {
         return Ok(());
     };

@@ -58,6 +58,11 @@ testing_logger = "0.1.1"
 [lints.rust]
 missing_docs = "warn"
 unsafe_code = "forbid"
+# The codec commands call `rdlp_ffmpeg::ffmpeg::init_ok`; dropping its answer
+# resumes the wrong-offset FFI reads the ABI check exists to stop (#656).
+# Denied rather than left at rustc's default `warn` so the guarantee holds
+# without the `-D warnings` gate, not only under it.
+unused_must_use = "deny"
 
 [lints.clippy]
 must_use_candidate = "warn"

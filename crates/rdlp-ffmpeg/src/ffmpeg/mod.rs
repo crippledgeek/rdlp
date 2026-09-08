@@ -39,6 +39,7 @@
 // policy" section in the module docstring above.
 #![allow(unsafe_code)]
 
+mod abi;
 mod audio_codecs;
 pub mod audio_encoder_registry;
 mod audio_only_container;
@@ -124,9 +125,26 @@ static FFMPEG_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 /// # Errors
 ///
 /// Returns [`PostProcessError::FFmpegInitFailed`] if `ffmpeg_the_third::init()`
-/// fails (e.g. required shared libraries are missing or incompatible).
+/// fails (e.g. required shared libraries are missing or incompatible), or if a
+/// loaded `FFmpeg` library belongs to a different ABI generation than the
+/// bindings were generated against (see the `abi` module).
 pub fn ensure_init() -> Result<()> {
     let result = FFMPEG_INIT.get_or_init(|| {
+        // Before init, not after: an ABI mismatch links cleanly and then makes
+        // every struct field access read the wrong offset, and `init()` is
+        // itself such an access.
+        //
+        // This returns an error rather than logging one because a mismatch is
+        // not a degraded mode — there is no correct work to do past this point.
+        // How loudly that lands depends on the caller: the ~15 `?`-propagating
+        // entry points (e.g. `metadata.rs`, `merge/mod.rs`, `remux.rs`,
+        // `probe.rs`, `salvage.rs`, the CLI) abort with it — that list is
+        // illustrative, not a set to keep synchronised — while the
+        // self-initializing helpers whose signatures cannot carry an error ask
+        // `init_ok` and return their own safe fallback. Neither kind proceeds
+        // into FFI after a mismatch.
+        abi::check_linked_ffmpeg_abi().map_err(|e| e.to_string())?;
+
         ffmpeg_the_third::init().map_err(|e| format!("ffmpeg_the_third::init() failed: {e}"))?;
         // Suppress FFmpeg's internal diagnostic messages (e.g. mpegts stream timing warnings).
         // Only show actual errors -- we handle logging ourselves.
@@ -139,6 +157,35 @@ pub fn ensure_init() -> Result<()> {
         Err(msg) => Err(PostProcessError::FFmpegInitFailed {
             message: msg.clone(),
         }),
+    }
+}
+
+/// Initialize `FFmpeg`, reporting a failure instead of propagating it, and
+/// answering whether the library is safe to call.
+///
+/// For the self-initializing helpers whose signatures cannot carry the error —
+/// they return a `Vec`, a `&'static str`, or an unrelated error type. A `false`
+/// here is not "no codecs today": it means the loaded `FFmpeg` disagrees with
+/// the bindings, so walking `AVCodec` or reading `AVCodecDescriptor.name` would
+/// dereference fields at offsets that do not exist. Every caller must return
+/// its own safe fallback instead.
+///
+/// `#[must_use]` plus `unused_must_use = "deny"` in this crate's `[lints.rust]`
+/// makes a bare `init_ok();` a compile error rather than rustc's default
+/// warning. An explicit `let _ = init_ok();` still compiles — that is what the
+/// discard syntax means, and no lint enabled here reaches it — so the deny
+/// raises the cost of ignoring the answer, it does not make it impossible.
+///
+/// The report is a one-line `log::error!`; on a repeating path it repeats,
+/// which is the intended cost of not being able to fail properly here.
+#[must_use]
+pub fn init_ok() -> bool {
+    match ensure_init() {
+        Ok(()) => true,
+        Err(e) => {
+            log::error!("{e}");
+            false
+        }
     }
 }
 

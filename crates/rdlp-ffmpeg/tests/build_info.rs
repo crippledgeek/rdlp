@@ -1,14 +1,19 @@
 //! Verifies that `build.rs` bakes the resolved FFmpeg prefix into the binary
 //! via `cargo:rustc-env=RDLP_FFMPEG_PREFIX=...`.
 //!
-//! See PR E-1 (FFmpeg linkage visibility) — future runtime diagnostics in
-//! PR E-2 / E-3 will read this env to surface the linkage to end users.
+//! See PR E-1 (FFmpeg linkage visibility) — runtime diagnostics in PR E-3 will
+//! read this env to surface the linkage to end users.
 //!
 //! Scope: this is a deliberate smoke check that the env is emitted at all
-//! (the load-bearing precondition for E-2/E-3 reading it via `env!()`).
-//! Branch coverage for the broken-prefix detection logic lives in
-//! `tests/pkgconfig_intent.rs`; asserting the baked value matches the
-//! actually-linked FFmpeg is deferred to the E-2 `rdlp doctor` fixtures.
+//! (the load-bearing precondition for reading it via `env!()`). Branch coverage
+//! for the broken-prefix detection logic lives in `tests/pkgconfig_intent.rs`.
+//!
+//! Whether the *linked* FFmpeg matches what these bindings were generated
+//! against is asserted at run time by `ffmpeg::abi`, called from
+//! `ensure_init()` (rdlp#656). That assertion used to be deferred here to an
+//! `rdlp doctor` command (PR E-2) which does not exist; the failure is silent,
+//! and nobody runs a diagnostic for a bug they cannot see. The prefix baked by
+//! this env is the *message* half of that check, never the comparison.
 
 #[test]
 fn ffmpeg_prefix_baked_into_binary() {
