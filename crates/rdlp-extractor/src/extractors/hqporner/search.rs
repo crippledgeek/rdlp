@@ -9,6 +9,17 @@ use scraper::{Html, Selector};
 use std::sync::LazyLock;
 
 use super::parse_duration;
+use crate::base::common::resolve_media_url;
+
+/// Base for resolving a card's poster reference. Only relative references
+/// consult it — [`resolve_media_url`] admits any `http(s)` host, which is what
+/// keeps the real CDN posters.
+const SITE_ROOT: &str = "https://hqporner.com/";
+
+/// Poster attributes in preference order. `data-src` carries the real image on
+/// lazy-loaded cards; `src` is the fallback (and the only one present on the
+/// recorded fixture).
+const THUMBNAIL_ATTRS: [&str; 2] = ["data-src", "src"];
 
 /// Pattern to extract total result count from "1850 HD movies" text.
 static TOTAL_COUNT_PATTERN: Lazy<Regex> = lazy_regex!(r"(\d+)\s+HD movies");
@@ -51,19 +62,23 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
 
         let video_url = format!("https://hqporner.com{href}");
 
+        // `resolve_media_url`, not the hand-rolled `//` → `https:` prefix this
+        // replaced: HQPorner's posters are on `fastporndelivery.hqporner.com`,
+        // so an origin comparison would drop every real one, but a `data:` or
+        // `javascript:` value must not reach the desktop's `<img src>` and a
+        // relative `src` must not reach the UI unresolved. Resolution is tried
+        // PER candidate rather than after the fallback chain, so an unusable
+        // `data-src` placeholder still falls through to `src`.
         let thumbnail_url = thumbs.get(i).and_then(|el| {
-            el.value()
-                .attr("data-src")
-                .filter(|s| !s.is_empty())
-                .or_else(|| el.value().attr("src"))
-                .filter(|s| !s.is_empty())
-                .map(|s| {
-                    if s.starts_with("//") {
-                        format!("https:{s}")
-                    } else {
-                        s.to_string()
-                    }
-                })
+            THUMBNAIL_ATTRS
+                .iter()
+                .filter_map(|attr| el.value().attr(attr))
+                // An empty attribute must not become a candidate: joining `""`
+                // against the base yields the BASE, so it would resolve
+                // "successfully" to the site root. Lazy cards really do ship
+                // `data-src="…" src=""`.
+                .filter(|src| !src.is_empty())
+                .find_map(|src| resolve_media_url(SITE_ROOT, src))
         });
 
         let duration = durations.get(i).and_then(|el| {
@@ -182,6 +197,68 @@ mod tests {
         let results = parse_search_results(sample_search_html());
         assert_eq!(results[1].title, "same sex oral massage");
         assert_eq!(results[1].duration, Some(1108.0));
+    }
+
+    /// Posters go through `resolve_media_url`: the protocol-relative CDN
+    /// reference the site actually ships is kept (as `https:`), a relative one
+    /// is absolutized instead of reaching the UI as `/t.jpg`, and a `data:`
+    /// value never reaches the desktop's `<img src>` — which the hand-rolled
+    /// `//` → `https:` prefix this replaced let straight through. A bad poster
+    /// costs the poster, not the card.
+    #[test]
+    fn posters_are_resolved_and_non_http_ones_dropped() {
+        let card = |src: &str, title: &str| {
+            format!(
+                r#"<div class="4u"><section class="box feature">
+                     <a href="/hdporn/1-{title}.html" class="image featured atfib">
+                       <div><img src="{src}" /></div>
+                     </a>
+                     <div id="span-case"><h3 class="meta-data-title">
+                       <a href="/hdporn/1-{title}.html" class="click-trigger">{title}</a>
+                     </h3></div>
+                   </section></div>"#
+            )
+        };
+        let html = format!(
+            "<html><body>{}{}{}</body></html>",
+            card("//fastporndelivery.hqporner.com/imgs/a/b/main.jpg", "cdn"),
+            card("/t.jpg", "relative"),
+            card("data:text/html,x", "bad")
+        );
+        let results = parse_search_results(&html);
+        assert_eq!(results.len(), 3, "a bad poster must not cost the card");
+        assert_eq!(
+            results[0].thumbnail_url.as_deref(),
+            Some("https://fastporndelivery.hqporner.com/imgs/a/b/main.jpg")
+        );
+        assert_eq!(
+            results[1].thumbnail_url.as_deref(),
+            Some("https://hqporner.com/t.jpg")
+        );
+        assert_eq!(results[2].thumbnail_url, None);
+    }
+
+    /// An unusable `data-src` must fall through to `src`, not consume the
+    /// card's only chance at a poster. Resolving once after the fallback chain
+    /// had committed would return `None` here.
+    #[test]
+    fn an_unusable_data_src_falls_through_to_src() {
+        let html = r#"<html><body>
+<div class="4u"><section class="box feature">
+    <a href="/hdporn/2-lazy.html" class="image featured atfib">
+      <div><img data-src="data:image/gif;base64,R0lGOD" src="//fastporndelivery.hqporner.com/imgs/c/d/real.jpg" /></div>
+    </a>
+    <div id="span-case"><h3 class="meta-data-title">
+      <a href="/hdporn/2-lazy.html" class="click-trigger">lazy</a>
+    </h3></div>
+</section></div>
+</body></html>"#;
+        let results = parse_search_results(html);
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].thumbnail_url.as_deref(),
+            Some("https://fastporndelivery.hqporner.com/imgs/c/d/real.jpg")
+        );
     }
 
     #[test]

@@ -321,11 +321,15 @@ impl InfoExtractor for HQPornerExtractor {
                 break;
             }
 
-            // Build next page URL
-            page_url = search_patterns::next_listing_page_url(&webpage);
-            if page_url.is_empty() {
+            // Build next page URL, resolved against the page that served this
+            // listing so a `www.`/`m.` host paginates against itself. `None` is
+            // both "no Next link" and "the Next link left that origin" — either
+            // way, stop here and return what has been gathered.
+            let Some(next_page_url) = search_patterns::next_listing_page_url(&webpage, &page_url)
+            else {
                 break;
-            }
+            };
+            page_url = next_page_url;
 
             tokio::time::sleep(Duration::from_millis(PAGE_RATE_LIMIT_MS)).await;
         }
