@@ -13,7 +13,12 @@ use rdlp_types::ContainerFormat;
 #[tauri::command]
 #[must_use]
 pub fn available_codecs() -> Vec<VideoCodecInfo> {
-    rdlp_ffmpeg::ffmpeg::init_or_report();
+    // An empty list, not a walk of `AVCodec` at offsets the loaded FFmpeg does
+    // not have. The UI renders "no codecs available", which is true of a build
+    // whose FFmpeg cannot be called.
+    if !rdlp_ffmpeg::ffmpeg::init_ok() {
+        return Vec::new();
+    }
     list_available_codecs()
 }
 
@@ -25,7 +30,9 @@ pub fn available_codecs() -> Vec<VideoCodecInfo> {
 #[tauri::command]
 #[must_use]
 pub fn available_audio_codecs(container: Option<ContainerFormat>) -> Vec<AudioCodecInfo> {
-    rdlp_ffmpeg::ffmpeg::init_or_report();
+    if !rdlp_ffmpeg::ffmpeg::init_ok() {
+        return Vec::new();
+    }
     let all = list_available_audio_codecs();
     if let Some(c) = container {
         all.into_iter()

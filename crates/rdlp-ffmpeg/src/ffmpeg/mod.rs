@@ -138,9 +138,9 @@ pub fn ensure_init() -> Result<()> {
         // entry points (e.g. `metadata.rs`, `merge/mod.rs`, `remux.rs`,
         // `probe.rs`, `salvage.rs`, the CLI) abort with it — that list is
         // illustrative, not a set to keep synchronised — while the
-        // self-initializing helpers whose signatures
-        // cannot carry an error go through `init_or_report` and continue after
-        // logging. Those are the ones this check binds least tightly.
+        // self-initializing helpers whose signatures cannot carry an error ask
+        // `init_ok` and return their own safe fallback. Neither kind proceeds
+        // into FFI after a mismatch.
         abi::check_linked_ffmpeg_abi().map_err(|e| e.to_string())?;
 
         ffmpeg_the_third::init().map_err(|e| format!("ffmpeg_the_third::init() failed: {e}"))?;
@@ -158,17 +158,27 @@ pub fn ensure_init() -> Result<()> {
     }
 }
 
-/// Initialize `FFmpeg`, reporting a failure instead of propagating it.
+/// Initialize `FFmpeg`, reporting a failure instead of propagating it, and
+/// answering whether the library is safe to call.
 ///
 /// For the self-initializing helpers whose signatures cannot carry the error —
-/// they return a `Vec`, a `&'static str`, or an unrelated error type — and
-/// which previously discarded it with `.ok()`. They still proceed, because
-/// making them fallible would change five public signatures; the point is that
-/// an ABI mismatch leaves a trace instead of being read as an empty codec
-/// table or a wrong default.
-pub fn init_or_report() {
-    if let Err(e) = ensure_init() {
-        log::error!("{e}");
+/// they return a `Vec`, a `&'static str`, or an unrelated error type. A `false`
+/// here is not "no codecs today": it means the loaded `FFmpeg` disagrees with
+/// the bindings, so walking `AVCodec` or reading `AVCodecDescriptor.name` would
+/// dereference fields at offsets that do not exist. Every caller must return
+/// its own safe fallback instead — which is why this is `#[must_use]`, so
+/// ignoring the answer does not compile.
+///
+/// The report is a one-line `log::error!`; on a repeating path it repeats,
+/// which is the intended cost of not being able to fail properly here.
+#[must_use]
+pub fn init_ok() -> bool {
+    match ensure_init() {
+        Ok(()) => true,
+        Err(e) => {
+            log::error!("{e}");
+            false
+        }
     }
 }
 
