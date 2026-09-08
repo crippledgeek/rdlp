@@ -179,6 +179,32 @@ mod tests {
         );
     }
 
+    /// Drift guard, not a fix: no reachable `format_id`/`ext` forges a part
+    /// name today (`sidecar_path`'s reserved-name rewrite sees to that), and
+    /// merge streams are never resumed anyway. This fails if someone
+    /// re-inlines the stem+join here for readability — merge is the only
+    /// caller composing a multi-segment suffix, so it is where that would
+    /// happen.
+    #[test]
+    fn merge_stream_path_never_forges_a_part_name() {
+        let base = Path::new("/tmp/out/Title.mkv");
+        let format = Format::new(
+            "rdlp-part",
+            "https://example.test/v.mp4",
+            "mkv",
+            rdlp_types::DownloadProtocol::Https,
+        );
+        for label in ["video", "audio"] {
+            let path = Orchestrator::merge_stream_path(base, &format, label);
+            assert_ne!(path, super::super::naming::part_path(base));
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap();
+            assert!(
+                !name.contains(super::super::naming::PART_MARKER),
+                "{label}: name spells the part marker: {name:?}"
+            );
+        }
+    }
+
     #[test]
     fn merge_stream_path_preserves_ordinary_format_metadata() {
         let format = Format::new(

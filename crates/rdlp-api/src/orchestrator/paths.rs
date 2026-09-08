@@ -113,6 +113,44 @@ impl Orchestrator {
         "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     ];
 
+    /// Defuse rdlp's reserved temp-file markers wherever they appear in a
+    /// file name.
+    ///
+    /// Only the leading dot of each marker becomes an underscore, so the
+    /// visible text is preserved while the name stops spelling a marker.
+    /// Each of the three is defused for its own reason:
+    ///
+    /// - `PART_MARKER` / `TMP_MARKER` — [`strip_temp_marker`] searches for
+    ///   the dotted form anywhere in a name, so an undefused one would be
+    ///   read as a real marker and its "stem" recovered from a user string.
+    /// - `BAK_MARKER` — `strip_temp_marker` does NOT search this one, and a
+    ///   `.rdlp-bak-` sidecar is deliberately invisible to the stale sweep
+    ///   (see `naming.rs`). It is defused so a composed name cannot spell a
+    ///   *live* backup: `finalize_part`'s Windows path renames the user's
+    ///   data to that name and back, and a foreign file wearing it is
+    ///   neither swept nor distinguishable from one mid-rename.
+    ///
+    /// The over-match is deliberate and load-bearing: [`strip_temp_marker`]
+    /// locates markers with a plain substring `find`, so it reads
+    /// `demo.rdlp-partial.mp4` as a part file. This must over-match
+    /// identically — narrowing it to a word boundary would let a name the
+    /// stripper still treats as a marker slip through undefused.
+    ///
+    /// Applied at two points, because the markers are dot-prefixed and a
+    /// name is assembled from parts: here, covering a marker written inside
+    /// one part, and again in
+    /// [`container_resolver::sidecar_path`](super::container_resolver::sidecar_path)
+    /// over the *joined* name, where the joining dot can reconstitute a
+    /// marker that neither part contained. Idempotent, so the second
+    /// application is a convergence rather than a double-rewrite.
+    ///
+    /// [`strip_temp_marker`]: super::naming::strip_temp_marker
+    pub(super) fn neutralize_temp_markers(name: &str) -> String {
+        name.replace(super::naming::PART_MARKER, "_rdlp-part")
+            .replace(super::naming::TMP_MARKER, "_rdlp-tmp-")
+            .replace(super::naming::BAK_MARKER, "_rdlp-bak-")
+    }
+
     /// Sanitize filename for safe filesystem usage
     ///
     /// This function provides comprehensive protection against:
@@ -121,32 +159,13 @@ impl Orchestrator {
     /// - Null bytes and control characters
     /// - Windows reserved filenames (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
     /// - Leading/trailing dots and spaces
+    /// - rdlp's reserved temp-file markers (see [`Self::neutralize_temp_markers`])
     /// - Excessive filename length (truncated to 200 chars)
     ///
     /// # Security
     ///
     /// This function is critical for security. Never use unsanitized filenames
     /// directly from external sources (video titles, URLs, etc.).
-    /// Defuse rdlp's reserved temp-file markers wherever they appear in a
-    /// file name.
-    ///
-    /// Only the leading dot of each marker becomes an underscore, so the
-    /// visible text is preserved while the strip logic (`strip_temp_marker`
-    /// searches for the *dotted* form anywhere in the name) can never mistake
-    /// it for a real marker.
-    ///
-    /// Applied twice, at two different points, because the markers are
-    /// dot-prefixed and a name is assembled from parts: `sanitize_filename`
-    /// covers a marker written inside one part, and
-    /// [`container_resolver::sidecar_path`](super::container_resolver::sidecar_path)
-    /// re-applies it to the *joined* name, where the joining dot can
-    /// reconstitute a marker that neither part contained.
-    pub(super) fn neutralize_temp_markers(name: &str) -> String {
-        name.replace(super::naming::PART_MARKER, "_rdlp-part")
-            .replace(super::naming::TMP_MARKER, "_rdlp-tmp-")
-            .replace(super::naming::BAK_MARKER, "_rdlp-bak-")
-    }
-
     pub(super) fn sanitize_filename(name: &str) -> String {
         // Step 1: Replace invalid filesystem characters and filter control characters
         let sanitized: String = name

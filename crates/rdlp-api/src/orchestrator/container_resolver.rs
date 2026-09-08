@@ -119,13 +119,30 @@ const UNKNOWN_SEGMENT: &str = "und";
 /// `InfoDict.subtitles` map key, which some extractors take verbatim from
 /// site JSON. It is sanitized here rather than at each call site, so the
 /// suffix contributes exactly one path component: no separators, no `..`.
-/// (A caller's own `base_path` is passed through as given — `sidecar_path`
-/// constrains the suffix, not the directory it is handed.)
+/// The *directory* of `base_path` is passed through as given — this
+/// constrains the file name, not where the caller puts it.
 ///
 /// Sanitizing can also *shorten* a suffix, which is its own hazard: a
 /// subtitle whose language sanitizes away would collapse `{lang}.{ext}` to
 /// a bare `{ext}` and land on one of rdlp's own files. See
 /// [`UNKNOWN_SEGMENT`].
+///
+/// # The stem is not passed through verbatim
+///
+/// The reserved-name rewrite runs over the *joined* name — it has to, since
+/// that is where the joining dot can create a marker neither part contained
+/// — so a `base_path` whose own stem spells a marker has that stem rewritten
+/// too (`Title.rdlp-tmp-abc.mkv` + `jpg` → `Title_rdlp-tmp-abc.jpg`), and
+/// the sidecar then no longer shares its media file's stem.
+///
+/// This is a deliberate trade, not an oversight. The guarantee that no
+/// output of `sidecar_path` ever spells a reserved name is worth more than
+/// an untouched-stem promise: `suffix` is remote-controlled while
+/// `base_path` is rdlp-owned, and all four call sites pass template-generated
+/// paths that already went through `sanitize_filename`, so the rewrite is
+/// unreachable for the stem today. A caller that hands in a genuinely
+/// marker-named `base_path` gets a sidecar that no longer pairs with it
+/// under the `{stem}.` discovery in `find_subtitle_files` / `original_stem_for`.
 pub fn sidecar_path(base_path: &Path, suffix: &str) -> PathBuf {
     let stem = base_path
         .file_stem()
@@ -146,27 +163,24 @@ pub fn sidecar_path(base_path: &Path, suffix: &str) -> PathBuf {
         sanitized
     };
 
-    // The session-state file is an exact whole-name spelling rather than a
-    // substring anyone searches for, so one placeholder segment in front is
-    // enough to break the collision. `language="rdlp_state", ext="json"` is
-    // byte-identical through the sanitizer and reaches this on its own.
-    let restored = if format!("{stem}.{restored}")
-        == format!("{stem}{}", super::session_state::STATE_SUFFIX)
-    {
-        format!("{UNKNOWN_SEGMENT}.{restored}")
-    } else {
-        restored
+    // Every reserved name is dot-PREFIXED, so a placeholder segment in front
+    // never breaks one — `und.rdlp-part.mp4` still spells a marker, and
+    // `{stem}.und.rdlp_state.json` is still a state file, just of the
+    // download named `{stem}.und`. The remedy is the same dot→underscore
+    // rewrite `sanitize_filename` already applies, run over the JOINED name:
+    // a suffix that merely *starts* with a reserved token carries none when
+    // the sanitizer inspects the suffix alone, and the dot joined in here
+    // reconstitutes one. Left unguarded, `language="rdlp-part", ext="mp4"`
+    // composes exactly `naming::part_path`, which resume probes and then
+    // trusts the bytes of.
+    let compose = |sfx: &str| {
+        let joined = super::Orchestrator::neutralize_temp_markers(&format!("{stem}.{sfx}"));
+        // The state file is not a temp marker, so it is not the sanitizer's
+        // business — but it is the same shape, and `single_video_state_path`
+        // builds it with its own join and never routes through here.
+        let state = super::session_state::STATE_SUFFIX;
+        joined.replace(state, &state.replacen('.', "_", 1))
     };
-
-    // The temp markers are dot-PREFIXED and searched for at any position, so
-    // a placeholder segment would not help — `und.rdlp-part.mp4` still spells
-    // one. Re-run the marker rewrite on the JOINED name instead: a suffix that
-    // merely starts with `rdlp-part` carries no marker when `sanitize_filename`
-    // inspects it, and the dot joined in here reconstitutes one. Left
-    // unguarded, `language="rdlp-part", ext="mp4"` composes exactly
-    // `naming::part_path`, which resume probes and then trusts the bytes of.
-    let compose =
-        |sfx: &str| super::Orchestrator::neutralize_temp_markers(&format!("{stem}.{sfx}"));
 
     // Belt-and-braces: a sidecar must never *be* the file it accompanies.
     // `thumbnail.rs` passes a bare, dotless suffix today (`sidecar_path(media_file,
@@ -181,7 +195,7 @@ pub fn sidecar_path(base_path: &Path, suffix: &str) -> PathBuf {
         // Otherwise the file silently appears under a name the operator
         // never asked for, and a colliding track looks like a resume hit.
         warn!(
-            requested:% = suffix.escape_debug(),
+            requested:% = format!("{stem}.{suffix}").escape_debug(),
             used:% = file_name.escape_debug();
             "Sidecar name was sanitized"
         );
@@ -462,8 +476,12 @@ mod tests {
             let path = sidecar_path(&base, suffix);
             assert_inside_parent(&path, Path::new("/tmp/out"), "video");
             let name = path.file_name().and_then(|n| n.to_str()).unwrap();
+            // `video.und` rather than `video.und.`: for the state-file case
+            // the reserved-name rewrite additionally turns the separator that
+            // follows into `_` (`video.und_rdlp_state.json`). What matters
+            // here is that the lost segment came back, not what delimits it.
             assert!(
-                name.starts_with("video.und."),
+                name.starts_with("video.und"),
                 "{label}: lost the language segment: {name:?}"
             );
         }
@@ -558,7 +576,7 @@ mod tests {
     fn sidecar_path_cannot_forge_the_session_state_file() {
         let base = PathBuf::from("/tmp/out/Title.mp4");
         // language = "rdlp_state", ext = "json" — byte-identical through the
-        // sanitizer, so only the exact-name guard catches it.
+        // sanitizer, so only the reserved-name rewrite catches it.
         let path = sidecar_path(&base, "rdlp_state.json");
         assert_ne!(
             path,
@@ -570,14 +588,44 @@ mod tests {
         );
     }
 
+    /// A reserved name is an *ending*, not just a stem-exact spelling: a
+    /// state file belongs to whichever download its leading text names, so
+    /// `{stem}.en.rdlp_state.json` is the state of `{stem}.en`. A guard
+    /// keyed on this download's own stem — or a placeholder segment in
+    /// front, which only renames the victim — would miss it.
+    #[test]
+    fn sidecar_path_cannot_forge_another_downloads_state_file() {
+        let base = PathBuf::from("/tmp/out/Title.mp4");
+        // language = "en", ext = "rdlp_state.json"
+        let path = sidecar_path(&base, "en.rdlp_state.json");
+        assert_ne!(
+            path,
+            crate::orchestrator::session_state::single_video_state_path(
+                Path::new("/tmp/out"),
+                "Title.en"
+            ),
+            "composed another download's session-state name"
+        );
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap();
+        assert!(
+            !name.ends_with(crate::orchestrator::session_state::STATE_SUFFIX),
+            "name still ends with the state-file spelling: {name:?}"
+        );
+    }
+
     /// The marker rewrite must not fire on an ordinary name that merely
     /// mentions rdlp.
     ///
     /// `rdlp_part` (underscore) is deliberately not `rdlp-partial`: the
     /// marker is matched as a substring, so `.rdlp-partial` *does* contain
-    /// `.rdlp-part` and is rewritten. That over-match is `sanitize_filename`'s
-    /// pre-existing behaviour for titles, unchanged here — asserting it were
-    /// untouched would be asserting a fiction.
+    /// `.rdlp-part` and is rewritten.
+    ///
+    /// That over-match is required, not tolerated. `naming::strip_temp_marker`
+    /// locates markers with a plain `find`, so it reads `demo.rdlp-partial.mp4`
+    /// as a part file — the neutralizer must over-match identically, or a name
+    /// the stripper still treats as a marker would slip through undefused.
+    /// Narrowing either side to a word boundary recreates this commit's bug
+    /// class.
     #[test]
     fn sidecar_path_leaves_marker_lookalikes_alone() {
         let base = PathBuf::from("/tmp/out/Title.mp4");
