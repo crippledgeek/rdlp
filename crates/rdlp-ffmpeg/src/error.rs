@@ -193,6 +193,29 @@ pub enum PostProcessError {
         medium: Medium,
     },
 
+    /// The remux target is a container rdlp treats as audio-only, but the
+    /// input carries a real video stream (an `ATTACHED_PIC` cover is not one
+    /// — see `remux_sync`'s guard).
+    ///
+    /// Distinct from [`Self::IncompatibleContainerCodec`], which is a
+    /// muxer-capability answer with a deliberately generic remediation. This
+    /// one is an rdlp *policy* refusal, so it can name the container the user
+    /// should have asked for: the alternative comes from
+    /// [`video_alternative_for`](crate::ffmpeg::video_alternative_for), which
+    /// only ever yields a video-capable container.
+    #[error(
+        "{container} is an audio-only container and cannot carry the input's {codec} video stream; \
+         remux to {alternative} instead, or extract the audio if that is what you wanted"
+    )]
+    AudioOnlyContainerRejectsVideo {
+        /// The target container the user asked for (e.g. `wma`).
+        container: rdlp_types::ContainerFormat,
+        /// The input's video codec, as `FFmpeg` names it (e.g. `h264`).
+        codec: String,
+        /// The video-capable container to use instead (e.g. `wmv`).
+        alternative: rdlp_types::ContainerFormat,
+    },
+
     /// Catch-all for errors with context chains from internal operations.
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -212,6 +235,32 @@ impl PostProcessError {
         Self::IoError {
             message: message.into(),
             source,
+        }
+    }
+
+    /// True if this is the audio-only-container policy refusal (#577),
+    /// including when it arrives wrapped in [`Self::Other`].
+    ///
+    /// The distinction callers need: this is rdlp declining a *request* it can
+    /// see is wrong, not a failure to carry one out. The input was never
+    /// touched and is still exactly as it was, so a caller that would
+    /// otherwise clean up after a failed stage must preserve it instead —
+    /// `RemuxStage`/`RecodeStage`/`MergeStage` use this to keep the user's
+    /// completed download rather than letting `FileTracker`'s cancel-`Drop`
+    /// delete it.
+    ///
+    /// The `Other` arm is not defensive: `remux_sync` and friends return
+    /// `anyhow::Result`, so the typed variant reaches the async wrapper's
+    /// `Result<_, PostProcessError>` through `#[from] anyhow::Error` and lands
+    /// as `Other(anyhow(AudioOnlyContainerRejectsVideo))` every time.
+    #[must_use]
+    pub fn is_audio_only_container_refusal(&self) -> bool {
+        match self {
+            Self::AudioOnlyContainerRejectsVideo { .. } => true,
+            Self::Other(e) => e
+                .downcast_ref::<Self>()
+                .is_some_and(Self::is_audio_only_container_refusal),
+            _ => false,
         }
     }
 

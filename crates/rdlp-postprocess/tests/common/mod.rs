@@ -110,6 +110,43 @@ pub fn build_jpeg_fixture(path: &Path) -> Result<(), ()> {
     ])
 }
 
+/// Build a VP9 fixture — a codec no container in the ASF family can carry, so
+/// `RecodeStage` cannot stream-copy it and takes the transcode branch (#577).
+///
+/// Small and low-bitrate on purpose: the suites using it care which branch
+/// runs, not what the picture looks like, and libvpx-vp9 is slow.
+pub fn build_vp9_fixture(path: &Path) -> Result<(), ()> {
+    run_ffmpeg(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=d=1:s=160x120:r=10",
+        "-c:v",
+        "libvpx-vp9",
+        "-pix_fmt",
+        "yuv420p",
+        "-b:v",
+        "50k",
+        path.to_str().unwrap(),
+    ])
+}
+
+/// Build an audio-only AAC fixture — no video stream of any kind, which is the
+/// input an audio-only container legitimately receives (#577).
+pub fn build_audio_fixture(path: &Path) -> Result<(), ()> {
+    run_ffmpeg(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=d=1",
+        "-c:a",
+        "aac",
+        "-b:a",
+        "64k",
+        path.to_str().unwrap(),
+    ])
+}
+
 fn run_ffmpeg(args: &[&str]) -> Result<(), ()> {
     let ok = Command::new("ffmpeg")
         .args(["-y", "-loglevel", "error"])

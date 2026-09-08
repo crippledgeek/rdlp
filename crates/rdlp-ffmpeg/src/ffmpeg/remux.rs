@@ -106,6 +106,27 @@ impl FFmpegRunner {
             .map_err(PostProcessError::from)
             .with_context(|| format!("failed to open input for remux {}", input.display()))?;
 
+        // #577: refuse, rather than silently stream-copy a video track into a
+        // container rdlp treats as audio-only. Sits after the input is open
+        // (the stream dispositions are the whole question) and before
+        // `format::output`, which creates/truncates the file on disk — a
+        // refusal must leave nothing behind.
+        //
+        // The MKV raw-FFI path above bypasses this, which is correct rather
+        // than a hole: it is reached only for `ContainerFormat::Mkv`, which is
+        // video-capable, so the guard could never fire there. `.mka` — the
+        // Matroska *audio* spelling, and one of the twelve refused — parses to
+        // `ContainerFormat::Mka`, so it takes this generic path.
+        //
+        // One caller reaches this with a target it did not choose:
+        // `FixupStage` repairs in place, so a legacy audio-container-bearing-
+        // video file (one written before this guard existed, or by another
+        // tool) is now declined rather than repaired. `FixupStage` is
+        // non-fatal, so that file survives un-repaired instead of being lost —
+        // the right trade, since repairing it would mean rewriting the very
+        // artifact #577 forbids.
+        super::audio_only_container::reject_video_into_audio_only(&ictx, output)?;
+
         let mut octx = ffmpeg_the_third::format::output(output)
             .map_err(PostProcessError::from)
             .with_context(|| format!("failed to open output for remux {}", output.display()))?;

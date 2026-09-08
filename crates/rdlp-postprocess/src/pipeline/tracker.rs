@@ -25,6 +25,33 @@ fn is_temp_named(path: &Path) -> bool {
         .is_some_and(|n| n.contains(TEMP_MARKER))
 }
 
+/// The marker that replaces [`TEMP_MARKER`] on a file
+/// [`FileTracker::preserve_current_files`] has decided to keep.
+///
+/// A distinct marker rather than no marker: it keeps the survivor
+/// collision-free and greppable, while `contains(".rdlp-tmp-")` — the only
+/// thing `TempRegistry::cleanup_stale` matches on — becomes false. Same
+/// reasoning as `rdlp-api`'s `.rdlp-bak-` sidecar (#416-M1).
+const KEPT_MARKER: &str = ".rdlp-kept-";
+
+/// The path a temp-named survivor is moved to so the stale sweep can no longer
+/// see it: `{stem}.rdlp-tmp-{uuid}.{ext}` → `{stem}.rdlp-kept-{uuid}.{ext}`.
+///
+/// `None` when `path` carries no temp marker — it is already outside the swept
+/// namespace, so there is nothing to move and renaming would only obscure a
+/// name someone else chose.
+///
+/// A plain marker swap, so the uuid and the extension both survive: the uuid
+/// keeps the new name as collision-free as the old one, and the extension has
+/// to stay last or the kept file stops opening in a player.
+fn kept_path(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name()?.to_str()?;
+    if !name.contains(TEMP_MARKER) {
+        return None;
+    }
+    Some(path.with_file_name(name.replace(TEMP_MARKER, KEPT_MARKER)))
+}
+
 /// Tracks current and temporary file paths for a single post-processing job.
 ///
 /// After each stage produces output, the stage calls [`Self::replace`] to promote
@@ -129,6 +156,100 @@ impl FileTracker {
             })
             .collect();
         Self::with_borrowed(files, borrowed, temp_registry)
+    }
+
+    /// Reclassify the live working set as user-owned, so the cancel-`Drop`
+    /// below will not delete it — the #414 "delete what we created, preserve
+    /// what the user brought us" rule, applied to a file rdlp created but has
+    /// no right to destroy.
+    ///
+    /// For a **policy refusal**: rdlp declining a request it can see is wrong
+    /// (#577's audio-only remux target), rather than failing to carry one out.
+    /// The download completed, the media on disk is intact and untouched, and
+    /// the only thing that went wrong is a flag the operator can correct and
+    /// re-run — so losing the download to it is the worst possible outcome.
+    /// Contrast a genuine processing failure, where the working set really is
+    /// suspect and the existing cancel-cleanup is right.
+    ///
+    /// **Surviving `Drop` is not enough — the survivor must also leave the
+    /// `.rdlp-tmp-` namespace.** Both sweepers key on that marker:
+    /// `TempRegistry::cleanup_all()` deletes what is still registered (CLI and
+    /// desktop exit), and [`TempRegistry::cleanup_stale`] marker-scans
+    /// `name.contains(".rdlp-tmp-")` in the output directory, sparing a file
+    /// only while another process holds its `.lock`. Releasing the registry
+    /// entry removes that sidecar, so a released-but-still-marker-named file
+    /// is deleted by the next sweep once its mtime is an hour old — at CLI
+    /// startup, desktop startup, or desktop exit. Preserving without renaming
+    /// would defer the data loss by an hour, not prevent it.
+    ///
+    /// So each file is renamed to `{stem}.rdlp-kept-{uuid}.{ext}` first, then
+    /// released. This is the remedy #416-M1 already established for the same
+    /// trap, verbatim from `rdlp-api`'s `finalize_part_replace_windows`: *"The
+    /// backup is intentionally NOT named `.rdlp-tmp-*`: `TempRegistry::
+    /// cleanup_stale` marker-scans `.rdlp-tmp-` names and would delete the
+    /// user's sole in-window copy."* The uuid is carried over from the temp
+    /// name rather than freshly generated, so the survivor inherits its
+    /// collision-freedom and the two names stay greppable as a pair. The
+    /// extension is preserved as the last component, so the kept file still
+    /// opens in a player.
+    ///
+    /// `current_files` is updated to the new paths — callers log them, and a
+    /// stale entry would name a file that no longer exists. If the rename
+    /// fails the original path is preserved instead: still safe from `Drop`,
+    /// still exposed to the stale sweep, and warned about, which is strictly
+    /// better than losing it now.
+    ///
+    /// The clean user-visible name is deliberately NOT used, for two
+    /// independent reasons: the pipeline cannot know it (the orchestrator
+    /// derives it from the output template on the success path — #406 Option
+    /// X), and renaming onto a guess would atomically replace an unrelated
+    /// existing file on POSIX. A marker name that survives beats a pretty name
+    /// that might clobber. (That clobber argument is this case's own —
+    /// `rdlp-api`'s `.rdlp-bak-` cites only sweep invisibility, and as a
+    /// transient sidecar it never competes for the clean name at all.)
+    ///
+    /// **A `.rdlp-kept-` file is deliberately immortal, and that is the
+    /// point.** Nothing sweeps it, by any age or any rule — it holds media the
+    /// user paid bandwidth for and that rdlp has no business reclaiming, the
+    /// same trade `.rdlp-bak-` makes. Teaching a sweeper to recognise this
+    /// marker would reintroduce the exact data loss it exists to prevent,
+    /// under a different name; the leftover file is the cost, and it is the
+    /// cheap side of the trade.
+    pub fn preserve_current_files(&mut self) {
+        let preserved: Vec<PathBuf> = std::mem::take(&mut self.current_files)
+            .into_iter()
+            .map(|raw| {
+                let kept = kept_path(&raw).map_or_else(
+                    || raw.clone(),
+                    |kept| {
+                        // Safe: the lint guards against blocking a runtime
+                        // worker. This is two syscalls on a terminal error
+                        // path, in the same synchronous shape as this file's
+                        // sibling `std::fs` uses — no measurable stall to
+                        // hand to `spawn_blocking`.
+                        #[allow(clippy::disallowed_methods)]
+                        match std::fs::rename(&raw, &kept) {
+                            Ok(()) => kept,
+                            Err(e) => {
+                                log::warn!(
+                                    "FileTracker: could not move {} out of the temp namespace \
+                                     ({e}); it is kept but a stale sweep may still remove it",
+                                    raw.display()
+                                );
+                                raw.clone()
+                            }
+                        }
+                    },
+                );
+                // Release the ORIGINAL path: that is what `register` recorded,
+                // and its `.lock` sidecar names the old file.
+                self.temp_registry.release(raw.as_path());
+                let canonical = std::fs::canonicalize(&kept).ok();
+                self.borrowed.push((kept.clone(), canonical));
+                kept
+            })
+            .collect();
+        self.current_files = preserved;
     }
 
     /// Whether `path` is a borrowed (user-owned) input that must never be
@@ -362,6 +483,37 @@ mod tests {
 
     fn test_registry() -> Arc<TempRegistry> {
         Arc::new(TempRegistry::new())
+    }
+
+    /// The three properties `kept_path`'s doc comment promises, none of which
+    /// any other oracle can see: the caller-side tests assert only that the
+    /// kept path differs from the original and that a `.rdlp-kept-` file
+    /// exists, so a `kept_path` that dropped the extension — breaking the
+    /// stated reason for the marker swap, that the survivor still opens in a
+    /// player — would pass the entire branch.
+    #[test]
+    fn kept_path_swaps_the_marker_and_keeps_everything_else() {
+        let cases: [(&str, Option<&str>); 3] = [
+            // The uuid is carried over, not regenerated, and the extension
+            // stays last.
+            (
+                "d/video.rdlp-tmp-577.mp4",
+                Some("d/video.rdlp-kept-577.mp4"),
+            ),
+            // Already outside the swept namespace: nothing to move.
+            ("d/plain.mp4", None),
+            // A multi-part extension is not special-cased — the swap is
+            // positional, so `.tar.gz` survives whole.
+            ("d/a.rdlp-tmp-1.tar.gz", Some("d/a.rdlp-kept-1.tar.gz")),
+        ];
+
+        for (input, want) in cases {
+            assert_eq!(
+                kept_path(Path::new(input)),
+                want.map(PathBuf::from),
+                "kept_path({input})"
+            );
+        }
     }
 
     /// The download path owns everything it created, so no sidecar next to it

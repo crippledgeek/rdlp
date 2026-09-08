@@ -41,6 +41,8 @@
 
 mod audio_codecs;
 pub mod audio_encoder_registry;
+mod audio_only_container;
+pub use audio_only_container::video_alternative_for;
 pub(crate) mod codec_registry;
 pub(crate) mod container_default;
 mod dts_synth;

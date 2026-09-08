@@ -8,7 +8,6 @@
 
 use std::sync::Arc;
 
-use anyhow::Context;
 use async_trait::async_trait;
 use log::{debug, info};
 
@@ -16,6 +15,7 @@ use rdlp_ffmpeg::{FFmpegRunner, RemuxOptions};
 
 use rdlp_types::ContainerFormat;
 
+use super::policy_refusal::keep_download_on_policy_refusal;
 use crate::pipeline::{PipelineMessage, PipelineStage};
 
 /// Remuxes the current file to a different container.
@@ -123,10 +123,14 @@ impl PipelineStage for RemuxStage {
             Arc::new(move |frac| cb.on_progress(rdlp_types::Progress::from_f64(frac)))
         });
 
-        self.ffmpeg
+        if let Err(e) = self
+            .ffmpeg
             .remux(&input_file, &output_path, &opts, callback)
             .await
-            .context("remux stage failed")?;
+        {
+            keep_download_on_policy_refusal(&e, &mut msg, "RemuxStage");
+            return Err(anyhow::Error::new(e).context("remux stage failed"));
+        }
 
         debug!("RemuxStage: remuxed to {}", output_path.display());
 
