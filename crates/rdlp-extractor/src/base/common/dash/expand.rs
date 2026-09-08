@@ -1,8 +1,17 @@
 //! Expand an MPEG-DASH MPD into one [`Format`] per usable Representation.
 //!
-//! Mirrors yt-dlp's `_parse_mpd_periods` (common.py:2870–3073) at the
-//! per-Repr-Format level. The DASH downloader is the consumer; it reads
+//! Mirrors yt-dlp's `InfoExtractor._parse_mpd_periods` at the per-Repr-Format
+//! level (`yt_dlp/extractor/common.py:2869-3207` **at upstream tag
+//! 2026.08.19**). The DASH downloader is the consumer; it reads
 //! `format.fragments` directly without re-parsing the manifest.
+//!
+//! The tag is the load-bearing part, not the line numbers. This citation read
+//! `common.py:2870-3073` unpinned: the start was one line out and the end
+//! understated the function by ~134 lines, because upstream is a 4189-line
+//! monolith that moves every release. An unpinned range silently becomes a
+//! claim about whatever happens to sit there later — verified 2026-09-08 by
+//! fetching the tagged file, not by recall. Re-pin the tag when re-checking
+//! parity rather than editing the numbers in place.
 
 use rdlp_types::{Codec, DownloadProtocol, Format, Fragment, Rfc6381Codec};
 use url::Url;
