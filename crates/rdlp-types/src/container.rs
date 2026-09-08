@@ -232,8 +232,8 @@ mod tests {
     use super::*;
     use crate::enum_test_support::{
         assert_all_parse_to, assert_display_matches, assert_display_roundtrips,
-        assert_serde_spellings_are_parseable, assert_toml_accepts_every_from_str_spelling,
-        assert_toml_rejects_unknown_spelling,
+        assert_serde_spellings_are_parseable, assert_serialize_spellings,
+        assert_toml_accepts_every_from_str_spelling, assert_toml_rejects_unknown_spelling,
     };
     use strum::IntoEnumIterator as _;
 
@@ -305,13 +305,52 @@ mod tests {
     /// the `rename_all` spelling `"threegp"`, while `Display`/`as_ext` render
     /// `"3gp"`. That asymmetry is deliberate — the wire keeps the old value,
     /// the filesystem gets the real extension, and `FromStr` now accepts both.
+    ///
+    /// Driven by `EnumIter`, so a newly added variant fails here until its wire
+    /// spelling is stated. `check-ts-enum-drift.sh` does not cover this: it
+    /// derives the Rust set by lowercasing variant *identifiers*, so dropping
+    /// `#[serde(rename_all)]` would move the serialized value while leaving
+    /// that gate comparing two unchanged sets. The two guards are
+    /// complementary.
     #[test]
     fn test_serialize_still_emits_the_wire_spelling() {
-        assert_eq!(
-            serde_json::to_string(&ContainerFormat::ThreeGp).expect("serialize"),
-            "\"threegp\"",
-            "the IPC wire value must not change; only Deserialize was widened"
-        );
+        assert_serialize_spellings(&[
+            (ContainerFormat::Mp4, "mp4"),
+            (ContainerFormat::Mkv, "mkv"),
+            (ContainerFormat::WebM, "webm"),
+            (ContainerFormat::Mov, "mov"),
+            (ContainerFormat::M4v, "m4v"),
+            (ContainerFormat::Ts, "ts"),
+            (ContainerFormat::Flv, "flv"),
+            (ContainerFormat::Avi, "avi"),
+            (ContainerFormat::ThreeGp, "threegp"),
+            (ContainerFormat::Mpg, "mpg"),
+            (ContainerFormat::F4v, "f4v"),
+            (ContainerFormat::Wmv, "wmv"),
+            (ContainerFormat::Wma, "wma"),
+            (ContainerFormat::Asf, "asf"),
+            (ContainerFormat::Mxf, "mxf"),
+            (ContainerFormat::Vob, "vob"),
+            (ContainerFormat::Dv, "dv"),
+            (ContainerFormat::Nut, "nut"),
+            (ContainerFormat::Ivf, "ivf"),
+            (ContainerFormat::Ogg, "ogg"),
+            (ContainerFormat::M4a, "m4a"),
+            (ContainerFormat::Mp3, "mp3"),
+            (ContainerFormat::Wav, "wav"),
+            (ContainerFormat::Flac, "flac"),
+            (ContainerFormat::Opus, "opus"),
+            (ContainerFormat::Aac, "aac"),
+            (ContainerFormat::Aiff, "aiff"),
+            (ContainerFormat::Mka, "mka"),
+            (ContainerFormat::Wv, "wv"),
+            (ContainerFormat::Caf, "caf"),
+            (ContainerFormat::Ac3, "ac3"),
+        ]);
+
+        // Asserted here rather than in the table above because the helper
+        // checks the wire form only, and `ThreeGp`'s whole point is that its
+        // other two projections disagree with it.
         assert_eq!(ContainerFormat::ThreeGp.to_string(), "3gp");
         assert_eq!(ContainerFormat::ThreeGp.as_ext(), "3gp");
     }

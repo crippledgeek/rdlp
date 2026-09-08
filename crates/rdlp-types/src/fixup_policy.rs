@@ -59,8 +59,8 @@ pub enum FixupPolicy {
 mod tests {
     use super::*;
     use crate::enum_test_support::{
-        assert_serde_spellings_are_parseable, assert_toml_accepts_every_from_str_spelling,
-        assert_toml_rejects_unknown_spelling,
+        assert_serde_spellings_are_parseable, assert_serialize_spellings,
+        assert_toml_accepts_every_from_str_spelling, assert_toml_rejects_unknown_spelling,
     };
 
     /// Back-compat precondition for the #583 delegation, and the drift guard
@@ -104,17 +104,17 @@ mod tests {
     /// #583 widens `Deserialize` only. The serialized form is a wire contract,
     /// so it must not move — dropping `#[serde(rename_all)]` would emit
     /// `"Never"` instead of `"never"` and silently break persisted configs.
+    ///
+    /// Driven by `EnumIter`, so a newly added variant fails here until its
+    /// wire spelling is stated (the hand-written form this replaced covered
+    /// two of the three variants and could not notice a third).
     #[test]
     fn test_serialize_still_emits_the_wire_spelling() {
-        assert_eq!(
-            serde_json::to_string(&FixupPolicy::DetectOrWarn).expect("serialize"),
-            "\"detect_or_warn\"",
-            "the wire value must not change; only Deserialize was widened"
-        );
-        assert_eq!(
-            serde_json::to_string(&FixupPolicy::Never).expect("serialize"),
-            "\"never\""
-        );
+        assert_serialize_spellings(&[
+            (FixupPolicy::Never, "never"),
+            (FixupPolicy::Warn, "warn"),
+            (FixupPolicy::DetectOrWarn, "detect_or_warn"),
+        ]);
     }
 
     #[test]
