@@ -1,10 +1,17 @@
 //! Shared fixtures and probes for the `rdlp-ffmpeg` integration suites.
 //!
-//! `ffmpeg_available()` was hand-copied into 16 of the 22 test files in this
-//! directory, and 11 of them hand-roll their own `ffprobe` invocation. This
-//! module is the single definition, mirroring `rdlp-postprocess/tests/common`.
-//! New suites should use it; the pre-existing copies are migrated
-//! opportunistically rather than in one sweep (#640).
+//! `ffmpeg_available()` was hand-copied into many of the test files in this
+//! directory, and several of them hand-roll their own `ffprobe` invocation.
+//! This module is the single definition, mirroring
+//! `rdlp-postprocess/tests/common`. New suites should use it; the pre-existing
+//! copies are migrated opportunistically rather than in one sweep (#640).
+//!
+//! Deliberately no counts here. This comment carried "16 of the 22" and "11 of
+//! them" from the day it was written; the real figures were 10 of 23 and 9,
+//! and #640 was filed quoting both wrong numbers back — a comment nobody can
+//! check became a defect in the tracker. Migration progress is answered by
+//! grepping for `fn ffmpeg_available` under this directory, which is always
+//! current; a number written here is only ever true on the day it is typed.
 //!
 //! The system `ffmpeg`/`ffprobe` CLIs are used ONLY to build fixtures and to
 //! verify results — production code never spawns a subprocess (the
