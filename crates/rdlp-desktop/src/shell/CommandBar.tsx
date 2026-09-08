@@ -18,7 +18,7 @@ import { Button } from "@/components/ui/button";
 
 const NONE_SENTINEL = "none";
 import { uiStore, setView, setAnalyzeUrl } from "@/stores/uiStore";
-import { searchStore, setSearchParam } from "@/stores/searchStore";
+import { searchStore, setSearchParam, setSearchSite } from "@/stores/searchStore";
 import { providersQueryOptions } from "@/api/search";
 import { cn } from "@/lib/utils";
 
@@ -147,7 +147,7 @@ export function CommandBar() {
                     <div style={{ display: inSearchMode ? undefined : "none" }}>
                         <Select
                             selectedKey={searchSite || NONE_SENTINEL}
-                            onSelectionChange={(key) => setSearchParam("site", key === NONE_SENTINEL ? "" : String(key))}
+                            onSelectionChange={(key) => setSearchSite(key === NONE_SENTINEL ? "" : String(key))}
                             aria-label="Search site"
                         >
                             <SelectTrigger

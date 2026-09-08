@@ -147,7 +147,15 @@ impl DownloadJob {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SavedDownloadOptions {
-    /// Raw JSON of the original `DownloadOptions` sent by the frontend.
+    /// `DownloadOptions` re-serialized from the parsed struct
+    /// (`serde_json::to_value`), NOT the frontend's original request body.
+    ///
+    /// It therefore always matches the running binary's field shape, and a
+    /// `null` here is Rust's `None` after deserialization — which is not
+    /// necessarily what the frontend sent, since an absent field with
+    /// `#[serde(default)]` also arrives as `None`. That distinction became
+    /// meaningful with `subtitle_langs: Option<Vec<String>>` (#589), where
+    /// `None` means "apply the settings default" rather than "no languages".
     pub(crate) json: serde_json::Value,
 }
 

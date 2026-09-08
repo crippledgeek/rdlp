@@ -18,6 +18,7 @@ import { BottomDrawer } from "./BottomDrawer";
 import { CommandPalette } from "./CommandPalette";
 import { uiStore } from "@/stores/uiStore";
 import { useGlobalHotkeys } from "@/hooks/useGlobalHotkeys";
+import { useSeedSearchProvider } from "@/hooks/useSeedSearchProvider";
 import { AnalyzeView } from "@/views/analyze/AnalyzeView";
 import { QueueView } from "@/views/queue/QueueView";
 import { HistoryView } from "@/views/history/HistoryView";
@@ -26,6 +27,9 @@ import { SettingsView } from "@/views/settings/SettingsView";
 export function AppShell() {
     const activeView = useStore(uiStore, (s) => s.activeView);
     useGlobalHotkeys();
+    // Here, not in CommandBar: the shell is mounted for the window's lifetime,
+    // so the seed cannot be re-run by a child remounting.
+    useSeedSearchProvider();
 
     // Persist panel layouts to localStorage
     const outerLayout = useDefaultLayout({ id: "rdlp-outer", storage: localStorage });
