@@ -165,7 +165,24 @@ mod tests {
     /// wall-clock `now`, so a value exactly on the boundary would make the test
     /// depend on which side of the comparison the clock lands.
     fn age_past_the_sweep_window(path: &std::path::Path) {
-        const WELL_PAST_THE_WINDOW: std::time::Duration = std::time::Duration::from_hours(2);
+        // `duration_suboptimal_units` wants `Duration::from_hours(2)` here.
+        // That constructor is Rust **1.91**, and this workspace declares
+        // `rust-version = "1.88"` (root `Cargo.toml:48`), which covers a
+        // package's tests — so taking the suggestion compiles here on 1.97 and
+        // breaks `cargo test` for anyone on the stated floor.
+        //
+        // The lint fires only because clippy cannot see the floor: no crate
+        // sets `rust-version.workspace = true` and `clippy.toml` has no `msrv`
+        // key, so clippy assumes the current toolchain and suggests APIs the
+        // workspace has not adopted. Setting `msrv = "1.88"` in `clippy.toml`
+        // would fix this for every crate at once and retire this allow — a
+        // workspace-wide call, not one a test helper should make.
+        #[allow(
+            clippy::duration_suboptimal_units,
+            reason = "suggested Duration::from_hours is Rust 1.91; workspace MSRV is 1.88"
+        )]
+        const WELL_PAST_THE_WINDOW: std::time::Duration =
+            std::time::Duration::from_secs(2 * 60 * 60);
 
         let backdated = std::time::SystemTime::now() - WELL_PAST_THE_WINDOW;
         let file = std::fs::File::options()

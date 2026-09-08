@@ -199,11 +199,22 @@ impl FileTracker {
     /// still exposed to the stale sweep, and warned about, which is strictly
     /// better than losing it now.
     ///
-    /// The clean user-visible name is deliberately NOT used: the pipeline
-    /// cannot know it (the orchestrator derives it from the output template on
-    /// the success path — #406 Option X), and renaming onto a guess would
-    /// atomically replace an unrelated existing file on POSIX. A marker name
-    /// that survives beats a pretty name that might clobber.
+    /// The clean user-visible name is deliberately NOT used, for two
+    /// independent reasons: the pipeline cannot know it (the orchestrator
+    /// derives it from the output template on the success path — #406 Option
+    /// X), and renaming onto a guess would atomically replace an unrelated
+    /// existing file on POSIX. A marker name that survives beats a pretty name
+    /// that might clobber. (That clobber argument is this case's own —
+    /// `rdlp-api`'s `.rdlp-bak-` cites only sweep invisibility, and as a
+    /// transient sidecar it never competes for the clean name at all.)
+    ///
+    /// **A `.rdlp-kept-` file is deliberately immortal, and that is the
+    /// point.** Nothing sweeps it, by any age or any rule — it holds media the
+    /// user paid bandwidth for and that rdlp has no business reclaiming, the
+    /// same trade `.rdlp-bak-` makes. Teaching a sweeper to recognise this
+    /// marker would reintroduce the exact data loss it exists to prevent,
+    /// under a different name; the leftover file is the cost, and it is the
+    /// cheap side of the trade.
     pub fn preserve_current_files(&mut self) {
         let preserved: Vec<PathBuf> = std::mem::take(&mut self.current_files)
             .into_iter()
@@ -211,9 +222,11 @@ impl FileTracker {
                 let kept = kept_path(&raw).map_or_else(
                     || raw.clone(),
                     |kept| {
-                        // Safe: sync rename in a stage path; mirrors the
-                        // sibling `std::fs` uses in this file (`process` is
-                        // async but performs no await around this call).
+                        // Safe: the lint guards against blocking a runtime
+                        // worker. This is two syscalls on a terminal error
+                        // path, in the same synchronous shape as this file's
+                        // sibling `std::fs` uses — no measurable stall to
+                        // hand to `spawn_blocking`.
                         #[allow(clippy::disallowed_methods)]
                         match std::fs::rename(&raw, &kept) {
                             Ok(()) => kept,
@@ -470,6 +483,37 @@ mod tests {
 
     fn test_registry() -> Arc<TempRegistry> {
         Arc::new(TempRegistry::new())
+    }
+
+    /// The three properties `kept_path`'s doc comment promises, none of which
+    /// any other oracle can see: the caller-side tests assert only that the
+    /// kept path differs from the original and that a `.rdlp-kept-` file
+    /// exists, so a `kept_path` that dropped the extension — breaking the
+    /// stated reason for the marker swap, that the survivor still opens in a
+    /// player — would pass the entire branch.
+    #[test]
+    fn kept_path_swaps_the_marker_and_keeps_everything_else() {
+        let cases: [(&str, Option<&str>); 3] = [
+            // The uuid is carried over, not regenerated, and the extension
+            // stays last.
+            (
+                "d/video.rdlp-tmp-577.mp4",
+                Some("d/video.rdlp-kept-577.mp4"),
+            ),
+            // Already outside the swept namespace: nothing to move.
+            ("d/plain.mp4", None),
+            // A multi-part extension is not special-cased — the swap is
+            // positional, so `.tar.gz` survives whole.
+            ("d/a.rdlp-tmp-1.tar.gz", Some("d/a.rdlp-kept-1.tar.gz")),
+        ];
+
+        for (input, want) in cases {
+            assert_eq!(
+                kept_path(Path::new(input)),
+                want.map(PathBuf::from),
+                "kept_path({input})"
+            );
+        }
     }
 
     /// The download path owns everything it created, so no sidecar next to it

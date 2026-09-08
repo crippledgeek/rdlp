@@ -131,11 +131,17 @@ async fn remux_refuses_and_keeps_the_download() {
 
     // The download must survive — moved out of the temp namespace so the stale
     // sweep cannot take it later, not left where it was.
+    let kept = kept_survivors(dir.path());
     assert_eq!(
-        kept_survivors(dir.path()).len(),
+        kept.len(),
         1,
         "the completed download must survive a policy refusal — it is intact, \
          untouched, and the operator only needs to re-run with a different flag"
+    );
+    assert_eq!(
+        kept[0].extension().and_then(|e| e.to_str()),
+        Some("mp4"),
+        "the survivor must be the source, extension intact: {kept:?}"
     );
     assert!(
         !media.exists(),
@@ -174,10 +180,20 @@ async fn recode_refuses_the_transcode_branch_and_keeps_the_download() {
     };
     assert_names_wma_and_wmv(&err, "recode");
 
+    let kept = kept_survivors(dir.path());
     assert_eq!(
-        kept_survivors(dir.path()).len(),
+        kept.len(),
         1,
         "a refused recode must not cost the user their download"
+    );
+    assert_eq!(
+        kept[0].extension().and_then(|e| e.to_str()),
+        Some("webm"),
+        "the survivor must be the source, extension intact: {kept:?}"
+    );
+    assert!(
+        !media.exists(),
+        "the temp-named original must be gone, not duplicated"
     );
 }
 
@@ -212,10 +228,25 @@ async fn merge_refuses_an_audio_only_output_format_and_keeps_the_inputs() {
     };
     assert_names_wma_and_wmv(&err, "merge");
 
-    assert_eq!(
-        kept_survivors(dir.path()).len(),
-        2,
-        "a refused merge must not cost the user either downloaded stream"
+    // Identity, not just a count: `len() == 2` does not say the two survivors
+    // are the video and the audio, and a merge that kept one stream twice
+    // would satisfy a bare count.
+    let kept: Vec<String> = kept_survivors(dir.path())
+        .iter()
+        .filter_map(|p| p.file_name()?.to_str().map(str::to_owned))
+        .collect();
+    assert_eq!(kept.len(), 2, "kept survivors: {kept:?}");
+    assert!(
+        kept.iter().any(|n| n.starts_with("video.")),
+        "the video stream must survive: {kept:?}"
+    );
+    assert!(
+        kept.iter().any(|n| n.starts_with("audio.")),
+        "the audio stream must survive: {kept:?}"
+    );
+    assert!(
+        !video.exists() && !audio.exists(),
+        "the temp-named originals must be gone, not duplicated"
     );
 }
 
