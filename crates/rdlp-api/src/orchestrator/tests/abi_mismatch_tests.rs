@@ -155,17 +155,16 @@ async fn a_plain_progressive_download_is_not_refused() {
 async fn a_missing_ffmpeg_refuses_nothing() {
     // Mutation guard: the refusal must be reached via the mismatch, not by the
     // pipeline merely being absent — `FfmpegUnavailable` degrades as always.
-    let (tx, _rx) = mpsc::channel::<Event>(64);
-    let mut config = Config::default();
-    config.postprocess.remux_container = Some(ContainerFormat::Mp4);
-    let mut orch = Orchestrator::new(
-        Arc::new(config),
-        tx,
-        DownloadId::next(),
-        CancellationToken::new(),
-        None,
+    let orch = orchestrator_with(
+        Config {
+            postprocess: PostProcess {
+                remux_container: Some(ContainerFormat::Mp4),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        PipelineAvailability::FfmpegUnavailable,
     );
-    orch.pipeline = PipelineAvailability::FfmpegUnavailable;
 
     let plan = orch
         .select_format(
@@ -293,17 +292,16 @@ async fn a_borrowed_input_fails_honestly() {
 async fn a_missing_ffmpeg_still_degrades_gracefully() {
     // The behaviour rdlp has always had, and the one this change must not
     // convert into a failure: no FFmpeg at all is a degraded mode.
-    let (tx, _rx) = mpsc::channel::<Event>(64);
-    let mut config = Config::default();
-    config.postprocess.remux_container = Some(ContainerFormat::Mp4);
-    let mut orch = Orchestrator::new(
-        Arc::new(config),
-        tx,
-        DownloadId::next(),
-        CancellationToken::new(),
-        None,
+    let orch = orchestrator_with(
+        Config {
+            postprocess: PostProcess {
+                remux_container: Some(ContainerFormat::Mp4),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+        PipelineAvailability::FfmpegUnavailable,
     );
-    orch.pipeline = PipelineAvailability::FfmpegUnavailable;
     let files = one_file();
 
     let result = orch

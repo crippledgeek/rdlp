@@ -17,6 +17,12 @@ use super::{DownloadPlan, Orchestrator};
 
 /// A plan that has been checked against the linked `FFmpeg`.
 ///
+/// The guarantee is "checked against *an* orchestrator", not "against the one
+/// that will run it" — nothing ties the wrapper to the orchestrator that made
+/// it. That is exact rather than limiting: `advance` threads one orchestrator
+/// through a download, so the two are the same in every current path, and
+/// binding them with a lifetime or an id would cost more than it proves.
+///
 /// Held by [`DownloadPhase::Preparing`](super::DownloadPhase::Preparing),
 /// which is the single door into the download.
 #[derive(Debug)]
@@ -37,16 +43,13 @@ impl GatedPlan {
         Ok(Self(plan))
     }
 
-    /// The plan, for the phases that act on it.
+    /// The plan, for a phase that only needs to look at it.
+    pub(super) fn plan(&self) -> &DownloadPlan {
+        &self.0
+    }
+
+    /// The plan, for the phase that consumes it.
     pub(super) fn into_inner(self) -> Box<DownloadPlan> {
         self.0
-    }
-}
-
-impl std::ops::Deref for GatedPlan {
-    type Target = DownloadPlan;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
