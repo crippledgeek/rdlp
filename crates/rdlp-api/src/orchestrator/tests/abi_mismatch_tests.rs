@@ -242,6 +242,48 @@ fn the_plan_answers_for_its_own_shape() {
     );
 }
 
+#[test]
+fn the_resume_transition_is_gated_too() {
+    // `select_format` is not the only producer of a plan: resuming a saved
+    // session reconstructs one directly and reaches `Preparing` without it.
+    // A resumed merge therefore downloaded both streams and finalized only the
+    // video seam — the audio-less file this branch exists to prevent. The gate
+    // is on the transition, so both producers pass it.
+    let orch = skewed_orchestrator(Config::default());
+    let resumed_merge = DownloadPhase::Preparing {
+        info: Box::new(test_info()),
+        format: Box::new(video_only()),
+        subtitle_selection: Vec::new(),
+        plan: Box::new(DownloadPlan::Merge {
+            video: video_only(),
+            audio: audio_only(),
+        }),
+    };
+
+    let result = resumed_merge.refusing_an_unusable_ffmpeg(&orch);
+
+    assert!(
+        matches!(result, Err(OrchestratorError::FFmpegAbiMismatch(_))),
+        "a resumed merge must be refused exactly like a freshly selected one"
+    );
+}
+
+#[test]
+fn the_resume_transition_lets_an_unaffected_plan_through() {
+    let orch = skewed_orchestrator(Config::default());
+    let resumed_single = DownloadPhase::Preparing {
+        info: Box::new(test_info()),
+        format: Box::new(progressive()),
+        subtitle_selection: Vec::new(),
+        plan: Box::new(DownloadPlan::Single(progressive())),
+    };
+
+    assert!(
+        resumed_single.refusing_an_unusable_ffmpeg(&orch).is_ok(),
+        "a resumed progressive download needs nothing from FFmpeg"
+    );
+}
+
 // ── Rule 2: a run holding bytes is never failed for this ─────────────────────
 
 #[tokio::test]

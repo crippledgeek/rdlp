@@ -46,6 +46,18 @@ impl PipelineAvailability {
         self.pipeline().is_some()
     }
 
+    /// Whether `FFmpeg` is installed at all, usable or not.
+    ///
+    /// The question format selection asks, and deliberately not
+    /// [`Self::is_ready`]: an ABI mismatch means `FFmpeg` is present and this
+    /// binary refuses to call it, and selecting a lesser format for that would
+    /// hand the user a quietly worse download instead of an explanation
+    /// (rdlp#727). Named once here because production and its tests must agree
+    /// on it; spelled out at both, they drifted.
+    pub const fn ffmpeg_is_installed(&self) -> bool {
+        self.is_ready() || self.abi_mismatch().is_some()
+    }
+
     /// The ABI mismatch that makes the pipeline unusable, if that is why.
     pub const fn abi_mismatch(&self) -> Option<&AbiMismatches> {
         match self {

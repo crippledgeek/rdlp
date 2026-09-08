@@ -199,7 +199,9 @@ impl Orchestrator {
                 }
                 if needed {
                     warn!(
-                        "Post-processing skipped: FFmpeg is installed but unusable (ABI                          mismatch). The download is complete and unprocessed; see the                          FFmpeg ABI error above for the remedy"
+                        "Post-processing skipped: FFmpeg is installed but unusable (ABI mismatch). \
+                         The download is complete and unprocessed; the FFmpeg ABI \
+                         error logged earlier in this session carries the remedy"
                     );
                 }
                 return Ok(files);

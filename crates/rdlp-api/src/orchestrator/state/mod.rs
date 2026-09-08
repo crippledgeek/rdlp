@@ -117,6 +117,22 @@ impl fmt::Display for DownloadPhase {
 }
 
 impl DownloadPhase {
+    /// Refuse to enter the download when the plan needs `FFmpeg` and the
+    /// linked `FFmpeg` is unusable.
+    ///
+    /// Sited on the transition rather than on either producer of a plan
+    /// because there are two: `select_format`, and the reconstruction from a
+    /// saved session, which reaches `Preparing` without passing through it.
+    /// A resumed merge therefore used to download both streams and finalize
+    /// only the video seam — the silently audio-less file this branch exists
+    /// to prevent (rdlp#727). Every plan enters the download through here.
+    pub(super) fn refusing_an_unusable_ffmpeg(self, orchestrator: &Orchestrator) -> Result<Self> {
+        if let Self::Preparing { ref plan, .. } = self {
+            orchestrator.refuse_plan_needing_unusable_ffmpeg(plan)?;
+        }
+        Ok(self)
+    }
+
     /// Advance to the next phase in the download workflow
     ///
     /// # State Transitions
@@ -218,12 +234,13 @@ impl DownloadPhase {
                         } else {
                             DownloadPlan::Single(format.clone())
                         };
-                        return Ok(Self::Preparing {
+                        return Self::Preparing {
                             info: Box::new(info),
                             format: Box::new(format),
                             subtitle_selection,
                             plan: Box::new(plan),
-                        });
+                        }
+                        .refusing_an_unusable_ffmpeg(orchestrator);
                     }
                     warn!(
                         format_id = saved.format_id.as_str();
@@ -304,12 +321,13 @@ impl DownloadPhase {
                     state.save(&state_path).await;
                 }
 
-                Ok(Self::Preparing {
+                Self::Preparing {
                     info,
                     format,
                     subtitle_selection,
                     plan,
-                })
+                }
+                .refusing_an_unusable_ffmpeg(orchestrator)
             }
 
             Self::Preparing {

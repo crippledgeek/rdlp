@@ -22,7 +22,8 @@ impl Orchestrator {
     /// Priority:
     /// 1. Explicit user format (`config.format = Some(...)`) always wins
     /// 2. Otherwise, compute default from:
-    ///    - `ffmpeg_available` -- from `pipeline.is_some()`
+    ///    - `ffmpeg_available` -- from `pipeline.ffmpeg_is_installed()`, i.e.
+    ///      whether `FFmpeg` is present, NOT whether it is usable
     ///    - `audio_multistreams` -- from `config.audio_multistreams`
     ///
     /// # Defaults
@@ -31,7 +32,7 @@ impl Orchestrator {
     /// |-----------|---------|
     /// | FFmpeg available, no multistreams | `bv*+ba/b` |
     /// | FFmpeg available, multistreams | `bv+ba/b` |
-    /// | FFmpeg unavailable | `b/bv+ba` |
+    /// | FFmpeg not installed | `b/bv+ba` |
     /// | User explicit `-f` | User's value |
     pub(super) fn resolve_effective_selector(&self) -> Cow<'_, str> {
         // 1. Explicit user format always wins
@@ -54,7 +55,7 @@ impl Orchestrator {
         // the user gets a silently audio-less file. Asking for what they
         // actually wanted lets `refuse_plan_needing_unusable_ffmpeg` explain
         // why it cannot be delivered (rdlp#727).
-        let ffmpeg_available = self.pipeline.is_ready() || self.pipeline.abi_mismatch().is_some();
+        let ffmpeg_available = self.pipeline.ffmpeg_is_installed();
         let audio_multistreams = self.config.audio_multistreams;
 
         let selector = if ffmpeg_available && !audio_multistreams {
@@ -96,6 +97,9 @@ impl Orchestrator {
     /// Returns an error if:
     /// - Format selector string is invalid
     /// - No suitable format is found (automatic mode)
+    /// - The plan needs `FFmpeg` and the linked `FFmpeg` is unusable, i.e.
+    ///   [`OrchestratorError::FFmpegAbiMismatch`] — see
+    ///   [`Self::refuse_plan_needing_unusable_ffmpeg`]
     pub(super) async fn select_format(
         &self,
         info: &InfoDict,
@@ -117,7 +121,7 @@ impl Orchestrator {
     /// after the download instead stranded a complete download under its
     /// `.rdlp-tmp-` seam name, which `TempRegistry::cleanup_stale` deletes an
     /// hour later — a refusal that destroys the thing it was protecting.
-    fn refuse_plan_needing_unusable_ffmpeg(&self, plan: &DownloadPlan) -> Result<()> {
+    pub(super) fn refuse_plan_needing_unusable_ffmpeg(&self, plan: &DownloadPlan) -> Result<()> {
         let Some(mismatches) = self.pipeline.abi_mismatch() else {
             return Ok(());
         };
