@@ -464,6 +464,12 @@ pub fn validate_speed_controls(
     // there is nothing trustworthy to validate against, so accept rather than
     // reject on a reading of wrong offsets — the media paths abort on the same
     // sticky error long before anything is encoded.
+    //
+    // That is fail-open validation, and its safety is borrowed entirely from
+    // `ensure_init`'s `OnceLock` being sticky: the first Err is cached, so a
+    // caller that gets `Ok(())` here cannot then reach a *successful* init
+    // later. If init ever becomes retryable, this stops being a safe default
+    // and becomes a validation bypass — change it here at the same time.
     if !super::init_ok() {
         return Ok(());
     }

@@ -37,6 +37,11 @@ strum = { workspace = true }
 missing_docs = "warn"
 unsafe_code = "deny"
 unsafe_op_in_unsafe_fn = "warn"
+# `ffmpeg::init_ok` answers whether FFmpeg is safe to call at all: dropping its
+# answer resumes the wrong-offset FFI reads the ABI check exists to stop (#656).
+# Denied rather than left at rustc's default `warn` so the guarantee holds
+# without the `-D warnings` gate, not only under it.
+unused_must_use = "deny"
 
 [lints.clippy]
 must_use_candidate = "warn"

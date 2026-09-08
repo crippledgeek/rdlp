@@ -166,8 +166,13 @@ pub fn ensure_init() -> Result<()> {
 /// here is not "no codecs today": it means the loaded `FFmpeg` disagrees with
 /// the bindings, so walking `AVCodec` or reading `AVCodecDescriptor.name` would
 /// dereference fields at offsets that do not exist. Every caller must return
-/// its own safe fallback instead — which is why this is `#[must_use]`, so
-/// ignoring the answer does not compile.
+/// its own safe fallback instead.
+///
+/// `#[must_use]` plus `unused_must_use = "deny"` in this crate's `[lints.rust]`
+/// makes a bare `init_ok();` a compile error rather than rustc's default
+/// warning. An explicit `let _ = init_ok();` still compiles — that is what the
+/// discard syntax means, and no lint reaches it — so the deny raises the cost
+/// of ignoring the answer, it does not make it impossible.
 ///
 /// The report is a one-line `log::error!`; on a repeating path it repeats,
 /// which is the intended cost of not being able to fail properly here.

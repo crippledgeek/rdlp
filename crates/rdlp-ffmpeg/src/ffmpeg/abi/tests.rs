@@ -178,16 +178,28 @@ fn each_library_is_observed_through_its_own_version_constants() {
     // both would still compare Ok, so nothing else would notice.
     use ffmpeg_the_third::ffi;
 
+    // Both components, not just the major: an arm pairing libavformat's major
+    // with libavcodec's MINOR compares Ok on any agreeing machine, and only
+    // misbehaves on a skewed one — wrongly refusing, or wrongly accepting, the
+    // backward-minor case the check was extended to catch.
     for observed in observed_library_abis() {
         let expected = match observed.library {
-            FfmpegLibrary::Avcodec => ffi::LIBAVCODEC_VERSION_MAJOR,
-            FfmpegLibrary::Avutil => ffi::LIBAVUTIL_VERSION_MAJOR,
-            FfmpegLibrary::Avformat => ffi::LIBAVFORMAT_VERSION_MAJOR,
-            FfmpegLibrary::Avfilter => ffi::LIBAVFILTER_VERSION_MAJOR,
+            FfmpegLibrary::Avcodec => {
+                (ffi::LIBAVCODEC_VERSION_MAJOR, ffi::LIBAVCODEC_VERSION_MINOR)
+            }
+            FfmpegLibrary::Avutil => (ffi::LIBAVUTIL_VERSION_MAJOR, ffi::LIBAVUTIL_VERSION_MINOR),
+            FfmpegLibrary::Avformat => (
+                ffi::LIBAVFORMAT_VERSION_MAJOR,
+                ffi::LIBAVFORMAT_VERSION_MINOR,
+            ),
+            FfmpegLibrary::Avfilter => (
+                ffi::LIBAVFILTER_VERSION_MAJOR,
+                ffi::LIBAVFILTER_VERSION_MINOR,
+            ),
         };
         assert_eq!(
-            observed.compiled.major(),
-            i64::from(expected),
+            observed.compiled,
+            AbiVersion::new(i64::from(expected.0), i64::from(expected.1)),
             "{} is observed through another library's constants",
             observed.library
         );

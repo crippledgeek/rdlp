@@ -38,6 +38,19 @@
 #   3. TRANSITIVE USE. A library reached only through another crate's wrappers,
 #      with no `ffi::` mention in this crate, is not seen.
 #
+# Import shapes were MEASURED against the real symbol_used, not reasoned about,
+# because two reviewers disagreed about one of them:
+#
+#      use ...::ffi::sws_scale;      + bare sws_scale(..)   MATCHED
+#      use ...::ffi::{ .., sws_scale };  (multi-line)       MATCHED
+#      use ...::ffi;                 + ffi::sws_scale(..)   MATCHED
+#      use ...::ffi as sys;          + sys::sws_scale(..)   NOT MATCHED
+#
+# The braceless single-item import matches because the `use` line ITSELF
+# contains `ffi::sws_scale`, which the first pattern finds -- it needs no
+# separate case. The aliased form is the genuine hole, and rather than document
+# it as a limitation the gate now refuses to run when it sees one (exit 2).
+#
 # Treat this as a guard against the specific drift that bit us -- a new direct
 # FFI dependency on an unchecked library -- not as proof of completeness.
 # ---------------------------------------------------------------------------
@@ -114,11 +127,29 @@ postproc_:libpostproc'
 # question, not the crate consuming the library. Counting them would make every
 # library look "used" purely because it is checked -- self-referential -- and
 # would hide the case where a library's last real consumer goes away.
+#
+# grep matches --exclude-dir by BASENAME, so this skips any directory named
+# `abi` under the scan root, not specifically ffmpeg/abi. One exists today; a
+# second would be silently skipped too.
 symbol_used() {
     local prefix=$1 dir=$2
     grep -rqE --exclude-dir=abi "\bffi::${prefix}" "$dir" && return 0
     grep -rqzE --exclude-dir=abi "use[^;]*ffi::\{[^;}]*\b${prefix}" "$dir" && return 0
     return 1
+}
+
+# An aliased ffi module (`use ffmpeg_the_third::ffi as sys;` then
+# `sys::sws_scale(...)`) defeats both patterns above: the call site never spells
+# `ffi::`, and the import names no symbol. MEASURED against the real
+# `symbol_used` -- the four import shapes were run through it, and this is the
+# only one that came back unmatched.
+#
+# Rather than leave that as a silent hole, refuse to answer. Attributing symbols
+# through an arbitrary alias needs real name resolution, which a grep cannot do,
+# so a confident "OK" here would be unfounded. Exit 2 (cannot run) rather than 1
+# (violation): the tree may be perfectly fine, but this gate can no longer tell.
+aliased_ffi_imports() {
+    grep -rnE --exclude-dir=abi 'use +[A-Za-z_:]*ffi +as +[A-Za-z_][A-Za-z0-9_]*' "$1"
 }
 
 # Which libraries does `dir` actually call into?
@@ -146,8 +177,14 @@ report_unchecked() {
         # hypothetical: deleting the Avutil arm left the gate GREEN, because
         # `tests.rs` asserts `message.contains("libavutil")` and that quoted
         # string satisfied the search. The verdict was reporting "checked" on
-        # the strength of a test fixture. Excluding tests.rs as well keeps a
-        # future test string from reintroducing it.
+        # the strength of a test fixture.
+        #
+        # The `=> ` anchor is what provides the protection: it is what a test
+        # assertion does not satisfy, and it holds for the inline
+        # `#[cfg(test)] mod tests` blocks in mod.rs and version.rs, which
+        # --exclude=tests.rs does NOT cover (that flag is filename-scoped and
+        # only reaches the out-of-line abi/tests.rs). The exclusion is
+        # defence-in-depth against a future test string, not the mechanism.
         if ! grep -rFq --exclude=tests.rs "=> \"$library\"" "$abi_dir"; then
             echo "ERROR: rdlp-ffmpeg calls into $library, but $abi_dir does not check it."
             echo "       An ABI skew in $library would go unreported, and its struct"
@@ -239,8 +276,24 @@ FIXTURE
         exit 1
     fi
 
-    echo "SELF-TEST OK: the gate still detects all three call shapes, fails an unchecked" \
-         "library, and passes a checked one."
+    # The aliased-ffi refusal. Without this the gate would report a confident
+    # OK on a tree whose symbols it cannot attribute at all.
+    mkdir -p "$tmp/aliased"
+    printf 'use ffmpeg_the_third::ffi as sys;\nfn s() { unsafe { sys::sws_scale(); } }\n' \
+        > "$tmp/aliased/e.rs"
+    if ! aliased_ffi_imports "$tmp/aliased" > /dev/null; then
+        echo "SELF-TEST FAILED: the gate did NOT spot an aliased ffi import, so it would" \
+             "silently under-report every symbol reached through the alias."
+        exit 1
+    fi
+    if aliased_ffi_imports "$tmp/short" > /dev/null; then
+        echo "SELF-TEST FAILED: the alias detector fired on a plain \`use ...::ffi;\`" \
+             "— it would refuse to run on the crate's ordinary style."
+        exit 1
+    fi
+
+    echo "SELF-TEST OK: the gate detects all three matched call shapes, refuses an aliased" \
+         "ffi import, fails an unchecked library, and passes a checked one."
     exit 0
 fi
 
@@ -252,5 +305,14 @@ fi
     echo "ERROR: $SCAN_ROOT not found — nothing scanned." >&2
     exit 2
 }
+
+if aliased="$(aliased_ffi_imports "$SCAN_ROOT")"; then
+    echo "ERROR: rdlp-ffmpeg aliases the ffi module, so this gate cannot attribute" >&2
+    echo "       symbols to their libraries and will not guess:" >&2
+    printf '%s\n' "$aliased" >&2
+    echo "       Fix: import it as \`ffi\` (the convention everywhere else in this" >&2
+    echo "       crate), or teach symbol_used the alias." >&2
+    exit 2
+fi
 
 report_unchecked "$SCAN_ROOT" "$ABI_DIR"
