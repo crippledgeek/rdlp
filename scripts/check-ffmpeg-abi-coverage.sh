@@ -49,7 +49,14 @@
 # The braceless single-item import matches because the `use` line ITSELF
 # contains `ffi::sws_scale`, which the first pattern finds -- it needs no
 # separate case. The aliased form is the genuine hole, and rather than document
-# it as a limitation the gate now refuses to run when it sees one (exit 2).
+# it as a limitation the gate now refuses to run when it sees one (exit 2);
+# see aliased_ffi_imports, which covers the unbraced and braced spellings and
+# is measured against the renames this crate legitimately contains.
+#
+# One residual: a comment or string whose line STARTS with `use
+# ffmpeg_the_third::ffi as ...` still trips the refusal. Far narrower than the
+# alternative -- the loose form tripped on any `// ...: use x::ffi as y;`
+# anywhere in a line -- and it fails safe (CANNOT RUN, never a false OK).
 #
 # Treat this as a guard against the specific drift that bit us -- a new direct
 # FFI dependency on an unchecked library -- not as proof of completeness.
@@ -148,8 +155,37 @@ symbol_used() {
 # through an arbitrary alias needs real name resolution, which a grep cannot do,
 # so a confident "OK" here would be unfounded. Exit 2 (cannot run) rather than 1
 # (violation): the tree may be perfectly fine, but this gate can no longer tell.
+# Anchored on `ffmpeg_the_third::ffi` specifically, and on `use` starting a
+# line. A looser `[A-Za-z_:]*ffi +as +` -- which this gate shipped with for one
+# round -- matches ANY path ending in `ffi`, and MEASURED against 11 candidate
+# lines it produced five false positives:
+#
+#     use std::ffi as c_ffi;                        <- unrelated
+#     use super::mkv_raw_ffi as raw;                <- unrelated
+#     use crate::ffmpeg::merge::mkv_raw_ffi as m;   <- unrelated
+#     // never write: use ...::ffi as sys;          <- a comment about this rule
+#     let s = "use ...::ffi as sys;";               <- a string
+#
+# That is not theoretical here: this crate has three modules whose paths end in
+# `ffi` (merge/mkv_raw_ffi.rs, thumbnail/mkv_raw_ffi.rs, merge/raw_ffi_helpers.rs)
+# and `use ... as` renaming across 19 files. A rename nobody would question would
+# have wedged this gate at permanent CANNOT RUN. The comment case matters just as
+# much: documenting why aliasing is forbidden must not trip the detector that
+# forbids it.
+#
+# Two passes because the alias can be braced. The line-based pass takes the
+# unbraced and single-line braced forms; the -z pass takes a brace list wrapped
+# across lines, the same blind spot symbol_used had to learn. Both were measured
+# against the fixture set above: two matches, both real, zero false positives.
 aliased_ffi_imports() {
-    grep -rnE --exclude-dir=abi 'use +[A-Za-z_:]*ffi +as +[A-Za-z_][A-Za-z0-9_]*' "$1"
+    local unbraced_or_single_line='^[[:space:]]*use +([A-Za-z_][A-Za-z0-9_]*::)*ffmpeg_the_third::(ffi +as +[A-Za-z_]|\{[^;}]*\bffi +as +[A-Za-z_])'
+    # `^` matches the record start under -z (one record = one file), so the
+    # line-start anchor is spelled with [[:space:]], which covers newline.
+    local braced_multiline='(^|[[:space:]])use +([A-Za-z_][A-Za-z0-9_]*::)*ffmpeg_the_third::\{[^;}]*\bffi +as +[A-Za-z_]'
+
+    grep -rnE --exclude-dir=abi --exclude=tests.rs "$unbraced_or_single_line" "$1" && return 0
+    grep -rlzE --exclude-dir=abi --exclude=tests.rs "$braced_multiline" "$1" && return 0
+    return 1
 }
 
 # Which libraries does `dir` actually call into?
@@ -286,14 +322,41 @@ FIXTURE
              "silently under-report every symbol reached through the alias."
         exit 1
     fi
-    if aliased_ffi_imports "$tmp/short" > /dev/null; then
-        echo "SELF-TEST FAILED: the alias detector fired on a plain \`use ...::ffi;\`" \
-             "— it would refuse to run on the crate's ordinary style."
+    mkdir -p "$tmp/braced-alias"
+    printf 'use ffmpeg_the_third::{\n    ffi as sys,\n    AVCodec,\n};\nfn s() { unsafe { sys::sws_scale(); } }\n' \
+        > "$tmp/braced-alias/f.rs"
+    if ! aliased_ffi_imports "$tmp/braced-alias" > /dev/null; then
+        echo "SELF-TEST FAILED: the gate did NOT spot an ffi alias inside a brace list," \
+             "which is the same shape the symbol matcher already had to learn."
         exit 1
     fi
 
-    echo "SELF-TEST OK: the gate detects all three matched call shapes, refuses an aliased" \
-         "ffi import, fails an unchecked library, and passes a checked one."
+    # NEGATIVE fixtures, one per shape that must NOT wedge the gate. Proving the
+    # detector fires is only half of what it needs to prove: a detector that
+    # fires on everything reports CANNOT RUN forever, and every line below is a
+    # shape this crate really contains.
+    mkdir -p "$tmp/not-aliases"
+    {
+        echo 'use ffmpeg_the_third::ffi;'
+        echo 'use std::ffi as c_ffi;'
+        echo 'use super::mkv_raw_ffi as raw;'
+        echo 'use crate::ffmpeg::merge::mkv_raw_ffi as m;'
+        echo 'use super::raw_ffi_helpers as helpers;'
+        echo 'use std::ffi::CString;'
+        echo '// never write: use ffmpeg_the_third::ffi as sys;'
+        echo '    let s = "use ffmpeg_the_third::ffi as sys;";'
+    } > "$tmp/not-aliases/g.rs"
+    if aliased_ffi_imports "$tmp/not-aliases" > /dev/null; then
+        echo "SELF-TEST FAILED: the alias detector fired on a shape that is not an" \
+             "ffmpeg_the_third::ffi alias — an ordinary rename, or a comment about" \
+             "this very rule, would wedge the gate at permanent CANNOT RUN:"
+        aliased_ffi_imports "$tmp/not-aliases"
+        exit 1
+    fi
+
+    echo "SELF-TEST OK: the gate detects all three matched call shapes, refuses both" \
+         "spellings of an aliased ffi import without firing on ordinary renames," \
+         "fails an unchecked library, and passes a checked one."
     exit 0
 fi
 

@@ -171,8 +171,8 @@ pub fn ensure_init() -> Result<()> {
 /// `#[must_use]` plus `unused_must_use = "deny"` in this crate's `[lints.rust]`
 /// makes a bare `init_ok();` a compile error rather than rustc's default
 /// warning. An explicit `let _ = init_ok();` still compiles — that is what the
-/// discard syntax means, and no lint reaches it — so the deny raises the cost
-/// of ignoring the answer, it does not make it impossible.
+/// discard syntax means, and no lint enabled here reaches it — so the deny
+/// raises the cost of ignoring the answer, it does not make it impossible.
 ///
 /// The report is a one-line `log::error!`; on a repeating path it repeats,
 /// which is the intended cost of not being able to fail properly here.
