@@ -67,26 +67,42 @@ impl std::fmt::Debug for PipelineAvailability {
     }
 }
 
+/// Test fixtures, `pub(crate)` so the orchestrator's own tests build their
+/// mismatch from the same constructor rather than a second copy of it.
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub mod fixture {
     use rdlp_ffmpeg::ffmpeg::abi::{
-        AbiMismatch, AbiVersion, BuildPrefix, FfmpegLibrary, MismatchKind,
+        AbiMismatch, AbiMismatches, AbiVersion, BuildPrefix, FfmpegLibrary, MismatchKind,
     };
 
+    /// `libavcodec`'s major in this build's bindings, and the next one up — the
+    /// drift rdlp#656 observed on a system whose `FFmpeg` moved.
+    pub const COMPILED_MAJOR: i64 = 62;
+    pub const LINKED_MAJOR: i64 = 63;
+    const A_MINOR: i64 = 11;
+
+    /// The build prefix the remedy tells the operator to point at.
+    pub const A_PREFIX: &str = "/home/user/.local/mediaforge";
+
     /// A mismatch set standing in for a partially-upgraded system.
-    fn mismatches() -> AbiMismatches {
+    pub fn mismatches() -> AbiMismatches {
         AbiMismatches::new(
             vec![AbiMismatch {
                 library: FfmpegLibrary::Avcodec,
                 kind: MismatchKind::DifferentMajor,
-                compiled: AbiVersion::new(62, 11),
-                linked: AbiVersion::new(63, 1),
+                compiled: AbiVersion::new(COMPILED_MAJOR, A_MINOR),
+                linked: AbiVersion::new(LINKED_MAJOR, A_MINOR),
             }],
-            BuildPrefix::from_env_value("/home/user/.local/mediaforge"),
+            BuildPrefix::from_env_value(A_PREFIX),
         )
         .expect("a non-empty mismatch list is a mismatch")
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fixture::mismatches;
+    use super::*;
 
     #[test]
     fn abi_mismatch_has_no_pipeline() {

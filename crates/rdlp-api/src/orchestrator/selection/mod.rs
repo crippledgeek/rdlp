@@ -45,7 +45,16 @@ impl Orchestrator {
         }
 
         // 2. Compute dynamic default
-        let ffmpeg_available = self.pipeline.is_ready();
+        //
+        // The question here is whether FFmpeg is INSTALLED, not whether the
+        // pipeline is usable. An ABI mismatch means it is installed and this
+        // binary refuses to call it — downgrading the selector for that would
+        // quietly pick a lesser format, and on a source whose best video and
+        // audio are separate streams `b` resolves to the video-only one, so
+        // the user gets a silently audio-less file. Asking for what they
+        // actually wanted lets `refuse_plan_needing_unusable_ffmpeg` explain
+        // why it cannot be delivered (rdlp#727).
+        let ffmpeg_available = self.pipeline.is_ready() || self.pipeline.abi_mismatch().is_some();
         let audio_multistreams = self.config.audio_multistreams;
 
         let selector = if ffmpeg_available && !audio_multistreams {
@@ -88,6 +97,39 @@ impl Orchestrator {
     /// - Format selector string is invalid
     /// - No suitable format is found (automatic mode)
     pub(super) async fn select_format(
+        &self,
+        info: &InfoDict,
+        interactive: bool,
+    ) -> Result<Option<DownloadPlan>> {
+        let plan = self.select_plan(info, interactive).await?;
+        if let Some(ref plan) = plan {
+            self.refuse_plan_needing_unusable_ffmpeg(plan)?;
+        }
+        Ok(plan)
+    }
+
+    /// Refuse a plan that only `FFmpeg` could complete, when `FFmpeg` is
+    /// present but its ABI disagrees with this binary's bindings.
+    ///
+    /// Here rather than after the download because here it costs nothing: no
+    /// bytes exist yet, so there is no half-finished artifact to dispose of and
+    /// no bandwidth spent on a file that cannot be assembled. Deciding this
+    /// after the download instead stranded a complete download under its
+    /// `.rdlp-tmp-` seam name, which `TempRegistry::cleanup_stale` deletes an
+    /// hour later — a refusal that destroys the thing it was protecting.
+    fn refuse_plan_needing_unusable_ffmpeg(&self, plan: &DownloadPlan) -> Result<()> {
+        let Some(mismatches) = self.pipeline.abi_mismatch() else {
+            return Ok(());
+        };
+        if plan.requires_ffmpeg() || self.postprocessing_alters_the_media() {
+            return Err(OrchestratorError::FFmpegAbiMismatch(mismatches.clone()));
+        }
+        Ok(())
+    }
+
+    /// Build the plan. See [`Self::select_format`], which wraps this with the
+    /// refusal above so every plan passes one gate.
+    async fn select_plan(
         &self,
         info: &InfoDict,
         interactive: bool,

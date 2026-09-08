@@ -75,6 +75,32 @@ pub enum DownloadPlan {
     },
 }
 
+impl DownloadPlan {
+    /// Whether any stream this plan downloads arrives over HLS.
+    ///
+    /// An HLS download is remuxed by the pipeline regardless of configuration,
+    /// so the answer decides whether the run needs `FFmpeg` at all.
+    #[must_use]
+    pub fn is_hls(&self) -> bool {
+        match self {
+            Self::Single(format) => format.is_hls(),
+            Self::Merge { video, audio } => video.is_hls() || audio.is_hls(),
+        }
+    }
+
+    /// Whether only `FFmpeg` can turn what this plan downloads into the file
+    /// the user asked for.
+    ///
+    /// True for a merge — two streams nothing else can join — and for HLS,
+    /// whose segments may be unplayable until remuxed. A single progressive
+    /// format needs no help, so post-processing over it is decoration and its
+    /// absence is a warning rather than a failure.
+    #[must_use]
+    pub fn requires_ffmpeg(&self) -> bool {
+        matches!(self, Self::Merge { .. }) || self.is_hls()
+    }
+}
+
 impl std::fmt::Display for DownloadPlan {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -291,7 +317,13 @@ impl Orchestrator {
                 // the build prefix and two separate remedies. Truncated onto a
                 // "not found" warn line it sent operators looking for a missing
                 // install (rdlp#727).
-                error!("{mismatches}");
+                //
+                // Once per process, not per orchestrator: one is built per
+                // download, so a 50-item desktop queue would otherwise repeat
+                // this multi-line block 50 times. Each affected run still says
+                // what it cost, at its own call site.
+                static REPORTED: std::sync::Once = std::sync::Once::new();
+                REPORTED.call_once(|| error!("{mismatches}"));
                 return PipelineAvailability::AbiMismatch(mismatches);
             }
             Err(e) => {
