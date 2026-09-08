@@ -134,9 +134,11 @@ pub fn ensure_init() -> Result<()> {
         //
         // This returns an error rather than logging one because a mismatch is
         // not a degraded mode — there is no correct work to do past this point.
-        // How loudly that lands depends on the caller: the `?`-propagating
-        // entry points (`metadata.rs`, `merge/mod.rs`, `remux.rs`, the CLI)
-        // abort with it, while the self-initializing helpers whose signatures
+        // How loudly that lands depends on the caller: the ~15 `?`-propagating
+        // entry points (e.g. `metadata.rs`, `merge/mod.rs`, `remux.rs`,
+        // `probe.rs`, `salvage.rs`, the CLI) abort with it — that list is
+        // illustrative, not a set to keep synchronised — while the
+        // self-initializing helpers whose signatures
         // cannot carry an error go through `init_or_report` and continue after
         // logging. Those are the ones this check binds least tightly.
         abi::check_linked_ffmpeg_abi().map_err(|e| e.to_string())?;

@@ -14,13 +14,17 @@
 //! the major baked into the generated bindings against the major each loaded
 //! library reports is the comparison that sees both sides.
 //!
-//! All three libraries whose layouts this crate reads are checked, because
-//! their sonames bump independently and a partially-upgraded system can skew
-//! one without the others: `libavcodec` (`AVCodec`, `AVCodecContext`),
-//! `libavutil` (`AVFrame`, `AVDictionary`, `AVBufferRef`) and `libavformat`
-//! (`AVFormatContext`, `AVStream`). They carry genuinely different numbers —
-//! at the time of writing 62, 60 and 62 — so checking one does not stand in
-//! for the others.
+//! Every library whose layouts this crate reads is checked — see
+//! [`FfmpegLibrary`] for which types each one carries. Their sonames bump
+//! independently, so a partially-upgraded system can skew one without the
+//! others, and their majors are not even close to each other: at the time of
+//! writing 62, 60, 62 and 11. Checking one does not stand in for the rest.
+//!
+//! `libswscale` and `libswresample` are deliberately absent: this crate calls
+//! nothing from either (no `sws_*`/`swr_*` symbol appears in its sources),
+//! because rescaling and resampling both go through filters *inside* the
+//! filtergraph — that is, through `libavfilter`. `scripts/check-ffmpeg-abi-coverage.sh`
+//! fails the build if that stops being true.
 
 use std::fmt;
 
@@ -34,15 +38,56 @@ const UNKNOWN_PREFIX: &str = "<unknown — pkg-config resolved no prefix at buil
 
 /// One of the `FFmpeg` shared libraries whose struct layouts this crate reads
 /// through the generated bindings.
+///
+/// Each variant names types this crate actually touches, so the list can be
+/// audited against the sources rather than taken on trust.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FfmpegLibrary {
     /// `AVCodec`, `AVCodecContext`, `AVPacket`.
     Avcodec,
-    /// `AVFrame`, `AVDictionary`, `AVBufferRef`.
+    /// `AVFrame`, `AVDictionary`.
     Avutil,
     /// `AVFormatContext`, `AVStream`, `AVOutputFormat`.
     Avformat,
+    /// `AVFilterInOut`, whose `name`/`filter_ctx`/`pad_idx`/`next` fields are
+    /// written directly on the loudnorm and volume graph paths
+    /// (`ffi_helpers/filter_graph.rs`).
+    Avfilter,
 }
+
+impl FfmpegLibrary {
+    /// Every variant, in `index_in_all` order.
+    pub const ALL: [Self; 4] = [Self::Avcodec, Self::Avutil, Self::Avformat, Self::Avfilter];
+
+    /// Each variant's position in [`ALL`](Self::ALL).
+    ///
+    /// The `match` is the point: adding a variant without extending `ALL` is a
+    /// non-exhaustive-match compile error here, and the const block below
+    /// rejects an `ALL` that is merely the wrong length or order. Together they
+    /// make "every library is checked" a property the compiler holds, rather
+    /// than one a hand-written list in a test claims.
+    const fn index_in_all(self) -> usize {
+        match self {
+            Self::Avcodec => 0,
+            Self::Avutil => 1,
+            Self::Avformat => 2,
+            Self::Avfilter => 3,
+        }
+    }
+}
+
+// Destructuring `ALL` against a fixed-arity pattern is what makes a forgotten
+// variant a compile error rather than a silently short list: add one, and
+// either `index_in_all`'s match stops being exhaustive or this pattern stops
+// matching `ALL`'s new length. The asserts then tie the array's contents and
+// order to that match, so the two cannot drift apart.
+const _: () = {
+    let [avcodec, avutil, avformat, avfilter] = FfmpegLibrary::ALL;
+    assert!(avcodec.index_in_all() == 0, "ALL[0] is not Avcodec");
+    assert!(avutil.index_in_all() == 1, "ALL[1] is not Avutil");
+    assert!(avformat.index_in_all() == 2, "ALL[2] is not Avformat");
+    assert!(avfilter.index_in_all() == 3, "ALL[3] is not Avfilter");
+};
 
 impl fmt::Display for FfmpegLibrary {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -50,6 +95,7 @@ impl fmt::Display for FfmpegLibrary {
             Self::Avcodec => "libavcodec",
             Self::Avutil => "libavutil",
             Self::Avformat => "libavformat",
+            Self::Avfilter => "libavfilter",
         })
     }
 }
@@ -112,28 +158,21 @@ impl LibraryAbi {
             linked,
         }
     }
+
+    /// The disagreement this pair represents, if the two majors differ.
+    #[must_use]
+    pub fn mismatch(self) -> Option<AbiMismatch> {
+        (self.compiled != self.linked).then_some(AbiMismatch {
+            library: self.library,
+            compiled: self.compiled,
+            linked: self.linked,
+        })
+    }
 }
 
-/// The generated bindings and a loaded shared library belong to different
-/// `FFmpeg` ABI generations.
-///
-/// The message carries two remedies because it has two audiences: a
-/// contributor with a checkout, whose cached binding set needs regenerating,
-/// and someone running a prebuilt single-binary rdlp after a distro upgrade
-/// moved `FFmpeg` out from under it — the surviving runtime hazard in
-/// rdlp#656, and the larger audience of the two.
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error(
-    "FFmpeg ABI mismatch in {library}: these bindings were generated against {library} major \
-     {compiled} (build-time FFmpeg prefix {prefix}), but the {library} loaded at run time \
-     reports major {linked}. Struct layouts change across a major bump while symbol names \
-     survive it, so the link succeeds and every field access through those layouts reads the \
-     wrong offset. From a checkout: regenerate the bindings against the FFmpeg you intend to \
-     link — `cargo clean -p ffmpeg-sys-the-third`, with PKG_CONFIG_PATH pointing at it. \
-     Running a prebuilt rdlp: the FFmpeg on this system has moved to major {linked} since this \
-     binary was built, so install a {library} with major {compiled} and point LD_LIBRARY_PATH \
-     at it, or obtain an rdlp built against major {linked}."
-)]
+/// One library's ABI disagreement. Rendered as a line within [`AbiMismatches`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("{library}: bindings assume major {compiled}, loaded library reports major {linked}")]
 pub struct AbiMismatch {
     /// Which library disagreed.
     pub library: FfmpegLibrary,
@@ -141,9 +180,70 @@ pub struct AbiMismatch {
     pub compiled: AbiMajor,
     /// Major the loaded library reports.
     pub linked: AbiMajor,
-    /// Build-time prefix, or [`UNKNOWN_PREFIX`] when none was resolved.
-    pub prefix: String,
 }
+
+/// Every `FFmpeg` library whose ABI generation disagrees with the bindings.
+///
+/// All of them are reported rather than just the first, because *how many*
+/// disagree is the signal separating the two situations this error is written
+/// for: one skewed library is a partially-upgraded system, while all of them
+/// moving together is a wholesale `FFmpeg` bump. Non-empty by construction —
+/// [`new`](Self::new) returns `None` when nothing disagreed, so "a mismatch
+/// error carrying no mismatches" is unrepresentable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AbiMismatches {
+    mismatches: Vec<AbiMismatch>,
+    prefix: String,
+}
+
+impl AbiMismatches {
+    /// Gather disagreements, or `None` when every library agreed.
+    #[must_use]
+    pub fn new(mismatches: Vec<AbiMismatch>, prefix: BuildPrefix<'_>) -> Option<Self> {
+        (!mismatches.is_empty()).then(|| Self {
+            mismatches,
+            prefix: prefix.to_string(),
+        })
+    }
+
+    /// The disagreeing libraries, in the order they were checked.
+    #[must_use]
+    pub fn mismatches(&self) -> &[AbiMismatch] {
+        &self.mismatches
+    }
+}
+
+impl fmt::Display for AbiMismatches {
+    // Hand-written rather than a `#[error(...)]` template because the body is a
+    // variable-length list, and because the two remedies below belong to the
+    // set as a whole — repeating them per library would bury them.
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "FFmpeg ABI mismatch: the FFmpeg loaded at run time disagrees with the bindings \
+             this build was compiled against, in {} of the {} libraries it reads:",
+            self.mismatches().len(),
+            FfmpegLibrary::ALL.len()
+        )?;
+        for mismatch in self.mismatches() {
+            write!(f, "\n  - {mismatch}")?;
+        }
+        write!(
+            f,
+            "\nBuild-time FFmpeg prefix: {}. Struct layouts change across a major bump while \
+             symbol names survive it, so the link succeeds and every field access through those \
+             layouts reads the wrong offset. From a checkout: regenerate the bindings against \
+             the FFmpeg you intend to link — `cargo clean -p ffmpeg-sys-the-third`, with \
+             PKG_CONFIG_PATH pointing at it. Running a prebuilt rdlp: the FFmpeg on this system \
+             has moved since this binary was built, so install one providing the majors listed \
+             above as \"bindings assume\" and point LD_LIBRARY_PATH at it, or obtain an rdlp \
+             built against the majors it reports.",
+            self.prefix
+        )
+    }
+}
+
+impl std::error::Error for AbiMismatches {}
 
 /// The `FFmpeg` install prefix this crate's `build.rs` resolved (from
 /// `libavcodec.pc`), baked in via `cargo:rustc-env=RDLP_FFMPEG_PREFIX`.
@@ -168,57 +268,42 @@ impl fmt::Display for BuildPrefix<'_> {
     }
 }
 
-/// Compare one library's compile-time and run-time majors.
+/// Compare every observed library's compile-time and run-time majors.
 ///
-/// Pure over its inputs so the mismatch path is testable with a fabricated
-/// pair; `prefix` contributes to the message only.
+/// Pure over its inputs so the mismatch path is testable with fabricated pairs;
+/// `prefix` contributes to the message only.
 ///
 /// # Errors
 ///
-/// Returns [`AbiMismatch`] when the two majors differ.
-pub fn check_abi(observed: LibraryAbi, prefix: BuildPrefix<'_>) -> Result<(), AbiMismatch> {
-    if observed.compiled == observed.linked {
-        return Ok(());
-    }
-    Err(AbiMismatch {
-        library: observed.library,
-        compiled: observed.compiled,
-        linked: observed.linked,
-        prefix: prefix.to_string(),
-    })
+/// Returns [`AbiMismatches`] carrying every library that disagreed.
+pub fn check_abis(observed: &[LibraryAbi], prefix: BuildPrefix<'_>) -> Result<(), AbiMismatches> {
+    let mismatches = observed.iter().filter_map(|abi| abi.mismatch()).collect();
+
+    AbiMismatches::new(mismatches, prefix).map_or(Ok(()), Err)
 }
 
-/// What each library's two sides claim in this process.
-fn observed_library_abis() -> [LibraryAbi; 3] {
+/// The two majors this process can observe for one library.
+fn observe(library: FfmpegLibrary) -> LibraryAbi {
+    use ffmpeg_the_third::ffi;
+
     // SAFETY: each `*_version()` takes no arguments and returns a scalar, so it
     // dereferences no caller-supplied pointer and reads no struct through a
     // possibly-wrong layout. That is what makes them callable even when the ABI
     // they are being used to test turns out to disagree.
-    let (avcodec, avutil, avformat) = unsafe {
-        (
-            ffmpeg_the_third::ffi::avcodec_version(),
-            ffmpeg_the_third::ffi::avutil_version(),
-            ffmpeg_the_third::ffi::avformat_version(),
-        )
+    let (compiled, linked) = unsafe {
+        match library {
+            FfmpegLibrary::Avcodec => (ffi::LIBAVCODEC_VERSION_MAJOR, ffi::avcodec_version()),
+            FfmpegLibrary::Avutil => (ffi::LIBAVUTIL_VERSION_MAJOR, ffi::avutil_version()),
+            FfmpegLibrary::Avformat => (ffi::LIBAVFORMAT_VERSION_MAJOR, ffi::avformat_version()),
+            FfmpegLibrary::Avfilter => (ffi::LIBAVFILTER_VERSION_MAJOR, ffi::avfilter_version()),
+        }
     };
 
-    [
-        LibraryAbi::new(
-            FfmpegLibrary::Avcodec,
-            AbiMajor::new(i64::from(ffmpeg_the_third::ffi::LIBAVCODEC_VERSION_MAJOR)),
-            AbiMajor::from_packed(avcodec),
-        ),
-        LibraryAbi::new(
-            FfmpegLibrary::Avutil,
-            AbiMajor::new(i64::from(ffmpeg_the_third::ffi::LIBAVUTIL_VERSION_MAJOR)),
-            AbiMajor::from_packed(avutil),
-        ),
-        LibraryAbi::new(
-            FfmpegLibrary::Avformat,
-            AbiMajor::new(i64::from(ffmpeg_the_third::ffi::LIBAVFORMAT_VERSION_MAJOR)),
-            AbiMajor::from_packed(avformat),
-        ),
-    ]
+    LibraryAbi::new(
+        library,
+        AbiMajor::new(i64::from(compiled)),
+        AbiMajor::from_packed(linked),
+    )
 }
 
 /// Compare the bindings this crate was compiled against with every `FFmpeg`
@@ -226,13 +311,12 @@ fn observed_library_abis() -> [LibraryAbi; 3] {
 ///
 /// # Errors
 ///
-/// Returns the first [`AbiMismatch`] found. One disagreeing library is already
-/// disqualifying, so the remaining checks would add noise, not information.
-pub fn check_linked_ffmpeg_abi() -> Result<(), AbiMismatch> {
-    let prefix = BuildPrefix::from_env_value(env!("RDLP_FFMPEG_PREFIX"));
-    observed_library_abis()
-        .into_iter()
-        .try_for_each(|observed| check_abi(observed, prefix))
+/// Returns [`AbiMismatches`] listing every library that disagreed.
+pub fn check_linked_ffmpeg_abi() -> Result<(), AbiMismatches> {
+    check_abis(
+        &FfmpegLibrary::ALL.map(observe),
+        BuildPrefix::from_env_value(env!("RDLP_FFMPEG_PREFIX")),
+    )
 }
 
 #[cfg(test)]
@@ -253,30 +337,36 @@ mod tests {
         LibraryAbi::new(library, AbiMajor::new(compiled), AbiMajor::new(linked))
     }
 
+    fn agreeing_avcodec() -> LibraryAbi {
+        observed(
+            FfmpegLibrary::Avcodec,
+            FFMPEG_8_AVCODEC_MAJOR,
+            FFMPEG_8_AVCODEC_MAJOR,
+        )
+    }
+
+    fn skewed_avcodec() -> LibraryAbi {
+        observed(
+            FfmpegLibrary::Avcodec,
+            FFMPEG_8_AVCODEC_MAJOR,
+            FFMPEG_9_AVCODEC_MAJOR,
+        )
+    }
+
+    fn skewed_avutil() -> LibraryAbi {
+        observed(FfmpegLibrary::Avutil, FFMPEG_8_AVUTIL_MAJOR, 61)
+    }
+
     #[test]
     fn agreeing_majors_are_accepted() {
-        let result = check_abi(
-            observed(
-                FfmpegLibrary::Avcodec,
-                FFMPEG_8_AVCODEC_MAJOR,
-                FFMPEG_8_AVCODEC_MAJOR,
-            ),
-            BuildPrefix::from_env_value(A_PREFIX),
-        );
+        let result = check_abis(&[agreeing_avcodec()], BuildPrefix::from_env_value(A_PREFIX));
         assert!(result.is_ok(), "agreeing majors must not be a mismatch");
     }
 
     #[test]
     fn differing_majors_are_reported_with_both_values() {
-        let err = check_abi(
-            observed(
-                FfmpegLibrary::Avcodec,
-                FFMPEG_8_AVCODEC_MAJOR,
-                FFMPEG_9_AVCODEC_MAJOR,
-            ),
-            BuildPrefix::from_env_value(A_PREFIX),
-        )
-        .expect_err("FFmpeg-8 bindings against a FFmpeg-9 library must be reported");
+        let err = check_abis(&[skewed_avcodec()], BuildPrefix::from_env_value(A_PREFIX))
+            .expect_err("FFmpeg-8 bindings against a FFmpeg-9 library must be reported");
 
         let message = err.to_string();
         assert!(
@@ -296,11 +386,8 @@ mod tests {
 
     #[test]
     fn a_mismatch_names_the_library_that_disagreed() {
-        let err = check_abi(
-            observed(FfmpegLibrary::Avutil, FFMPEG_8_AVUTIL_MAJOR, 61),
-            BuildPrefix::from_env_value(A_PREFIX),
-        )
-        .expect_err("a skewed libavutil must be reported");
+        let err = check_abis(&[skewed_avutil()], BuildPrefix::from_env_value(A_PREFIX))
+            .expect_err("a skewed libavutil must be reported");
 
         let message = err.to_string();
         assert!(
@@ -308,54 +395,76 @@ mod tests {
             "message must name the library that disagreed, not a fixed one: {message}"
         );
         assert!(
-            !message.contains("libavcodec"),
+            !message.contains("libavcodec:"),
             "naming libavcodec for a libavutil skew would send the operator to \
              the wrong library: {message}"
         );
     }
 
     #[test]
-    fn each_library_is_checked_independently() {
+    fn one_skewed_library_among_agreeing_ones_still_fails() {
         // The realistic partial-upgrade case: libavcodec agrees, libavutil does
         // not. A check that only looked at libavcodec would pass this.
-        let prefix = BuildPrefix::from_env_value(A_PREFIX);
-        let skewed = [
-            observed(
-                FfmpegLibrary::Avcodec,
-                FFMPEG_8_AVCODEC_MAJOR,
-                FFMPEG_8_AVCODEC_MAJOR,
-            ),
-            observed(FfmpegLibrary::Avutil, FFMPEG_8_AVUTIL_MAJOR, 61),
-        ];
+        let err = check_abis(
+            &[agreeing_avcodec(), skewed_avutil()],
+            BuildPrefix::from_env_value(A_PREFIX),
+        )
+        .expect_err("a skew in any one library must fail the set");
 
-        let result = skewed
-            .into_iter()
-            .try_for_each(|observed| check_abi(observed, prefix));
-
-        let err = result.expect_err("a skew in any one library must fail the set");
-        assert_eq!(err.library, FfmpegLibrary::Avutil);
+        assert_eq!(
+            err.mismatches().len(),
+            1,
+            "only the skewed library belongs in the report: {err}"
+        );
+        assert_eq!(
+            err.mismatches().first().map(|m| m.library),
+            Some(FfmpegLibrary::Avutil)
+        );
     }
 
     #[test]
-    fn every_library_whose_layouts_this_crate_reads_is_observed() {
-        // Without this, dropping a library from `observed_library_abis` would
-        // pass every other test in this module: the fabricated-pair tests never
-        // touch that function, and on an agreeing machine the live check is
-        // `Ok` whether it looked at three libraries or one.
-        let observed: Vec<FfmpegLibrary> = observed_library_abis()
-            .into_iter()
-            .map(|abi| abi.library)
-            .collect();
+    fn every_disagreeing_library_is_reported_not_just_the_first() {
+        // How many disagree is what separates a partial upgrade from a
+        // wholesale bump, so stopping at the first would discard the signal.
+        let err = check_abis(
+            &[skewed_avcodec(), skewed_avutil()],
+            BuildPrefix::from_env_value(A_PREFIX),
+        )
+        .expect_err("two skewed libraries must be reported");
 
-        for library in [
-            FfmpegLibrary::Avcodec,
-            FfmpegLibrary::Avutil,
-            FfmpegLibrary::Avformat,
-        ] {
+        assert_eq!(
+            err.mismatches().len(),
+            2,
+            "both belong in the report: {err}"
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains("libavcodec") && message.contains("libavutil"),
+            "the message must list both, not stop at the first: {message}"
+        );
+    }
+
+    #[test]
+    fn an_empty_mismatch_set_cannot_become_an_error() {
+        assert!(
+            AbiMismatches::new(Vec::new(), BuildPrefix::from_env_value(A_PREFIX)).is_none(),
+            "an error carrying no mismatches would claim a failure that did not happen"
+        );
+    }
+
+    #[test]
+    fn every_library_this_crate_reads_is_observed() {
+        // Derived from ALL rather than a second hand-written list, so this
+        // cannot drift from the enum. What it CANNOT see is the crate starting
+        // to read a library that has no variant at all — that direction is
+        // scripts/check-ffmpeg-abi-coverage.sh's job, which greps the sources
+        // for ffi symbols by library prefix.
+        for library in FfmpegLibrary::ALL {
+            let observed = FfmpegLibrary::ALL.map(observe);
             assert!(
-                observed.contains(&library),
-                "{library} is read through the generated bindings but is not \
-                 checked; a skew in it would go unreported. Observed: {observed:?}"
+                observed.iter().any(|abi| abi.library == library),
+                "{library} has a variant but is never observed; a skew in it \
+                 would go unreported"
             );
         }
     }
@@ -365,25 +474,16 @@ mod tests {
         // The only assertion here about the machine actually running the tests:
         // whatever it linked must agree with what it compiled, or every other
         // FFmpeg test in this crate is reading wrong offsets.
-        assert!(
-            check_linked_ffmpeg_abi().is_ok(),
-            "the linked FFmpeg disagrees with the generated bindings: {:?}",
-            check_linked_ffmpeg_abi()
-        );
+        if let Err(e) = check_linked_ffmpeg_abi() {
+            panic!("the linked FFmpeg disagrees with the generated bindings: {e}");
+        }
     }
 
     #[test]
     fn absent_prefix_is_not_a_mismatch() {
         // build.rs bakes an empty RDLP_FFMPEG_PREFIX when pkg-config yields
         // nothing usable. That is "unknown", and must not be read as drift.
-        let result = check_abi(
-            observed(
-                FfmpegLibrary::Avcodec,
-                FFMPEG_8_AVCODEC_MAJOR,
-                FFMPEG_8_AVCODEC_MAJOR,
-            ),
-            BuildPrefix::from_env_value(""),
-        );
+        let result = check_abis(&[agreeing_avcodec()], BuildPrefix::from_env_value(""));
         assert!(
             result.is_ok(),
             "an unknown prefix alongside agreeing majors is not a mismatch"
@@ -392,15 +492,8 @@ mod tests {
 
     #[test]
     fn absent_prefix_still_reports_a_real_mismatch_as_unknown() {
-        let err = check_abi(
-            observed(
-                FfmpegLibrary::Avcodec,
-                FFMPEG_8_AVCODEC_MAJOR,
-                FFMPEG_9_AVCODEC_MAJOR,
-            ),
-            BuildPrefix::from_env_value(""),
-        )
-        .expect_err("a real major mismatch is reported whether or not the prefix is known");
+        let err = check_abis(&[skewed_avcodec()], BuildPrefix::from_env_value(""))
+            .expect_err("a real major mismatch is reported whether or not the prefix is known");
 
         let message = err.to_string();
         assert!(
@@ -411,15 +504,8 @@ mod tests {
 
     #[test]
     fn a_mismatch_offers_a_remedy_to_both_audiences() {
-        let err = check_abi(
-            observed(
-                FfmpegLibrary::Avcodec,
-                FFMPEG_8_AVCODEC_MAJOR,
-                FFMPEG_9_AVCODEC_MAJOR,
-            ),
-            BuildPrefix::from_env_value(A_PREFIX),
-        )
-        .expect_err("mismatch");
+        let err = check_abis(&[skewed_avcodec()], BuildPrefix::from_env_value(A_PREFIX))
+            .expect_err("mismatch");
 
         let message = err.to_string();
         assert!(
