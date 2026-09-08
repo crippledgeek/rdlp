@@ -20,6 +20,11 @@ pub(super) const PART_MARKER: &str = ".rdlp-part";
 /// neutralize title collisions — keep the two in sync.
 pub(super) const TMP_MARKER: &str = ".rdlp-tmp-";
 
+/// Windows backup-replace marker (random per finalize; see `finalize_part`).
+/// Same shape as the two above, so it is neutralized alongside them by
+/// `Orchestrator::neutralize_temp_markers`.
+pub(super) const BAK_MARKER: &str = ".rdlp-bak-";
+
 /// The stdout sentinel. Temp-naming is meaningless when output goes to stdout.
 /// Matches ONLY the exact `-` token, not a path whose last component is `-`.
 fn is_stdout(path: &Path) -> bool {
@@ -212,7 +217,7 @@ async fn finalize_part_replace_windows(part: &Path, clean: &Path) -> anyhow::Res
             .file_name()
             .map(std::ffi::OsStr::to_os_string)
             .unwrap_or_default();
-        name.push(format!(".rdlp-bak-{}", uuid::Uuid::new_v4().simple()));
+        name.push(format!("{BAK_MARKER}{}", uuid::Uuid::new_v4().simple()));
         clean.with_file_name(name)
     };
     // NOTE (#416-M1): a second Ctrl+C force-exit (process::exit) in the micro-window

@@ -270,8 +270,15 @@ impl SessionState {
 ///
 /// Pattern: `{output_dir}/{sanitized_title}.rdlp_state.json`
 pub(super) fn single_video_state_path(output_dir: &Path, sanitized_title: &str) -> PathBuf {
-    output_dir.join(format!("{sanitized_title}.rdlp_state.json"))
+    output_dir.join(format!("{sanitized_title}{STATE_SUFFIX}"))
 }
+
+/// Trailing spelling of a single-video state file, including its dot.
+///
+/// Named so [`container_resolver::sidecar_path`](super::container_resolver::sidecar_path)
+/// can refuse to compose this exact name: unlike the temp markers, this is an
+/// exact whole-name spelling rather than a substring anyone searches for.
+pub(super) const STATE_SUFFIX: &str = ".rdlp_state.json";
 
 /// Compute the state file path for a playlist download.
 ///
