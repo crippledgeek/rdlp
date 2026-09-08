@@ -119,6 +119,20 @@ pub enum PostProcessError {
     #[error("FFmpeg library initialization failed: {message}")]
     FFmpegInitFailed { message: String },
 
+    /// The `FFmpeg` loaded at run time disagrees with the bindings' struct
+    /// layouts, so no FFI may be attempted (rdlp#656).
+    ///
+    /// Separate from [`PostProcessError::FFmpegInitFailed`] because the two
+    /// remedies differ — one installs `FFmpeg`, the other reconciles two
+    /// versions of it — and a caller that must tell them apart would otherwise
+    /// have to match on message text (rdlp#727). The `Display` here is the
+    /// mismatch set's own, which carries the per-library versions and both
+    /// remedies; it is not summarised.
+    #[error("{mismatches}")]
+    FFmpegAbiMismatch {
+        mismatches: crate::ffmpeg::abi::AbiMismatches,
+    },
+
     /// `FFmpeg` library operation failed
     #[error("FFmpeg library error: {message}")]
     FFmpegLibraryError { message: String },
@@ -333,6 +347,7 @@ impl From<PostProcessError> for RdlpError {
         match error {
             PostProcessError::FFmpegFailed { .. }
             | PostProcessError::FFmpegInitFailed { .. }
+            | PostProcessError::FFmpegAbiMismatch { .. }
             | PostProcessError::FFmpegLibraryError { .. }
             | PostProcessError::MuxWriteError { .. }
             | PostProcessError::InputCorrupt { .. }

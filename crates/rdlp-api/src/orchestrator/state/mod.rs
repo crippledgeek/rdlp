@@ -5,6 +5,7 @@ mod download_state;
 pub use download_state::DownloadState;
 
 use super::DownloadPlan;
+use super::gated_plan::GatedPlan;
 use super::session_state::{self, SessionState, SingleVideoState};
 use super::{
     Orchestrator,
@@ -62,8 +63,12 @@ pub enum DownloadPhase {
         format: Box<Format>,
         /// Subtitles selected for download (empty if none)
         subtitle_selection: Vec<(String, rdlp_types::Subtitle)>,
-        /// Download plan (single or merge)
-        plan: Box<DownloadPlan>,
+        /// Download plan, checked against the linked `FFmpeg`.
+        ///
+        /// [`GatedPlan`] rather than a bare plan so the check cannot be
+        /// skipped: its only constructor performs it, and this is the single
+        /// door into the download (rdlp#727).
+        plan: GatedPlan,
     },
     /// Downloading with progress tracking
     Downloading {
@@ -77,8 +82,13 @@ pub enum DownloadPhase {
         state: DownloadState,
         /// Subtitles selected for download (empty if none)
         subtitle_selection: Vec<(String, rdlp_types::Subtitle)>,
-        /// Download plan (single or merge)
-        plan: Box<DownloadPlan>,
+        /// Download plan, still carrying its check.
+        ///
+        /// [`GatedPlan`] here as well as in `Preparing` because this is the
+        /// phase that actually downloads: a future shortcut that resumed
+        /// straight into it would otherwise reinstate the bypass with no
+        /// compile error, which is the failure this type exists to prevent.
+        plan: GatedPlan,
     },
     /// Download completed successfully.
     ///
@@ -222,7 +232,7 @@ impl DownloadPhase {
                             info: Box::new(info),
                             format: Box::new(format),
                             subtitle_selection,
-                            plan: Box::new(plan),
+                            plan: GatedPlan::new(orchestrator, Box::new(plan))?,
                         });
                     }
                     warn!(
@@ -308,7 +318,7 @@ impl DownloadPhase {
                     info,
                     format,
                     subtitle_selection,
-                    plan,
+                    plan: GatedPlan::new(orchestrator, plan)?,
                 })
             }
 
@@ -322,7 +332,7 @@ impl DownloadPhase {
                 // Reject merge plans early — the Downloading phase would
                 // also reject, but failing here gives a clearer context.
                 if orchestrator.config.output_to_stdout {
-                    if matches!(*plan, DownloadPlan::Merge { .. }) {
+                    if matches!(plan.plan(), DownloadPlan::Merge { .. }) {
                         return Err(OrchestratorError::Configuration(
                             "Merge downloads (video+audio) are not supported \
                              with -o - (stdout output)"
@@ -350,7 +360,7 @@ impl DownloadPhase {
                 // Resume detection only applies to Single downloads.
                 // Merge downloads create separate stream files (video + audio)
                 // at derived paths and always start fresh.
-                let state = match *plan {
+                let state = match plan.plan() {
                     DownloadPlan::Merge { .. } => DownloadState::Fresh,
                     DownloadPlan::Single(_) => {
                         // Probe resume against the deterministic .rdlp-part name —
@@ -395,6 +405,7 @@ impl DownloadPhase {
                 subtitle_selection,
                 plan,
             } => {
+                let plan = plan.into_inner();
                 // Stdout mode: stream directly, skip post-processing
                 if orchestrator.config.output_to_stdout {
                     if matches!(*plan, DownloadPlan::Merge { .. }) {

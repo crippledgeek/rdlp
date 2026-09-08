@@ -1,0 +1,168 @@
+//! Whether the post-processing pipeline is usable — and when it is not, why.
+//!
+//! Absence used to be a bare `Option<Arc<Pipeline>>`, so the two ways to be
+//! absent were indistinguishable downstream and both were reported as
+//! "`FFmpeg` NOT found". They are not the same condition and do not have the
+//! same remedy (rdlp#727):
+//!
+//! * `FFmpeg` is not installed — degrade gracefully, as rdlp always has.
+//! * `FFmpeg` is installed and refuses to be called, because its ABI
+//!   disagrees with the bindings this binary carries (rdlp#656). The operator
+//!   asked for post-processing that is not going to happen, and the remedy
+//!   names two versions rather than a missing package.
+
+use std::sync::Arc;
+
+use rdlp_ffmpeg::ffmpeg::abi::AbiMismatches;
+use rdlp_postprocess::pipeline::Pipeline;
+
+/// The post-processing pipeline, or the reason there isn't one.
+#[derive(Clone)]
+pub enum PipelineAvailability {
+    /// `FFmpeg` initialized and the pipeline is built.
+    Ready(Arc<Pipeline>),
+    /// `FFmpeg` could not be initialized at all — typically not installed.
+    FfmpegUnavailable,
+    /// `FFmpeg` is present but its ABI disagrees with this binary's bindings,
+    /// so calling into it would read struct fields at offsets that do not
+    /// exist. Carries the mismatch set so its remedy reaches the user intact.
+    AbiMismatch(AbiMismatches),
+}
+
+impl PipelineAvailability {
+    /// The pipeline, when there is one.
+    pub const fn pipeline(&self) -> Option<&Arc<Pipeline>> {
+        match self {
+            Self::Ready(pipeline) => Some(pipeline),
+            Self::FfmpegUnavailable | Self::AbiMismatch(_) => None,
+        }
+    }
+
+    /// Whether post-processing can run at all.
+    ///
+    /// Format selection asks this to decide whether merging separate video and
+    /// audio streams is on the table.
+    pub const fn is_ready(&self) -> bool {
+        self.pipeline().is_some()
+    }
+
+    /// Whether `FFmpeg` is installed at all, usable or not.
+    ///
+    /// The question format selection asks, and deliberately not
+    /// [`Self::is_ready`]: an ABI mismatch means `FFmpeg` is present and this
+    /// binary refuses to call it, and selecting a lesser format for that would
+    /// hand the user a quietly worse download instead of an explanation
+    /// (rdlp#727). Named once here because production and its tests must agree
+    /// on it; spelled out at both, they drifted.
+    pub const fn ffmpeg_is_installed(&self) -> bool {
+        self.is_ready() || self.abi_mismatch().is_some()
+    }
+
+    /// The ABI mismatch that makes the pipeline unusable, if that is why.
+    pub const fn abi_mismatch(&self) -> Option<&AbiMismatches> {
+        match self {
+            Self::AbiMismatch(mismatches) => Some(mismatches),
+            Self::Ready(_) | Self::FfmpegUnavailable => None,
+        }
+    }
+}
+
+impl std::fmt::Debug for PipelineAvailability {
+    // Hand-written because `Pipeline` is not `Debug`; the variant is the part
+    // a reader of a log line needs.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Ready(_) => f.write_str("Ready"),
+            Self::FfmpegUnavailable => f.write_str("FfmpegUnavailable"),
+            Self::AbiMismatch(mismatches) => write!(f, "AbiMismatch({mismatches})"),
+        }
+    }
+}
+
+/// Test fixtures, `pub(crate)` so the orchestrator's own tests build their
+/// mismatch from the same constructor rather than a second copy of it.
+#[cfg(test)]
+pub mod fixture {
+    use rdlp_ffmpeg::ffmpeg::abi::{
+        AbiMismatch, AbiMismatches, AbiVersion, BuildPrefix, FfmpegLibrary, MismatchKind,
+    };
+
+    /// `libavcodec`'s major in this build's bindings, and the next one up — the
+    /// drift rdlp#656 observed on a system whose `FFmpeg` moved.
+    pub const COMPILED_MAJOR: i64 = 62;
+    pub const LINKED_MAJOR: i64 = 63;
+    const A_MINOR: i64 = 11;
+
+    /// The build prefix the remedy tells the operator to point at.
+    pub const A_PREFIX: &str = "/home/user/.local/mediaforge";
+
+    /// A mismatch set standing in for a partially-upgraded system.
+    pub fn mismatches() -> AbiMismatches {
+        AbiMismatches::new(
+            vec![AbiMismatch {
+                library: FfmpegLibrary::Avcodec,
+                kind: MismatchKind::DifferentMajor,
+                compiled: AbiVersion::new(COMPILED_MAJOR, A_MINOR),
+                linked: AbiVersion::new(LINKED_MAJOR, A_MINOR),
+            }],
+            BuildPrefix::from_env_value(A_PREFIX),
+        )
+        .expect("a non-empty mismatch list is a mismatch")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fixture::mismatches;
+    use super::*;
+
+    #[test]
+    fn abi_mismatch_has_no_pipeline() {
+        let availability = PipelineAvailability::AbiMismatch(mismatches());
+
+        assert!(
+            availability.pipeline().is_none(),
+            "an ABI-skewed FFmpeg must never hand out a pipeline"
+        );
+        assert!(!availability.is_ready());
+    }
+
+    #[test]
+    fn abi_mismatch_is_distinguishable_from_a_missing_ffmpeg() {
+        assert!(
+            PipelineAvailability::AbiMismatch(mismatches())
+                .abi_mismatch()
+                .is_some(),
+            "the mismatch must survive to the call site that reports it"
+        );
+        assert!(
+            PipelineAvailability::FfmpegUnavailable
+                .abi_mismatch()
+                .is_none(),
+            "a missing FFmpeg is not an ABI mismatch — that conflation is rdlp#727"
+        );
+    }
+
+    #[test]
+    fn unavailable_ffmpeg_has_no_pipeline_and_no_mismatch() {
+        let availability = PipelineAvailability::FfmpegUnavailable;
+
+        assert!(availability.pipeline().is_none());
+        assert!(!availability.is_ready());
+        assert!(availability.abi_mismatch().is_none());
+    }
+
+    #[test]
+    fn debug_carries_the_remedy_for_a_mismatch() {
+        let rendered = format!("{:?}", PipelineAvailability::AbiMismatch(mismatches()));
+
+        assert!(
+            rendered.contains("regenerate the bindings"),
+            "the remedy must not be summarised away: {rendered}"
+        );
+        assert_eq!(
+            format!("{:?}", PipelineAvailability::FfmpegUnavailable),
+            "FfmpegUnavailable"
+        );
+    }
+}

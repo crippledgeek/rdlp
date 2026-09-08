@@ -120,15 +120,39 @@ pub fn classify_pipeline_err(e: &anyhow::Error) -> OrchestratorError {
 impl Orchestrator {
     /// Check if post-processing is needed based on configuration
     pub(super) fn needs_postprocessing(&self) -> bool {
-        self.config.postprocess.extract_audio
+        self.postprocessing_alters_the_media()
             || self.config.postprocess.embed_metadata
             || self.config.postprocess.embed_thumbnail
             || self.config.postprocess.embed_subtitles
+            || self.config.postprocess.fixup != rdlp_types::FixupPolicy::Never
+    }
+
+    /// Whether post-processing would change the media itself, rather than
+    /// decorate it.
+    ///
+    /// One half of the predicate that decides whether an unusable `FFmpeg`
+    /// fails a run (rdlp#727) — the other half is the plan's own shape, in
+    /// [`DownloadPlan::requires_ffmpeg`](super::DownloadPlan::requires_ffmpeg). Drawn by consequence rather than by
+    /// which options happen to be set: skipping a remux, a recode, an audio
+    /// extract or a normalize yields a file that is not what was asked for —
+    /// the wrong container, the wrong codec, no audio track. Skipping an
+    /// embedded thumbnail, a metadata tag or embedded subtitles yields the
+    /// right media with something missing around it, which the warning in
+    /// `run_postprocessing` covers. `fixup` sits with those not because it
+    /// cannot change the media — `DetectOrWarn` repairs a broken file — but
+    /// because it is a conditional repair that is on by default, so treating
+    /// it as a request would refuse every unconfigured download.
+    ///
+    /// Config defaults are why the line cannot be "did the user ask": both
+    /// `embed_thumbnail` and `fixup` are on in [`Config::default`], so a
+    /// request-shaped test would call every unconfigured run a request and
+    /// refuse it.
+    pub(super) fn postprocessing_alters_the_media(&self) -> bool {
+        self.config.postprocess.extract_audio
             || self.config.postprocess.recode_video.is_some()
             || self.config.postprocess.recode_container.is_some()
             || self.config.postprocess.remux_container.is_some()
             || self.config.postprocess.normalize_audio
-            || self.config.postprocess.fixup != rdlp_types::FixupPolicy::Never
     }
 
     /// Run post-processing pipeline on downloaded file(s)
@@ -153,13 +177,55 @@ impl Orchestrator {
         keep_inputs: bool,
     ) -> Result<Vec<PathBuf>> {
         debug!(
-            "[PostProcess] Called: is_hls={is_hls}, pipeline={}",
-            self.pipeline.is_some()
+            "[PostProcess] Called: is_hls={is_hls}, pipeline={:?}",
+            self.pipeline
         );
 
-        let Some(pipeline) = &self.pipeline else {
-            // No pipeline available — return files unchanged.
-            if self.needs_postprocessing() || is_hls {
+        let Some(pipeline) = self.pipeline.pipeline() else {
+            let needed = self.needs_postprocessing() || is_hls;
+
+            // An ABI-skewed FFmpeg is installed and refusing to be called.
+            //
+            // A run that needed it was already refused before the download
+            // started (`refuse_plan_needing_unusable_ffmpeg`), so what reaches
+            // here either needed nothing or holds bytes on disk. Those bytes
+            // are why this branch does not fail when it owns them: the caller
+            // finalizes the clean name only on the `Ok` path, so returning
+            // `Err` here would abandon a complete download under its
+            // `.rdlp-tmp-` seam name for `cleanup_stale` to delete. Borrowed
+            // inputs (`keep_inputs`, e.g. `process_local_file`) are the user's
+            // own files and are never ours to lose, so that path can fail
+            // honestly.
+            if let Some(mismatches) = self.pipeline.abi_mismatch() {
+                if keep_inputs && self.postprocessing_alters_the_media() {
+                    return Err(OrchestratorError::FFmpegAbiMismatch(mismatches.clone()));
+                }
+                // More than one file means a merge, and the caller finalizes
+                // only the first — so reaching here with a skewed FFmpeg would
+                // hand back a video and abandon its audio. `GatedPlan` makes
+                // that unreachable: a merge plan cannot enter the download on a
+                // skewed machine. If it ever does, the gate has been defeated
+                // and that is worth saying loudly, because the symptom on its
+                // own looks like a successful download.
+                if files.len() > 1 {
+                    error!(
+                        "BUG: a merge reached post-processing with an unusable FFmpeg; \
+                         the pre-download gate was bypassed. Streams are left unmerged \
+                         rather than one of them being presented as the result"
+                    );
+                }
+                if needed {
+                    warn!(
+                        "Post-processing skipped: FFmpeg is installed but unusable (ABI mismatch). \
+                         The download is complete and unprocessed; the FFmpeg ABI \
+                         error logged earlier in this session carries the remedy"
+                    );
+                }
+                return Ok(files);
+            }
+
+            // No FFmpeg at all — degrade, as rdlp always has.
+            if needed {
                 warn!("Post-processing unavailable (FFmpeg not found)");
                 if is_hls {
                     warn!("HLS downloads may have container issues without FFmpeg remux");

@@ -8,6 +8,7 @@
     unused_variables
 )]
 
+mod abi_mismatch_tests;
 mod dash_e2e;
 mod hls_e2e;
 mod property_tests;
@@ -27,23 +28,12 @@ use tokio_util::sync::CancellationToken;
 
 /// Helper function to create a test orchestrator with event channel
 pub(super) fn create_test_orchestrator() -> Orchestrator {
-    let config = Arc::new(Config::default());
-    let (tx, _rx) = mpsc::channel::<Event>(64);
-    let id = DownloadId::next();
-    let token = CancellationToken::new();
-    Orchestrator::new(config, tx, id, token, None)
+    crate::orchestrator::test_support::orchestrator_with_config(Config::default())
 }
 
 /// Helper function to wrap formats in an `InfoDict` for testing
 fn create_test_info_dict(formats: Vec<Format>) -> InfoDict {
-    let mut info = InfoDict::new(
-        "test_id",
-        "Test Video",
-        "TestExtractor",
-        "https://example.com/video",
-    );
-    info.formats = formats;
-    info
+    crate::orchestrator::test_support::test_info_with_formats(formats)
 }
 
 /// Helper function to create a test format
