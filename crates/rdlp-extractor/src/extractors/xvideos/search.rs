@@ -11,9 +11,16 @@ use rdlp_types::{
 use scraper::Html;
 
 use super::XVideosExtractor;
-use crate::base::common::{BaseExtractor, PagedSearch, SearchPage, SearchPageSpec};
+use crate::base::common::{
+    BaseExtractor, PagedSearch, SearchPage, SearchPageSpec, resolve_card_url, resolve_media_url,
+};
 
 const XVIDEOS_BASE_URL: &str = "https://www.xvideos.com";
+
+/// Poster attributes in preference order. `data-src` holds the real image
+/// (`src` is a blank-GIF placeholder on nearly every card), `data-mzl` is the
+/// mosaique listing image, `src` the last resort.
+const THUMBNAIL_ATTRS: [&str; 3] = ["data-src", "data-mzl", "src"];
 
 /// Maximum results cap for a full search (matches the pre-refactor
 /// `unwrap_or(500)`; mirrors the xnxx sibling's named cap).
@@ -102,13 +109,11 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
             .select(anchor_sel)
             .next()
             .and_then(|a| a.value().attr("href"))
-            .map(|href| {
-                if href.starts_with("http") {
-                    href.to_string()
-                } else {
-                    format!("{XVIDEOS_BASE_URL}{href}")
-                }
-            });
+            // The anchor selector is an href-PREFIX match, which already makes
+            // an authority impossible; resolving through `resolve_card_url`
+            // (#665) removes the dependence on that selector staying a prefix
+            // match rather than closing a live hole.
+            .and_then(|href| resolve_card_url(XVIDEOS_BASE_URL, href));
 
         let Some(video_url) = video_url else {
             continue;
@@ -134,14 +139,28 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
         // — we substitute with `1` (the first-frame thumb, universally
         // available). Falls back to `data-mzl` (mosaique listing image)
         // if neither works, then `src` as last resort.
+        //
+        // Resolved through `resolve_media_url` — deliberately NOT
+        // `resolve_card_url`: XVideos' posters live on `*.xvideos-cdn.com`, so
+        // an origin comparison would drop every real thumbnail. What it refuses
+        // is a non-`http(s)` reference reaching the desktop's `<img src>`, and
+        // it absolutizes a relative one. Both the placeholder filter and the
+        // resolution apply PER candidate: after an `or_else` chain they would
+        // run only on whichever attribute won, so a `data-src` holding the
+        // blank placeholder (or an unusable `data:` value) would yield `None`
+        // instead of falling through to `data-mzl`/`src`. The `THUMBNUM`
+        // substitution stays ahead of resolution so the placeholder token never
+        // survives into a URL.
         let thumbnail_url = block.select(img_sel).next().and_then(|img| {
             let attrs = img.value();
-            attrs
-                .attr("data-src")
-                .or_else(|| attrs.attr("data-mzl"))
-                .or_else(|| attrs.attr("src"))
-                .filter(|u| !u.contains("lightbox-blank"))
+            THUMBNAIL_ATTRS
+                .iter()
+                .filter_map(|attr| attrs.attr(attr))
+                // An empty attribute joins to the BASE, so it would resolve
+                // "successfully" to the site root rather than being skipped.
+                .filter(|u| !u.is_empty() && !u.contains("lightbox-blank"))
                 .map(|u| u.replace("THUMBNUM", "1"))
+                .find_map(|u| resolve_media_url(XVIDEOS_BASE_URL, &u))
         });
 
         // Duration from .duration or span.duration
@@ -268,6 +287,147 @@ mod tests {
     use rdlp_types::SearchFilter;
 
     const FIXTURE: &str = include_str!("tests/xvideos_search_page.html");
+
+    /// The four #665 reference shapes, in one array because on this site they
+    /// share one outcome — see `no_result_can_move_the_authority_off_xvideos`.
+    const HOSTILE_HREFS: [&str; 4] = [
+        "https://evil.test/video.abc/x/",
+        "//evil.test/video.x/",
+        "@evil.test/video.x/",
+        ".evil.test/video.x/",
+    ];
+
+    const LEGIT_HREF: &str = "/video.abc123/real_clip";
+
+    fn host_of(url: &str) -> String {
+        url::Url::parse(url)
+            .expect("every emitted URL must parse")
+            .host_str()
+            .expect("every emitted URL must carry a host")
+            .to_string()
+    }
+
+    fn thumb_block(href: &str, title: &str) -> String {
+        format!(
+            r#"<div class="thumb-block">
+                 <div class="thumb-inside"><a href="{href}"><img data-src="/t.jpg"></a></div>
+                 <p class="title"><a href="{href}" title="{title}">{title}</a></p>
+               </div>"#
+        )
+    }
+
+    fn page(blocks: &str) -> String {
+        format!("<html><body>{blocks}</body></html>")
+    }
+
+    /// All four #665 shapes are dropped, and — unlike PornHub — none of them
+    /// reaches `resolve_card_url` at all: the card anchor selector
+    /// `a[href^='/video.']` is an attribute PREFIX match, the same guard
+    /// hqporner spells as `h.starts_with("/hdporn/")`, so a reference that does
+    /// not begin `/video.` is never selected. Measured on 2026-09-08 against
+    /// the unconverted parser: all four were already refused there too, because
+    /// a reference forced to begin with a single `/` is path-absolute and RFC
+    /// 3986 gives it no way to introduce an authority. Routing this site
+    /// through `resolve_card_url` therefore removes a dependence on that
+    /// selector staying a prefix match rather than closing a live hole, and
+    /// this test is what keeps the property pinned if it is ever loosened to a
+    /// `*=` contains match.
+    ///
+    /// The legitimate card is co-located deliberately (eporner's prior art,
+    /// `eporner/search.rs`): asserting only "nothing off-origin survives" would
+    /// hold vacuously on an empty result, so the `len() == 1` is what makes the
+    /// test fail if resolution ever empties the page instead of guarding it.
+    #[test]
+    fn no_result_can_move_the_authority_off_xvideos() {
+        for hostile in HOSTILE_HREFS {
+            let html = page(&format!(
+                "{}{}",
+                thumb_block(hostile, "Hostile"),
+                thumb_block(LEGIT_HREF, "Real")
+            ));
+            let results = parse_search_results(&html);
+            assert_eq!(
+                results.len(),
+                1,
+                "href {hostile:?}: the hostile card must be dropped and the legitimate one kept"
+            );
+            assert_eq!(results[0].title, "Real");
+            assert_eq!(host_of(&results[0].video_url), "www.xvideos.com");
+        }
+    }
+
+    /// Posters go through `resolve_media_url`, so an off-origin CDN host is
+    /// kept (that is where every real XVideos thumb lives), a relative one is
+    /// absolutized rather than handed to the UI as `/t.jpg`, and a `data:`
+    /// reference never reaches the desktop's `<img src>`. A bad poster costs
+    /// the poster, not the card.
+    #[test]
+    fn posters_are_resolved_and_non_http_ones_dropped() {
+        let block = |src: &str, title: &str| {
+            format!(
+                r#"<div class="thumb-block">
+                     <div class="thumb-inside"><a href="{LEGIT_HREF}"><img data-src="{src}"></a></div>
+                     <p class="title"><a href="{LEGIT_HREF}" title="{title}">{title}</a></p>
+                   </div>"#
+            )
+        };
+        let cdn = "https://img-hw.xvideos-cdn.com/videos/thumbs169/1/real.jpg";
+        let html = page(&format!(
+            "{}{}{}",
+            block(cdn, "Cdn"),
+            block("/t.jpg", "Relative"),
+            block("data:text/html,x", "Bad")
+        ));
+        let results = parse_search_results(&html);
+        assert_eq!(results.len(), 3, "a bad poster must not cost the card");
+        assert_eq!(results[0].thumbnail_url.as_deref(), Some(cdn));
+        assert_eq!(
+            results[1].thumbnail_url.as_deref(),
+            Some("https://www.xvideos.com/t.jpg")
+        );
+        assert_eq!(results[2].thumbnail_url, None);
+    }
+
+    /// A `data-src` the pipeline cannot use must fall through to
+    /// `data-mzl`/`src` rather than costing the card its poster. Both
+    /// rejections are exercised, because they are enforced at different steps
+    /// and an `or_else` chain would defeat each separately: the blank
+    /// placeholder is dropped by the name filter, and a `data:` URI only by the
+    /// resolver.
+    #[test]
+    fn an_unusable_data_src_falls_through_to_the_next_attribute() {
+        let real = "https://img-hw.xvideos-cdn.com/videos/thumbs169/1/real.jpg";
+        for unusable in [
+            "https://cdn.xvideos-cdn.com/img/lightbox/lightbox-blank.gif",
+            "data:image/gif;base64,R0lGOD",
+        ] {
+            let html = page(&format!(
+                r#"<div class="thumb-block">
+                     <div class="thumb-inside"><a href="{LEGIT_HREF}"><img
+                        data-src="{unusable}" data-mzl="{real}"></a></div>
+                     <p class="title"><a href="{LEGIT_HREF}" title="Lazy">Lazy</a></p>
+                   </div>"#
+            ));
+            let results = parse_search_results(&html);
+            assert_eq!(results.len(), 1);
+            assert_eq!(
+                results[0].thumbnail_url.as_deref(),
+                Some(real),
+                "data-src {unusable:?} must fall through"
+            );
+        }
+    }
+
+    #[test]
+    fn ordinary_root_relative_href_resolves() {
+        let results = parse_search_results(&page(&thumb_block(LEGIT_HREF, "Real")));
+        assert_eq!(results.len(), 1);
+        assert_eq!(
+            results[0].video_url,
+            format!("{XVIDEOS_BASE_URL}{LEGIT_HREF}"),
+            "a normal root-relative href must still yield a usable URL"
+        );
+    }
 
     fn make_query(q: &str, filters: Vec<SearchFilter>) -> SearchQuery {
         SearchQuery {

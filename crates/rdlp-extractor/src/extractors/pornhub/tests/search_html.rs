@@ -21,10 +21,31 @@ fn parses_results_with_uploader_populated() {
 #[test]
 fn results_carry_titles_and_thumbnails() {
     let results = parse_html_search_results(FIXTURE).unwrap();
+    let mut with_thumb = 0;
     for r in &results {
         assert!(!r.title.is_empty(), "title must not be empty");
         assert!(r.video_url.contains("view_video.php?viewkey="));
+        // The name promised thumbnails and the body never checked one. The
+        // count assertion below is the live guard: every card in this fixture
+        // carries a poster, so any regression that resolves them away reds it.
+        // The parse/scheme assertions cannot fail on this recording — every
+        // `src` in it is already an absolute https URL, so they would pass
+        // even with no resolver at all. They are here so a future fixture
+        // carrying a relative or `data:` poster cannot pass silently.
+        if let Some(t) = &r.thumbnail_url {
+            let url = url::Url::parse(t).expect("a poster URL must be absolute");
+            assert!(
+                matches!(url.scheme(), "http" | "https"),
+                "poster must be http(s): {t}"
+            );
+            with_thumb += 1;
+        }
     }
+    assert_eq!(
+        with_thumb,
+        results.len(),
+        "every card in the recorded fixture carries a usable poster"
+    );
 }
 
 #[test]
