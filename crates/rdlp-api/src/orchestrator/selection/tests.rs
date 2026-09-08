@@ -123,7 +123,7 @@ fn test_resolve_default_selector_matches_environment() {
     let config = Config::default();
     let orch = orchestrator_with_config(config);
     let selector = orch.resolve_effective_selector();
-    if orch.pipeline.is_some() {
+    if orch.pipeline.is_ready() {
         assert_eq!(
             selector, "bv*+ba/b",
             "FFmpeg available + merge supported should give bv*+ba/b"
@@ -152,7 +152,7 @@ fn test_resolve_audio_multistreams_with_ffmpeg() {
     };
     let orch = orchestrator_with_config(config);
     let selector = orch.resolve_effective_selector();
-    if orch.pipeline.is_some() {
+    if orch.pipeline.is_ready() {
         assert_eq!(selector, "bv+ba/b");
     } else {
         assert_eq!(selector, "b/bv+ba");
@@ -186,7 +186,7 @@ fn test_selector_truth_table() {
     let config = Config::default();
     let orch = orchestrator_with_config(config);
     let selector = orch.resolve_effective_selector();
-    if orch.pipeline.is_some() {
+    if orch.pipeline.is_ready() {
         assert_eq!(
             selector, "bv*+ba/b",
             "FFmpeg available + merge supported should give bv*+ba/b"
@@ -202,7 +202,7 @@ fn test_selector_truth_table() {
         ..Default::default()
     };
     let orch = orchestrator_with_config(config);
-    if orch.pipeline.is_some() {
+    if orch.pipeline.is_ready() {
         assert_eq!(
             orch.resolve_effective_selector(),
             "bv+ba/b",
@@ -299,7 +299,7 @@ async fn test_default_selector_returns_merge_with_ffmpeg() {
     let config = Config::default();
     let orch = orchestrator_with_config(config);
 
-    if orch.pipeline.is_none() {
+    if !orch.pipeline.is_ready() {
         // Skip if no FFmpeg
         return;
     }

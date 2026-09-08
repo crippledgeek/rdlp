@@ -8,6 +8,7 @@
     unused_variables
 )]
 
+mod abi_mismatch_tests;
 mod dash_e2e;
 mod hls_e2e;
 mod property_tests;

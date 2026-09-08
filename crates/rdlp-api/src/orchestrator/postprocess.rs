@@ -120,15 +120,34 @@ pub fn classify_pipeline_err(e: &anyhow::Error) -> OrchestratorError {
 impl Orchestrator {
     /// Check if post-processing is needed based on configuration
     pub(super) fn needs_postprocessing(&self) -> bool {
-        self.config.postprocess.extract_audio
+        self.postprocessing_alters_the_media()
             || self.config.postprocess.embed_metadata
             || self.config.postprocess.embed_thumbnail
             || self.config.postprocess.embed_subtitles
+            || self.config.postprocess.fixup != rdlp_types::FixupPolicy::Never
+    }
+
+    /// Whether post-processing would change the media itself, rather than
+    /// decorate it.
+    ///
+    /// This is the predicate that decides whether an unusable `FFmpeg` fails a
+    /// run (rdlp#727), and it is drawn by consequence rather than by which
+    /// options happen to be set. Skipping a remux, a recode, an audio extract
+    /// or a normalize yields a file that is not what was asked for — the wrong
+    /// container, the wrong codec, no audio track. Skipping a thumbnail, a
+    /// metadata tag, a subtitle sidecar or a fixup yields the right media with
+    /// something missing around it, which a warning covers.
+    ///
+    /// Config defaults are why the line cannot be "did the user ask": both
+    /// `embed_thumbnail` and `fixup` are on in [`Config::default`], so a
+    /// request-shaped test would call every unconfigured run a request and
+    /// refuse it.
+    fn postprocessing_alters_the_media(&self) -> bool {
+        self.config.postprocess.extract_audio
             || self.config.postprocess.recode_video.is_some()
             || self.config.postprocess.recode_container.is_some()
             || self.config.postprocess.remux_container.is_some()
             || self.config.postprocess.normalize_audio
-            || self.config.postprocess.fixup != rdlp_types::FixupPolicy::Never
     }
 
     /// Run post-processing pipeline on downloaded file(s)
@@ -154,12 +173,27 @@ impl Orchestrator {
     ) -> Result<Vec<PathBuf>> {
         debug!(
             "[PostProcess] Called: is_hls={is_hls}, pipeline={}",
-            self.pipeline.is_some()
+            self.pipeline.is_ready()
         );
 
-        let Some(pipeline) = &self.pipeline else {
-            // No pipeline available — return files unchanged.
-            if self.needs_postprocessing() || is_hls {
+        let Some(pipeline) = self.pipeline.pipeline() else {
+            let needed = self.needs_postprocessing() || is_hls;
+
+            // An ABI-skewed FFmpeg is installed and refusing to be called, so
+            // work the operator asked for is not going to happen. Failing is
+            // the honest outcome; returning the files as if processed is the
+            // silent degradation rdlp#727 reported. When nothing was asked of
+            // FFmpeg the download is complete and correct, so the mismatch is
+            // reported (once, by `create_pipeline`) and the run stands.
+            if let Some(mismatches) = self.pipeline.abi_mismatch() {
+                if self.postprocessing_alters_the_media() || is_hls {
+                    return Err(OrchestratorError::FFmpegAbiMismatch(mismatches.clone()));
+                }
+                return Ok(files);
+            }
+
+            // No FFmpeg at all — degrade, as rdlp always has.
+            if needed {
                 warn!("Post-processing unavailable (FFmpeg not found)");
                 if is_hls {
                     warn!("HLS downloads may have container issues without FFmpeg remux");

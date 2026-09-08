@@ -12,6 +12,7 @@ mod interactive;
 mod merge_download;
 pub mod naming;
 mod paths;
+pub mod pipeline_availability;
 mod playlist;
 mod postprocess;
 mod resume;
@@ -33,7 +34,8 @@ pub use state::DownloadPhase;
 
 use crate::events::Event;
 use crate::handle::DownloadId;
-use log::{debug, info, warn};
+use log::{debug, error, info, warn};
+use pipeline_availability::PipelineAvailability;
 use rdlp_cookies::SimpleCookieJar;
 use rdlp_core::ExtractionContext;
 use rdlp_downloader::{DownloaderRegistry, DownloaderRegistryTrait};
@@ -102,8 +104,8 @@ pub struct SharedHttpClient {
 pub struct Orchestrator {
     pub(super) extractor_registry: Arc<dyn ExtractorRegistryTrait>,
     pub(super) downloader_registry: Arc<dyn DownloaderRegistryTrait>,
-    /// Channel-based post-processing pipeline.
-    pub(super) pipeline: Option<Arc<Pipeline>>,
+    /// Channel-based post-processing pipeline, or why there isn't one.
+    pub(super) pipeline: PipelineAvailability,
     pub(super) extraction_context: Arc<ExtractionContext>,
     pub(super) config: Arc<Config>,
     /// Event sender for download lifecycle events
@@ -269,8 +271,13 @@ impl Orchestrator {
 
     /// Build the channel-based post-processing pipeline.
     ///
-    /// Returns `None` if `FFmpeg` is not available (graceful degradation).
-    fn create_pipeline(config: &Config, temp_registry: Arc<TempRegistry>) -> Option<Arc<Pipeline>> {
+    /// Returns a non-`Ready` [`PipelineAvailability`] when `FFmpeg` cannot be
+    /// used, carrying which of the two reasons applies. They are reported
+    /// differently and at different levels: a missing `FFmpeg` is a degraded
+    /// mode rdlp has always tolerated, while an ABI mismatch means an
+    /// installed `FFmpeg` is refusing to be called and the operator's remux is
+    /// not going to happen (rdlp#727).
+    fn create_pipeline(config: &Config, temp_registry: Arc<TempRegistry>) -> PipelineAvailability {
         let ffmpeg = match rdlp_ffmpeg::FFmpegRunner::with_location(
             config.postprocess.ffmpeg_location.as_deref(),
         ) {
@@ -279,9 +286,17 @@ impl Orchestrator {
                 rdlp_ffmpeg::set_verbose(config.verbose);
                 Arc::new(f)
             }
+            Err(rdlp_ffmpeg::PostProcessError::FFmpegAbiMismatch { mismatches }) => {
+                // `error!`, and the whole message: this one names two versions,
+                // the build prefix and two separate remedies. Truncated onto a
+                // "not found" warn line it sent operators looking for a missing
+                // install (rdlp#727).
+                error!("{mismatches}");
+                return PipelineAvailability::AbiMismatch(mismatches);
+            }
             Err(e) => {
                 warn!("FFmpeg NOT found: {e}");
-                return None;
+                return PipelineAvailability::FfmpegUnavailable;
             }
         };
 
@@ -300,7 +315,7 @@ impl Orchestrator {
             Arc::new(FinalizeMetadataStage::new(ffmpeg)),
         ];
 
-        Some(Arc::new(Pipeline::new(stages, temp_registry, 2)))
+        PipelineAvailability::Ready(Arc::new(Pipeline::new(stages, temp_registry, 2)))
     }
 
     /// Whether a cancellation should keep the resumable download partial.

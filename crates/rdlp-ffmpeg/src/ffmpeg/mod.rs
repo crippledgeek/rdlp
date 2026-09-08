@@ -39,7 +39,7 @@
 // policy" section in the module docstring above.
 #![allow(unsafe_code)]
 
-mod abi;
+pub mod abi;
 mod audio_codecs;
 pub mod audio_encoder_registry;
 mod audio_only_container;
@@ -113,9 +113,37 @@ pub use video_codecs::{
     list_available_codecs, preferred_video_encoder, resolve_encoder,
 };
 
+/// Why a first `ensure_init` failed, kept in a shape every later caller can
+/// rebuild the same typed error from.
+///
+/// The two are separated here rather than at the call site because only this
+/// module knows which check failed; flattening them into one string is what
+/// made an ABI mismatch reach the user as "`FFmpeg` NOT found" (rdlp#727).
+#[derive(Debug, Clone)]
+enum InitFailure {
+    /// A loaded library's ABI disagrees with the bindings.
+    Abi(abi::AbiMismatches),
+    /// `ffmpeg_the_third::init()` itself failed.
+    Init(String),
+}
+
+impl InitFailure {
+    /// The typed error this failure surfaces as.
+    fn to_error(&self) -> PostProcessError {
+        match self {
+            Self::Abi(mismatches) => PostProcessError::FFmpegAbiMismatch {
+                mismatches: mismatches.clone(),
+            },
+            Self::Init(message) => PostProcessError::FFmpegInitFailed {
+                message: message.clone(),
+            },
+        }
+    }
+}
+
 /// Global initialization state for the `FFmpeg` library.
 /// Ensures `ffmpeg_the_third::init()` is called exactly once.
-static FFMPEG_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
+static FFMPEG_INIT: OnceLock<std::result::Result<(), InitFailure>> = OnceLock::new();
 
 /// Initialize the `FFmpeg` library (idempotent).
 ///
@@ -125,9 +153,12 @@ static FFMPEG_INIT: OnceLock<std::result::Result<(), String>> = OnceLock::new();
 /// # Errors
 ///
 /// Returns [`PostProcessError::FFmpegInitFailed`] if `ffmpeg_the_third::init()`
-/// fails (e.g. required shared libraries are missing or incompatible), or if a
-/// loaded `FFmpeg` library belongs to a different ABI generation than the
-/// bindings were generated against (see the `abi` module).
+/// fails (e.g. required shared libraries are missing), or
+/// [`PostProcessError::FFmpegAbiMismatch`] if a loaded `FFmpeg` library
+/// disagrees with the ABI the bindings were generated against (see the `abi`
+/// module). They are distinct variants because a caller has to report them
+/// differently: the first means install `FFmpeg`, the second means reconcile
+/// two versions of it (rdlp#727).
 pub fn ensure_init() -> Result<()> {
     let result = FFMPEG_INIT.get_or_init(|| {
         // Before init, not after: an ABI mismatch links cleanly and then makes
@@ -143,9 +174,10 @@ pub fn ensure_init() -> Result<()> {
         // self-initializing helpers whose signatures cannot carry an error ask
         // `init_ok` and return their own safe fallback. Neither kind proceeds
         // into FFI after a mismatch.
-        abi::check_linked_ffmpeg_abi().map_err(|e| e.to_string())?;
+        abi::check_linked_ffmpeg_abi().map_err(InitFailure::Abi)?;
 
-        ffmpeg_the_third::init().map_err(|e| format!("ffmpeg_the_third::init() failed: {e}"))?;
+        ffmpeg_the_third::init()
+            .map_err(|e| InitFailure::Init(format!("ffmpeg_the_third::init() failed: {e}")))?;
         // Suppress FFmpeg's internal diagnostic messages (e.g. mpegts stream timing warnings).
         // Only show actual errors -- we handle logging ourselves.
         ffmpeg_the_third::log::set_level(ffmpeg_the_third::log::Level::Error);
@@ -154,9 +186,7 @@ pub fn ensure_init() -> Result<()> {
 
     match result {
         Ok(()) => Ok(()),
-        Err(msg) => Err(PostProcessError::FFmpegInitFailed {
-            message: msg.clone(),
-        }),
+        Err(failure) => Err(failure.to_error()),
     }
 }
 

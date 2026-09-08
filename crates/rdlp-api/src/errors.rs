@@ -331,6 +331,12 @@ impl From<OrchestratorError> for RdlpApiError {
                 message: io_err.to_string(),
             },
             OrchestratorError::PostProcessingFailed(msg) => Self::FfmpegError { message: msg },
+            // `Display` for this variant already embeds the mismatch set's own
+            // multi-line message, remedies included; it is carried whole rather
+            // than summarised, which is what rdlp#727 reported.
+            OrchestratorError::FFmpegAbiMismatch(_) => Self::FfmpegError {
+                message: err.to_string(),
+            },
             OrchestratorError::InteractiveNotConfigured => Self::InvalidInput {
                 message: "Interactive selection not configured".into(),
             },

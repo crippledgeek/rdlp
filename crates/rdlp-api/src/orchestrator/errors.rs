@@ -59,6 +59,21 @@ pub enum OrchestratorError {
     #[error("Post-processing failed: {}", redact(_0))]
     PostProcessingFailed(String),
 
+    /// Post-processing was required, and the `FFmpeg` on this system cannot be
+    /// called because its ABI disagrees with this binary's bindings.
+    ///
+    /// Distinct from [`Self::PostProcessingFailed`] because no stage ran: the
+    /// refusal happens before any FFI, which is the whole point of the check
+    /// (rdlp#656). It fails the run rather than degrading silently — `FFmpeg`
+    /// is installed, the operator asked for work that needs it, and returning
+    /// an unmerged file as if it had succeeded is what rdlp#727 reported.
+    // Through `redact` like every other interpolated error text: a no-op for
+    // version numbers and a build prefix, and the gate that keeps it uniform
+    // (`scripts/check-error-attr-redaction.sh`) is worth more than the
+    // exception this variant could argue for.
+    #[error("Post-processing requires FFmpeg, which cannot be used.\n{}", redact(&_0.to_string()))]
+    FFmpegAbiMismatch(rdlp_ffmpeg::ffmpeg::abi::AbiMismatches),
+
     /// Resume detection failed
     #[error("Failed to detect resume point: {}", redact(_0))]
     ResumeDetectionFailed(String),
@@ -148,6 +163,12 @@ impl std::fmt::Debug for OrchestratorError {
             }
             Self::IoError(t) => rdlp_redact::redacted_debug_tuple!(f, "IoError", t),
             Self::Configuration(t) => rdlp_redact::redacted_debug_tuple!(f, "Configuration", t),
+            // Not redacted: every field is a version number or the build
+            // prefix baked in at compile time, none of it caller-supplied.
+            Self::FFmpegAbiMismatch(mismatches) => f
+                .debug_tuple("FFmpegAbiMismatch")
+                .field(mismatches)
+                .finish(),
             Self::UserCancelled => f.write_str("UserCancelled"),
             Self::NoFormat => f.write_str("NoFormat"),
             Self::InteractiveNotConfigured => f.write_str("InteractiveNotConfigured"),
