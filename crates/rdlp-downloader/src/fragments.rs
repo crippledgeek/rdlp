@@ -93,10 +93,14 @@ fn extrapolate_total(
 /// sidecar against a path-only fingerprint of `fragments` + the fragment
 /// count; on a match (and when the existing partial is at least as long as the
 /// last confirmed byte boundary and the download is incomplete) it truncates
-/// any torn tail to that boundary, seeks, and skips the already-completed
-/// fragments. Otherwise it starts fresh. The sidecar is rewritten atomically
-/// after each fragment and removed on successful completion; it is left in
-/// place on cancel or error so a later run can resume.
+/// any torn tail to that boundary, re-hashes the remaining prefix and compares
+/// it with the sidecar's `stream_crc32`, then seeks and skips the
+/// already-completed fragments. A CRC mismatch (a crash left the size durable
+/// but not the data, #676) or any other miss starts fresh. The sidecar is
+/// rewritten atomically after each fragment — carrying the running CRC of
+/// everything written — and removed on successful completion; it is left in
+/// place on cancel or error so a later run can resume. Nothing is fsynced;
+/// see `crate::atomic` for the per-protocol durability position.
 ///
 /// # Retry
 ///
@@ -160,13 +164,12 @@ pub async fn download_pre_resolved_fragments(
     let loaded = state::HlsResumeState::load_matching(&state_file, fingerprint, total).await;
     // Resume only when state matches, the partial is at least as long as the
     // last confirmed boundary, and the download is not already complete.
-    let resume = loaded
+    let mut resume = loaded
         .as_ref()
         .is_some_and(|s| actual_len >= s.byte_len && s.fragments_done < total);
     let mut hls_state = loaded
         .filter(|_| resume)
         .unwrap_or_else(|| state::HlsResumeState::new(fingerprint, total));
-    let skip = hls_state.fragments_done as usize;
 
     let mut out_file = tokio::fs::OpenOptions::new()
         .write(true)
@@ -181,7 +184,7 @@ pub async fn download_pre_resolved_fragments(
             )),
         })?;
     if resume {
-        // Drop any torn tail past the last confirmed boundary, then append.
+        // Drop any torn tail past the last confirmed boundary.
         out_file
             .set_len(hls_state.byte_len)
             .await
@@ -191,6 +194,40 @@ pub async fn download_pre_resolved_fragments(
                     output.display().to_string(),
                 )),
             })?;
+        // The size being right proves nothing about the data (#676): re-hash
+        // the prefix and refuse to build on bytes that are not what was
+        // written. A mismatch is an ordinary fresh start, not an error.
+        let actual_crc = crate::atomic::crc32_of_prefix(output, hls_state.byte_len)
+            .await
+            .map_err(|e| rdlp_core::RdlpError::Download {
+                message: format!("verify resume prefix: {e}"),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(
+                    output.display().to_string(),
+                )),
+            })?;
+        if actual_crc != hls_state.stream_crc32 {
+            log::warn!(
+                "HLS partial content mismatch: crc32 {actual_crc:#010x} on disk vs {:#010x} recorded over {} bytes; starting fresh",
+                hls_state.stream_crc32,
+                hls_state.byte_len
+            );
+            resume = false;
+            hls_state = state::HlsResumeState::new(fingerprint, total);
+        }
+    }
+    // Every byte written passes through this one hasher (built once: `new`
+    // runs CPU-feature detection); the sidecar stores its running value. A
+    // verified resume continues from the prefix's CRC: `finalize` returns the
+    // raw state (crc32fast 1.5.0 `baseline.rs:17`) and `new_with_initial`
+    // takes that same state back (`lib.rs:84-86`; `new()` is
+    // `new_with_initial(0)`).
+    let mut hasher = if resume {
+        crc32fast::Hasher::new_with_initial(hls_state.stream_crc32)
+    } else {
+        crc32fast::Hasher::new()
+    };
+    let skip = hls_state.fragments_done as usize;
+    if resume {
         out_file
             .seek(SeekFrom::Start(hls_state.byte_len))
             .await
@@ -393,6 +430,7 @@ pub async fn download_pre_resolved_fragments(
             });
         }
 
+        hasher.update(&bytes);
         total_bytes += bytes.len() as u64;
 
         // Inform the AIMD controller of segment completion so it can tune
@@ -409,6 +447,7 @@ pub async fn download_pre_resolved_fragments(
 
         hls_state.fragments_done = frags_done;
         hls_state.byte_len = total_bytes;
+        hls_state.stream_crc32 = hasher.clone().finalize();
         crate::atomic::note_sidecar_save(
             hls_state.save(&state_file).await,
             &mut save_tracker,

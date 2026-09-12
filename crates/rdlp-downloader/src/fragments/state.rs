@@ -5,6 +5,12 @@
 //! fingerprint so CDN host/token rotation does not break resume. Load/save
 //! are async (`tokio::fs`) because the workspace bans blocking `std::fs` in
 //! async contexts; the file is tiny.
+//!
+//! The sidecar also carries a running CRC-32 of the output so a resume can
+//! prove the partial's content, not just its length (#676): a crash can leave
+//! the output at `byte_len` bytes with an unwritten (zeroed) tail on
+//! filesystems that commit size before data (see `crate::atomic`). Nothing is
+//! fsynced; the mismatch is detected on resume and the download starts fresh.
 
 use std::path::Path;
 
@@ -15,7 +21,8 @@ use tokio::fs;
 use crate::atomic::now_secs;
 
 /// Current schema version. Bump on incompatible field changes.
-pub const STATE_VERSION: u32 = 1;
+/// v2 (#676) added `stream_crc32`; v1 sidecars are rejected ⇒ fresh start.
+pub const STATE_VERSION: u32 = 2;
 
 /// Persisted state of an in-progress native-HLS fragment download.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,6 +38,10 @@ pub struct HlsResumeState {
     pub fragments_done: u64,
     /// Byte length of the output confirmed flushed at the last checkpoint.
     pub byte_len: u64,
+    /// CRC-32/IEEE of `output[0..byte_len]` (`crate::atomic::crc32_of_prefix`).
+    /// Re-computed on resume; a mismatch means the partial's content is not what was written (a
+    /// non-durable tail after a crash) and the download starts fresh.
+    pub stream_crc32: u32,
     /// Unix epoch seconds — for stale-state diagnosis.
     pub updated_at: u64,
 }
@@ -69,6 +80,7 @@ impl HlsResumeState {
             total_fragments,
             fragments_done: 0,
             byte_len: 0,
+            stream_crc32: 0,
             updated_at: now_secs(),
         }
     }
@@ -219,7 +231,7 @@ mod tests {
                 .is_none()
         );
 
-        let bogus = r#"{"state_version":999,"fingerprint":111,"total_fragments":10,"fragments_done":4,"byte_len":4096,"updated_at":0}"#.to_string();
+        let bogus = r#"{"state_version":999,"fingerprint":111,"total_fragments":10,"fragments_done":4,"byte_len":4096,"stream_crc32":0,"updated_at":0}"#.to_string();
         tokio::fs::write(&path, bogus).await.expect("write bogus");
         assert!(
             HlsResumeState::load_matching(&path, 111, 10)
@@ -235,7 +247,8 @@ mod tests {
         // resume can't seek to 0 and skip real fragments (silent corruption).
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("out.hls_state.json");
-        let bogus = r#"{"state_version":1,"fingerprint":111,"total_fragments":10,"fragments_done":4,"byte_len":0,"updated_at":0}"#.to_string();
+        // Otherwise-valid v2 shape so the inconsistency gate is what rejects it.
+        let bogus = r#"{"state_version":2,"fingerprint":111,"total_fragments":10,"fragments_done":4,"byte_len":0,"stream_crc32":0,"updated_at":0}"#.to_string();
         tokio::fs::write(&path, bogus).await.expect("write bogus");
         assert!(
             HlsResumeState::load_matching(&path, 111, 10)
@@ -243,5 +256,54 @@ mod tests {
                 .is_none(),
             "inconsistent done>0/byte_len==0 sidecar must be rejected"
         );
+    }
+
+    #[tokio::test]
+    async fn load_matching_none_on_v1_sidecar_without_crc() {
+        // A real pre-#676 sidecar: version 1, no `stream_crc32`. Must be
+        // rejected so the upgrade starts fresh instead of trusting an
+        // unverifiable partial.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("out.hls_state.json");
+        let v1 = r#"{"state_version":1,"fingerprint":111,"total_fragments":10,"fragments_done":4,"byte_len":4096,"updated_at":0}"#;
+        tokio::fs::write(&path, v1).await.expect("write v1");
+        assert!(
+            HlsResumeState::load_matching(&path, 111, 10)
+                .await
+                .is_none(),
+            "v1 sidecar must not load"
+        );
+    }
+
+    #[tokio::test]
+    async fn load_matching_rejects_version_1_even_when_crc_field_is_present() {
+        // Isolates the version gate from serde's missing-field rejection: a
+        // document that parses as the current struct but claims version 1
+        // must still be refused.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("out.hls_state.json");
+        let v1 = r#"{"state_version":1,"fingerprint":111,"total_fragments":10,"fragments_done":4,"byte_len":4096,"stream_crc32":0,"updated_at":0}"#;
+        tokio::fs::write(&path, v1).await.expect("write v1");
+        assert!(
+            HlsResumeState::load_matching(&path, 111, 10)
+                .await
+                .is_none(),
+            "version gate must reject 1 regardless of field shape"
+        );
+    }
+
+    #[tokio::test]
+    async fn stream_crc32_roundtrips_through_save_and_load() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("out.hls_state.json");
+        let mut s = HlsResumeState::new(7, 3);
+        s.fragments_done = 1;
+        s.byte_len = 9;
+        s.stream_crc32 = 0xCBF4_3926;
+        s.save(&path).await.expect("save");
+        let loaded = HlsResumeState::load_matching(&path, 7, 3)
+            .await
+            .expect("must load");
+        assert_eq!(loaded.stream_crc32, 0xCBF4_3926);
     }
 }
