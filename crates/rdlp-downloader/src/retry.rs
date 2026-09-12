@@ -2,7 +2,7 @@
 //!
 //! Four paths need the same thing — walk a backoff, retry only errors worth
 //! retrying, log each attempt — and before issue #570 three of them spelled it
-//! out separately (`http`'s own `with_retry`, `dash::download::download_one`,
+//! out separately (`http`'s own `with_retry`, `dash::download::SegmentFetchCtx::fetch`,
 //! and `http::parallel::download_chunk_with_retry`'s hand-rolled loop). What
 //! varies between them is *policy* (how many attempts, how long between them,
 //! what else must hold) and the work itself, so both are passed in as values
@@ -14,6 +14,7 @@
 
 use std::fmt::Display;
 use std::future::Future;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use backon::Retryable as _;
@@ -111,6 +112,42 @@ pub(crate) const fn test_retry_config(max_retries: usize) -> RetryConfig {
         std::time::Duration::from_millis(5),
         2.0,
     )
+}
+
+/// Read a shared retry counter into the `usize` `DownloadStats::retries`
+/// expects.
+///
+/// `AtomicU64` is what every fetch path increments from; `DownloadStats`
+/// predates it and stays `usize`. One conversion, shared by every
+/// `DownloadStats` producer (HTTP sequential/stdout/resume, the parallel
+/// chunk paths, the fragment path, and the DASH legacy path — issue #672),
+/// so a future producer doesn't reinvent the saturating fallback.
+pub(crate) fn retries_taken(counter: &AtomicU64) -> usize {
+    usize::try_from(counter.load(Ordering::Relaxed)).unwrap_or(usize::MAX)
+}
+
+/// Byte and retry counters shared across every task in one download attempt.
+///
+/// Both are `Arc<AtomicU64>` and travel together everywhere a run needs to
+/// report bytes downloaded AND retries taken from tasks fanned out in
+/// parallel — `download_parallel`/`download_parallel_resume`'s per-chunk
+/// tasks, and DASH `run`'s per-representation segment loop. Grouping them
+/// stops the two counters drifting into separate parameters at every call
+/// site that needs both (they pass the deletion test together: a caller that
+/// wants one of these two numbers from a running attempt wants both).
+#[derive(Clone, Default)]
+pub(crate) struct Tallies {
+    /// Bytes downloaded so far.
+    pub(crate) bytes: Arc<AtomicU64>,
+    /// Retries actually taken, across every task sharing this value.
+    pub(crate) retries: Arc<AtomicU64>,
+}
+
+impl Tallies {
+    /// A fresh zeroed pair for a new download attempt.
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
 }
 
 /// Run `operation` under `policy`, retrying transient failures.

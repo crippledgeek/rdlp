@@ -521,18 +521,26 @@ impl HttpDownloader {
     /// - 200 → server ignored Range; parse total from `Content-Length`,
     ///   `supports_ranges = false`. The probe body is discarded (caller
     ///   re-issues a plain GET via `download_sequential`).
-    /// - other (4xx/5xx after retry) → `ProbeResult { size: None,
-    ///   supports_ranges: false }`. Non-2xx is "no info", not an error;
-    ///   caller falls to sequential.
-    pub(crate) async fn probe(&self, url: &str) -> Result<ProbeResult> {
+    /// - other (incl. 4xx/5xx) → `ProbeResult { size: None,
+    ///   supports_ranges: false }`. `rdlp_http::probe_size` folds every
+    ///   non-206/200 status into this `Ok` value rather than an `Err`, so
+    ///   `with_retry` below never retries a 4xx/5xx probe response — only a
+    ///   genuine transport failure on `send()` is retried (see #735).
+    pub(crate) async fn probe(
+        &self,
+        url: &str,
+        retries: &std::sync::atomic::AtomicU64,
+    ) -> Result<ProbeResult> {
         use config::PROBE_WINDOW_BYTES;
 
         // F3 probe delegates to the shared `rdlp_http::probe_size` helper
         // (closes #306). Retry semantics preserved via the with_retry
-        // wrapper; the shared helper itself is leaf-level (no retry).
-        // Non-2xx and network errors after retry both produce the
-        // `ProbeResult { size: None, supports_ranges: false }` form so the
-        // caller falls back to sequential download.
+        // wrapper; the shared helper itself is leaf-level (no retry). Only a
+        // transport-level `send()` failure produces the `Err` this loop can
+        // retry — a non-2xx status (incl. 4xx/5xx) is itself an `Ok(ProbeResult
+        // { size: None, .. })` from `probe_size`'s own match, so it is never
+        // retried here; the caller falls back to sequential download either
+        // way (see #735).
         let client = self.client.clone();
         let url_string = url.to_string();
         let hdrs = self.headers();
@@ -540,7 +548,7 @@ impl HttpDownloader {
         let timeout = self.config.read_timeout;
 
         let probed = with_retry(
-            RetryPolicy::new(&self.config.retry_config, &"HTTP probe (F3)"),
+            RetryPolicy::new(&self.config.retry_config, &"HTTP probe (F3)").counting_into(retries),
             || {
                 let client = client.clone();
                 let url = url_string.clone();
@@ -569,15 +577,30 @@ impl HttpDownloader {
     /// `next_with_cancel_and_timeout`. On cancellation the `BufWriter` is
     /// flushed before returning `RdlpError::Cancelled` so partial bytes already
     /// buffered reach disk.
+    ///
+    /// Takes the whole [`crate::http::parallel::ChunkRequestSpec`] (rather
+    /// than its four scalar fields as separate parameters) so the retry
+    /// counter it carries reaches this function's own "HTTP GET (range)"
+    /// retry loop — see the comment in `download_chunk_with_retry` for why
+    /// that inner loop needed its own `.counting_into` (issue #672
+    /// follow-up): a plain 500/429 on a chunk GET is absorbed HERE, before
+    /// `download_chunk_with_retry`'s outer loop ever observes a failure to
+    /// retry, so without this the outer counter alone under-reports.
     pub(crate) async fn download_range_with_progress(
         &self,
-        url: &str,
-        start: u64,
-        end: u64,
-        chunk_path: &Path,
+        request: crate::http::parallel::ChunkRequestSpec<'_>,
         progress_counter: Option<Arc<std::sync::atomic::AtomicU64>>,
         cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<u64> {
+        let crate::http::parallel::ChunkRequestSpec {
+            url,
+            start,
+            end,
+            chunk_path,
+            chunk_id: _,
+            retries,
+        } = request;
+
         // Pre-cancel guard: bail before any network I/O if already cancelled.
         if let Some(token) = cancel
             && token.is_cancelled()
@@ -597,7 +620,8 @@ impl HttpDownloader {
         // invoking this directly and expecting a cancel to interrupt a backoff
         // would not get one.
         let response = with_retry(
-            RetryPolicy::new(&self.config.retry_config, &"HTTP GET (range)"),
+            RetryPolicy::new(&self.config.retry_config, &"HTTP GET (range)")
+                .counting_into(retries.as_ref()),
             || {
                 let client = client.clone();
                 let url = url.clone();
@@ -760,6 +784,7 @@ impl HttpDownloader {
         path: &Path,
         progress: Option<Box<dyn ProgressCallback>>,
         cancel: Option<&tokio_util::sync::CancellationToken>,
+        retries: &std::sync::atomic::AtomicU64,
     ) -> Result<DownloadStats> {
         let progress: Option<Arc<dyn ProgressCallback>> = progress.map(Arc::from);
         let start_time = Instant::now();
@@ -775,7 +800,7 @@ impl HttpDownloader {
         }
 
         let response = with_retry(
-            RetryPolicy::new(&self.config.retry_config, &"HTTP GET"),
+            RetryPolicy::new(&self.config.retry_config, &"HTTP GET").counting_into(retries),
             || {
                 let client = client.clone();
                 let url = url_string.clone();
@@ -873,7 +898,7 @@ impl HttpDownloader {
         })?;
 
         let duration = start_time.elapsed();
-        let stats = DownloadStats::new(downloaded, duration, 0);
+        let stats = DownloadStats::new(downloaded, duration, crate::retry::retries_taken(retries));
 
         if let Some(callback) = progress {
             callback.on_complete(&stats);

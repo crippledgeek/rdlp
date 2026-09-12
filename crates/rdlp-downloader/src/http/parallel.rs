@@ -9,7 +9,7 @@ use super::config::DownloaderConfig;
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, ChunkRequest, ControllerMode};
 use crate::chunking::{ChunkSizeStrategy, calculate_chunks};
 use crate::progress::{ProgressMetrics, ProgressReporterConfig, spawn_progress_reporter};
-use crate::retry::{LazyLabel, RetryPolicy, with_retry_cancellable};
+use crate::retry::{LazyLabel, RetryPolicy, Tallies, with_retry_cancellable};
 use futures::Stream;
 use futures::stream::{self, StreamExt, TryStreamExt};
 use log::{debug, error, info, warn};
@@ -84,25 +84,51 @@ pub async fn download_chunk_with_retry(
         end,
         chunk_path,
         chunk_id,
+        retries,
     } = request;
     let config = chunk_retry_policy(&downloader.config.retry_config);
     let label = LazyLabel(|f| write!(f, "Chunk {chunk_id}"));
 
-    let outcome = with_retry_cancellable(RetryPolicy::new(&config, &label), cancel, || async {
-        let attempt = downloader
-            .download_range_with_progress(url, start, end, chunk_path, progress.clone(), cancel)
-            .await;
-        if attempt.is_err() {
-            // Drop this attempt's partial before returning. backon sleeps
-            // *after* the error and only builds the next attempt afterwards,
-            // so cleaning up at the start of that attempt instead would leave
-            // the bytes on disk for the whole backoff. Not needed for the next
-            // attempt's correctness — `download_range_with_progress` opens
-            // with `File::create`, which truncates.
-            let _ = tokio::fs::remove_file(chunk_path).await;
-        }
-        attempt
-    })
+    // This outer loop's `counting_into` and the inner one inside
+    // `download_range_with_progress` share the SAME `retries` counter
+    // (issue #672 follow-up). Neither layer double-counts: each increment
+    // corresponds to one real retried HTTP request, regardless of which
+    // layer issued it. A chunk recovered by a single inner retry (a 500
+    // absorbed before the outer loop ever sees an `Err`) reports 1. An inner
+    // loop that exhausts its own `max_retries` on consecutive 5xx responses
+    // returns `Err` to the outer loop, which then retries the SAME failure
+    // kind — that is a distinct extra request too, and correctly adds
+    // another increment, not a duplicate of the inner ones already counted.
+    let outcome = with_retry_cancellable(
+        RetryPolicy::new(&config, &label).counting_into(retries.as_ref()),
+        cancel,
+        || async {
+            let attempt = downloader
+                .download_range_with_progress(
+                    ChunkRequestSpec {
+                        url,
+                        start,
+                        end,
+                        chunk_path,
+                        chunk_id,
+                        retries: Arc::clone(&retries),
+                    },
+                    progress.clone(),
+                    cancel,
+                )
+                .await;
+            if attempt.is_err() {
+                // Drop this attempt's partial before returning. backon sleeps
+                // *after* the error and only builds the next attempt afterwards,
+                // so cleaning up at the start of that attempt instead would leave
+                // the bytes on disk for the whole backoff. Not needed for the next
+                // attempt's correctness — `download_range_with_progress` opens
+                // with `File::create`, which truncates.
+                let _ = tokio::fs::remove_file(chunk_path).await;
+            }
+            attempt
+        },
+    )
     .await;
 
     if matches!(outcome, Err(RdlpError::Cancelled)) {
@@ -128,6 +154,11 @@ pub struct ChunkRequestSpec<'a> {
     pub chunk_path: &'a Path,
     /// Identifies the chunk in logs.
     pub chunk_id: u64,
+    /// Retries actually taken, shared across every chunk task in this
+    /// attempt so the finished `DownloadStats` reports every retry actually
+    /// taken (issue #672) — carried here rather than as a 5th positional
+    /// parameter on `download_chunk_with_retry`.
+    pub retries: Arc<AtomicU64>,
 }
 
 /// Mode for chunk merging operations
@@ -213,6 +244,7 @@ impl HttpDownloader {
         path: &Path,
         total_size: u64,
         progress: Option<Box<dyn rdlp_core::ProgressCallback>>,
+        retries: Arc<AtomicU64>,
     ) -> Result<DownloadStats> {
         let start_time = Instant::now();
         let download_id = DOWNLOAD_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -227,36 +259,31 @@ impl HttpDownloader {
                 }
             })?;
 
-        let downloaded = Arc::new(AtomicU64::new(0));
         let progress: Option<Arc<dyn rdlp_core::ProgressCallback>> = progress.map(Arc::from);
+        let tallies = Tallies {
+            bytes: Arc::new(AtomicU64::new(0)),
+            retries: Arc::clone(&retries),
+        };
         let _progress_guard = spawn_progress_reporter(
             progress.clone(),
-            ProgressMetrics::bytes_only(downloaded.clone()),
+            ProgressMetrics::bytes_only(Arc::clone(&tallies.bytes)),
             ProgressReporterConfig::http(start_time, total_size, 0),
         );
 
+        let span = TransferSpan {
+            url,
+            offset: attempt.byte_offset(),
+            len: total_size,
+        };
+        let layout = ChunkLayout {
+            chunk_set: &chunk_set,
+            temp_dir,
+        };
         let (chunk_paths, total_downloaded) = if self.config.adaptive {
-            self.download_parallel_adaptive(
-                url,
-                total_size,
-                &chunk_set,
-                temp_dir,
-                downloaded.clone(),
-                attempt.byte_offset(),
-                progress.clone(),
-                None,
-            )
-            .await?
+            self.download_parallel_adaptive(span, layout, progress.clone(), None, tallies)
+                .await?
         } else {
-            self.download_parallel_static(
-                url,
-                total_size,
-                &chunk_set,
-                temp_dir,
-                downloaded.clone(),
-                attempt.byte_offset(),
-            )
-            .await?
+            self.download_parallel_static(span, layout, tallies).await?
         };
 
         let chunk_count = chunk_paths.len();
@@ -268,7 +295,11 @@ impl HttpDownloader {
         verify_merged_size(path, total_size, url).await?;
 
         let duration = start_time.elapsed();
-        let stats = DownloadStats::new(total_downloaded, duration, 0);
+        let stats = DownloadStats::new(
+            total_downloaded,
+            duration,
+            crate::retry::retries_taken(&retries),
+        );
 
         info!(
             "Download complete: {} MB in {:.1}s ({:.1} MB/s)",
@@ -293,6 +324,7 @@ impl HttpDownloader {
         resume_from: u64,
         total_size: u64,
         progress: Option<Box<dyn rdlp_core::ProgressCallback>>,
+        retries: Arc<AtomicU64>,
     ) -> Result<DownloadStats> {
         let start_time = Instant::now();
         let remaining_size = total_size - resume_from;
@@ -308,11 +340,14 @@ impl HttpDownloader {
                 }
             })?;
 
-        let downloaded = Arc::new(AtomicU64::new(resume_from));
         let progress: Option<Arc<dyn rdlp_core::ProgressCallback>> = progress.map(Arc::from);
+        let tallies = Tallies {
+            bytes: Arc::new(AtomicU64::new(resume_from)),
+            retries: Arc::clone(&retries),
+        };
         let mut progress_guard = spawn_progress_reporter(
             progress.clone(),
-            ProgressMetrics::bytes_only(downloaded.clone()),
+            ProgressMetrics::bytes_only(Arc::clone(&tallies.bytes)),
             ProgressReporterConfig::http(start_time, total_size, resume_from),
         );
 
@@ -324,28 +359,20 @@ impl HttpDownloader {
             self.config.concurrent_fragments
         );
 
+        let span = TransferSpan {
+            url,
+            offset: attempt.byte_offset(),
+            len: remaining_size,
+        };
+        let layout = ChunkLayout {
+            chunk_set: &chunk_set,
+            temp_dir,
+        };
         let result = if self.config.adaptive {
-            self.download_parallel_adaptive(
-                url,
-                remaining_size,
-                &chunk_set,
-                temp_dir,
-                downloaded.clone(),
-                attempt.byte_offset(),
-                progress.clone(),
-                None,
-            )
-            .await
+            self.download_parallel_adaptive(span, layout, progress.clone(), None, tallies)
+                .await
         } else {
-            self.download_parallel_static(
-                url,
-                remaining_size,
-                &chunk_set,
-                temp_dir,
-                downloaded.clone(),
-                attempt.byte_offset(),
-            )
-            .await
+            self.download_parallel_static(span, layout, tallies).await
         };
 
         let (chunk_paths, newly_downloaded) = match result {
@@ -367,7 +394,11 @@ impl HttpDownloader {
 
         let duration = start_time.elapsed();
         let total_downloaded = resume_from + newly_downloaded;
-        let stats = DownloadStats::new(total_downloaded, duration, 0);
+        let stats = DownloadStats::new(
+            total_downloaded,
+            duration,
+            crate::retry::retries_taken(&retries),
+        );
 
         info!(
             "Resume complete: {} MB total, {} MB new in {:.1}s ({:.1} MB/s)",
@@ -400,25 +431,33 @@ impl HttpDownloader {
     /// Adaptive download: uses `AdaptiveController` for dynamic chunk sizing and concurrency.
     ///
     /// Returns `(chunk_paths_in_order, total_bytes_downloaded)`.
-    /// `byte_offset` is added to every chunk's start position (for resume).
+    /// `span.offset` is added to every chunk's start position (for resume).
     ///
-    /// `cancel` is `Option<CancellationToken>` (owned, not a reference) so it can be
-    /// cloned into the `try_unfold` closure. `CancellationToken` is cheaply cloneable.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "Each argument is a distinct piece of per-attempt state (url, size, chunk-name grammar, temp dir, progress sink, resume offset, log callback, cancel token) fed to the AIMD unfold closure; grouping them would either duplicate `Attempt` (already owns kind/offset) or bundle unrelated concerns just to hit a number."
-    )]
+    /// `cancel` is `Option<CancellationToken>` (owned, not a reference) so it
+    /// can be cloned into the `try_unfold` closure. `CancellationToken` is
+    /// cheaply cloneable. F6 (#308) infrastructure: no caller wires a live
+    /// token today (both call sites pass `None`) — the outer orchestrator's
+    /// own `select!` covers cancellation for the parallel path in the
+    /// meantime (see `trait_impl.rs::download_format`) — but the plumbing
+    /// here is deliberate, not dead (issue #673 tracks wiring a real token
+    /// through), and `parallel_adaptive_cancel_uses_biased_select` guards it.
     async fn download_parallel_adaptive(
         &self,
-        url: &str,
-        size_to_download: u64,
-        chunk_set: &ChunkSet,
-        temp_dir: &Path,
-        progress_counter: Arc<AtomicU64>,
-        byte_offset: u64,
+        span: TransferSpan<'_>,
+        layout: ChunkLayout<'_>,
         log_callback: Option<Arc<dyn ProgressCallback>>,
         cancel: Option<CancellationToken>,
+        tallies: Tallies,
     ) -> Result<(Vec<PathBuf>, u64)> {
+        let TransferSpan {
+            url,
+            offset: byte_offset,
+            len: size_to_download,
+        } = span;
+        let ChunkLayout {
+            chunk_set,
+            temp_dir,
+        } = layout;
         let controller = self.build_controller(size_to_download, log_callback);
         let sem = controller.semaphore().clone();
 
@@ -450,7 +489,7 @@ impl HttpDownloader {
         let buffered = {
             let downloader = self.clone();
             let url_arc = url_shared.clone();
-            let progress = progress_counter.clone();
+            let progress = Arc::clone(&tallies.bytes);
             let temp_dir_owned = temp_dir.to_path_buf();
             let chunk_set_owned = chunk_set.clone();
             // Clone once outside the closure; each iteration re-clones from this.
@@ -458,6 +497,7 @@ impl HttpDownloader {
             let stop_flag = stop_scheduling.clone();
             let controller_for_jobs = controller.clone();
             let ledger_for_unfold = ledger.clone();
+            let retries_for_unfold = Arc::clone(&tallies.retries);
 
             stream::try_unfold((controller.clone(), 0u64), move |(ctrl, chunk_id)| {
                 let sem = sem.clone();
@@ -473,6 +513,7 @@ impl HttpDownloader {
                 let cancel_for_unfold = cancel_outer.clone();
                 let stop_flag = stop_flag.clone();
                 let controller_for_job = controller_for_jobs.clone();
+                let retries = Arc::clone(&retries_for_unfold);
 
                 async move {
                     // A sibling chunk has already failed terminally: stop
@@ -504,6 +545,7 @@ impl HttpDownloader {
                         semaphore: sem,
                         controller: controller_for_job,
                         cancel: cancel_for_unfold,
+                        retries,
                     };
 
                     Ok(Some((run_adaptive_chunk(job), (ctrl_next, chunk_id + 1))))
@@ -529,13 +571,19 @@ impl HttpDownloader {
     /// Returns `(chunk_paths_in_order, total_bytes_downloaded)`.
     async fn download_parallel_static(
         &self,
-        url: &str,
-        size_to_download: u64,
-        chunk_set: &ChunkSet,
-        temp_dir: &Path,
-        progress_counter: Arc<AtomicU64>,
-        byte_offset: u64,
+        span: TransferSpan<'_>,
+        layout: ChunkLayout<'_>,
+        tallies: Tallies,
     ) -> Result<(Vec<PathBuf>, u64)> {
+        let TransferSpan {
+            url,
+            offset: byte_offset,
+            len: size_to_download,
+        } = span;
+        let ChunkLayout {
+            chunk_set,
+            temp_dir,
+        } = layout;
         let plan = StaticChunkPlan::new(size_to_download, byte_offset, self.config.chunk_strategy);
 
         debug!(
@@ -564,7 +612,8 @@ impl HttpDownloader {
                 ledger.register(chunk_path.clone());
                 let downloader = self.clone();
                 let url = Arc::clone(&url_shared);
-                let progress = Some(progress_counter.clone());
+                let progress = Some(Arc::clone(&tallies.bytes));
+                let retries = Arc::clone(&tallies.retries);
 
                 async move {
                     let result = download_chunk_with_retry(
@@ -575,6 +624,7 @@ impl HttpDownloader {
                             end,
                             chunk_path: &chunk_path,
                             chunk_id: chunk_id as u64,
+                            retries,
                         },
                         progress,
                         None,
@@ -602,6 +652,28 @@ impl HttpDownloader {
     }
 }
 
+/// The span of bytes being transferred in one download attempt: the
+/// resource URL, the byte offset every chunk's range is shifted by (0 for a
+/// fresh download, `resume_from` for a resume), and the length of THIS
+/// attempt's transfer (the full size for fresh, the remaining size for
+/// resume). The three travel together — every chunk-planning call in both
+/// `download_parallel_adaptive` and `download_parallel_static` needs all
+/// three to compute a single chunk's absolute range.
+struct TransferSpan<'a> {
+    url: &'a str,
+    offset: u64,
+    len: u64,
+}
+
+/// Where this attempt's chunk files live: the naming grammar plus the
+/// directory they're written into. The two travel together — every chunk
+/// path in both `download_parallel_adaptive` and `download_parallel_static`
+/// is `chunk_set.path_in(temp_dir, id)`, never one without the other.
+struct ChunkLayout<'a> {
+    chunk_set: &'a ChunkSet,
+    temp_dir: &'a Path,
+}
+
 /// Everything one adaptive-chunk worker future needs to run to completion,
 /// gathered into one named-field value so the `try_unfold` closure hands it
 /// to [`run_adaptive_chunk`] as a single argument instead of a long
@@ -617,6 +689,9 @@ struct AdaptiveChunkJob {
     semaphore: Arc<Semaphore>,
     controller: Arc<AdaptiveController>,
     cancel: Option<CancellationToken>,
+    /// Retries actually taken, shared across every chunk task in this
+    /// attempt (issue #672).
+    retries: Arc<AtomicU64>,
 }
 
 /// Run one adaptive chunk download: acquire a concurrency permit (racing
@@ -634,6 +709,7 @@ async fn run_adaptive_chunk(job: AdaptiveChunkJob) -> Result<(u64, PathBuf, u64)
         semaphore,
         controller,
         cancel,
+        retries,
     } = job;
 
     // F6 (#308): race semaphore acquisition against cancel so a pending
@@ -670,6 +746,7 @@ async fn run_adaptive_chunk(job: AdaptiveChunkJob) -> Result<(u64, PathBuf, u64)
             end: abs_end,
             chunk_path: &chunk_path,
             chunk_id,
+            retries,
         },
         Some(progress),
         cancel.as_ref(),

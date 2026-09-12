@@ -11,7 +11,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
@@ -30,8 +30,9 @@ use crate::dash::errors::DashError;
 use crate::dash::manifest;
 use crate::dash::segments::SegmentPlan;
 use crate::dash::state::DashDownloadState;
+use crate::fragments::fetch_with_optional_range;
 use crate::http::HttpDownloader;
-use crate::retry::{RetryPolicy, with_retry_cancellable};
+use crate::retry::{RetryPolicy, Tallies, retries_taken, with_retry_cancellable};
 
 /// Number of successful segment fetches between state-save flushes.
 const STATE_SAVE_BATCH: usize = 16;
@@ -96,11 +97,14 @@ pub async fn run(
     // this legacy path, so its origin is the seed against which all segment
     // URLs are compared. Cross-origin segments (CDN-redirected media) get
     // operator-set headers stripped. Same gate pattern as PR #273 for the
-    // modern per-Repr path; gate applied inside `download_one`.
+    // modern per-Repr path; gate applied inside `SegmentFetchCtx::fetch`.
     let mpd_origin = mpd_url_parsed.origin();
 
     let started = Instant::now();
-    let bytes_total = Arc::new(AtomicU64::new(0));
+    // Shared across both representations (issue #672): a segment retried, or
+    // a byte downloaded, on either the video or audio track is reflected in
+    // the final `DownloadStats` rather than discarded.
+    let tallies = Tallies::new();
 
     // Wrap the progress callback in Arc so it can be shared with the per-
     // representation adaptive controllers without cloning the Box.
@@ -147,23 +151,35 @@ pub async fn run(
             url: Some(rdlp_redact::RedactedUrlBuf::from(mpd_url)),
         });
     }
+    let segment_ctx = SegmentFetchCtx {
+        http: http_downloader.clone(),
+        retry: Arc::clone(&retry_config),
+        mpd_origin: mpd_origin.clone(),
+        cancel: cancel.cloned(),
+        tallies: tallies.clone(),
+    };
+
     let video_bytes = download_representation(
-        http_downloader,
-        &retry_config,
-        concurrent_segments,
-        buffer_size,
-        &video_repr_id,
-        video_init,
-        video_seg_urls,
-        &video_final,
-        &video_parts,
-        Arc::clone(&state_arc),
-        &state_file,
-        true,
-        Arc::clone(&bytes_total),
+        segment_ctx.clone(),
+        RepresentationTarget {
+            repr_id: video_repr_id.clone(),
+            is_video: true,
+            init_url: video_init,
+            seg_urls: video_seg_urls,
+        },
+        RepresentationPaths {
+            final_path: &video_final,
+            parts_dir: &video_parts,
+        },
+        TransferOptions {
+            concurrent: concurrent_segments,
+            buffer_size,
+        },
+        ResumeState {
+            shared: Arc::clone(&state_arc),
+            path: &state_file,
+        },
         progress_arc.clone(),
-        &mpd_origin,
-        cancel,
     )
     .await?;
 
@@ -182,22 +198,26 @@ pub async fn run(
             });
         }
         download_representation(
-            http_downloader,
-            &retry_config,
-            concurrent_segments,
-            buffer_size,
-            &audio_repr.id,
-            audio_init,
-            audio_seg_urls,
-            &audio_final,
-            &audio_parts,
-            Arc::clone(&state_arc),
-            &state_file,
-            false,
-            Arc::clone(&bytes_total),
+            segment_ctx,
+            RepresentationTarget {
+                repr_id: audio_repr.id.clone(),
+                is_video: false,
+                init_url: audio_init,
+                seg_urls: audio_seg_urls,
+            },
+            RepresentationPaths {
+                final_path: &audio_final,
+                parts_dir: &audio_parts,
+            },
+            TransferOptions {
+                concurrent: concurrent_segments,
+                buffer_size,
+            },
+            ResumeState {
+                shared: Arc::clone(&state_arc),
+                path: &state_file,
+            },
             progress_arc.clone(),
-            &mpd_origin,
-            cancel,
         )
         .await?
     } else {
@@ -238,7 +258,7 @@ pub async fn run(
         bytes_downloaded: bytes,
         duration: elapsed,
         average_speed: avg,
-        retries: 0,
+        retries: retries_taken(&tallies.retries),
         fragments: None,
     };
 
@@ -314,30 +334,83 @@ fn segment_filename(idx: usize) -> String {
     format!("{idx:04}.m4s")
 }
 
-#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-async fn download_representation(
-    http: &HttpDownloader,
-    retry: &Arc<RetryConfig>,
-    concurrent: usize,
-    buffer_size: usize,
-    repr_id: &str,
+/// What to fetch for one representation: its id, whether it is the video or
+/// audio track, and the init/segment URLs already resolved from the MPD.
+struct RepresentationTarget {
+    repr_id: String,
+    is_video: bool,
     init_url: Option<Url>,
     seg_urls: Vec<Url>,
-    final_path: &Path,
-    parts_dir: &Path,
-    state_arc: Arc<Mutex<DashDownloadState>>,
-    state_path: &Path,
-    is_video: bool,
-    bytes_counter: Arc<AtomicU64>,
+}
+
+/// Where one representation's output lands: the concatenated intermediate
+/// and its per-segment parts directory. The resume-state sidecar is a
+/// separate concept (paired with the in-memory state instead — see
+/// [`ResumeState`]), not a third thing that merely happens to be a path.
+struct RepresentationPaths<'a> {
+    final_path: &'a Path,
+    parts_dir: &'a Path,
+}
+
+/// Transfer tuning shared by every segment fetch in one representation.
+#[derive(Clone, Copy)]
+struct TransferOptions {
+    concurrent: usize,
+    buffer_size: usize,
+}
+
+/// A representation's resume state: the in-memory value every segment
+/// mutates as it completes, and the sidecar path it is persisted to. The
+/// two travel together — every save and every "was this already done"
+/// check needs both, so grouping by lifetime rather than concept (as the
+/// state alongside unrelated per-run handles previously did) was the wrong
+/// cut.
+struct ResumeState<'a> {
+    shared: Arc<Mutex<DashDownloadState>>,
+    path: &'a Path,
+}
+
+#[allow(clippy::too_many_lines)]
+async fn download_representation(
+    ctx: SegmentFetchCtx,
+    target: RepresentationTarget,
+    paths: RepresentationPaths<'_>,
+    transfer: TransferOptions,
+    resume: ResumeState<'_>,
     log_callback: Option<Arc<dyn ProgressCallback>>,
-    mpd_origin: &url::Origin,
-    cancel: Option<&CancellationToken>,
 ) -> Result<u64> {
+    let RepresentationTarget {
+        repr_id,
+        is_video,
+        init_url,
+        seg_urls,
+    } = target;
+    let RepresentationPaths {
+        final_path,
+        parts_dir,
+    } = paths;
+    let TransferOptions {
+        concurrent,
+        buffer_size,
+    } = transfer;
+    let ResumeState {
+        shared: state_arc,
+        path: state_path,
+    } = resume;
+    // Read through `ctx.tallies` (not a separate parameter) — `ctx` already
+    // carries the run's shared byte/retry tallies for `SegmentFetchCtx::fetch`,
+    // and this loop's own byte accounting must land in the SAME `bytes`
+    // counter, not a second clone of it.
+    let bytes_counter = Arc::clone(&ctx.tallies.bytes);
     // #347: cooperative-cancel gate before any work for this representation
     // (init segment + segment loop). Mirrors the fragment downloader idiom
     // (`download_pre_resolved_fragments`, its pre-loop check and its between-fragment-writes check) — a pre-cancelled token returns
     // `RdlpError::Cancelled` before any network round-trip.
-    if cancel.is_some_and(CancellationToken::is_cancelled) {
+    if ctx
+        .cancel
+        .as_ref()
+        .is_some_and(CancellationToken::is_cancelled)
+    {
         return Err(RdlpError::Cancelled);
     }
 
@@ -372,7 +445,7 @@ async fn download_representation(
             total += len;
             debug!("DASH repr {repr_id}: init resumed ({len} bytes)");
         } else {
-            let bytes = download_one(http, retry, &u, mpd_origin, cancel).await?;
+            let bytes = ctx.fetch(&u).await?;
             let len = bytes.len() as u64;
             fs::write(&init_part_path, &bytes).await?;
             bytes_counter.fetch_add(len, Ordering::Relaxed);
@@ -404,7 +477,7 @@ async fn download_representation(
         let mut s = state_arc.lock().await;
         for (i, u) in seg_urls.into_iter().enumerate() {
             let part_path = parts_dir.join(segment_filename(i));
-            let recorded_done = s.is_segment_done(repr_id, i as u64);
+            let recorded_done = s.is_segment_done(&repr_id, i as u64);
             let on_disk_len = fs::metadata(&part_path).await.map_or(0, |m| m.len());
             if recorded_done && on_disk_len > 0 {
                 bytes_counter.fetch_add(on_disk_len, Ordering::Relaxed);
@@ -412,7 +485,7 @@ async fn download_representation(
             } else {
                 // If state said done but file is missing or zero-length, drop
                 // the bookkeeping so we re-fetch.
-                if recorded_done && let Some(v) = s.completed_segments.get_mut(repr_id) {
+                if recorded_done && let Some(v) = s.completed_segments.get_mut(&repr_id) {
                     v.retain(|x| *x != i as u64);
                 }
                 to_fetch.push((i, u));
@@ -436,16 +509,11 @@ async fn download_representation(
     ));
     let sem = controller.semaphore().clone();
 
-    let mpd_origin_owned = mpd_origin.clone();
-    let cancel_owned = cancel.cloned();
     let mut stream = futures::stream::iter(to_fetch.into_iter().map(|(i, u)| {
-        let http = http.clone();
-        let retry = Arc::clone(retry);
+        let ctx = ctx.clone();
         let parts_dir = parts_dir.to_path_buf();
         let sem = sem.clone();
         let controller = Arc::clone(&controller);
-        let mpd_origin = mpd_origin_owned.clone();
-        let cancel = cancel_owned.clone();
         async move {
             // #347: per-segment cooperative-cancel check at the top of each
             // fetch task, mirroring the fragment downloader's per-iteration
@@ -454,9 +522,14 @@ async fn download_representation(
             // The check below short-circuits a segment whose task starts after
             // cancel; an in-flight segment body is ALSO interrupted mid-read by
             // the `biased` select! in `crate::retry::with_retry_cancellable`,
-            // which `download_one` and the fragment path both go through, so a
-            // stalled CDN body no longer blocks until `read_timeout` fires.
-            if cancel.as_ref().is_some_and(CancellationToken::is_cancelled) {
+            // which `SegmentFetchCtx::fetch` and the fragment path both go
+            // through, so a stalled CDN body no longer blocks until
+            // `read_timeout` fires.
+            if ctx
+                .cancel
+                .as_ref()
+                .is_some_and(CancellationToken::is_cancelled)
+            {
                 return Err(RdlpError::Cancelled);
             }
 
@@ -468,7 +541,7 @@ async fn download_representation(
             })?;
 
             let fetch_start = Instant::now();
-            let bytes = download_one(&http, &retry, &u, &mpd_origin, cancel.as_ref()).await?;
+            let bytes = ctx.fetch(&u).await?;
             let len = bytes.len() as u64;
             let elapsed = fetch_start.elapsed();
 
@@ -493,7 +566,7 @@ async fn download_representation(
                 bytes_counter.fetch_add(len, Ordering::Relaxed);
                 total += len;
                 let mut s = state_arc.lock().await;
-                s.record_segment(repr_id, i as u64);
+                s.record_segment(&repr_id, i as u64);
                 completed_since_save += 1;
                 if completed_since_save >= STATE_SAVE_BATCH {
                     crate::atomic::note_sidecar_save(
@@ -642,66 +715,72 @@ async fn mux_outputs(
     }
 }
 
-async fn download_one(
+/// Everything a DASH segment fetch needs that is fixed for the whole
+/// representation: the HTTP client, retry policy, the MPD origin behind the
+/// same-origin header gate, the cancellation token, and the shared
+/// byte/retry tallies (issue #672).
+///
+/// Mirrors `crate::fragments::FragmentFetchCtx` — same shape, same reason:
+/// each parallel segment task builds its own cheap clone, and the tallies
+/// are shared across every task (both representations, via `run`) so the
+/// finished `DownloadStats` reports every retry actually taken. Holds the
+/// whole `Tallies` pair (not just its `retries` half) because
+/// `download_representation`'s own segment loop reads the byte counter
+/// through `ctx.tallies.bytes` rather than taking a second, separate
+/// `Tallies` parameter of its own.
+#[derive(Clone)]
+struct SegmentFetchCtx {
+    http: HttpDownloader,
+    retry: Arc<RetryConfig>,
+    mpd_origin: url::Origin,
+    cancel: Option<CancellationToken>,
+    tallies: Tallies,
+}
+
+impl SegmentFetchCtx {
+    /// Fetch one DASH segment (init or media), retrying transient failures.
+    ///
+    /// Delegates to `fetch_with_optional_range` with `byte_range: None` —
+    /// the same send/status-gate/body-read mechanism the HLS/DASH fragment
+    /// path uses, so a DASH segment and an HLS fragment go through one fetch
+    /// implementation rather than two (this superseded a hand-rolled closure
+    /// that duplicated it).
+    async fn fetch(&self, url: &Url) -> Result<Vec<u8>> {
+        let url_str = url.to_string();
+        let policy = RetryPolicy::new(self.retry.as_ref(), &"DASH segment fetch")
+            .counting_into(self.tallies.retries.as_ref());
+        // Mid-read cancel is part of the shared runner: it races the whole
+        // retry loop, so an in-flight send()/bytes(), a stalled CDN body, or
+        // a backoff sleep all abort immediately rather than blocking until
+        // `read_timeout` fires.
+        with_retry_cancellable(policy, self.cancel.as_ref(), || async {
+            fetch_with_optional_range(&self.http, &url_str, None, Some(&self.mpd_origin)).await
+        })
+        .await
+    }
+}
+
+/// Test fixture only (not used in production code): builds a one-off
+/// [`SegmentFetchCtx`], so the cancel/origin-gate tests below can exercise
+/// the same mechanism `download_representation` uses without constructing a
+/// whole representation. Plain positional parameters are unambiguous here —
+/// the four types (`&HttpDownloader`, `&Arc<RetryConfig>`, `&url::Origin`,
+/// `Option<&CancellationToken>`) are all distinct, so there is no risk of
+/// silently swapping two same-typed arguments at a call site.
+#[cfg(test)]
+fn test_ctx(
     http: &HttpDownloader,
     retry: &Arc<RetryConfig>,
-    url: &Url,
     mpd_origin: &url::Origin,
     cancel: Option<&CancellationToken>,
-) -> Result<Vec<u8>> {
-    let client = http.client().clone();
-    let url_str = url.to_string();
-    // Same-origin header gate (#319): a segment on a different origin from the
-    // MPD (CDN-redirected media) gets no operator headers. Shared with the
-    // fragment path — one implementation of the credential gate, not two.
-    let headers = crate::http::same_origin_headers(Some(mpd_origin), &url_str, &http.headers());
-    // The fetch itself: send + status check + body read. The retry policy,
-    // the backoff, and the cancel race all live in `crate::retry` — this
-    // closure is only the work that varies between callers.
-    let fetch = || {
-        let client = client.clone();
-        let headers = headers.clone();
-        let url_str = url_str.clone();
-        async move {
-            let resp = crate::http::with_transfer_timeouts(
-                client.get(&url_str),
-                // Item 8 replaced a hardcoded 60s with this operator-tunable
-                // value, but wired it to wreq's *total* timeout while calling
-                // it an idle one. Both axes are now bounded, each by the timer
-                // that actually implements it.
-                http.config.read_timeout,
-            )
-            .headers(headers)
-            .send()
-            .await
-            .map_err(|e| RdlpError::Network {
-                message: format!("DASH segment fetch failed: {e}"),
-                url: Some(rdlp_redact::RedactedUrlBuf::from(url_str.as_str())),
-            })?;
-            if !resp.status().is_success() {
-                return Err(RdlpError::Http {
-                    status: resp.status().as_u16(),
-                    reason: format!("DASH segment HTTP {}", resp.status()),
-                });
-            }
-            let bytes = resp.bytes().await.map_err(|e| RdlpError::Network {
-                message: format!("DASH segment read error: {e}"),
-                url: Some(rdlp_redact::RedactedUrlBuf::from(url_str.as_str())),
-            })?;
-            Ok(bytes.to_vec())
-        }
-    };
-
-    // Mid-read cancel is part of the shared runner: it races the whole retry
-    // loop, so an in-flight `send()`/`bytes()`, a stalled CDN body, or a
-    // backoff sleep all abort immediately rather than blocking until
-    // `read_timeout` fires.
-    with_retry_cancellable(
-        RetryPolicy::new(retry, &"DASH segment fetch"),
-        cancel,
-        fetch,
-    )
-    .await
+) -> SegmentFetchCtx {
+    SegmentFetchCtx {
+        http: http.clone(),
+        retry: Arc::clone(retry),
+        mpd_origin: mpd_origin.clone(),
+        cancel: cancel.cloned(),
+        tallies: Tallies::new(),
+    }
 }
 
 /// 0-retry `RetryConfig` so failing tests fail immediately rather than
@@ -720,7 +799,6 @@ mod cancel_tests {
     //! the top of the segment loop). A pre-cancelled token must abort
     //! `download_representation` BEFORE any segment is fetched.
     use super::*;
-    use std::sync::atomic::AtomicU64;
     use tokio_util::sync::CancellationToken;
 
     /// Negative (regression guard for #347): a pre-cancelled token makes
@@ -747,28 +825,40 @@ mod cancel_tests {
         let final_path = tmp.join("out.video.m4s");
         let parts = tmp.join("out.video.parts");
         let state_file = tmp.join("out.dash_state.json");
-        let counter = Arc::new(AtomicU64::new(0));
+        let tallies = Tallies::new();
 
         let token = CancellationToken::new();
         token.cancel(); // pre-cancel
 
+        let ctx = SegmentFetchCtx {
+            http,
+            retry,
+            mpd_origin,
+            cancel: Some(token),
+            tallies: tallies.clone(),
+        };
+
         let res = download_representation(
-            &http,
-            &retry,
-            8,
-            64 * 1024,
-            "v0",
-            None, // no init segment
-            vec![seg_url],
-            &final_path,
-            &parts,
-            state,
-            &state_file,
-            true,
-            counter,
+            ctx,
+            RepresentationTarget {
+                repr_id: "v0".to_string(),
+                is_video: true,
+                init_url: None, // no init segment
+                seg_urls: vec![seg_url],
+            },
+            RepresentationPaths {
+                final_path: &final_path,
+                parts_dir: &parts,
+            },
+            TransferOptions {
+                concurrent: 8,
+                buffer_size: 64 * 1024,
+            },
+            ResumeState {
+                shared: state,
+                path: &state_file,
+            },
             None,
-            &mpd_origin,
-            Some(&token),
         )
         .await;
 
@@ -786,7 +876,7 @@ mod cancel_tests {
     const MID_READ_CANCEL_TIMEOUT_SECS: u64 = 5;
 
     /// Negative (mid-read interrupt, this PR): a cancel that fires while a
-    /// segment body is IN-FLIGHT must abort `download_one` immediately via the
+    /// segment body is IN-FLIGHT must abort `SegmentFetchCtx::fetch` immediately via the
     /// `biased` select! wrapper — NOT wait for the body to finish or for the
     /// `read_timeout` to fire. The mockito mock writes one chunk then sleeps
     /// 30s inside `with_chunked_body`, stalling the body read. We cancel the
@@ -795,11 +885,11 @@ mod cancel_tests {
     /// if the select! were absent, the read would block on the stalled chunk
     /// and the test-level timeout would elapse instead of `Cancelled`).
     #[tokio::test]
-    async fn download_one_cancel_interrupts_in_flight_read() {
+    async fn segment_fetch_cancel_interrupts_in_flight_read() {
         let mut server = mockito::Server::new_async().await;
         // Write the first byte, then stall for 30s before completing the body.
         // This holds the connection open mid-read so the `resp.bytes()` future
-        // inside `download_one` is parked when the cancel fires.
+        // inside `SegmentFetchCtx::fetch` is parked when the cancel fires.
         let _mock = server
             .mock("GET", "/seg.m4s")
             .with_chunked_body(|w| {
@@ -821,7 +911,9 @@ mod cancel_tests {
         let token_for_fetch = token.clone();
 
         let fetch = tokio::spawn(async move {
-            download_one(&http, &retry, &seg_url, &mpd_origin, Some(&token_for_fetch)).await
+            test_ctx(&http, &retry, &mpd_origin, Some(&token_for_fetch))
+                .fetch(&seg_url)
+                .await
         });
 
         // Let the request reach the server and park on the stalled body, then
@@ -835,7 +927,7 @@ mod cancel_tests {
         // is NOT interrupted.
         let res = tokio::time::timeout(Duration::from_secs(MID_READ_CANCEL_TIMEOUT_SECS), fetch)
             .await
-            .expect("download_one did not return within MID_READ_CANCEL_TIMEOUT_SECS s — in-flight read was not interrupted")
+            .expect("segment fetch did not return within MID_READ_CANCEL_TIMEOUT_SECS s — in-flight read was not interrupted")
             .expect("fetch task panicked");
 
         assert!(
@@ -864,7 +956,7 @@ mod same_origin_gate_tests {
     /// Companion to the negative tests below; prevents a defensive
     /// over-correction (e.g. always-strip) from going unnoticed.
     #[tokio::test]
-    async fn download_one_same_origin_forwards_headers() {
+    async fn segment_fetch_same_origin_forwards_headers() {
         let mut server = mockito::Server::new_async().await;
         let referer = "https://operator.example.com/page";
 
@@ -882,7 +974,8 @@ mod same_origin_gate_tests {
         let mpd_origin = url::Url::parse(&mpd_url).unwrap().origin();
         let seg_url = url::Url::parse(&format!("{}/seg.m4s", server.url())).unwrap();
 
-        let bytes = download_one(&http, &retry, &seg_url, &mpd_origin, None)
+        let bytes = test_ctx(&http, &retry, &mpd_origin, None)
+            .fetch(&seg_url)
             .await
             .expect("same-origin segment fetch must succeed");
         assert_eq!(&bytes[..], b"abcd");
@@ -892,7 +985,7 @@ mod same_origin_gate_tests {
     /// Two mockito servers = different ports = different origins per RFC 6454.
     /// Catch-all 501 on the cross-origin server fires if Referer leaks.
     #[tokio::test]
-    async fn download_one_cross_origin_strips_headers() {
+    async fn segment_fetch_cross_origin_strips_headers() {
         use mockito::Matcher;
 
         let mpd_server = mockito::Server::new_async().await;
@@ -921,7 +1014,8 @@ mod same_origin_gate_tests {
         let mpd_origin = url::Url::parse(&mpd_url).unwrap().origin();
         let seg_url = url::Url::parse(&format!("{}/seg.m4s", cdn_server.url())).unwrap();
 
-        let bytes = download_one(&http, &retry, &seg_url, &mpd_origin, None)
+        let bytes = test_ctx(&http, &retry, &mpd_origin, None)
+            .fetch(&seg_url)
             .await
             .expect("cross-origin segment fetch must succeed without leaking headers");
         assert_eq!(&bytes[..], b"abcd");
@@ -931,7 +1025,7 @@ mod same_origin_gate_tests {
     /// opaque-scheme URL) compares not-equal to every Tuple origin → fails
     /// closed (headers stripped). Verifies the type-level guarantee.
     #[tokio::test]
-    async fn download_one_opaque_mpd_origin_strips_headers() {
+    async fn segment_fetch_opaque_mpd_origin_strips_headers() {
         use mockito::Matcher;
 
         let mut server = mockito::Server::new_async().await;
@@ -962,7 +1056,8 @@ mod same_origin_gate_tests {
         );
         let seg_url = url::Url::parse(&format!("{}/seg.m4s", server.url())).unwrap();
 
-        let bytes = download_one(&http, &retry, &seg_url, &opaque_origin, None)
+        let bytes = test_ctx(&http, &retry, &opaque_origin, None)
+            .fetch(&seg_url)
             .await
             .expect("opaque mpd_origin must fail closed: headers stripped, fetch still succeeds");
         assert_eq!(&bytes[..], b"abcd");

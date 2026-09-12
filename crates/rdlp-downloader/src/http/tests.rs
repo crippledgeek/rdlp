@@ -321,6 +321,7 @@ async fn test_chunk_retry_succeeds_on_second_attempt() {
             end: 1023,
             chunk_path: &chunk_path,
             chunk_id: 0,
+            retries: Arc::new(AtomicU64::new(0)),
         },
         Some(progress),
         None,
@@ -368,6 +369,7 @@ async fn test_chunk_retry_exhausted_returns_error() {
             end: 1023,
             chunk_path: &chunk_path,
             chunk_id: 0,
+            retries: Arc::new(AtomicU64::new(0)),
         },
         Some(progress),
         None,
@@ -413,6 +415,7 @@ async fn test_chunk_retry_non_retryable_fails_immediately() {
             end: 1023,
             chunk_path: &chunk_path,
             chunk_id: 0,
+            retries: Arc::new(AtomicU64::new(0)),
         },
         Some(progress),
         None,
@@ -483,6 +486,7 @@ async fn test_chunk_retry_cleans_partial_file() {
             end: 511,
             chunk_path: &chunk_path,
             chunk_id: 0,
+            retries: Arc::new(AtomicU64::new(0)),
         },
         Some(progress),
         None,
@@ -676,7 +680,7 @@ async fn probe_206_returns_size_from_content_range() {
     let downloader = HttpDownloader::new();
     let url = format!("{}/file", server.url());
 
-    let result = downloader.probe(&url).await.unwrap();
+    let result = downloader.probe(&url, &AtomicU64::new(0)).await.unwrap();
 
     assert_eq!(result.size, Some(1048576));
     assert!(result.supports_ranges);
@@ -703,7 +707,7 @@ async fn probe_200_returns_content_length_no_ranges() {
     let downloader = HttpDownloader::new();
     let url = format!("{}/file", server.url());
 
-    let result = downloader.probe(&url).await.unwrap();
+    let result = downloader.probe(&url, &AtomicU64::new(0)).await.unwrap();
 
     assert_eq!(result.size, Some(524288));
     assert!(!result.supports_ranges);
@@ -726,7 +730,7 @@ async fn probe_416_returns_none_falls_to_sequential() {
     let downloader = HttpDownloader::new();
     let url = format!("{}/file", server.url());
 
-    let result = downloader.probe(&url).await.unwrap();
+    let result = downloader.probe(&url, &AtomicU64::new(0)).await.unwrap();
 
     assert_eq!(result.size, None);
     assert!(!result.supports_ranges);
@@ -751,7 +755,7 @@ async fn probe_206_malformed_content_range_keeps_supports_ranges_true() {
     let downloader = HttpDownloader::new();
     let url = format!("{}/file", server.url());
 
-    let result = downloader.probe(&url).await.unwrap();
+    let result = downloader.probe(&url, &AtomicU64::new(0)).await.unwrap();
 
     assert_eq!(result.size, None);
     assert!(result.supports_ranges);
@@ -826,7 +830,7 @@ async fn download_sequential_cancel_before_start_returns_cancelled() {
     token.cancel();
 
     let res = downloader
-        .download_sequential(&url, &out, None, Some(&token))
+        .download_sequential(&url, &out, None, Some(&token), &AtomicU64::new(0))
         .await;
 
     assert!(matches!(res, Err(RdlpError::Cancelled)));
@@ -878,7 +882,7 @@ async fn download_sequential_cancel_mid_stream_returns_cancelled() {
     });
 
     let res = downloader
-        .download_sequential(&url, &out, None, Some(&token))
+        .download_sequential(&url, &out, None, Some(&token), &AtomicU64::new(0))
         .await;
 
     assert!(
@@ -904,7 +908,7 @@ async fn download_sequential_cancel_none_passes_existing_behavior() {
     let url = format!("{}/file", server.url());
 
     let stats = downloader
-        .download_sequential(&url, &out, None, None)
+        .download_sequential(&url, &out, None, None, &AtomicU64::new(0))
         .await
         .unwrap();
 
@@ -1371,6 +1375,25 @@ fn validation_test_downloader() -> HttpDownloader {
     ))
 }
 
+/// A one-off [`ChunkRequestSpec`] for the range-validation tests below,
+/// which care about `url`/`start`/`end`/`chunk_path` only — `chunk_id` is an
+/// arbitrary log label and `retries` a fresh, unread counter.
+fn range_request<'a>(
+    url: &'a str,
+    start: u64,
+    end: u64,
+    chunk_path: &'a Path,
+) -> ChunkRequestSpec<'a> {
+    ChunkRequestSpec {
+        url,
+        start,
+        end,
+        chunk_path,
+        chunk_id: 0,
+        retries: Arc::new(AtomicU64::new(0)),
+    }
+}
+
 /// RFC 9110 §14.2 lets a server ignore `Range` and return the whole body with
 /// 200. Writing that into a chunk's offset slot is the corruption in #526,
 /// so it must be refused rather than accepted as a valid chunk.
@@ -1394,7 +1417,7 @@ async fn range_fetch_rejects_200_full_body() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(&url, 0, 1023, &chunk_path, None, None)
+        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None, None)
         .await;
 
     assert!(
@@ -1424,7 +1447,7 @@ async fn range_fetch_rejects_206_without_content_range() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(&url, 0, 1023, &chunk_path, None, None)
+        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None, None)
         .await;
 
     assert!(
@@ -1457,7 +1480,7 @@ async fn range_fetch_rejects_mismatched_content_range() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(&url, 0, 1023, &chunk_path, None, None)
+        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None, None)
         .await;
 
     assert!(
@@ -1499,7 +1522,7 @@ async fn range_fetch_rejects_short_body() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(&url, 0, 1023, &chunk_path, None, None)
+        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None, None)
         .await;
 
     assert!(
@@ -1534,7 +1557,7 @@ async fn range_fetch_rejects_overlong_body() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(&url, 0, 1023, &chunk_path, None, None)
+        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None, None)
         .await;
 
     assert!(
@@ -1576,7 +1599,7 @@ async fn range_fetch_accepts_conformant_206() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(&url, 4096, 5119, &chunk_path, None, None)
+        .download_range_with_progress(range_request(&url, 4096, 5119, &chunk_path), None, None)
         .await;
 
     assert_eq!(
@@ -1716,6 +1739,7 @@ async fn chunk_retry_recovers_from_wrong_span_response() {
             end: 1023,
             chunk_path: &chunk_path,
             chunk_id: 0,
+            retries: Arc::new(AtomicU64::new(0)),
         },
         Some(Arc::new(AtomicU64::new(0))),
         None,
@@ -1784,6 +1808,7 @@ async fn chunk_retry_recovers_from_short_body() {
             end: 1023,
             chunk_path: &chunk_path,
             chunk_id: 0,
+            retries: Arc::new(AtomicU64::new(0)),
         },
         Some(Arc::new(AtomicU64::new(0))),
         None,
@@ -1841,6 +1866,7 @@ async fn chunk_retry_does_not_retry_range_ignoring_server() {
             end: 1023,
             chunk_path: &chunk_path,
             chunk_id: 0,
+            retries: Arc::new(AtomicU64::new(0)),
         },
         Some(Arc::new(AtomicU64::new(0))),
         None,
@@ -1883,7 +1909,7 @@ async fn range_fetch_rejects_body_one_byte_short() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(&url, 0, 1023, &chunk_path, None, None)
+        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None, None)
         .await;
 
     assert!(
@@ -1913,7 +1939,7 @@ async fn range_fetch_rejects_body_one_byte_over() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(&url, 0, 1023, &chunk_path, None, None)
+        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None, None)
         .await;
 
     assert!(
@@ -2416,4 +2442,527 @@ fn a_same_origin_target_with_a_different_path_or_query_still_matches() {
         &seed_headers(),
     );
     assert_eq!(out.len(), 2);
+}
+
+// ---------------------------------------------------------------------------
+// #672 follow-up — every `DownloadStats` producer on a retrying path must
+// report retries actually taken, not a hardcoded 0. Each test below drives
+// one producer that used to hardcode the value.
+// ---------------------------------------------------------------------------
+
+/// `download_sequential`, reached via `download_to_file`'s probe-then-
+/// sequential dispatch (`mod.rs`). The probe succeeds first try; the
+/// sequential GET is retried once.
+#[tokio::test]
+async fn download_to_file_sequential_get_retry_is_reported_in_stats() {
+    use mockito::Matcher;
+
+    let mut server = mockito::Server::new_async().await;
+    let body = vec![0xAA; 524288];
+
+    let _probe = server
+        .mock("GET", "/file")
+        .match_header("range", "bytes=0-262143")
+        .with_status(206)
+        .with_header("content-range", "bytes 0-262143/524288")
+        .with_body(vec![0u8; 262144])
+        .expect(1)
+        .create_async()
+        .await;
+
+    let fail = server
+        .mock("GET", "/file")
+        .match_header("range", Matcher::Missing)
+        .with_status(500)
+        .expect(1)
+        .create_async()
+        .await;
+    let ok = server
+        .mock("GET", "/file")
+        .match_header("range", Matcher::Missing)
+        .with_status(200)
+        .with_body(body.clone())
+        .expect(1)
+        .create_async()
+        .await;
+
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.bin");
+    let downloader = HttpDownloader::new().with_retry_config(crate::retry::test_retry_config(3));
+    let url = format!("{}/file", server.url());
+
+    let stats = downloader
+        .download_to_file(&url, &out, None)
+        .await
+        .expect("a transient 500 on the sequential GET must be retried, not fail the download");
+
+    assert_eq!(stats.bytes_downloaded, 524288);
+    assert_eq!(
+        stats.retries, 1,
+        "the sequential GET's retry must be reflected in DownloadStats.retries"
+    );
+    fail.assert_async().await;
+    ok.assert_async().await;
+}
+
+/// `download_to_writer_with_cancel` (`trait_impl.rs`), the stdout-streaming
+/// path: its own "HTTP GET (stdout)" retry loop is the only source of
+/// retries here.
+#[tokio::test]
+async fn download_to_writer_get_retry_is_reported_in_stats() {
+    use mockito::Server;
+    use tokio::io::AsyncWrite;
+
+    let mut server = Server::new_async().await;
+    let body = b"hello stdout stream";
+
+    let fail = server
+        .mock("GET", "/pipe.mp4")
+        .with_status(500)
+        .expect(1)
+        .create_async()
+        .await;
+    let ok = server
+        .mock("GET", "/pipe.mp4")
+        .with_status(200)
+        .with_body(body.as_slice())
+        .expect(1)
+        .create_async()
+        .await;
+
+    let downloader = HttpDownloader::new().with_retry_config(crate::retry::test_retry_config(3));
+
+    let (client_stream, mut server_stream) = tokio::io::duplex(64 * 1024);
+    let reader_handle = tokio::spawn(async move {
+        let mut collected = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut server_stream, &mut collected)
+            .await
+            .unwrap();
+        collected
+    });
+
+    let writer: Box<dyn AsyncWrite + Unpin + Send> = Box::new(client_stream);
+    let stats = downloader
+        .download_to_writer(&format!("{}/pipe.mp4", server.url()), writer, None)
+        .await
+        .expect("a transient 500 must be retried, not fail the download");
+
+    assert_eq!(
+        stats.retries, 1,
+        "one retried GET must be reflected in DownloadStats.retries"
+    );
+
+    let received = reader_handle.await.unwrap();
+    assert_eq!(received, body.as_slice());
+    fail.assert_async().await;
+    ok.assert_async().await;
+}
+
+/// A loopback GET carrying wreq's default Chrome-emulation headers runs
+/// ~800-950 bytes; 4096 comfortably fits one `read` without leaving unread
+/// request bytes behind (which would surface as an RST instead of a clean
+/// FIN on the "drop" leg below and could flip a success leg into
+/// `ECONNRESET`). Matches the pre-existing stall-forever fixtures at
+/// `:849`/`:1149`.
+const REQUEST_BUF: usize = 4096;
+
+/// A raw, scripted `TcpListener` server for tests that need a genuine
+/// transport-level failure rather than an HTTP status code (a plain 500
+/// doesn't exercise every retry loop in this module — see
+/// `download_with_resume_sequential_get_retry_is_reported_in_stats` below).
+///
+/// `script` is played back one accepted connection at a time: `None` reads
+/// and drops the connection (the client sees a transport-level error),
+/// `Some(response)` reads then writes `response` verbatim as the raw HTTP
+/// reply. Returns the port the server is listening on.
+fn scripted_server(script: Vec<Option<Vec<u8>>>) -> u16 {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+
+    std::thread::spawn(move || {
+        for step in script {
+            let Ok((mut stream, _)) = listener.accept() else {
+                break;
+            };
+            let mut buf = [0u8; REQUEST_BUF];
+            let _ = stream.read(&mut buf);
+            if let Some(response) = step {
+                let _ = stream.write_all(&response);
+                let _ = stream.flush();
+            }
+        }
+    });
+
+    port
+}
+
+/// `download_with_resume_with_cancel`'s own initial "HTTP GET (resume)"
+/// retry loop, on the sequential (below-threshold) branch.
+///
+/// This loop treats ANY non-206 status as a hard "server doesn't support
+/// resume" failure (not gated through `is_retryable_error`), so a plain 5xx
+/// does not exercise it — only a genuine transport-level failure does.
+/// `scripted_server` drops the first connection before writing a response
+/// (mapped to `RdlpError::Network`, which IS retryable), then answers the
+/// second connection with a conformant 206.
+#[tokio::test]
+async fn download_with_resume_sequential_get_retry_is_reported_in_stats() {
+    use tempfile::NamedTempFile;
+
+    let body = vec![0x77u8; 500];
+    let mut response = format!(
+        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 1000-1499/1500\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    response.extend_from_slice(&body);
+
+    let port = scripted_server(vec![None, Some(response)]);
+
+    let downloader = HttpDownloader::new().with_retry_config(crate::retry::test_retry_config(3));
+
+    let temp_file = NamedTempFile::new().unwrap();
+    let path = temp_file.path();
+    tokio::fs::write(path, vec![0x11u8; 1000]).await.unwrap();
+    let url = format!("http://127.0.0.1:{port}/video.mp4");
+
+    let stats = downloader
+        .download_with_resume(&url, path, 1000, None, None)
+        .await
+        .expect("a transient connection error on the resume GET must be retried");
+
+    assert_eq!(
+        stats.retries, 1,
+        "one retried resume GET must be reflected in DownloadStats.retries"
+    );
+}
+
+/// `download_parallel` (`parallel.rs`, static/non-adaptive branch): a chunk
+/// fetch is retried by the OUTER `download_chunk_with_retry` loop. A
+/// wrong-span response is what drives that outer loop rather than the inner
+/// per-request retry inside `download_range_with_progress` (see
+/// `chunk_test_downloader`'s docstring above).
+#[tokio::test]
+async fn download_parallel_static_chunk_retry_is_reported_in_stats() {
+    use crate::chunking::ChunkSizeStrategy;
+    use mockito::Server;
+
+    let mut server = Server::new_async().await;
+
+    let _probe = server
+        .mock("GET", "/file.bin")
+        .match_header("range", "bytes=0-262143")
+        .with_status(206)
+        .with_header("content-range", "bytes 0-262143/2048")
+        .with_body(vec![0u8; 2048])
+        .expect(1)
+        .create_async()
+        .await;
+
+    // Wrong SPAN (mismatched start/end, not just a mismatched total) is what
+    // `validate_range_response` rejects — a mismatched total alone is not
+    // checked and would be silently accepted on the first try.
+    let mock_wrong_span = server
+        .mock("GET", "/file.bin")
+        .match_header("range", mockito::Matcher::Any)
+        .with_status(206)
+        .with_header("content-range", "bytes 1000-3047/5000")
+        .with_body(vec![0x99u8; 2048])
+        .expect(1)
+        .create_async()
+        .await;
+    let mock_ok = server
+        .mock("GET", "/file.bin")
+        .match_header("range", mockito::Matcher::Any)
+        .with_status(206)
+        .with_header("content-range", "bytes 0-2047/2048")
+        .with_body(vec![0x11u8; 2048])
+        .expect(1)
+        .create_async()
+        .await;
+
+    let downloader = HttpDownloader::new()
+        .with_parallel_threshold(512)
+        .with_concurrent_fragments(2)
+        .with_adaptive(false)
+        .with_chunk_strategy(ChunkSizeStrategy::Fixed(4096))
+        .with_retry_config(crate::retry::test_retry_config(3));
+
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let stats = downloader
+        .download_to_file(&format!("{}/file.bin", server.url()), tmp.path(), None)
+        .await
+        .expect("a recoverable wrong-span chunk must be retried, not fail the download");
+
+    assert_eq!(
+        stats.retries, 1,
+        "the retried chunk fetch must be reflected in DownloadStats.retries"
+    );
+    mock_wrong_span.assert_async().await;
+    mock_ok.assert_async().await;
+}
+
+/// Issue #672's literal symptom: a plain 500 on a chunk GET. This is caught
+/// by the INNER "HTTP GET (range)" retry loop inside
+/// `download_range_with_progress` BEFORE the OUTER `download_chunk_with_retry`
+/// loop ever observes a failure to retry — so one 500 is counted exactly
+/// ONCE (by the inner layer), not twice. Pinning the exact count (rather
+/// than `>=1`) is what would catch a future regression that counts both
+/// layers for the same recovered request (see the comment in
+/// `download_chunk_with_retry` for why they must not).
+#[tokio::test]
+async fn download_parallel_static_chunk_500_retry_is_reported_in_stats() {
+    use crate::chunking::ChunkSizeStrategy;
+    use mockito::Server;
+
+    let mut server = Server::new_async().await;
+
+    let _probe = server
+        .mock("GET", "/file.bin")
+        .match_header("range", "bytes=0-262143")
+        .with_status(206)
+        .with_header("content-range", "bytes 0-262143/2048")
+        .with_body(vec![0u8; 2048])
+        .expect(1)
+        .create_async()
+        .await;
+
+    let fail = server
+        .mock("GET", "/file.bin")
+        .match_header("range", mockito::Matcher::Any)
+        .with_status(500)
+        .expect(1)
+        .create_async()
+        .await;
+    let ok = server
+        .mock("GET", "/file.bin")
+        .match_header("range", mockito::Matcher::Any)
+        .with_status(206)
+        .with_header("content-range", "bytes 0-2047/2048")
+        .with_body(vec![0x11u8; 2048])
+        .expect(1)
+        .create_async()
+        .await;
+
+    let downloader = HttpDownloader::new()
+        .with_parallel_threshold(512)
+        .with_concurrent_fragments(2)
+        .with_adaptive(false)
+        .with_chunk_strategy(ChunkSizeStrategy::Fixed(4096))
+        .with_retry_config(crate::retry::test_retry_config(3));
+
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let stats = downloader
+        .download_to_file(&format!("{}/file.bin", server.url()), tmp.path(), None)
+        .await
+        .expect("a transient 500 on the chunk GET must be retried, not fail the download");
+
+    assert_eq!(
+        stats.retries, 1,
+        "one retried chunk fetch must be reflected as exactly one retry in DownloadStats.retries"
+    );
+    fail.assert_async().await;
+    ok.assert_async().await;
+}
+
+/// `download_parallel_resume` (`parallel.rs`, static/non-adaptive branch):
+/// same wrong-span retry shape as the fresh-download test above, driven
+/// through `download_with_resume`'s parallel-resume delegation.
+#[tokio::test]
+async fn download_parallel_resume_chunk_retry_is_reported_in_stats() {
+    use crate::chunking::ChunkSizeStrategy;
+    use mockito::Server;
+
+    let mut server = Server::new_async().await;
+    let output_dir = tempfile::tempdir().unwrap();
+    let output = output_dir.path().join("out.bin");
+    tokio::fs::write(&output, vec![0xAA; 100]).await.unwrap();
+
+    let _initial = server
+        .mock("GET", "/file.bin")
+        .match_header("Range", "bytes=100-")
+        .with_status(206)
+        .with_header("content-range", "bytes 100-2147/2148")
+        .with_header("accept-ranges", "bytes")
+        .with_body(vec![0u8; 2048])
+        .expect(1)
+        .create_async()
+        .await;
+
+    // Wrong SPAN (mismatched start/end), same rationale as the fresh-download
+    // test above.
+    let mock_wrong_span = server
+        .mock("GET", "/file.bin")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(206)
+        .with_header("content-range", "bytes 1000-3047/5000")
+        .with_body(vec![0x99u8; 2048])
+        .expect(1)
+        .create_async()
+        .await;
+    let mock_ok = server
+        .mock("GET", "/file.bin")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(206)
+        .with_header("content-range", "bytes 100-2147/2148")
+        .with_body(vec![0x11u8; 2048])
+        .expect(1)
+        .create_async()
+        .await;
+
+    let downloader = HttpDownloader::new()
+        .with_parallel_threshold(512)
+        .with_concurrent_fragments(2)
+        .with_adaptive(false)
+        .with_chunk_strategy(ChunkSizeStrategy::Fixed(4096))
+        .with_retry_config(crate::retry::test_retry_config(3));
+
+    let stats = downloader
+        .download_with_resume(
+            &format!("{}/file.bin", server.url()),
+            &output,
+            100,
+            None,
+            None,
+        )
+        .await
+        .expect("a recoverable wrong-span chunk must be retried, not fail the resume");
+
+    assert_eq!(
+        stats.retries, 1,
+        "the retried chunk fetch must be reflected in DownloadStats.retries"
+    );
+    mock_wrong_span.assert_async().await;
+    mock_ok.assert_async().await;
+}
+
+/// Issue #672's literal symptom on the resume/parallel path: same rationale
+/// as `download_parallel_static_chunk_500_retry_is_reported_in_stats` above
+/// — a plain 500 is absorbed by the inner per-request retry and counted
+/// exactly once; pinning the exact count catches a future double-count.
+#[tokio::test]
+async fn download_parallel_resume_chunk_500_retry_is_reported_in_stats() {
+    use crate::chunking::ChunkSizeStrategy;
+    use mockito::Server;
+
+    let mut server = Server::new_async().await;
+    let output_dir = tempfile::tempdir().unwrap();
+    let output = output_dir.path().join("out.bin");
+    tokio::fs::write(&output, vec![0xAA; 100]).await.unwrap();
+
+    let _initial = server
+        .mock("GET", "/file.bin")
+        .match_header("Range", "bytes=100-")
+        .with_status(206)
+        .with_header("content-range", "bytes 100-2147/2148")
+        .with_header("accept-ranges", "bytes")
+        .with_body(vec![0u8; 2048])
+        .expect(1)
+        .create_async()
+        .await;
+
+    let fail = server
+        .mock("GET", "/file.bin")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(500)
+        .expect(1)
+        .create_async()
+        .await;
+    let ok = server
+        .mock("GET", "/file.bin")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(206)
+        .with_header("content-range", "bytes 100-2147/2148")
+        .with_body(vec![0x11u8; 2048])
+        .expect(1)
+        .create_async()
+        .await;
+
+    let downloader = HttpDownloader::new()
+        .with_parallel_threshold(512)
+        .with_concurrent_fragments(2)
+        .with_adaptive(false)
+        .with_chunk_strategy(ChunkSizeStrategy::Fixed(4096))
+        .with_retry_config(crate::retry::test_retry_config(3));
+
+    let stats = downloader
+        .download_with_resume(
+            &format!("{}/file.bin", server.url()),
+            &output,
+            100,
+            None,
+            None,
+        )
+        .await
+        .expect("a transient 500 on the chunk GET must be retried, not fail the resume");
+
+    assert_eq!(
+        stats.retries, 1,
+        "one retried chunk fetch must be reflected as exactly one retry in DownloadStats.retries"
+    );
+    fail.assert_async().await;
+    ok.assert_async().await;
+}
+
+/// Issue #672 (item 5): `download_to_file`'s probe and its download-proper
+/// retry loop are separate `with_retry` calls sharing ONE counter (see the
+/// comment in `download_format`); a retry on EACH must be summed into the
+/// same `DownloadStats.retries`, not just whichever one happens last.
+#[tokio::test]
+async fn download_to_file_sums_probe_and_download_retries() {
+    // `probe()`'s underlying `rdlp_http::probe_size` folds every HTTP status
+    // (including 5xx) into `Ok(ProbeResult { size: None, .. })` — only a
+    // genuine transport failure on `send()` produces the `Err` its
+    // `with_retry` can act on (verified: a plain mockito 500 here does NOT
+    // retry, since it is a successful response as far as `probe_size` is
+    // concerned; see #735). So proving the probe's OWN retry sums with the
+    // download's needs a real connection failure, not a status code —
+    // `scripted_server` drops the first connection on each leg.
+    let body = vec![0xAAu8; 1024];
+
+    let probe_body = vec![0u8; 4];
+    let mut probe_response = format!(
+        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 0-3/{}\r\nContent-Length: 4\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    probe_response.extend_from_slice(&probe_body);
+
+    let mut download_response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    download_response.extend_from_slice(&body);
+
+    // 1) Probe attempt #1: dropped. 2) Probe attempt #2: succeeds — total
+    // (1024) stays well below the default parallel threshold, so the
+    // download dispatches sequentially rather than in parallel. 3) Sequential
+    // download attempt #1: dropped. 4) Sequential download attempt #2:
+    // succeeds with the full body. The listener is dropped after this 4th
+    // accept, so a passing run implies EXACTLY two retries.
+    let port = scripted_server(vec![
+        None,
+        Some(probe_response),
+        None,
+        Some(download_response),
+    ]);
+
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.bin");
+    let downloader = HttpDownloader::new().with_retry_config(crate::retry::test_retry_config(3));
+    let url = format!("http://127.0.0.1:{port}/file");
+
+    let stats = downloader
+        .download_to_file(&url, &out, None)
+        .await
+        .expect("transient connection errors on both the probe and the download must be retried");
+
+    assert_eq!(
+        stats.retries, 2,
+        "the probe's retry AND the download's retry must both be reflected in DownloadStats.retries"
+    );
 }
