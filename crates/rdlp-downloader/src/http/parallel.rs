@@ -204,13 +204,15 @@ static DOWNLOAD_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// Everything one download attempt needs that stays fixed for its whole
 /// duration: where its chunks are fetched from and land (`url`,
-/// `chunk_set`, `temp_dir`), which attempt this is (`attempt`,
-/// `download_id`) and how many bytes it covers (`size_to_download` — used
-/// BOTH for the chunking plan and, via [`build_manifest_tracker`], for the
-/// manifest's recorded total, so it is carried exactly once rather than
-/// twice as an earlier version of this type did), and the two adaptive-only
-/// knobs (`log_callback`, `cancel`) that static ignores. One struct rather
-/// than two (attempt identity vs. call options) because every field here is
+/// `chunk_set`, `temp_dir`), which attempt this is (`attempt` — `chunk_set`
+/// already carries its own `download_id`, recovered via
+/// `ChunkSet::download_id()` rather than threaded a second time here) and
+/// how many bytes it covers (`size_to_download` — used BOTH for the
+/// chunking plan and, via [`build_manifest_tracker`], for the manifest's
+/// recorded total, so it is carried exactly once rather than twice as an
+/// earlier version of this type did), and the two adaptive-only knobs
+/// (`log_callback`, `cancel`) that static ignores. One struct rather than
+/// two (attempt identity vs. call options) because every field here is
 /// decided once, before the first chunk is dispatched, and never changes
 /// for the rest of the attempt — unlike [`ChunkTracking`], whose fields are
 /// mutated as chunks complete.
@@ -219,7 +221,6 @@ struct AttemptContext<'a> {
     chunk_set: &'a ChunkSet,
     temp_dir: &'a Path,
     attempt: Attempt,
-    download_id: u64,
     size_to_download: u64,
     log_callback: Option<Arc<dyn ProgressCallback>>,
     cancel: Option<CancellationToken>,
@@ -231,12 +232,16 @@ struct AttemptContext<'a> {
 /// re-deriving the manifest path from `chunk_set` and re-stating
 /// `ChunkManifest::new`'s arguments.
 fn build_manifest_tracker(ctx: &AttemptContext<'_>) -> ChunkManifestTracker {
-    let manifest = ChunkManifest::new(
-        ctx.download_id,
-        ctx.attempt.chunk_kind(),
-        ctx.attempt.byte_offset(),
-        ctx.size_to_download,
-    );
+    // `AttemptContext` is only ever built from a new-style (Fresh/Resume)
+    // chunk set (both `download_parallel` and `download_parallel_resume`
+    // build `chunk_set` via `ChunkSet::for_attempt`, never `::legacy`), so
+    // `download_id()` returning `None` here is a broken invariant, not a
+    // reachable runtime condition — `unreachable!` says that plainly,
+    // without routing a documented-impossible case through `Option::expect`.
+    let Some(download_id) = ctx.chunk_set.download_id() else {
+        unreachable!("AttemptContext's chunk_set must always be new-style (have a download_id)");
+    };
+    let manifest = ChunkManifest::new(download_id, ctx.attempt.chunk_kind(), ctx.size_to_download);
     ChunkManifestTracker::new(manifest, ctx.chunk_set.manifest_path_in(ctx.temp_dir))
 }
 
@@ -310,7 +315,6 @@ impl HttpDownloader {
             chunk_set: &chunk_set,
             temp_dir,
             attempt,
-            download_id,
             size_to_download: total_size,
             log_callback: progress.clone(),
             cancel: None,
@@ -398,7 +402,6 @@ impl HttpDownloader {
             chunk_set: &chunk_set,
             temp_dir,
             attempt,
-            download_id,
             size_to_download: remaining_size,
             log_callback: progress.clone(),
             cancel: None,
@@ -1199,7 +1202,6 @@ mod tests {
             chunk_set: &chunk_set,
             temp_dir: temp_dir.path(),
             attempt: Attempt::Fresh,
-            download_id,
             size_to_download: total_size,
             log_callback: None,
             cancel: None,
@@ -1250,7 +1252,6 @@ mod tests {
             chunk_set: &chunk_set,
             temp_dir: temp_dir.path(),
             attempt: Attempt::Fresh,
-            download_id,
             size_to_download: total_size,
             log_callback: None,
             cancel: None,

@@ -298,7 +298,7 @@ pub mod progress;
 pub(crate) mod retry;
 
 pub use atomic::intact_len;
-pub use chunking::{ChunkSizeStrategy, calculate_chunks, chunk_size_for_file};
+pub use chunking::{CHUNK_SCAN_CEILING, ChunkSizeStrategy, calculate_chunks, chunk_size_for_file};
 pub use dash::DashDownloader;
 pub use hls::HlsDownloader;
 pub use http::HttpDownloader;

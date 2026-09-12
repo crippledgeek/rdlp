@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use log::warn;
+use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -44,11 +44,6 @@ pub struct ChunkManifest {
     pub download_id: u64,
     /// Fresh vs. Resume — matched the same way as `download_id`.
     pub kind: ChunkKind,
-    /// Byte offset every chunk id's range was relative to (0 for a fresh
-    /// download; the resume point for a resumed one). Carried for parity
-    /// with `DashDownloadState`; not itself load-bearing for #675's
-    /// length-verification gate.
-    pub byte_offset: u64,
     /// The plan's total size for this attempt, in bytes.
     pub total_size: u64,
     /// `chunk_id -> exact byte length written`, recorded only once that
@@ -58,13 +53,18 @@ pub struct ChunkManifest {
 
 impl ChunkManifest {
     /// Construct a fresh, empty manifest for one download attempt.
+    ///
+    /// Deliberately does NOT take a byte offset: nothing on the recovery
+    /// side ever reads one (the file's own length verification is
+    /// per-chunk, not offset-relative), and an earlier version of this type
+    /// carried one anyway "for parity with `DashDownloadState`" — a
+    /// duplicated field with no reader is dead weight, not parity.
     #[must_use]
-    pub const fn new(download_id: u64, kind: ChunkKind, byte_offset: u64, total_size: u64) -> Self {
+    pub const fn new(download_id: u64, kind: ChunkKind, total_size: u64) -> Self {
         Self {
             schema_version: CHUNK_MANIFEST_VERSION,
             download_id,
             kind,
-            byte_offset,
             total_size,
             completed: BTreeMap::new(),
         }
@@ -93,13 +93,23 @@ impl ChunkManifest {
     }
 
     /// Load a manifest from `path`, accepting it only if it matches
-    /// `download_id` and `kind` and carries the current schema version.
+    /// `download_id` and `kind`, carries the current schema version, and its
+    /// highest recorded chunk id is within [`crate::chunking::CHUNK_SCAN_CEILING`].
+    ///
+    /// The ceiling check is a security boundary, not a correctness nicety:
+    /// this file is attacker-influenceable by anyone who can write to the
+    /// download's output directory (no secret gates it), and its
+    /// `completed` keys drive recovery's scan range directly. A single
+    /// entry near `u64::MAX` would otherwise make that scan effectively
+    /// unbounded — no real plan can produce an id anywhere near this
+    /// ceiling (see `CHUNK_SCAN_CEILING`'s doc), so rejecting one here is
+    /// pure loss-prevention with no cost to a legitimate manifest.
     ///
     /// Returns `None` for: missing file, parse failure, schema mismatch,
-    /// `download_id` mismatch, or `kind` mismatch — every one of these
-    /// means the manifest cannot be trusted to describe the chunk set being
-    /// probed, so the caller must treat the set as unverifiable rather than
-    /// guess at a partial match.
+    /// `download_id` mismatch, `kind` mismatch, or an oversized max chunk id
+    /// — every one of these means the manifest cannot be trusted to
+    /// describe the chunk set being probed, so the caller must treat the
+    /// set as unverifiable rather than guess at a partial match.
     #[must_use]
     pub async fn load_matching(path: &Path, download_id: u64, kind: ChunkKind) -> Option<Self> {
         let manifest: Self = crate::atomic::read_json_sidecar(path).await?;
@@ -107,6 +117,19 @@ impl ChunkManifest {
             || manifest.download_id != download_id
             || manifest.kind != kind
         {
+            return None;
+        }
+        if let Some(&max_id) = manifest.completed.keys().next_back()
+            && max_id > crate::chunking::CHUNK_SCAN_CEILING
+        {
+            debug!(
+                max_id,
+                ceiling = crate::chunking::CHUNK_SCAN_CEILING;
+                "Rejecting chunk manifest at {}: max recorded chunk id {max_id} exceeds the \
+                 scan ceiling of {}",
+                path.display(),
+                crate::chunking::CHUNK_SCAN_CEILING
+            );
             return None;
         }
         Some(manifest)
@@ -202,7 +225,7 @@ mod tests {
     async fn save_then_load_matching_roundtrips() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("Title.mp4.7.chunks.json");
-        let mut manifest = ChunkManifest::new(7, ChunkKind::Fresh, 0, 1_000_000);
+        let mut manifest = ChunkManifest::new(7, ChunkKind::Fresh, 1_000_000);
         manifest.record_completed(0, 65_536);
         manifest.record_completed(1, 65_536);
         manifest.save(&path).await.expect("save");
@@ -219,7 +242,7 @@ mod tests {
     async fn load_matching_rejects_download_id_mismatch() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("m.json");
-        ChunkManifest::new(7, ChunkKind::Fresh, 0, 100)
+        ChunkManifest::new(7, ChunkKind::Fresh, 100)
             .save(&path)
             .await
             .expect("save");
@@ -236,7 +259,7 @@ mod tests {
     async fn load_matching_rejects_kind_mismatch() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("m.json");
-        ChunkManifest::new(7, ChunkKind::Fresh, 0, 100)
+        ChunkManifest::new(7, ChunkKind::Fresh, 100)
             .save(&path)
             .await
             .expect("save");
@@ -253,7 +276,7 @@ mod tests {
     async fn load_matching_rejects_schema_version_mismatch() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("m.json");
-        let mut manifest = ChunkManifest::new(7, ChunkKind::Fresh, 0, 100);
+        let mut manifest = ChunkManifest::new(7, ChunkKind::Fresh, 100);
         manifest.schema_version = CHUNK_MANIFEST_VERSION + 1;
         manifest.save(&path).await.expect("save");
 
@@ -277,8 +300,7 @@ mod tests {
 
     #[tokio::test]
     async fn tracker_with_no_path_is_a_no_op() {
-        let tracker =
-            ChunkManifestTracker::new(ChunkManifest::new(0, ChunkKind::Fresh, 0, 0), None);
+        let tracker = ChunkManifestTracker::new(ChunkManifest::new(0, ChunkKind::Fresh, 0), None);
         // Must not panic and must not attempt any I/O.
         tracker.record_and_save(0, 10).await;
         tracker.delete().await;
@@ -289,7 +311,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("m.json");
         let tracker = ChunkManifestTracker::new(
-            ChunkManifest::new(0, ChunkKind::Fresh, 0, 10),
+            ChunkManifest::new(0, ChunkKind::Fresh, 10),
             Some(path.clone()),
         );
         tracker.record_and_save(0, 10).await;
@@ -313,7 +335,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("m.json");
         let tracker = ChunkManifestTracker::new(
-            ChunkManifest::new(0, ChunkKind::Fresh, 0, 0),
+            ChunkManifest::new(0, ChunkKind::Fresh, 0),
             Some(path.clone()),
         );
 

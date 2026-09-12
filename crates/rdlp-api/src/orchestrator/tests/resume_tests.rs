@@ -22,7 +22,7 @@ async fn write_chunk_manifest(set: &ChunkSet, dir: &std::path::Path, lengths: &[
         .download_id()
         .expect("a manifest is only ever written for a new-style (Fresh) set");
     let total: u64 = lengths.iter().sum();
-    let mut manifest = ChunkManifest::new(download_id, ChunkKind::Fresh, 0, total);
+    let mut manifest = ChunkManifest::new(download_id, ChunkKind::Fresh, total);
     for (chunk_id, len) in lengths.iter().enumerate() {
         manifest.record_completed(chunk_id as u64, *len);
     }
@@ -874,7 +874,7 @@ mod issue_675_chunk_integrity_tests {
         // recorded complete, standing in for chunks that finished on the
         // adaptive path's out-of-order completion before the process died.
         let set = ChunkSet::for_attempt("video.mp4", 0, ChunkKind::Fresh).unwrap();
-        let mut manifest = ChunkManifest::new(0, ChunkKind::Fresh, 0, 384);
+        let mut manifest = ChunkManifest::new(0, ChunkKind::Fresh, 384);
         for id in [0u64, 1, 2, 4, 5] {
             manifest.record_completed(id, 64);
         }
@@ -911,6 +911,45 @@ mod issue_675_chunk_integrity_tests {
         assert_eq!(resume_offset, 192, "merge stops at the verified prefix");
         assert!(temp_dir.path().join("video.mp4.0.part4").exists());
         assert!(temp_dir.path().join("video.mp4.0.part5").exists());
+
+        // Code-quality review finding 3: a PARTIAL merge must NOT delete the
+        // manifest — chunks 4 and 5 are still only recorded there, and
+        // deleting it would make that record unrecoverable (the exact
+        // silence #675 exists to prevent).
+        let manifest_path = set.manifest_path_in(temp_dir.path()).unwrap();
+        assert!(
+            tokio::fs::metadata(&manifest_path).await.is_ok(),
+            "the manifest must survive a partial merge so stranded chunks stay reported"
+        );
+
+        // A retained manifest must re-warn on the next scan: chunk 0's file
+        // was consumed by the merge above, so it is now the new break
+        // (`first_bad{id:0}`), and 1, 2, 4, 5 are all still recorded
+        // complete but unreachable — the manifest keeps doing its job
+        // across repeated scans rather than being spent after one.
+        // `detect_chunk_files` would return `None` here (chunk_paths is
+        // empty), so assert via `collect_contiguous_chunks` directly.
+        assert!(
+            resume::detect_chunk_files(&output_path).await.is_none(),
+            "chunk 0's file is gone, so nothing is merge-eligible on the rescan"
+        );
+        let reloaded = ChunkManifest::load_matching(&manifest_path, 0, ChunkKind::Fresh)
+            .await
+            .expect("the retained manifest must still load");
+        let rescanned = resume::collect_contiguous_chunks(&set, temp_dir.path(), &reloaded).await;
+        assert_eq!(
+            rescanned.first_bad,
+            Some(resume::BadChunk {
+                id: 0,
+                on_disk: None,
+                recorded: Some(64),
+            }),
+            "chunk 0 is now the break: recorded complete but its file is gone"
+        );
+        assert_eq!(
+            rescanned.stranded_beyond_gap, 4,
+            "chunks 1, 2, 4, 5 are all still recorded complete but unreachable"
+        );
     }
 
     /// (iii) If the assembled merge total no longer matches the recorded
@@ -928,10 +967,15 @@ mod issue_675_chunk_integrity_tests {
         let chunk_info = resume::ChunkInfo {
             download_id: Some(0),
             chunk_paths: vec![chunk0.clone()],
-            // Recorded length disagrees with what's actually on disk — the
-            // scenario `merge_chunk_files` alone (not `detect_chunk_files`,
-            // which would already have rejected this) must still catch.
-            chunk_lengths: vec![512],
+            // Matches the 256-byte file exactly, so the PER-CHUNK check
+            // passes — this test's oracle is the separate merged-TOTAL
+            // check below it, not the per-chunk one (spec review finding
+            // 2: `chunk_lengths: [512]` against this same 256-byte file
+            // trips the per-chunk check first and never reaches the total
+            // check at all, so deleting that check leaves this test green).
+            chunk_lengths: vec![256],
+            // Disagrees with the sum of `chunk_lengths` (256), even though
+            // every individual chunk was copied exactly as recorded.
             total_size: 512,
             first_bad: None,
             stranded_beyond_gap: 0,
@@ -940,7 +984,8 @@ mod issue_675_chunk_integrity_tests {
         let result = resume::merge_chunk_files(&output_path, &chunk_info).await;
         assert!(
             result.is_err(),
-            "a copied length disagreeing with the recorded one must fail the merge"
+            "a merged total disagreeing with the recorded sum must fail the merge \
+             even when every individual chunk matched its recorded length"
         );
     }
 
@@ -1014,5 +1059,104 @@ mod issue_675_chunk_integrity_tests {
         .await;
 
         assert!(resume::detect_chunk_files(&output_path).await.is_none());
+    }
+
+    // ── security review: unbounded scan via an attacker-controlled manifest key ──
+    //
+    // The manifest file is attacker-influenceable by anyone who can write to
+    // the output directory (schema/download_id/kind carry no secret), and
+    // its `completed` keys used to drive `collect_contiguous_chunks`'s scan
+    // range directly. A single `{"<huge id>": len}` entry made recovery
+    // iterate towards that id — near `u64::MAX` it never finished.
+
+    /// RED against the pre-fix loader: a manifest recording a chunk id near
+    /// `u64::MAX` used to load successfully.
+    #[tokio::test]
+    async fn manifest_with_near_max_key_is_rejected_at_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.json");
+        let mut manifest = ChunkManifest::new(0, ChunkKind::Fresh, 1);
+        manifest.record_completed(u64::MAX - 1, 1);
+        manifest.save(&path).await.unwrap();
+
+        assert!(
+            ChunkManifest::load_matching(&path, 0, ChunkKind::Fresh)
+                .await
+                .is_none(),
+            "a manifest key near u64::MAX must never be trusted"
+        );
+    }
+
+    #[tokio::test]
+    async fn manifest_with_key_one_beyond_ceiling_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.json");
+        let mut manifest = ChunkManifest::new(0, ChunkKind::Fresh, 1);
+        manifest.record_completed(rdlp_downloader::CHUNK_SCAN_CEILING + 1, 1);
+        manifest.save(&path).await.unwrap();
+
+        assert!(
+            ChunkManifest::load_matching(&path, 0, ChunkKind::Fresh)
+                .await
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn manifest_with_key_exactly_at_ceiling_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.json");
+        let mut manifest = ChunkManifest::new(0, ChunkKind::Fresh, 1);
+        manifest.record_completed(rdlp_downloader::CHUNK_SCAN_CEILING, 1);
+        manifest.save(&path).await.unwrap();
+
+        assert!(
+            ChunkManifest::load_matching(&path, 0, ChunkKind::Fresh)
+                .await
+                .is_some(),
+            "the ceiling itself is a legitimate boundary value, not a rejection"
+        );
+    }
+
+    /// Pins the count-from-map path: a sparse manifest `{0: n, 5000: n}`
+    /// must complete quickly and report exactly 1 stranded chunk, without
+    /// depending on iterating every id up to 5000.
+    #[tokio::test]
+    async fn sparse_manifest_scan_completes_bounded_and_counts_via_the_map() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        tokio::fs::write(temp_dir.path().join("video.mp4.0.part0"), &[1u8; 4])
+            .await
+            .unwrap();
+
+        let set = ChunkSet::for_attempt("video.mp4", 0, ChunkKind::Fresh).unwrap();
+        let mut manifest = ChunkManifest::new(0, ChunkKind::Fresh, 8);
+        manifest.record_completed(0, 4);
+        manifest.record_completed(5000, 4);
+
+        let started = std::time::Instant::now();
+        let scanned = resume::collect_contiguous_chunks(&set, temp_dir.path(), &manifest).await;
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "must not iterate id-by-id up to the sparse key"
+        );
+
+        assert_eq!(
+            scanned.chunk_paths.len(),
+            1,
+            "only chunk 0 is merge-eligible"
+        );
+        assert_eq!(
+            scanned.first_bad,
+            Some(resume::BadChunk {
+                id: 1,
+                on_disk: None,
+                recorded: None,
+            }),
+            "chunk 1 is a real gap"
+        );
+        assert_eq!(
+            scanned.stranded_beyond_gap, 1,
+            "chunk 5000 is recorded complete but unreachable past the gap at 1"
+        );
     }
 }
