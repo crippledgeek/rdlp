@@ -868,6 +868,98 @@ async fn probe_206_malformed_content_range_keeps_supports_ranges_true() {
     mock.assert_async().await;
 }
 
+/// A transient 503 on the probe is retried and recovers on the next
+/// attempt — the probe must see the real HLS/HTTP retry path, not
+/// silently degrade to sequential on a transient status (issue #735).
+///
+/// Mockito matches in creation order and retires a mock once its
+/// `expect(n)` is met, so the failing mock (created first) answers the
+/// first attempt and the 206 mock answers the retry.
+#[tokio::test]
+async fn probe_503_then_206_recovers_on_retry() {
+    use mockito::Server;
+
+    let mut server = Server::new_async().await;
+    let mock_503 = server
+        .mock("GET", "/file")
+        .match_header("range", "bytes=0-262143")
+        .with_status(503)
+        .expect(1)
+        .create_async()
+        .await;
+    let mock_ok = server
+        .mock("GET", "/file")
+        .match_header("range", "bytes=0-262143")
+        .with_status(206)
+        .with_header("content-range", "bytes 0-262143/1048576")
+        .with_body(vec![0u8; 262144])
+        .expect(1)
+        .create_async()
+        .await;
+
+    let downloader = chunk_test_downloader(3);
+    let url = format!("{}/file", server.url());
+
+    let result = downloader.probe(&url).await.unwrap();
+
+    assert_eq!(result.size, Some(1048576));
+    assert!(result.supports_ranges);
+    mock_503.assert_async().await;
+    mock_ok.assert_async().await;
+}
+
+/// A non-retryable 404 must NOT be retried — exactly one request, and the
+/// probe falls back to `size: None` (existing "no info" fallback policy).
+#[tokio::test]
+async fn probe_404_is_not_retried_falls_back_to_none() {
+    use mockito::Server;
+
+    let mut server = Server::new_async().await;
+    let mock = server
+        .mock("GET", "/file")
+        .match_header("range", "bytes=0-262143")
+        .with_status(404)
+        .expect(1)
+        .create_async()
+        .await;
+
+    let downloader = chunk_test_downloader(3);
+    let url = format!("{}/file", server.url());
+
+    let result = downloader.probe(&url).await.unwrap();
+
+    assert_eq!(result.size, None);
+    assert!(!result.supports_ranges);
+    mock.assert_async().await;
+}
+
+/// A 503 that never recovers exhausts the configured retries and falls
+/// back to `size: None` — every attempt is consumed
+/// (`chunk_test_downloader(N)` caps at N retries, i.e. N+1 total attempts).
+#[tokio::test]
+async fn probe_503_exhausts_retries_falls_back_to_none() {
+    use mockito::Server;
+
+    let max_retries = 2;
+    let mut server = Server::new_async().await;
+    let mock = server
+        .mock("GET", "/file")
+        .match_header("range", "bytes=0-262143")
+        .with_status(503)
+        .expect(max_retries + 1)
+        .create_async()
+        .await;
+
+    let downloader = chunk_test_downloader(max_retries);
+    let url = format!("{}/file", server.url());
+
+    let result = downloader.probe(&url).await.unwrap();
+
+    assert_eq!(result.size, None);
+    assert!(!result.supports_ranges);
+    mock.assert_async().await;
+}
+
 #[tokio::test]
 async fn parallel_threshold_override_takes_parallel_path_for_5mib_file() {
     use mockito::Server;

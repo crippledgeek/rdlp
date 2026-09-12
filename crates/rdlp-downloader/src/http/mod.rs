@@ -521,18 +521,20 @@ impl HttpDownloader {
     /// - 200 → server ignored Range; parse total from `Content-Length`,
     ///   `supports_ranges = false`. The probe body is discarded (caller
     ///   re-issues a plain GET via `download_sequential`).
-    /// - other (4xx/5xx after retry) → `ProbeResult { size: None,
-    ///   supports_ranges: false }`. Non-2xx is "no info", not an error;
-    ///   caller falls to sequential.
+    /// - other (4xx/5xx) → typed `RdlpError::Http { status, .. }`, retried
+    ///   via `is_retryable_error` (429/5xx) up to `retry_config`'s limit;
+    ///   a non-retryable 4xx returns on the first response. Either way, if
+    ///   every attempt is exhausted the probe falls back to
+    ///   `ProbeResult { size: None, supports_ranges: false }` — the
+    ///   downloader then takes the sequential path (issue #735).
     pub(crate) async fn probe(&self, url: &str) -> Result<ProbeResult> {
         use config::PROBE_WINDOW_BYTES;
 
         // F3 probe delegates to the shared `rdlp_http::probe_size` helper
         // (closes #306). Retry semantics preserved via the with_retry
-        // wrapper; the shared helper itself is leaf-level (no retry).
-        // Non-2xx and network errors after retry both produce the
-        // `ProbeResult { size: None, supports_ranges: false }` form so the
-        // caller falls back to sequential download.
+        // wrapper; the shared helper itself is leaf-level (no retry) and
+        // now surfaces non-2xx as a typed `ProbeError::Status`, which we
+        // map to `RdlpError::Http` so `is_retryable_error` can classify it.
         let client = self.client.clone();
         let url_string = url.to_string();
         let hdrs = self.headers();
@@ -548,18 +550,30 @@ impl HttpDownloader {
                 async move {
                     rdlp_http::probe_size(&client, &url, Some(&hdrs), window, timeout)
                         .await
-                        .map_err(|e| RdlpError::Network {
-                            message: format!("probe failed: {e}"),
-                            url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
+                        .map_err(|e| match e {
+                            rdlp_http::ProbeError::Status { status } => RdlpError::Http {
+                                status,
+                                reason: format!("probe HTTP {status}"),
+                            },
+                            rdlp_http::ProbeError::Network(e) => RdlpError::Network {
+                                message: format!("probe failed: {e}"),
+                                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
+                            },
                         })
                 }
             },
         )
         .await;
 
-        Ok(probed.unwrap_or(ProbeResult {
-            size: None,
-            supports_ranges: false,
+        Ok(probed.unwrap_or_else(|e| {
+            log::warn!(
+                "probe of {} failed ({e}); falling back to sequential download",
+                rdlp_redact::RedactedUrl::new(url)
+            );
+            ProbeResult {
+                size: None,
+                supports_ranges: false,
+            }
         }))
     }
 

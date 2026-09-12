@@ -8,6 +8,9 @@
 //!
 //! Threat model: this helper is leaf-level — no retry, no header
 //! gating. Callers compose retry / cancel / header-trust as needed.
+//! A non-2xx status is a typed [`ProbeError::Status`] — this crate does
+//! not know which statuses are worth retrying, so callers classify and
+//! retry (or fall back) using their own retry policy (issue #735).
 
 use std::time::Duration;
 
@@ -16,14 +19,17 @@ use std::time::Duration;
 /// header-only probes where body bandwidth is constrained.
 pub const DEFAULT_PROBE_WINDOW_BYTES: u64 = 256 * 1_024;
 
-/// Outcome of a single HTTP probe.
+/// Outcome of a single HTTP probe that produced a usable response.
+///
+/// Only 206 and 200 yield a value. Any other status, and any transport
+/// failure, is a [`ProbeError`] so a caller's retry policy can see it.
 #[derive(Debug, Clone, Copy)]
 pub struct ProbeResult {
     /// Total file size, parsed from `Content-Range` (206) or
     /// `Content-Length` (200). `None` if neither was parseable.
     pub size: Option<u64>,
     /// Whether the server honoured the `Range` header (HTTP 206).
-    /// `false` on 200 (range ignored), 4xx, 5xx, or network failure.
+    /// `false` on 200 (range ignored).
     pub supports_ranges: bool,
 }
 
@@ -35,6 +41,14 @@ pub enum ProbeError {
     /// Underlying wreq error (DNS, TLS, connect, etc.).
     #[error("probe network error: {0}")]
     Network(#[from] wreq::Error),
+    /// Non-2xx HTTP status. Unclassified — this crate does not decide
+    /// what is retryable; callers map `status` through their own retry
+    /// policy (e.g. `rdlp_core::is_retryable_error`).
+    #[error("probe HTTP {status}")]
+    Status {
+        /// The response status code.
+        status: u16,
+    },
 }
 
 /// Probe a URL with a single `GET Range: bytes=0-{window_bytes - 1}` request.
@@ -43,8 +57,9 @@ pub enum ProbeError {
 /// - 206 → parse total from `Content-Range`, `supports_ranges = true`.
 /// - 200 → server ignored Range; parse total from `Content-Length`,
 ///   `supports_ranges = false`.
-/// - other (4xx/5xx) → `ProbeResult { size: None, supports_ranges: false }`.
-///   Non-2xx is "no info", not an error; caller decides next step.
+/// - other (4xx/5xx) → `Err(ProbeError::Status { status })`. Non-2xx is
+///   a typed error, not a value; the caller decides whether it is
+///   retryable and what to fall back to (issue #735).
 ///
 /// `window_bytes` controls how much body the server is asked for; the
 /// response body is dropped without being read. Smaller windows trade
@@ -56,7 +71,8 @@ pub enum ProbeError {
 ///
 /// # Errors
 ///
-/// Returns [`ProbeError::Network`] on DNS, TLS, connect, or send failure.
+/// Returns [`ProbeError::Network`] on DNS, TLS, connect, or send failure,
+/// and [`ProbeError::Status`] on any non-2xx response.
 pub async fn probe_size(
     client: &wreq::Client,
     url: &str,
@@ -74,20 +90,17 @@ pub async fn probe_size(
         req = req.headers(h.clone());
     }
     let resp = req.send().await?;
-    Ok(match resp.status().as_u16() {
-        206 => ProbeResult {
+    match resp.status().as_u16() {
+        206 => Ok(ProbeResult {
             size: parse_content_range_total(resp.headers()),
             supports_ranges: true,
-        },
-        200 => ProbeResult {
+        }),
+        200 => Ok(ProbeResult {
             size: resp.content_length(),
             supports_ranges: false,
-        },
-        _ => ProbeResult {
-            size: None,
-            supports_ranges: false,
-        },
-    })
+        }),
+        status => Err(ProbeError::Status { status }),
+    }
 }
 
 fn parse_content_range_total(headers: &wreq::header::HeaderMap) -> Option<u64> {
@@ -166,9 +179,9 @@ mod tests {
         mock.assert_async().await;
     }
 
-    /// Non-2xx response → `ProbeResult { size: None, supports_ranges: false }`, no error.
+    /// Non-2xx response → `Err(ProbeError::Status { status })`, not a value.
     #[tokio::test]
-    async fn probe_non_2xx_returns_none_no_error() {
+    async fn probe_403_returns_typed_status_error() {
         let mut server = Server::new_async().await;
         let mock = server
             .mock("GET", "/file")
@@ -179,12 +192,54 @@ mod tests {
 
         let client = make_client();
         let url = format!("{}/file", server.url());
-        let result = probe_size(&client, &url, None, 1, Duration::from_secs(5))
+        let err = probe_size(&client, &url, None, 1, Duration::from_secs(5))
             .await
-            .expect("probe should succeed even on 403");
+            .expect_err("403 must be a typed error, not a value");
 
-        assert_eq!(result.size, None);
-        assert!(!result.supports_ranges);
+        assert!(matches!(err, ProbeError::Status { status: 403 }));
+        mock.assert_async().await;
+    }
+
+    /// A retryable-shaped (5xx) status is ALSO a typed error at this layer —
+    /// this crate does not classify retryability, callers do (issue #735).
+    #[tokio::test]
+    async fn probe_503_returns_typed_status_error() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", "/file")
+            .with_status(503)
+            .with_body("Service Unavailable")
+            .create_async()
+            .await;
+
+        let client = make_client();
+        let url = format!("{}/file", server.url());
+        let err = probe_size(&client, &url, None, 1, Duration::from_secs(5))
+            .await
+            .expect_err("503 must be a typed error");
+
+        assert!(matches!(err, ProbeError::Status { status: 503 }));
+        mock.assert_async().await;
+    }
+
+    /// 404 is a typed error too, distinct status carried through.
+    #[tokio::test]
+    async fn probe_404_returns_typed_status_error() {
+        let mut server = Server::new_async().await;
+        let mock = server
+            .mock("GET", "/file")
+            .with_status(404)
+            .with_body("Not Found")
+            .create_async()
+            .await;
+
+        let client = make_client();
+        let url = format!("{}/file", server.url());
+        let err = probe_size(&client, &url, None, 1, Duration::from_secs(5))
+            .await
+            .expect_err("404 must be a typed error");
+
+        assert!(matches!(err, ProbeError::Status { status: 404 }));
         mock.assert_async().await;
     }
 
