@@ -362,14 +362,25 @@ pub(crate) fn validate_range_response(
     // content into a slot sized for one span.
     let status = response.status().as_u16();
     if status != HTTP_PARTIAL_CONTENT {
-        return Err(RdlpError::Download {
-            url: redacted(),
-            message: format!(
+        // For a resume the operator-facing fact is that the server will not
+        // continue from the partial file; for a chunk it is that the body
+        // cannot be placed at its offset. Same defect, two audiences.
+        let message = match span {
+            ExpectedSpan::OpenEnded { .. } => format!(
+                "Server does not support resume (expected HTTP {HTTP_PARTIAL_CONTENT}, got \
+                 {status}). Cannot continue download without overwriting existing \
+                 data.{resume_guidance}"
+            ),
+            ExpectedSpan::Closed(_) => format!(
                 "ranged request for {requested} got HTTP {status}, expected \
                  {HTTP_PARTIAL_CONTENT} (Partial Content). The server ignored the Range \
                  header, so the body is the whole resource rather than the requested span \
-                 and cannot be placed at this position in the output.{resume_guidance}",
+                 and cannot be placed at this position in the output."
             ),
+        };
+        return Err(RdlpError::Download {
+            url: redacted(),
+            message,
         });
     }
 

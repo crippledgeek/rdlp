@@ -17,7 +17,7 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio_util::sync::CancellationToken;
 
 use super::config::PROGRESS_UPDATE_INTERVAL;
-use super::{ExpectedSpan, ExpectedTransfer, HTTP_PARTIAL_CONTENT, HttpDownloader};
+use super::{ExpectedSpan, ExpectedTransfer, HttpDownloader};
 use crate::progress::SpeedMeter;
 use crate::retry::{RetryPolicy, with_retry};
 
@@ -397,19 +397,6 @@ impl HttpDownloader {
                         .send()
                         .await
                         .map_err(|e| RdlpError::Network { message: format!("Resume request failed: {e}"), url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())) })?;
-
-                    if response.status().as_u16() != HTTP_PARTIAL_CONTENT {
-                        return Err(RdlpError::Download {
-                            url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
-                            message: format!(
-                                "Server does not support resume (expected HTTP \
-                                 {HTTP_PARTIAL_CONTENT}, got {}). Cannot continue download \
-                                 without overwriting existing data. Please delete the partial \
-                                 file and restart the download.",
-                                response.status()
-                            ),
-                        });
-                    }
 
                     // A 206 alone does not prove the body starts where the
                     // partial file ends, nor that it reaches the resource's
