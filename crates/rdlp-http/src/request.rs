@@ -110,7 +110,7 @@ impl RangeSpec {
 /// Adds `Range` and, with a validator, `If-Range` — always together, so
 /// §13.1.5's "no If-Range without Range" holds by construction.
 ///
-/// Applied the same way as [`IDENTITY_PIN`]: through
+/// Applied the same way as the `IDENTITY_PIN`: through
 /// [`wreq::RequestBuilder::headers`], which REPLACES a caller's `Range` or
 /// `If-Range` line where `RequestBuilder::header` would append a second one
 /// and leave the server free to honour either.
