@@ -120,6 +120,63 @@ async fn resume_skips_already_downloaded_segments() {
     v1_replay.assert_async().await;
 }
 
+/// Regression guard for #672: `DownloadStats.retries` on the DASH legacy
+/// MPD-URL path was hardcoded to `0` even when a segment fetch retried. One
+/// 503-then-200 on the single video segment must surface as `retries == 1`.
+#[tokio::test]
+async fn retry_count_is_reported_in_stats() {
+    let mut server = Server::new_async().await;
+    let _mpd = server
+        .mock("GET", "/manifest.mpd")
+        .with_body(mpd_body(&server.url()))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let _vi = server
+        .mock("GET", "/vinit.mp4")
+        .with_body(b"VINIT")
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    // mockito matches mocks in CREATION order: the 503 is tried first, then
+    // falls through to the 200 once exhausted (mockito re-checks in order
+    // each request, so an `expect(1)` 503 is only matched on the FIRST call).
+    let v1_fail = server
+        .mock("GET", "/vseg-1.m4s")
+        .with_status(503)
+        .expect(1)
+        .create_async()
+        .await;
+    let v1_ok = server
+        .mock("GET", "/vseg-1.m4s")
+        .with_body(b"V1")
+        .expect(1)
+        .create_async()
+        .await;
+    let _v2_ok = server
+        .mock("GET", "/vseg-2.m4s")
+        .with_body(b"V2")
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("out.mp4");
+    let url = format!("{}/manifest.mpd", server.url());
+
+    let stats = fast_dl()
+        .download_to_file(&url, &out, None)
+        .await
+        .expect("503-then-200 must succeed via retry (video-only, no mux needed)");
+
+    assert_eq!(
+        stats.retries, 1,
+        "one retried segment fetch must be reflected in DownloadStats.retries"
+    );
+    v1_fail.assert_async().await;
+    v1_ok.assert_async().await;
+}
+
 /// #677: a segment part that is durably recorded as done but is short on
 /// disk (unfsynced data lost after the sidecar had recorded it, or any other
 /// out-of-band truncation) must be re-fetched, not trusted on non-emptiness.

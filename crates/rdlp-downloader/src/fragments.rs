@@ -14,7 +14,7 @@
 use std::io::SeekFrom;
 use std::path::Path;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 
 use futures::StreamExt as _;
@@ -467,7 +467,7 @@ pub async fn download_pre_resolved_fragments(
         bytes_downloaded: total_bytes,
         duration: elapsed,
         average_speed: avg,
-        retries: usize::try_from(retries.load(Ordering::Relaxed)).unwrap_or(usize::MAX),
+        retries: crate::retry::retries_taken(&retries),
         fragments: Some(fragments.len()),
     })
 }
@@ -576,7 +576,7 @@ impl FragmentFetchCtx<'_> {
 /// forwarded only when `url`'s origin (scheme + host + port) matches `format_origin`.
 /// Fails closed — `None` `format_origin`, opaque origin, or parse failure all
 /// result in no operator headers being forwarded.
-async fn fetch_with_optional_range(
+pub(crate) async fn fetch_with_optional_range(
     http: &HttpDownloader,
     url: &str,
     byte_range: Option<(u64, u64)>,

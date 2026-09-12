@@ -1758,7 +1758,7 @@ async fn unranged_fragment_plain_200_still_succeeds() {
 // --- fragment retry (issue #570) ---
 //
 // The parallel-chunk path (`download_chunk_with_retry`) and the DASH segment
-// path (`dash/download.rs::download_one`) both retry transient failures; the
+// path (`dash/download.rs::SegmentFetchCtx::fetch`) both retry transient failures; the
 // fragment path did not, so one bad edge node killed a whole multi-hundred-
 // fragment HLS download. These tests pin the retry semantics: retryable
 // failures are re-fetched, non-retryable ones fail on the first response.

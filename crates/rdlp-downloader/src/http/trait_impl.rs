@@ -12,14 +12,16 @@ use rdlp_core::{
 use rdlp_types::Format;
 use std::path::Path;
 use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
 use std::time::Instant;
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio_util::sync::CancellationToken;
 
 use super::config::PROGRESS_UPDATE_INTERVAL;
+use super::parallel::{DownloadTarget, ResumeTarget};
 use super::{ContentRange, HTTP_PARTIAL_CONTENT, HttpDownloader};
 use crate::progress::SpeedMeter;
-use crate::retry::{RetryPolicy, with_retry};
+use crate::retry::{RetryPolicy, retries_taken, with_retry};
 
 #[allow(clippy::too_many_lines, clippy::option_if_let_else)]
 #[async_trait]
@@ -47,9 +49,14 @@ impl Downloader for HttpDownloader {
     ) -> Result<DownloadStats> {
         let url = &format.url;
         let timeout = self.config.download_timeout;
+        // Shared across the probe and whichever branch follows it (issue
+        // #672), so a retry spent probing is not silently dropped from the
+        // reported `DownloadStats.retries` when the download itself succeeds
+        // first try — and vice versa.
+        let retries = Arc::new(AtomicU64::new(0));
 
         let download_fut = async {
-            let probe = self.probe(url).await?;
+            let probe = self.probe(url, &retries).await?;
             let size = probe.size;
             let supports_ranges = probe.supports_ranges;
 
@@ -74,10 +81,21 @@ impl Downloader for HttpDownloader {
             if let Some(ps) = parallel_size {
                 // Parallel-path cooperative cancel is pre-existing AIMD work,
                 // out of scope for F6; outer select! at the orchestrator covers it.
-                return self.download_parallel(url, path, ps, progress).await;
+                return self
+                    .download_parallel(
+                        DownloadTarget {
+                            url,
+                            path,
+                            total_size: ps,
+                        },
+                        progress,
+                        Arc::clone(&retries),
+                    )
+                    .await;
             }
 
-            self.download_sequential(url, path, progress, cancel).await
+            self.download_sequential(url, path, progress, cancel, &retries)
+                .await
         };
 
         let timed = tokio::time::timeout(timeout, download_fut);
@@ -109,10 +127,13 @@ impl Downloader for HttpDownloader {
         progress: Option<Box<dyn ProgressCallback>>,
     ) -> Result<DownloadStats> {
         let timeout = self.config.download_timeout;
+        // Shared across the probe and whichever branch follows it (issue
+        // #672) — see the matching comment in `download_format`.
+        let retries = Arc::new(AtomicU64::new(0));
         tokio::time::timeout(timeout, async {
             // F3: single GET probe replaces HEAD x2 + Range:bytes=0-0 sequence.
             // See docs/superpowers/specs/2026-05-21-f3-f6-download-optimization-design.md
-            let probe = self.probe(url).await?;
+            let probe = self.probe(url, &retries).await?;
             let size = probe.size;
             let supports_ranges = probe.supports_ranges;
 
@@ -139,7 +160,17 @@ impl Downloader for HttpDownloader {
                     "Using parallel download mode ({} connections)",
                     self.config.concurrent_fragments
                 );
-                return self.download_parallel(url, path, ps, progress).await;
+                return self
+                    .download_parallel(
+                        DownloadTarget {
+                            url,
+                            path,
+                            total_size: ps,
+                        },
+                        progress,
+                        Arc::clone(&retries),
+                    )
+                    .await;
             }
 
             let reason = match size {
@@ -155,7 +186,8 @@ impl Downloader for HttpDownloader {
                 self.config.concurrent_fragments
             );
 
-            self.download_sequential(url, path, progress, None).await
+            self.download_sequential(url, path, progress, None, &retries)
+                .await
         })
         .await
         .map_err(|_| RdlpError::Download {
@@ -229,9 +261,11 @@ impl HttpDownloader {
             let client = self.client.clone();
             let url_string = url.to_string();
             let hdrs = self.headers();
+            let retries = AtomicU64::new(0);
 
             let response = with_retry(
-                RetryPolicy::new(&self.config.retry_config, &"HTTP GET (stdout)"),
+                RetryPolicy::new(&self.config.retry_config, &"HTTP GET (stdout)")
+                    .counting_into(&retries),
                 || {
                     let client = client.clone();
                     let url = url_string.clone();
@@ -341,7 +375,7 @@ impl HttpDownloader {
             }
 
             let duration = start_time.elapsed();
-            let stats = DownloadStats::new(downloaded, duration, 0);
+            let stats = DownloadStats::new(downloaded, duration, retries_taken(&retries));
 
             if let Some(callback) = progress {
                 callback.on_complete(&stats);
@@ -377,6 +411,11 @@ impl HttpDownloader {
         }
 
         let timeout = self.config.download_timeout;
+        // Shared with a possible `download_parallel_resume` delegation below
+        // (issue #672), so a retry spent on this function's own initial GET
+        // is not dropped when the transfer turns out large enough to hand
+        // off to the parallel path.
+        let retries = Arc::new(AtomicU64::new(0));
         tokio::time::timeout(timeout, async {
             let start_time = Instant::now();
             let client = self.client.clone();
@@ -384,7 +423,8 @@ impl HttpDownloader {
             let hdrs = self.headers();
 
             let response = with_retry(
-                RetryPolicy::new(&self.config.retry_config, &"HTTP GET (resume)"),
+                RetryPolicy::new(&self.config.retry_config, &"HTTP GET (resume)")
+                    .counting_into(&retries),
                 || {
                 let client = client.clone();
                 let url = Arc::clone(&url_string);
@@ -486,7 +526,16 @@ impl HttpDownloader {
 
                     drop(response);
                     return self
-                        .download_parallel_resume(url, path, resume_from, total, progress)
+                        .download_parallel_resume(
+                            ResumeTarget {
+                                url,
+                                path,
+                                resume_from,
+                                total_size: total,
+                            },
+                            progress,
+                            Arc::clone(&retries),
+                        )
                         .await;
                 }
 
@@ -565,7 +614,7 @@ impl HttpDownloader {
             ))?;
 
             let duration = start_time.elapsed();
-            let stats = DownloadStats::new(downloaded, duration, 0);
+            let stats = DownloadStats::new(downloaded, duration, retries_taken(&retries));
 
             if let Some(callback) = progress {
                 callback.on_complete(&stats);
