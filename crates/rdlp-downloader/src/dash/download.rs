@@ -784,6 +784,11 @@ impl RepresentationRunCtx {
 /// `&Arc<RetryConfig>`, `&url::Origin`, `Option<&CancellationToken>`) are all
 /// distinct, so there is no risk of silently swapping two same-typed
 /// arguments at a call site.
+/// Concat-writer buffer for tests; the value is irrelevant to what the tests
+/// assert, it only has to be non-zero.
+#[cfg(test)]
+const TEST_BUFFER_SIZE: usize = 64 * 1024;
+
 #[cfg(test)]
 fn test_ctx(
     http: &HttpDownloader,
@@ -800,7 +805,7 @@ fn test_ctx(
         log_callback: None,
         transfer: TransferOptions {
             concurrent: 1,
-            buffer_size: 64 * 1024,
+            buffer_size: TEST_BUFFER_SIZE,
         },
     }
 }
@@ -861,7 +866,7 @@ mod cancel_tests {
             log_callback: None,
             transfer: TransferOptions {
                 concurrent: 8,
-                buffer_size: 64 * 1024,
+                buffer_size: TEST_BUFFER_SIZE,
             },
         };
 
