@@ -47,15 +47,6 @@ pub async fn atomic_write_json<T: Serialize + Send + 'static>(
     .map_err(std::io::Error::other)?
 }
 
-/// Read and parse a JSON sidecar at `path`, or `None` for any reason it
-/// can't be trusted at the byte level: missing file, unreadable, or
-/// malformed JSON. Returns the raw deserialized value with NO identity or
-/// version check — every sidecar (HLS `HlsResumeState`, DASH
-/// `DashDownloadState`, and the chunk-completion `ChunkManifest`, #675) has
-/// its own notion of "matches what the caller expects" (a fingerprint, an
-/// MPD path + representation ids, a `download_id` + `ChunkKind`), so that
-/// gate stays in each type's own `load`/`load_matching`, which calls this
-/// for the read-and-parse mechanics they'd otherwise all duplicate.
 /// Maximum size, in bytes, of any JSON sidecar [`read_json_sidecar`] will
 /// read. A bound on the RESOURCE the read touches (memory for
 /// `read_to_string`, parse time), not on any semantic property of the
@@ -66,10 +57,19 @@ pub async fn atomic_write_json<T: Serialize + Send + 'static>(
 /// roughly 25-30 bytes per entry (`"<digits>":<digits>,`); even an extreme
 /// but entirely legitimate ~24 GiB adaptive download (100,000 chunks at the
 /// 256 KiB AIMD floor) produces a manifest of a few MB. This cap leaves
-/// roughly an order of magnitude of headroom above that before refusing to
+/// several times that as headroom before refusing to
 /// read a sidecar at all.
 pub(crate) const MAX_SIDECAR_BYTES: u64 = 16 * 1024 * 1024; // 16 MiB
 
+/// Read and parse a JSON sidecar at `path`, or `None` for any reason it
+/// can't be trusted at the byte level: missing file, unreadable, or
+/// malformed JSON. Returns the raw deserialized value with NO identity or
+/// version check — every sidecar (HLS `HlsResumeState`, DASH
+/// `DashDownloadState`, and the chunk-completion `ChunkManifest`, #675) has
+/// its own notion of "matches what the caller expects" (a fingerprint, an
+/// MPD path + representation ids, a `download_id` + `ChunkKind`), so that
+/// gate stays in each type's own `load`/`load_matching`, which calls this
+/// for the read-and-parse mechanics they'd otherwise all duplicate.
 pub(crate) async fn read_json_sidecar<T: DeserializeOwned>(path: &Path) -> Option<T> {
     let len = tokio::fs::metadata(path).await.ok()?.len();
     if len > MAX_SIDECAR_BYTES {
