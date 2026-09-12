@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use wreq::header::HeaderMap;
 
+use crate::content_range::ContentRange;
 use crate::request::{RangeSpec, RangedRequest, download_request};
 use crate::validator::StrongValidator;
 
@@ -129,7 +130,11 @@ impl ProbeResult {
         let headers = resp.headers().clone();
         match resp.status().as_u16() {
             206 => {
-                let complete_length = parse_content_range_total(&headers);
+                // One §14.4 grammar for the probe and the ranged download
+                // paths: a length the probe reports is exactly one a later
+                // 206 would be verified against, never a laxer reading.
+                let complete_length =
+                    ContentRange::from_headers(&headers).and_then(ContentRange::complete_length);
                 Self {
                     size: complete_length,
                     supports_ranges: true,
@@ -168,17 +173,6 @@ impl ProbeResult {
             headers: HeaderMap::new(),
         }
     }
-}
-
-fn parse_content_range_total(headers: &wreq::header::HeaderMap) -> Option<u64> {
-    headers
-        .get("content-range")?
-        .to_str()
-        .ok()?
-        .split('/')
-        .nth(1)?
-        .parse()
-        .ok()
 }
 
 #[cfg(test)]
@@ -323,6 +317,38 @@ mod tests {
         // could not parse the total.
         assert!(result.supports_ranges);
         mock.assert_async().await;
+    }
+
+    /// The probe reads `Content-Range` through the one §14.4 grammar: a
+    /// non-`bytes` unit is not a length the resume path may compare its
+    /// sidecar against ("MUST NOT attempt to recombine"), so it yields no
+    /// `complete_length` — where a lax `split('/')` would have said 10.
+    #[tokio::test]
+    async fn probe_206_with_non_bytes_unit_has_no_complete_length() {
+        let mut server = Server::new_async().await;
+        let _m = server
+            .mock("GET", "/f")
+            .with_status(206)
+            .with_header("content-range", "items 0-0/10")
+            .with_body("x")
+            .create_async()
+            .await;
+        let client = make_client();
+        let r = probe_size(
+            &client,
+            ProbeSpec {
+                url: &format!("{}/f", server.url()),
+                headers: None,
+                window_bytes: 1,
+                timeout: Duration::from_secs(5),
+                validator: None,
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(r.complete_length, None);
+        assert_eq!(r.size, None);
+        assert!(r.supports_ranges);
     }
 
     #[tokio::test]

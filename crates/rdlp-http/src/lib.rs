@@ -41,6 +41,7 @@
 
 mod client;
 mod config;
+pub mod content_range;
 pub mod probe;
 mod redirect;
 pub mod request;
@@ -48,6 +49,7 @@ pub mod validator;
 
 pub use client::HttpClientFactory;
 pub use config::HttpClientConfig;
+pub use content_range::ContentRange;
 pub use probe::{
     DEFAULT_PROBE_WINDOW_BYTES, ProbeError, ProbeResult, ProbeSpec, probe_request, probe_size,
 };

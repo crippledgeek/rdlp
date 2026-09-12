@@ -436,12 +436,4 @@ mod tests {
         assert!(reject_content_coding(&coding_headers(&[b" Identity "]), "u").is_ok());
         assert!(reject_content_coding(&coding_headers(&[b"identity", b"IDENTITY"]), "u").is_ok());
     }
-
-    #[test]
-    fn parse_unsatisfied() {
-        assert_eq!(ContentRange::parse_unsatisfied("bytes */1234"), Some(1234));
-        assert_eq!(ContentRange::parse_unsatisfied("bytes 0-1/1234"), None);
-        assert_eq!(ContentRange::parse_unsatisfied("items */5"), None);
-        assert_eq!(ContentRange::parse_unsatisfied("bytes */*"), None);
-    }
 }
