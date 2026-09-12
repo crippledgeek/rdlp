@@ -29,8 +29,8 @@
 #
 #   1. EXISTENCE-PROBE LOOPS. `for i in 0..N { if p.exists() { remove_file(p) } }`
 #      never calls read_dir, so it is invisible here -- and that shape is already
-#      precedented in this codebase (resume.rs cleanup_old_chunks,
-#      parallel.rs cleanup_chunk_files). A #558-style bug rewritten that way
+#      precedented in this codebase (formerly resume.rs cleanup_old_chunks, now
+#      log-only per #573; parallel.rs cleanup_chunk_files). A #558-style bug rewritten that way
 #      would NOT be flagged. This is the most likely real-world evasion.
 #   2. CROSS-FILE SPLIT. A helper in module A enumerates; module B deletes what
 #      it returns. Neither file trips the co-occurrence test.

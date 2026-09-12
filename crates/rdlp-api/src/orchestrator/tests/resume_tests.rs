@@ -264,19 +264,25 @@ mod resume_compatibility_tests {
             );
         }
 
-        // Verify old-style chunk files were also cleaned up
-        assert!(!temp_dir.path().join("video.mp4.part0").exists());
-        assert!(!temp_dir.path().join("video.mp4.part1").exists());
-        assert!(!temp_dir.path().join("video.mp4.part2").exists());
+        // #573: the unused old-style set carries no ownership proof (no
+        // download_id in its grammar), so it is discovered and logged, never
+        // deleted. Inverted from an earlier version of this test that
+        // asserted deletion.
+        assert!(temp_dir.path().join("video.mp4.part0").exists());
+        assert!(temp_dir.path().join("video.mp4.part1").exists());
+        assert!(temp_dir.path().join("video.mp4.part2").exists());
     }
 
-    /// #559 acceptance: the legacy `0..10` scan bound never leaked in
-    /// practice (legacy `concurrent_fragments` was capped at 10), but a
-    /// hardcoded ceiling on cleanup is still a defect waiting to happen if
-    /// that assumption ever drifts. 12 legacy chunks (2 beyond the old
-    /// bound) must ALL be cleaned up when the file is already complete.
+    /// #559 acceptance (scan bound) + #573 (ownership): the legacy `0..10`
+    /// scan bound never leaked in practice (legacy `concurrent_fragments`
+    /// was capped at 10), but a hardcoded ceiling on *discovery* is still a
+    /// defect waiting to happen if that assumption ever drifts, so all 12
+    /// legacy chunks (2 beyond the old bound) must be DISCOVERED even though
+    /// none of them are deleted. Inverted from an earlier version of this
+    /// test that asserted deletion — #573 established that a probed legacy
+    /// path carries no ownership proof.
     #[tokio::test]
-    async fn test_cleanup_legacy_chunks_beyond_old_ten_chunk_bound() {
+    async fn test_legacy_chunks_beyond_old_ten_chunk_bound_survive() {
         let temp_dir = tempfile::tempdir().unwrap();
         let output_path = temp_dir.path().join("video.mp4");
 
@@ -303,22 +309,25 @@ mod resume_compatibility_tests {
         assert_eq!(resume_offset, 4096);
         for i in 0..12 {
             assert!(
-                !temp_dir.path().join(format!("video.mp4.part{i}")).exists(),
-                "chunk {i} should have been cleaned up (beyond the old 0..10 bound)"
+                temp_dir.path().join(format!("video.mp4.part{i}")).exists(),
+                "chunk {i} should survive (beyond the old 0..10 bound, #573)"
             );
         }
     }
 
-    /// #571 MEDIUM follow-up: `cleanup_old_chunks` gates its
-    /// [`resume::CHUNK_SCAN_CEILING`]-wide scan on chunk 0's presence (same
-    /// sentinel as `log_orphaned_resume_chunks`), but MUST NOT reintroduce
-    /// break-on-first-hole *within* a set that does exist — an interrupted
-    /// parallel download completes chunks out of order, so `part0`, `part2`,
-    /// `part5` present with `part1`/`part3`/`part4` missing is the normal
-    /// shape, not evidence the set ends at `part0`. A break-on-first-miss
-    /// scan would only remove `part0` here; the fix must remove all three.
+    /// #571 MEDIUM follow-up (hole tolerance) + #573 (ownership): legacy
+    /// discovery gates its [`resume::CHUNK_SCAN_CEILING`]-wide scan on chunk
+    /// 0's presence (same sentinel as `log_orphaned_resume_chunks`), but
+    /// MUST NOT reintroduce break-on-first-hole *within* a set that does
+    /// exist — an interrupted parallel download completes chunks out of
+    /// order, so `part0`, `part2`, `part5` present with `part1`/`part3`/
+    /// `part4` missing is the normal shape, not evidence the set ends at
+    /// `part0`. A break-on-first-miss scan would only discover `part0` here;
+    /// the discovery must find all three. Inverted from an earlier version
+    /// of this test that asserted deletion — #573 established that a probed
+    /// legacy path carries no ownership proof, so nothing here is removed.
     #[tokio::test]
-    async fn test_cleanup_legacy_chunks_across_holes_when_chunk_zero_present() {
+    async fn test_legacy_chunks_across_holes_survive_when_chunk_zero_present() {
         let temp_dir = tempfile::tempdir().unwrap();
         let output_path = temp_dir.path().join("video.mp4");
 
@@ -347,37 +356,34 @@ mod resume_compatibility_tests {
 
         assert_eq!(resume_offset, 4096);
         assert!(
-            !temp_dir.path().join("video.mp4.part0").exists(),
-            "part0 should have been cleaned up"
+            temp_dir.path().join("video.mp4.part0").exists(),
+            "part0 should survive (#573)"
         );
         assert!(
-            !temp_dir.path().join("video.mp4.part2").exists(),
-            "part2 should have been cleaned up despite the hole at part1"
+            temp_dir.path().join("video.mp4.part2").exists(),
+            "part2 should survive despite the hole at part1 (#573)"
         );
         assert!(
-            !temp_dir.path().join("video.mp4.part5").exists(),
-            "part5 should have been cleaned up despite the holes at part3/part4"
+            temp_dir.path().join("video.mp4.part5").exists(),
+            "part5 should survive despite the holes at part3/part4 (#573)"
         );
     }
 
-    /// The chunk-0 sentinel must short-circuit the full scan when chunk 0 is
-    /// absent: a legacy set that never wrote id 0 is not a real set to clean
-    /// up, and later ids belonging to some other (foreign) file must survive
-    /// untouched. This is the observable side effect of the short-circuit —
-    /// with the gate skipped, `cleanup_old_chunks` would fall through to the
-    /// unconditional `0..CHUNK_SCAN_CEILING` loop and delete these files too.
+    /// The chunk-0 sentinel must short-circuit [`resume::log_legacy_chunks`]'s
+    /// scan when chunk 0 is absent: a legacy set that never wrote id 0 is not
+    /// a real set to discover, and later ids belonging to some other
+    /// (foreign) file must not be reported. Since #573 made discovery
+    /// log-only, file survival alone is tautological here (nothing is ever
+    /// deleted, gated or not) — the sentinel is instead pinned directly by
+    /// asserting the discovery call returns an EMPTY vec despite part1/part2
+    /// existing on disk.
     #[tokio::test]
-    async fn test_cleanup_short_circuits_when_chunk_zero_absent() {
+    async fn test_log_legacy_chunks_short_circuits_when_chunk_zero_absent() {
         let temp_dir = tempfile::tempdir().unwrap();
         let output_path = temp_dir.path().join("video.mp4");
 
-        let complete_data = vec![7u8; 4096];
-        tokio::fs::write(&output_path, &complete_data)
-            .await
-            .unwrap();
-
         // part0 deliberately absent -- part1/part2 exist but must NOT be
-        // reached by the scan once the chunk-0 sentinel gate is in place.
+        // reported once the chunk-0 sentinel gate is in place.
         tokio::fs::write(temp_dir.path().join("video.mp4.part1"), &[1u8; 64])
             .await
             .unwrap();
@@ -385,26 +391,22 @@ mod resume_compatibility_tests {
             .await
             .unwrap();
 
-        let orchestrator = create_test_orchestrator();
-        let resume_offset = orchestrator
-            .detect_resume_point(&output_path, Some(4096))
-            .await
-            .unwrap();
+        let discovered = resume::log_legacy_chunks(&output_path).await;
 
-        assert_eq!(resume_offset, 4096);
         assert!(
-            temp_dir.path().join("video.mp4.part1").exists(),
-            "part1 must survive: the chunk-0 sentinel gate should skip the scan entirely"
+            discovered.is_empty(),
+            "the chunk-0 sentinel gate should skip the scan entirely, \
+             despite part1/part2 existing; got {discovered:?}"
         );
-        assert!(
-            temp_dir.path().join("video.mp4.part2").exists(),
-            "part2 must survive: the chunk-0 sentinel gate should skip the scan entirely"
-        );
+        assert!(temp_dir.path().join("video.mp4.part1").exists());
+        assert!(temp_dir.path().join("video.mp4.part2").exists());
     }
 
     /// A foreign file that merely shares the output file's prefix must never
-    /// be deleted by chunk cleanup — cleanup only removes exact computed
-    /// chunk paths, never a directory sweep.
+    /// be touched — discovery only probes exact computed chunk paths, never
+    /// a directory sweep. #573: `part0` itself now also survives, since a
+    /// probed legacy chunk carries no ownership proof (inverted from an
+    /// earlier version of this test that asserted `part0` was deleted).
     #[tokio::test]
     async fn test_cleanup_does_not_delete_foreign_file() {
         let temp_dir = tempfile::tempdir().unwrap();
@@ -428,7 +430,10 @@ mod resume_compatibility_tests {
             .unwrap();
 
         assert_eq!(resume_offset, 1024);
-        assert!(!temp_dir.path().join("video.mp4.part0").exists());
+        assert!(
+            temp_dir.path().join("video.mp4.part0").exists(),
+            "part0 should survive (#573)"
+        );
         assert!(foreign.exists(), "foreign file must survive cleanup");
     }
 
@@ -640,8 +645,11 @@ mod resume_compatibility_tests {
         assert!(temp_dir.path().join("video.mp4.0.part1").exists());
     }
 
+    /// #573: an orphaned legacy chunk set found alongside an already-complete
+    /// file is discovered and logged, never deleted — inverted from an
+    /// earlier version of this test that asserted deletion.
     #[tokio::test]
-    async fn test_cleanup_orphaned_chunks_when_file_complete() {
+    async fn test_orphaned_legacy_chunks_survive_when_file_complete() {
         let temp_dir = tempfile::tempdir().unwrap();
         let output_path = temp_dir.path().join("video.mp4");
 
@@ -668,9 +676,104 @@ mod resume_compatibility_tests {
         // Should detect file is complete
         assert_eq!(resume_offset, 2048);
 
-        // Verify orphaned chunks were cleaned up
-        assert!(!temp_dir.path().join("video.mp4.part0").exists());
-        assert!(!temp_dir.path().join("video.mp4.part1").exists());
+        // Verify orphaned chunks survive (#573 — no ownership proof)
+        assert!(temp_dir.path().join("video.mp4.part0").exists());
+        assert!(temp_dir.path().join("video.mp4.part1").exists());
+    }
+
+    /// #573 acceptance (a): a concurrent writer's legacy chunk file must
+    /// survive `detect_resume_point` on every branch that could otherwise
+    /// have deleted it. This covers the PARTIAL-FILE branch specifically —
+    /// the complete-file and new-style-chunks-present branches are covered
+    /// by the tests above and by `test_prioritize_new_style_over_old_style`.
+    #[tokio::test]
+    async fn test_legacy_chunks_survive_partial_file_branch() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+
+        // Partial output file: nonzero size, no expected_size given so
+        // neither the "already complete" nor "oversized" checks apply —
+        // this exercises the plain "found partial download" branch.
+        tokio::fs::write(&output_path, &vec![1u8; 500])
+            .await
+            .unwrap();
+
+        let chunk0 = temp_dir.path().join("video.mp4.part0");
+        tokio::fs::write(&chunk0, &[9u8; 64]).await.unwrap();
+
+        let orchestrator = create_test_orchestrator();
+        let resume_offset = orchestrator
+            .detect_resume_point(&output_path, None)
+            .await
+            .unwrap();
+
+        assert_eq!(resume_offset, 500);
+        assert!(
+            chunk0.exists(),
+            "legacy chunk must survive the partial-file branch (#573)"
+        );
+    }
+
+    /// #573 acceptance (b): when `merge_chunk_files` fails partway through
+    /// `detect_resume_point`'s fallback arm, the chunks it had not yet
+    /// consumed carry no stronger ownership proof than having just been read
+    /// once — a set that fails to merge will fail the same way on retry, so
+    /// deleting them buys nothing and risks a concurrent writer's file. This
+    /// must log, never delete.
+    ///
+    /// `chunk0` does NOT survive: `merge_chunk_files` copies-then-deletes
+    /// each chunk in order, so by the time it fails opening `chunk1` it has
+    /// already consumed and removed `chunk0` — that deletion is
+    /// `merge_chunk_files`'s own (unchanged) behavior, not the fallback arm
+    /// under test here, and `output_path` itself is left truncated behind.
+    /// `chunk1` is made unreadable (not the *directory*) so `File::open`
+    /// fails inside `merge_chunk_files` while directory-level unlink
+    /// permission stays intact — proving `chunk1`/`chunk2` survive because of
+    /// policy, not because a permission error also happened to block
+    /// deletion under the old code.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_merge_failure_leaves_chunks_in_place() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+
+        let chunk0 = temp_dir.path().join("video.mp4.part0");
+        let chunk1 = temp_dir.path().join("video.mp4.part1");
+        let chunk2 = temp_dir.path().join("video.mp4.part2");
+        tokio::fs::write(&chunk0, &[1u8; 64]).await.unwrap();
+        tokio::fs::write(&chunk1, &[2u8; 64]).await.unwrap();
+        tokio::fs::write(&chunk2, &[3u8; 64]).await.unwrap();
+
+        std::fs::set_permissions(&chunk1, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let orchestrator = create_test_orchestrator();
+        let result = orchestrator.detect_resume_point(&output_path, None).await;
+
+        // Restore permissions before any assertion can panic and skip
+        // cleanup of the temp dir. Ignore the error: against the unpatched
+        // (deleting) code, chunk1 no longer exists at this point.
+        let _ = std::fs::set_permissions(&chunk1, std::fs::Permissions::from_mode(0o644));
+
+        let resume_offset = result.unwrap();
+        assert_eq!(
+            resume_offset, 0,
+            "a failed merge resets to a fresh download"
+        );
+        assert!(
+            !chunk0.exists(),
+            "chunk0 was already consumed by merge_chunk_files before the \
+             failure at chunk1 — that deletion is unrelated to #573"
+        );
+        assert!(
+            chunk1.exists(),
+            "chunk1 should survive a failed merge (#573)"
+        );
+        assert!(
+            chunk2.exists(),
+            "chunk2 should survive a failed merge (#573)"
+        );
     }
 
     #[tokio::test]
