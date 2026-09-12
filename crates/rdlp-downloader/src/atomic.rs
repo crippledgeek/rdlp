@@ -8,9 +8,11 @@
 //! without syncing:
 //!
 //! - **DASH** writes one file per segment; a torn segment costs one re-fetch.
-//! - **HTTP** keeps a validator-carrying sidecar (`ETag`/strong
-//!   `Last-Modified`) and re-validates with the origin, so no on-disk ordering
-//!   is assumed.
+//! - **HTTP** has no sidecar on `develop`; each ranged chunk is re-validated
+//!   against the origin's `Content-Range` (#526). PR #747 adds a
+//!   validator-carrying `<output>.http_state.json` checked with `If-Range` on
+//!   every resume — in both shapes nothing depends on on-disk write ordering,
+//!   so no sync.
 //! - **HLS** appends to one output and records the running CRC-32 of every
 //!   byte written in the sidecar; a resume re-hashes the partial's
 //!   `[0..byte_len)` and starts fresh on a mismatch (`fragments::state`).
@@ -30,9 +32,11 @@
 //! Syncing instead was measured (btrfs on dm-crypt SSD, 2 MiB × 200
 //! fragments, best of 3): 0.49 ms/fragment unsynced vs 16.2 ms with an
 //! `fsync` of the sidecar, 28.2 ms with `fdatasync` of the output plus the
-//! sidecar `fsync`, 11.6 ms for `fdatasync` of the output alone. A 2 MiB
-//! fragment arrives in ~16 ms on gigabit, so a per-fragment sync halves HLS
-//! throughput on a fast link, and HDDs are worse. Detecting the hole on
+//! sidecar `fsync`, 11.6 ms for `fdatasync` of the output alone, and a
+//! barrier every 8th fragment 0.5 ms median but 42 ms p99 (the middle ground
+//! only moves the stall, it does not remove it). A 2 MiB fragment arrives in
+//! ~16 ms on gigabit, so a per-fragment sync halves HLS throughput on a fast
+//! link, and HDDs are worse. Detecting the hole on
 //! resume costs one read of the partial and catches any hole anywhere in the
 //! prefix, on every filesystem, with no ordering assumption. yt-dlp and aria2
 //! write their state files unsynced as well.
@@ -90,8 +94,9 @@ pub async fn atomic_write_json<T: Serialize + Send + 'static>(
 /// CRC-32/IEEE of the first `len` bytes of the file at `path`, read in
 /// `VERIFY_READ_BUF` chunks. The one prefix-hashing routine: the HLS resume
 /// verify and the tests that seed sidecars both use it, so the stored value
-/// has a single definition. Lives here rather than in `fragments::state` so
-/// the DASH and HTTP sidecars can converge on it.
+/// has a single definition. Lives here because this is the module every
+/// sidecar shares, so there is one hashing definition for production and
+/// tests rather than one per protocol.
 ///
 /// # Errors
 /// Returns the underlying I/O error, or `UnexpectedEof` if the file is

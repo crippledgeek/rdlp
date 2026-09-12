@@ -196,7 +196,12 @@ pub async fn download_pre_resolved_fragments(
             })?;
         // The size being right proves nothing about the data (#676): re-hash
         // the prefix and refuse to build on bytes that are not what was
-        // written. A mismatch is an ordinary fresh start, not an error.
+        // written. A mismatch is an ordinary fresh start, not an error: it
+        // reuses the one fresh-start path below, so the output is truncated
+        // twice (to `byte_len` here, then to 0) by design. A read *fault* on
+        // the file we are about to rewrite is an environment error to surface,
+        // not an integrity question — unlike an unparseable sidecar, it does
+        // not become a fresh start.
         let actual_crc = crate::atomic::crc32_of_prefix(output, hls_state.byte_len)
             .await
             .map_err(|e| rdlp_core::RdlpError::Download {

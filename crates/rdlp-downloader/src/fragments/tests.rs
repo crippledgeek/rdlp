@@ -1212,17 +1212,24 @@ async fn cross_origin_fragment_url_does_not_forward_seed_headers() {
 use super::state::{HlsResumeState, fragment_fingerprint};
 use crate::atomic::crc32_of_prefix;
 
-/// Sidecar for a partial already on disk at `output`: `done` fragments of
-/// the one-byte bodies these fixtures serve (so `byte_len == done`), CRC
-/// taken from the output's current `[0..done)` via the production hashing
-/// helper. Callers that want a *stale* CRC hash first and then corrupt the
-/// file.
-async fn seed_sidecar(output: &Path, frags: &[Fragment], done: u64) {
+/// The confirmed boundary a seeded sidecar records: `done` fragments
+/// spanning `byte_len` bytes of the output.
+struct Checkpoint {
+    done: u64,
+    byte_len: u64,
+}
+
+/// Sidecar for a partial already on disk at `output`, with its CRC taken from
+/// the output's current `[0..byte_len)` via the production hashing helper.
+/// Callers that want a *stale* CRC hash first and then corrupt the file.
+async fn seed_sidecar(output: &Path, frags: &[Fragment], cp: Checkpoint) {
     let sidecar = output.with_extension("ts.hls_state.json");
     let mut st = HlsResumeState::new(fragment_fingerprint(frags), frags.len() as u64);
-    st.fragments_done = done;
-    st.byte_len = done;
-    st.stream_crc32 = crc32_of_prefix(output, done).await.expect("hash prefix");
+    st.fragments_done = cp.done;
+    st.byte_len = cp.byte_len;
+    st.stream_crc32 = crc32_of_prefix(output, cp.byte_len)
+        .await
+        .expect("hash prefix");
     st.save(&sidecar).await.expect("seed sidecar");
 }
 
@@ -1409,7 +1416,15 @@ async fn resume_is_byte_identical_and_skips_done_fragments() {
     // Partial is exactly byte_len long: the boundary case where the verify
     // reads the whole file and must pass.
     let sidecar = output.with_extension("ts.hls_state.json");
-    seed_sidecar(&output, &frags, done as u64).await;
+    seed_sidecar(
+        &output,
+        &frags,
+        Checkpoint {
+            done: done as u64,
+            byte_len: done as u64, // 1-byte fragment bodies
+        },
+    )
+    .await;
 
     download_pre_resolved_fragments(&http, &frags, None, None, None, &output, None, None)
         .await
@@ -1490,7 +1505,15 @@ async fn extra_tail_is_truncated_to_byte_len_on_resume() {
     // Sidecar CRC covers the intact 2-byte prefix; the torn 0xFF byte is
     // appended afterwards, past the confirmed boundary.
     tokio::fs::write(&output, &reference[..2]).await.unwrap();
-    seed_sidecar(&output, &frags, 2).await;
+    seed_sidecar(
+        &output,
+        &frags,
+        Checkpoint {
+            done: 2,
+            byte_len: 2,
+        },
+    )
+    .await;
     let mut partial = reference[..2].to_vec();
     partial.push(0xFF);
     tokio::fs::write(&output, &partial).await.unwrap();
@@ -1532,7 +1555,15 @@ async fn zeroed_tail_with_stale_crc_restarts_fresh() {
 
     // Sidecar hashed over the real 3-byte prefix, then the tail is zeroed.
     tokio::fs::write(&output, &reference[..3]).await.unwrap();
-    seed_sidecar(&output, &frags, 3).await;
+    seed_sidecar(
+        &output,
+        &frags,
+        Checkpoint {
+            done: 3,
+            byte_len: 3,
+        },
+    )
+    .await;
     let mut zeroed = reference[..3].to_vec();
     zeroed[2] = 0;
     tokio::fs::write(&output, &zeroed).await.unwrap();
@@ -1572,7 +1603,15 @@ async fn zeroed_hole_in_the_middle_restarts_fresh() {
     let frags = frags_on(&server, 5);
 
     tokio::fs::write(&output, &reference[..4]).await.unwrap();
-    seed_sidecar(&output, &frags, 4).await;
+    seed_sidecar(
+        &output,
+        &frags,
+        Checkpoint {
+            done: 4,
+            byte_len: 4,
+        },
+    )
+    .await;
     let mut holed = reference[..4].to_vec();
     holed[1] = 0;
     tokio::fs::write(&output, &holed).await.unwrap();
@@ -1647,7 +1686,15 @@ async fn resumed_hasher_continues_from_the_verified_prefix() {
         .await;
     let frags = frags_on(&server, 6);
     tokio::fs::write(&output, &reference[..2]).await.unwrap();
-    seed_sidecar(&output, &frags, 2).await;
+    seed_sidecar(
+        &output,
+        &frags,
+        Checkpoint {
+            done: 2,
+            byte_len: 2,
+        },
+    )
+    .await;
 
     let res =
         download_pre_resolved_fragments(&http, &frags, None, None, None, &output, None, None).await;
