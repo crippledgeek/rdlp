@@ -6,8 +6,8 @@
 //! stage task before returning `PipelineError::Cancelled` (#560), so by the
 //! time a caller observes `OrchestratorError::UserCancelled` every tracker
 //! that run created has already been dropped — including one still doing
-//! `FFmpeg` work when the cancel fired, which an earlier version of this join
-//! did not wait for. This module deletes only what the pipeline never sees:
+//! `FFmpeg` work when the cancel fired, which, before #560, `run` did not
+//! wait for. This module deletes only what the pipeline never sees:
 //! the downloaded thumbnail and the `.rdlp_state.json` session-state file.
 //! Called on the PP-cancel path only — download-time cancel intentionally
 //! retains resume state (see the #404 design spec).

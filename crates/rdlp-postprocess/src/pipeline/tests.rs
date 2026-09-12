@@ -593,6 +593,20 @@ async fn cancel_mid_slow_stage_reclaims_owned_source_before_run_returns() {
     // Wait for proof the stage is inside `process()` — not a guessed delay.
     entered.notified().await;
     token.cancel();
+    // On the default `current_thread` runtime this task's own queue is FIFO:
+    // without these two yields, `release.notify_one()` below would wake the
+    // gated stage in the SAME scheduling batch as `PassthroughStage`'s
+    // cancel-arm wakeup, so both would run to completion (and the gated
+    // stage's forward-and-drop would already have deleted the file) before
+    // `run`'s own task is ever polled again — green regardless of whether
+    // the join exists. Two yields force the ordering the join is meant to
+    // guarantee: the first lets `PassthroughStage` observe the cancel and
+    // drop its sender (closing the channel); the second lets `run`'s task
+    // be polled and either return `Cancelled` immediately (unfixed — the
+    // gated stage is still parked, file untouched) or park inside the join
+    // (fixed — it cannot finish until `release` is notified).
+    tokio::task::yield_now().await;
+    tokio::task::yield_now().await;
     // Let the (deliberately uncancellable) stage finish now that the cancel
     // has already been observed by the rest of the pipeline.
     release.notify_one();
