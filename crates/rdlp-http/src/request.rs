@@ -12,7 +12,7 @@
 
 use std::sync::LazyLock;
 
-use wreq::header::{ACCEPT_ENCODING, HeaderMap, HeaderValue};
+use wreq::header::{ACCEPT_ENCODING, HeaderMap, HeaderValue, IF_RANGE, RANGE};
 
 use crate::validator::StrongValidator;
 
@@ -109,6 +109,11 @@ impl RangeSpec {
 
 /// Adds `Range` and, with a validator, `If-Range` — always together, so
 /// §13.1.5's "no If-Range without Range" holds by construction.
+///
+/// Applied the same way as [`IDENTITY_PIN`]: through
+/// [`wreq::RequestBuilder::headers`], which REPLACES a caller's `Range` or
+/// `If-Range` line where `RequestBuilder::header` would append a second one
+/// and leave the server free to honour either.
 pub trait RangedRequest {
     /// Attach `range` (and `validator`'s `If-Range`, when given) to `self`.
     #[must_use]
@@ -117,10 +122,22 @@ pub trait RangedRequest {
 
 impl RangedRequest for wreq::RequestBuilder {
     fn ranged(self, range: RangeSpec, validator: Option<&StrongValidator>) -> Self {
-        let req = self.header("Range", range.header_value());
-        match validator {
-            Some(v) => req.header("If-Range", v.if_range_value()),
-            None => req,
+        let mut map = HeaderMap::with_capacity(2);
+        if let Some(v) = validator {
+            map.insert(IF_RANGE, v.if_range_value());
+        }
+        let value = range.header_value();
+        // `bytes=<digits>-[<digits>]` is visible ASCII, so `from_str` cannot
+        // fail. The `Err` arm keeps that honest without a panic path: wreq's
+        // `header` re-runs the same conversion and stores its failure as the
+        // builder's pending error (`client/request.rs` `header_sensitive`),
+        // so `send()` fails loudly rather than going out with no `Range`.
+        match HeaderValue::from_str(&value) {
+            Ok(v) => {
+                map.insert(RANGE, v);
+                self.headers(map)
+            }
+            Err(_) => self.headers(map).header(RANGE, value),
         }
     }
 }
@@ -262,6 +279,82 @@ mod tests {
             .unwrap();
         assert_eq!(resp.status().as_u16(), 206);
         m.assert_async().await;
+    }
+
+    /// A caller-supplied `Range` (an operator `--header`, say) is REPLACED
+    /// by the one this download computed, never joined by it: two `Range`
+    /// lines would leave the server free to honour either, and the body
+    /// would then be placed at the wrong offset. `Matcher::Exact` fails if
+    /// any `range` line differs, so an appended second line is caught.
+    #[tokio::test]
+    async fn ranged_replaces_a_caller_range_rather_than_appending() {
+        let mut server = Server::new_async().await;
+        let m = server
+            .mock("GET", "/f")
+            .match_header("range", Matcher::Exact("bytes=10-".to_string()))
+            .match_header("if-range", Matcher::Exact("\"v1\"".to_string()))
+            .with_status(206)
+            .with_header("content-range", "bytes 10-19/20")
+            .with_body("0123456789")
+            .create_async()
+            .await;
+        let client =
+            crate::HttpClientFactory::from_config(&crate::HttpClientConfig::default()).build();
+        let mut caller_headers = HeaderMap::new();
+        caller_headers.insert("range", HeaderValue::from_static("bytes=0-1"));
+        caller_headers.insert("if-range", HeaderValue::from_static("\"stale\""));
+        let v = StrongValidator::ETag(crate::validator::StrongEntityTag::parse("\"v1\"").unwrap());
+        let resp = download_request(
+            &client,
+            &format!("{}/f", server.url()),
+            Some(&caller_headers),
+        )
+        .ranged(RangeSpec::From(10), Some(&v))
+        .send()
+        .await
+        .unwrap();
+        assert_eq!(resp.status().as_u16(), 206);
+        m.assert_async().await;
+    }
+
+    /// Both `RangeSpec` shapes reach the wire as exactly one `Range` line
+    /// with the §14.1.2 value: `Matcher::Exact` fails on a missing line, a
+    /// second line, or any other text.
+    #[tokio::test]
+    async fn ranged_sends_exactly_the_span_or_open_ended_value() {
+        let mut server = Server::new_async().await;
+        let span = server
+            .mock("GET", "/s")
+            .match_header("range", Matcher::Exact("bytes=3-7".to_string()))
+            .with_status(206)
+            .with_header("content-range", "bytes 3-7/8")
+            .with_body("34567")
+            .create_async()
+            .await;
+        let open = server
+            .mock("GET", "/o")
+            .match_header("range", Matcher::Exact("bytes=3-".to_string()))
+            .with_status(206)
+            .with_header("content-range", "bytes 3-7/8")
+            .with_body("34567")
+            .create_async()
+            .await;
+        let client =
+            crate::HttpClientFactory::from_config(&crate::HttpClientConfig::default()).build();
+        let s = download_request(&client, &format!("{}/s", server.url()), None)
+            .ranged(RangeSpec::span(3, 7).unwrap(), None)
+            .send()
+            .await
+            .unwrap();
+        let o = download_request(&client, &format!("{}/o", server.url()), None)
+            .ranged(RangeSpec::From(3), None)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(s.status().as_u16(), 206);
+        assert_eq!(o.status().as_u16(), 206);
+        span.assert_async().await;
+        open.assert_async().await;
     }
 
     #[tokio::test]

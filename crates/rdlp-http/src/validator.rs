@@ -89,10 +89,12 @@ impl StrongEntityTag {
 
 /// A `Last-Modified` value in IMF-fixdate form, kept verbatim.
 ///
-/// Carries the parsed `HeaderValue` alongside the raw `String` for the same
-/// reason as [`StrongEntityTag`].
+/// Holds only the validated `HeaderValue`, for the same reason as
+/// [`StrongEntityTag`]: it is both the storage and what `If-Range` sends,
+/// and comparison follows the bytes. IMF-fixdate is pure visible ASCII by
+/// grammar (§5.6.7), so the bytes are also the text whenever one is shown.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ImfFixdate(String, HeaderValue);
+pub struct ImfFixdate(HeaderValue);
 
 impl ImfFixdate {
     /// `None` for the two obsolete formats: echoing them would break §5.6.7's
@@ -102,14 +104,13 @@ impl ImfFixdate {
         NaiveDateTime::parse_from_str(raw, IMF_FIXDATE).ok()?;
         // IMF-fixdate is pure visible ASCII, always inside `HeaderValue`'s
         // accepted byte range; see the note in `StrongEntityTag::parse`.
-        let header_value = HeaderValue::from_bytes(raw.as_bytes()).ok()?;
-        Some(Self(raw.to_owned(), header_value))
+        HeaderValue::from_bytes(raw.as_bytes()).ok().map(Self)
     }
 
-    /// The raw field value.
+    /// The raw field value, as received.
     #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
     }
 }
 
@@ -151,7 +152,12 @@ impl From<StrongValidator> for String {
                 |_| format!("{ETAG_HEX_PREFIX}{}", hex::encode(t.as_bytes())),
                 |utf8| format!("{ETAG_PREFIX}{utf8}"),
             ),
-            StrongValidator::LastModified(d) => format!("{LAST_MODIFIED_PREFIX}{}", d.as_str()),
+            // Lossless: an IMF-fixdate is ASCII by grammar (§5.6.7), and
+            // `parse` accepted only what chrono read as one.
+            StrongValidator::LastModified(d) => format!(
+                "{LAST_MODIFIED_PREFIX}{}",
+                Self::from_utf8_lossy(d.as_bytes())
+            ),
         }
     }
 }
@@ -185,8 +191,9 @@ impl TryFrom<String> for StrongValidator {
 pub enum ValidatorMismatch {
     /// The response carried no `ETag` although §15.3.7 requires one on a 206.
     Missing,
-    /// The response's `ETag` is weak and so cannot match strongly (§8.8.3.2).
-    Weak(String),
+    /// The response's `ETag` is weak (§8.8.3.2: never a strong match) or is
+    /// not an entity-tag at all — either way, not a strong validator.
+    NotStrong(String),
     /// A different validator: the server served another representation.
     Different {
         /// The validator that was sent in `If-Range`.
@@ -202,9 +209,9 @@ impl std::fmt::Display for ValidatorMismatch {
             Self::Missing => {
                 f.write_str("206 response carries no ETag (RFC 9110 §15.3.7 requires it)")
             }
-            Self::Weak(got) => write!(
+            Self::NotStrong(got) => write!(
                 f,
-                "206 response carries a weak ETag {got}; strong comparison fails"
+                "206 response carries a weak or malformed entity tag {got}; strong comparison fails"
             ),
             Self::Different { expected, got } => {
                 write!(
@@ -249,7 +256,7 @@ impl StrongValidator {
     pub fn if_range_value(&self) -> HeaderValue {
         match self {
             Self::ETag(t) => t.0.clone(),
-            Self::LastModified(d) => d.1.clone(),
+            Self::LastModified(d) => d.0.clone(),
         }
     }
 
@@ -280,18 +287,18 @@ impl StrongValidator {
                         expected: String::from_utf8_lossy(expected.as_bytes()).into_owned(),
                         got: String::from_utf8_lossy(tag.as_bytes()).into_owned(),
                     }),
-                    None => Err(ValidatorMismatch::Weak(
+                    None => Err(ValidatorMismatch::NotStrong(
                         String::from_utf8_lossy(got_bytes).into_owned(),
                     )),
                 }
             }
             Self::LastModified(expected) => {
-                match headers.get("last-modified").and_then(|v| v.to_str().ok()) {
+                match headers.get("last-modified").map(HeaderValue::as_bytes) {
                     None => Ok(()),
-                    Some(got) if got == expected.as_str() => Ok(()),
+                    Some(got) if got == expected.as_bytes() => Ok(()),
                     Some(got) => Err(ValidatorMismatch::Different {
-                        expected: expected.as_str().to_owned(),
-                        got: got.to_owned(),
+                        expected: String::from_utf8_lossy(expected.as_bytes()).into_owned(),
+                        got: String::from_utf8_lossy(got).into_owned(),
                     }),
                 }
             }
@@ -608,10 +615,38 @@ mod tests {
     #[test]
     fn verify_partial_weak_etag_on_206_is_a_mismatch() {
         let v = StrongValidator::ETag(StrongEntityTag::parse("\"a\"").unwrap());
+        let err = v
+            .verify_partial(&headers(&[("etag", "W/\"a\"")]))
+            .unwrap_err();
+        assert!(matches!(err, ValidatorMismatch::NotStrong(_)), "{err:?}");
+        assert!(err.to_string().contains("weak or malformed"), "{err}");
+    }
+    /// An unquoted `ETag` on the 206 is not an entity-tag at all (§8.8.3);
+    /// it is reported as not-strong, never as `Different`, because there is
+    /// no strong tag to differ from.
+    #[test]
+    fn verify_partial_malformed_etag_on_206_is_not_strong() {
+        let v = StrongValidator::ETag(StrongEntityTag::parse("\"a\"").unwrap());
         assert!(matches!(
-            v.verify_partial(&headers(&[("etag", "W/\"a\"")])),
-            Err(ValidatorMismatch::Weak(_))
+            v.verify_partial(&headers(&[("etag", "a")])),
+            Err(ValidatorMismatch::NotStrong(got)) if got == "a"
         ));
+    }
+    /// `ImfFixdate` holds the bytes once; the sidecar text and the
+    /// `If-Range` value are both those bytes, and `Last-Modified` on a 206
+    /// is compared byte-for-byte (§13.1.5 exact match).
+    #[test]
+    fn imf_fixdate_bytes_are_the_one_stored_value() {
+        const RAW: &str = "Sun, 06 Nov 1994 08:49:37 GMT";
+        let d = ImfFixdate::parse(RAW).unwrap();
+        assert_eq!(d.as_bytes(), RAW.as_bytes());
+        let v = StrongValidator::LastModified(d);
+        assert_eq!(v.if_range_value().as_bytes(), RAW.as_bytes());
+        assert_eq!(String::from(v.clone()), format!("last-modified:{RAW}"));
+        assert_eq!(
+            v.verify_partial(&headers(&[("last-modified", RAW)])),
+            Ok(())
+        );
     }
     #[test]
     fn verify_partial_last_modified_absent_is_ok() {
