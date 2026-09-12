@@ -6527,11 +6527,13 @@ dependencies = [
 name = "rdlp-http"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "mockito",
  "openssl-sys",
  "rdlp-redact",
  "rdlp-security",
  "rdlp-types",
+ "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",
