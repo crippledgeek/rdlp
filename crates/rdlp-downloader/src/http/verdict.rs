@@ -221,8 +221,8 @@ pub(crate) fn range_verdict(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::state::etag;
     use mockito::{Mock, Server, ServerGuard};
-    use rdlp_http::validator::StrongEntityTag;
 
     async fn served(
         server: &mut ServerGuard,
@@ -242,9 +242,6 @@ mod tests {
             .await
             .unwrap();
         (m, resp)
-    }
-    fn etag(s: &str) -> StrongValidator {
-        StrongValidator::ETag(StrongEntityTag::parse(s).unwrap())
     }
     fn span_meta(start: u64, end: u64, v: Option<&StrongValidator>) -> RangedRequestMeta<'_> {
         RangedRequestMeta {

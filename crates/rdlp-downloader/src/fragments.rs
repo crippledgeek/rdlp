@@ -594,78 +594,70 @@ async fn fetch_with_optional_range(
     // accepted the connection and then went silent produced no error for the
     // new retry to act on. See `with_transfer_timeouts` for which timer bounds
     // which failure — they are not interchangeable.
-    let (resp, expected_len) = if let Some((start, end_exclusive)) = byte_range {
-        // Ranged fetch (HLS #EXT-X-BYTERANGE / DASH mediaRange): the identity
-        // pin from `download_request` keeps byte offsets comparable
-        // (RFC 9110 §14.1.2), and `range_verdict` is the one decision point
-        // this shares with the parallel-chunk path (#526, #564).
-        let end_inclusive = end_exclusive.saturating_sub(1);
-        let span = RangeSpec::span(start, end_inclusive).ok_or_else(|| {
-            rdlp_core::RdlpError::Download {
+    //
+    // Built once, before the send: an inverted range is a caller bug, not a
+    // transient condition, so it fails before any request goes out.
+    let span = byte_range
+        .map(|(start, end_exclusive)| {
+            let end_inclusive = end_exclusive.saturating_sub(1);
+            RangeSpec::span(start, end_inclusive).ok_or_else(|| rdlp_core::RdlpError::Download {
                 url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
                 message: format!(
                     "internal error: fragment requested an inverted byte range \
-                     {start}-{end_inclusive}"
+                         {start}-{end_inclusive}"
                 ),
-            }
+            })
+        })
+        .transpose()?;
+
+    // Ranged fetch (HLS #EXT-X-BYTERANGE / DASH mediaRange): the identity pin
+    // from `download_request` keeps byte offsets comparable (RFC 9110
+    // §14.1.2). Unranged (whole-segment): a plain GET, no pin — a whole-segment
+    // body has no offsets to protect against a coded response, so the plain
+    // success-status gate is exactly right and must not be held to a 206
+    // standard. The two differ only in the request; the send is one.
+    let req = match span {
+        Some(span) => {
+            rdlp_http::download_request(http.client(), url, Some(&same_origin)).ranged(span, None)
+        }
+        None => http.client().get(url).headers(same_origin),
+    };
+    let resp = crate::http::with_transfer_timeouts(req, http.config.read_timeout)
+        .send()
+        .await
+        .map_err(|e| rdlp_core::RdlpError::Network {
+            message: format!("fetch {safe_url}: {e}"),
+            url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
         })?;
 
-        let req = crate::http::with_transfer_timeouts(
-            rdlp_http::download_request(http.client(), url, Some(&same_origin)),
-            http.config.read_timeout,
-        )
-        .ranged(span, None);
-
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| rdlp_core::RdlpError::Network {
-                message: format!("fetch {safe_url}: {e}"),
-                url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
-            })?;
-
+    let expected_len = if let Some(span) = span {
+        // `range_verdict` is the one decision point this shares with the
+        // parallel-chunk path (#526, #564). No `If-Range` is sent here, so it
+        // already turns a 200 into an error and never yields `Mismatched`;
+        // the only non-`Partial` verdict that can reach this arm is a 416.
         let meta = RangedRequestMeta {
             range: span,
             sent_validator: None,
         };
-        // No `If-Range` is sent here, so `range_verdict` already turns a 200
-        // into an error; the only non-`Partial` verdict that can reach this
-        // arm is a 416.
         let RangeVerdict::Partial { .. } = range_verdict(&resp, &meta, url)? else {
             return Err(rdlp_core::RdlpError::Download {
                 url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
                 message: format!(
-                    "ranged fragment fetch {safe_url} got 416 (Range Not Satisfiable) for bytes \
-                     {start}-{end_inclusive}; the fragment's byte range is not satisfiable on \
-                     the current representation"
+                    "ranged fragment fetch {safe_url} got 416 (Range Not Satisfiable) for {}; \
+                     the fragment's byte range is not satisfiable on the current representation",
+                    span.header_value()
                 ),
             });
         };
-        (resp, Some(bounded_len(span, url)?))
+        Some(bounded_len(span, url)?)
     } else {
-        // Unranged fetch (whole-segment): plain GET, no identity pin — a
-        // whole-segment body has no offsets to protect against a coded
-        // response, so the plain success-status gate is exactly right here
-        // and must not be held to a 206 standard.
-        let req =
-            crate::http::with_transfer_timeouts(http.client().get(url), http.config.read_timeout)
-                .headers(same_origin);
-
-        let resp = req
-            .send()
-            .await
-            .map_err(|e| rdlp_core::RdlpError::Network {
-                message: format!("fetch {safe_url}: {e}"),
-                url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
-            })?;
-
         if !resp.status().is_success() {
             return Err(rdlp_core::RdlpError::Http {
                 status: resp.status().as_u16(),
                 reason: format!("fragment HTTP {}", resp.status()),
             });
         }
-        (resp, None)
+        None
     };
 
     let body =

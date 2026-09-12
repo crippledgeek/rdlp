@@ -132,14 +132,6 @@ impl Source {
         }
     }
 
-    /// A source with no validator. Test-only: every production path now
-    /// threads the probe's or the sidecar's validator through [`Self::new`],
-    /// and a chunk test that wants "none was offered" says so here.
-    #[cfg(test)]
-    pub(crate) fn unverified(url: &str) -> Self {
-        Self::new(url, None)
-    }
-
     /// What a ranged request for `range` against this source asked for, so
     /// the answer can be checked against it.
     pub(crate) const fn meta(&self, range: RangeSpec) -> RangedRequestMeta<'_> {
@@ -150,14 +142,16 @@ impl Source {
     }
 }
 
+/// A strong-`ETag` validator from its raw quoted form, for the tests of
+/// every module in `http` that builds one (`state`, `verdict`, `tests`).
+#[cfg(test)]
+pub(crate) fn etag(s: &str) -> StrongValidator {
+    StrongValidator::ETag(rdlp_http::validator::StrongEntityTag::parse(s).unwrap())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rdlp_http::validator::StrongEntityTag;
-
-    fn etag(s: &str) -> StrongValidator {
-        StrongValidator::ETag(StrongEntityTag::parse(s).unwrap())
-    }
 
     #[tokio::test]
     async fn sidecar_round_trips_and_sits_next_to_the_output() {
@@ -217,12 +211,12 @@ mod tests {
     }
 
     /// `meta` is what every chunk's verdict is judged against, so the
-    /// validator it carries must be exactly the source's — `unverified`
-    /// sends none, `new` with one sends that one.
+    /// validator it carries must be exactly the source's — `None` sends
+    /// none, `Some` sends that one.
     #[test]
     fn meta_carries_the_source_validator() {
         let span = RangeSpec::span(0, 9).unwrap();
-        let none = Source::unverified("http://h/v");
+        let none = Source::new("http://h/v", None);
         assert!(none.meta(span).sent_validator.is_none());
         assert_eq!(none.meta(span).range, span);
 

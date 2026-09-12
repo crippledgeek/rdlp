@@ -2,6 +2,7 @@
 
 #![allow(clippy::unreadable_literal)] // byte-count literals in HTTP range tests
 
+use super::state::etag;
 use super::*;
 use rdlp_core::Downloader;
 use rdlp_core::is_retryable_error;
@@ -302,7 +303,7 @@ async fn test_chunk_retry_succeeds_on_second_attempt() {
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
-            source: &Source::unverified(&url),
+            source: &Source::new(&url, None),
             start: 0,
             end: 1023,
             chunk_path: &chunk_path,
@@ -349,7 +350,7 @@ async fn test_chunk_retry_exhausted_returns_error() {
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
-            source: &Source::unverified(&url),
+            source: &Source::new(&url, None),
             start: 0,
             end: 1023,
             chunk_path: &chunk_path,
@@ -394,7 +395,7 @@ async fn test_chunk_retry_non_retryable_fails_immediately() {
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
-            source: &Source::unverified(&url),
+            source: &Source::new(&url, None),
             start: 0,
             end: 1023,
             chunk_path: &chunk_path,
@@ -464,7 +465,7 @@ async fn test_chunk_retry_cleans_partial_file() {
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
-            source: &Source::unverified(&url),
+            source: &Source::new(&url, None),
             start: 0,
             end: 511,
             chunk_path: &chunk_path,
@@ -1365,7 +1366,7 @@ async fn range_fetch_rejects_200_full_body() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(&Source::unverified(&url), 0, 1023, &chunk_path, None, None)
+        .download_range_with_progress(&Source::new(&url, None), 0, 1023, &chunk_path, None, None)
         .await;
 
     assert!(
@@ -1395,7 +1396,7 @@ async fn range_fetch_rejects_206_without_content_range() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(&Source::unverified(&url), 0, 1023, &chunk_path, None, None)
+        .download_range_with_progress(&Source::new(&url, None), 0, 1023, &chunk_path, None, None)
         .await;
 
     assert!(
@@ -1428,7 +1429,7 @@ async fn range_fetch_rejects_mismatched_content_range() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(&Source::unverified(&url), 0, 1023, &chunk_path, None, None)
+        .download_range_with_progress(&Source::new(&url, None), 0, 1023, &chunk_path, None, None)
         .await;
 
     assert!(
@@ -1470,7 +1471,7 @@ async fn range_fetch_rejects_short_body() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(&Source::unverified(&url), 0, 1023, &chunk_path, None, None)
+        .download_range_with_progress(&Source::new(&url, None), 0, 1023, &chunk_path, None, None)
         .await;
 
     assert!(
@@ -1505,7 +1506,7 @@ async fn range_fetch_rejects_overlong_body() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(&Source::unverified(&url), 0, 1023, &chunk_path, None, None)
+        .download_range_with_progress(&Source::new(&url, None), 0, 1023, &chunk_path, None, None)
         .await;
 
     assert!(
@@ -1548,7 +1549,7 @@ async fn range_fetch_accepts_conformant_206() {
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
         .download_range_with_progress(
-            &Source::unverified(&url),
+            &Source::new(&url, None),
             4096,
             5119,
             &chunk_path,
@@ -1587,7 +1588,7 @@ async fn chunk_416_reaches_the_verdict_and_names_the_reported_length() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(&Source::unverified(&url), 0, 1023, &chunk_path, None, None)
+        .download_range_with_progress(&Source::new(&url, None), 0, 1023, &chunk_path, None, None)
         .await;
 
     let err = result.expect_err("a 416 must be refused, not silently accepted");
@@ -1620,7 +1621,7 @@ async fn chunk_503_is_still_a_plain_http_error() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(&Source::unverified(&url), 0, 1023, &chunk_path, None, None)
+        .download_range_with_progress(&Source::new(&url, None), 0, 1023, &chunk_path, None, None)
         .await;
 
     assert!(
@@ -1754,7 +1755,7 @@ async fn chunk_retry_recovers_from_wrong_span_response() {
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
-            source: &Source::unverified(&url),
+            source: &Source::new(&url, None),
             start: 0,
             end: 1023,
             chunk_path: &chunk_path,
@@ -1822,7 +1823,7 @@ async fn chunk_retry_recovers_from_short_body() {
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
-            source: &Source::unverified(&url),
+            source: &Source::new(&url, None),
             start: 0,
             end: 1023,
             chunk_path: &chunk_path,
@@ -1879,7 +1880,7 @@ async fn chunk_retry_does_not_retry_range_ignoring_server() {
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
-            source: &Source::unverified(&url),
+            source: &Source::new(&url, None),
             start: 0,
             end: 1023,
             chunk_path: &chunk_path,
@@ -1926,7 +1927,7 @@ async fn range_fetch_rejects_body_one_byte_short() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(&Source::unverified(&url), 0, 1023, &chunk_path, None, None)
+        .download_range_with_progress(&Source::new(&url, None), 0, 1023, &chunk_path, None, None)
         .await;
 
     assert!(
@@ -1956,7 +1957,7 @@ async fn range_fetch_rejects_body_one_byte_over() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(&Source::unverified(&url), 0, 1023, &chunk_path, None, None)
+        .download_range_with_progress(&Source::new(&url, None), 0, 1023, &chunk_path, None, None)
         .await;
 
     assert!(
@@ -2497,6 +2498,34 @@ fn read_sidecar_sync(output: &Path) -> Option<String> {
     std::fs::read_to_string(HttpResumeState::sidecar_path(output)).ok()
 }
 
+/// Poll interval and ceiling for a body thread waiting on a sidecar rewrite;
+/// the ceiling is only reached on a regression, when the test then fails on
+/// what it saw.
+const SIDECAR_POLL: std::time::Duration = std::time::Duration::from_millis(10);
+const SIDECAR_MAX_POLLS: u32 = 300;
+
+/// From a mockito body callback: wait — bounded — until the sidecar names
+/// `wanted`, and return the last sidecar text seen (rewritten or not). mockito
+/// builds a body BEFORE it writes the headers, so a `with_body_from_request`
+/// callback would only ever see the sidecar from before the request; a
+/// `with_chunked_body` thread runs while hyper streams and can wait for the
+/// rewrite the response's own headers trigger.
+fn wait_for_sidecar_validator(output: &Path, wanted: &StrongValidator) -> Option<String> {
+    let mut latest = None;
+    for _ in 0..SIDECAR_MAX_POLLS {
+        latest = read_sidecar_sync(output);
+        let rewritten = latest
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<HttpResumeState>(s).ok())
+            .is_some_and(|s| s.validator == *wanted);
+        if rewritten {
+            break;
+        }
+        std::thread::sleep(SIDECAR_POLL);
+    }
+    latest
+}
+
 /// Two-chunk parallel setup: a probe answering 206 with `etag`, and a
 /// downloader that will split `total` into two static chunks of `total / 2`.
 async fn two_chunk_setup(
@@ -2711,11 +2740,6 @@ async fn fresh_download_writes_sidecar_before_body_and_removes_it_on_success() {
 async fn sequential_get_validator_overrides_probe_validator() {
     use mockito::{Matcher, Server};
 
-    /// Poll interval and ceiling for the body thread's wait; the ceiling is
-    /// only reached on a regression, when the test then fails on `seen`.
-    const POLL: std::time::Duration = std::time::Duration::from_millis(10);
-    const MAX_POLLS: u32 = 300;
-
     let mut server = Server::new_async().await;
     let dir = tempfile::TempDir::new().unwrap();
     let out = dir.path().join("v.mp4");
@@ -2743,19 +2767,7 @@ async fn sequential_get_validator_overrides_probe_validator() {
         .with_status(200)
         .with_header("etag", "\"get\"")
         .with_chunked_body(move |w| {
-            let mut latest = None;
-            for _ in 0..MAX_POLLS {
-                latest = read_sidecar_sync(&out_for_body);
-                let rewritten = latest
-                    .as_deref()
-                    .and_then(|s| serde_json::from_str::<HttpResumeState>(s).ok())
-                    .is_some_and(|s| s.validator == wanted);
-                if rewritten {
-                    break;
-                }
-                std::thread::sleep(POLL);
-            }
-            *seen_in_body.lock().unwrap() = latest;
+            *seen_in_body.lock().unwrap() = wait_for_sidecar_validator(&out_for_body, &wanted);
             w.write_all(&body_for_get)
         })
         .create_async()
@@ -2849,10 +2861,6 @@ async fn fresh_download_without_probe_validator_clears_a_stale_sidecar() {
 // (RFC 9110 §13.1.5, §13.2.2, §14.4, §15.3.7.3).
 // ---------------------------------------------------------------------------
 
-fn etag(s: &str) -> StrongValidator {
-    StrongValidator::ETag(rdlp_http::validator::StrongEntityTag::parse(s).unwrap())
-}
-
 /// A partial file holding `partial`, optionally with a sidecar naming the
 /// validator and complete-length it was fetched under, and a downloader that
 /// never retries and never goes parallel — so the sequential branch is what
@@ -2941,8 +2949,6 @@ async fn resume_sends_if_range_and_appends_on_206() {
 #[tokio::test]
 async fn resume_200_after_if_range_rewrites_from_the_response_body() {
     use mockito::Server;
-    const POLL: std::time::Duration = std::time::Duration::from_millis(10);
-    const MAX_POLLS: u32 = 300;
 
     let mut server = Server::new_async().await;
     let (_dir, out, d) = resume_fixture(b"old-", Some(("\"v1\"", Some(8)))).await;
@@ -2958,19 +2964,7 @@ async fn resume_200_after_if_range_rewrites_from_the_response_body() {
         .with_header("etag", "\"v2\"")
         .with_header("content-length", "6")
         .with_chunked_body(move |w| {
-            let mut latest = None;
-            for _ in 0..MAX_POLLS {
-                latest = read_sidecar_sync(&out_for_body);
-                let rewritten = latest
-                    .as_deref()
-                    .and_then(|s| serde_json::from_str::<HttpResumeState>(s).ok())
-                    .is_some_and(|s| s.validator == wanted);
-                if rewritten {
-                    break;
-                }
-                std::thread::sleep(POLL);
-            }
-            *seen_in_body.lock().unwrap() = latest;
+            *seen_in_body.lock().unwrap() = wait_for_sidecar_validator(&out_for_body, &wanted);
             w.write_all(b"newnew")
         })
         .expect(1)
