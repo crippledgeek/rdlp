@@ -692,11 +692,10 @@ async fn download_one(
                     reason: format!("DASH segment HTTP {}", resp.status()),
                 });
             }
-            let bytes = resp.bytes().await.map_err(|e| RdlpError::Network {
-                message: format!("DASH segment read error: {e}"),
-                url: Some(rdlp_redact::RedactedUrlBuf::from(url_str.as_str())),
-            })?;
-            Ok(bytes.to_vec())
+            let bytes = rdlp_http::read_body_capped(resp, http.config.max_fragment_bytes)
+                .await
+                .map_err(|e| crate::http::body_cap_error(e, url_str.as_str(), "DASH segment"))?;
+            Ok(bytes)
         }
     };
 
@@ -974,5 +973,65 @@ mod same_origin_gate_tests {
             .await
             .expect("opaque mpd_origin must fail closed: headers stripped, fetch still succeeds");
         assert_eq!(&bytes[..], b"abcd");
+    }
+}
+
+#[cfg(test)]
+mod fragment_body_cap_tests {
+    //! #569 regression guard: a DASH segment body must be bounded by
+    //! `DownloaderConfig::max_fragment_bytes`, mirroring the pre-resolved
+    //! fragments path (`fragments.rs::fetch_with_optional_range`) — one cap
+    //! enforced by one shared reader, not two independent bodies-in-memory
+    //! copies.
+    //!
+    //! RED against the unpatched code: `download_one`'s fetch closure read
+    //! the whole body via `resp.bytes()` with no size check, so the oversized
+    //! test below would succeed with the full 200-byte segment instead of
+    //! erroring.
+    use super::*;
+
+    #[tokio::test]
+    async fn download_one_over_cap_is_rejected() {
+        let mut server = mockito::Server::new_async().await;
+        let _seg = server
+            .mock("GET", "/seg.m4s")
+            .with_body(vec![0u8; 200])
+            .create_async()
+            .await;
+
+        let http = HttpDownloader::with_client(wreq::Client::new()).with_max_fragment_bytes(100);
+        let retry = fast_retry();
+        let mpd_url = format!("{}/manifest.mpd", server.url());
+        let mpd_origin = url::Url::parse(&mpd_url).unwrap().origin();
+        let seg_url = url::Url::parse(&format!("{}/seg.m4s", server.url())).unwrap();
+
+        let err = download_one(&http, &retry, &seg_url, &mpd_origin, None)
+            .await
+            .expect_err("a 200-byte segment must be rejected by a 100-byte cap");
+        assert!(
+            matches!(err, RdlpError::Download { .. }),
+            "expected RdlpError::Download, got {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn download_one_under_cap_succeeds() {
+        let mut server = mockito::Server::new_async().await;
+        let _seg = server
+            .mock("GET", "/seg.m4s")
+            .with_body(vec![0u8; 50])
+            .create_async()
+            .await;
+
+        let http = HttpDownloader::with_client(wreq::Client::new()).with_max_fragment_bytes(100);
+        let retry = fast_retry();
+        let mpd_url = format!("{}/manifest.mpd", server.url());
+        let mpd_origin = url::Url::parse(&mpd_url).unwrap().origin();
+        let seg_url = url::Url::parse(&format!("{}/seg.m4s", server.url())).unwrap();
+
+        let bytes = download_one(&http, &retry, &seg_url, &mpd_origin, None)
+            .await
+            .expect("a 50-byte segment must pass a 100-byte cap");
+        assert_eq!(bytes.len(), 50);
     }
 }

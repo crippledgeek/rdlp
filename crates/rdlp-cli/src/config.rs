@@ -247,7 +247,7 @@ pub fn merge_config(
     //
     // Every field touched here must also appear in the canary
     // (`every_config_field_is_classified`) — the canary is what proves the
-    // declared set and this set together cover all 97 fields.
+    // declared set and this set together cover all 98 fields.
 
     // Output: -o - means stdout streaming
     if args.output.as_deref() == Some("-") {

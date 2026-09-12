@@ -270,8 +270,12 @@ impl Orchestrator {
         url: &str,
         output: &Path,
     ) -> std::result::Result<(), anyhow::Error> {
-        const MAX_SUBTITLE_BYTES: usize = 5 * 1024 * 1024;
-        use futures_util::StreamExt;
+        const MAX_SUBTITLE_BYTES: u64 = 5 * 1024 * 1024;
+        const MAX_SUBTITLE_BODY_CAP: rdlp_http::BodyCap =
+            match rdlp_http::BodyCap::new(MAX_SUBTITLE_BYTES) {
+                Some(cap) => cap,
+                None => panic!("MAX_SUBTITLE_BYTES must be nonzero"),
+            };
 
         rdlp_security::validate_url_security(url)
             .map_err(|e| anyhow::anyhow!("subtitle URL rejected: {e}"))?;
@@ -282,20 +286,15 @@ impl Orchestrator {
             anyhow::bail!("Subtitle download failed with status {}", response.status());
         }
 
-        // Streaming size check — abort the moment cumulative bytes
-        // exceed MAX_SUBTITLE_BYTES rather than buffer the full body
-        // before checking.
-        let mut stream = response.bytes_stream();
-        let mut buf: Vec<u8> = Vec::new();
-        while let Some(chunk) = stream.next().await {
-            let bytes = chunk?;
-            if buf.len().saturating_add(bytes.len()) > MAX_SUBTITLE_BYTES {
-                anyhow::bail!(
-                    "subtitle exceeds {MAX_SUBTITLE_BYTES}-byte cap (host integrity guard)"
-                );
+        // `read_body_capped` (rdlp-http, #569) is the single streaming
+        // implementation; this cap is this call site's own constant.
+        let buf = match rdlp_http::read_body_capped(response, MAX_SUBTITLE_BODY_CAP).await {
+            Ok(buf) => buf,
+            Err(rdlp_http::BodyCapError::Oversized { limit, .. }) => {
+                anyhow::bail!("subtitle exceeds {limit}-byte cap (host integrity guard)");
             }
-            buf.extend_from_slice(&bytes);
-        }
+            Err(rdlp_http::BodyCapError::Transport(e)) => return Err(e.into()),
+        };
         tokio::fs::write(output, &buf).await?;
         Ok(())
     }

@@ -431,6 +431,9 @@ impl DownloaderRegistry {
         if let Some(threshold) = config.parallel_threshold {
             http_downloader = http_downloader.with_parallel_threshold(threshold);
         }
+        if let Some(cap) = config.max_fragment_bytes {
+            http_downloader = http_downloader.with_max_fragment_bytes(cap);
+        }
         // Item 8/9: wire the operator's download-path timeouts. All validated by
         // Config::validate(); unset (None) keeps the DownloaderConfig default.
         // Without this they were silently ignored. read_timeout also bounds DASH
@@ -739,6 +742,34 @@ mod tests {
             registry.http_base.config.parallel_threshold,
             10 * 1024 * 1024,
             "None must fall back to HttpDownloader's DEFAULT_PARALLEL_THRESHOLD_BYTES"
+        );
+    }
+
+    #[test]
+    fn registry_wires_max_fragment_bytes_from_config() {
+        let config = Config {
+            max_fragment_bytes: Some(64 * 1024 * 1024), // 64 MiB override
+            ..Default::default()
+        };
+        let registry = DownloaderRegistry::with_config(&config);
+        assert_eq!(
+            registry.http_base.config.max_fragment_bytes.get(),
+            64 * 1024 * 1024,
+            "Config::max_fragment_bytes must reach HttpDownloader via build_registry"
+        );
+    }
+
+    #[test]
+    fn registry_uses_http_default_when_max_fragment_bytes_is_none() {
+        let config = Config {
+            max_fragment_bytes: None,
+            ..Default::default()
+        };
+        let registry = DownloaderRegistry::with_config(&config);
+        assert_eq!(
+            registry.http_base.config.max_fragment_bytes.get(),
+            rdlp_types::config::DEFAULT_MAX_FRAGMENT_BYTES,
+            "None must fall back to rdlp_types::config::DEFAULT_MAX_FRAGMENT_BYTES"
         );
     }
 

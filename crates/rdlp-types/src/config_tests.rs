@@ -649,6 +649,61 @@ fn test_validate_parallel_threshold_none_is_valid() {
 }
 
 #[test]
+fn test_default_max_fragment_bytes_is_512_mib() {
+    let config = Config::default();
+    assert_eq!(config.max_fragment_bytes, Some(512 * 1024 * 1024));
+    assert_eq!(config.max_fragment_bytes, Some(DEFAULT_MAX_FRAGMENT_BYTES));
+}
+
+#[test]
+fn test_validate_max_fragment_bytes_rejects_zero() {
+    let mut config = Config::default();
+    config.max_fragment_bytes = Some(0);
+    let err = config.validate().unwrap_err();
+    assert!(matches!(
+        err,
+        ConfigValidationError::OutOfRange {
+            field: "max_fragment_bytes",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_validate_max_fragment_bytes_rejects_above_2_gib() {
+    let mut config = Config::default();
+    config.max_fragment_bytes = Some(MAX_FRAGMENT_BYTES_UPPER_BOUND + 1);
+    let err = config.validate().unwrap_err();
+    assert!(matches!(
+        err,
+        ConfigValidationError::OutOfRange {
+            field: "max_fragment_bytes",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn test_validate_max_fragment_bytes_accepts_boundaries() {
+    let mut config = Config::default();
+    config.max_fragment_bytes = Some(1);
+    assert!(config.validate().is_ok(), "1 byte must be valid");
+
+    config.max_fragment_bytes = Some(MAX_FRAGMENT_BYTES_UPPER_BOUND);
+    assert!(config.validate().is_ok(), "2 GiB must be valid");
+}
+
+#[test]
+fn test_validate_max_fragment_bytes_none_is_valid() {
+    let mut config = Config::default();
+    config.max_fragment_bytes = None;
+    assert!(
+        config.validate().is_ok(),
+        "None must be valid (uses downloader default)"
+    );
+}
+
+#[test]
 fn validate_rejects_zero_recode_threads() {
     let mut cfg = Config::default();
     cfg.postprocess.recode_threads = Some(0);

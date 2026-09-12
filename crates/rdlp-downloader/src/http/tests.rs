@@ -766,6 +766,20 @@ fn with_parallel_threshold_clamps_zero_to_one() {
     );
 }
 
+/// `with_max_fragment_bytes(0)` has no valid `BodyCap` to clamp to
+/// (`BodyCap::new(0)` returns `None`), so — unlike `parallel_threshold`
+/// above — it is a no-op: the prior cap (here, the constructor's default)
+/// is kept unchanged rather than clamped to any floor.
+#[test]
+fn with_max_fragment_bytes_zero_keeps_the_prior_cap() {
+    let downloader = HttpDownloader::new().with_max_fragment_bytes(0);
+    assert_eq!(
+        downloader.config.max_fragment_bytes.get(),
+        rdlp_types::config::DEFAULT_MAX_FRAGMENT_BYTES,
+        "max_fragment_bytes = 0 must be ignored, keeping the default cap"
+    );
+}
+
 #[tokio::test]
 async fn probe_206_returns_size_from_content_range() {
     use mockito::Server;

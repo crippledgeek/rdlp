@@ -131,9 +131,15 @@ impl Orchestrator {
         media_file: &Path,
     ) -> Option<OwnedThumbnail> {
         // Streaming size cap (20 MB) — adversarial CDN can't OOM the host
-        // by sending a 1 GB image before the cap fires.
-        const MAX_THUMBNAIL_BYTES: usize = 20 * 1024 * 1024;
-        use futures_util::StreamExt;
+        // by sending a 1 GB image before the cap fires. `read_body_capped`
+        // (rdlp-http, #569) is the single streaming implementation; this
+        // cap is this call site's own constant, passed in as `BodyCap`.
+        const MAX_THUMBNAIL_BYTES: u64 = 20 * 1024 * 1024;
+        const MAX_THUMBNAIL_BODY_CAP: rdlp_http::BodyCap =
+            match rdlp_http::BodyCap::new(MAX_THUMBNAIL_BYTES) {
+                Some(cap) => cap,
+                None => panic!("MAX_THUMBNAIL_BYTES must be nonzero"),
+            };
 
         // Get best thumbnail URL
         let thumbnail_url = info.thumbnail.as_deref().or_else(|| {
@@ -185,30 +191,23 @@ impl Orchestrator {
             return None;
         }
 
-        let mut stream = response.bytes_stream();
-        let mut bytes: Vec<u8> = Vec::new();
-        loop {
-            match stream.next().await {
-                Some(Ok(chunk)) => {
-                    if bytes.len().saturating_add(chunk.len()) > MAX_THUMBNAIL_BYTES {
-                        warn!(
-                            url = RedactedUrl::new(thumbnail_url);
-                            "Thumbnail exceeds {MAX_THUMBNAIL_BYTES}-byte cap; aborting"
-                        );
-                        return None;
-                    }
-                    bytes.extend_from_slice(&chunk);
-                }
-                Some(Err(e)) => {
-                    warn!(
-                        "Failed to read thumbnail response: {}",
-                        rdlp_redact::redact_str(&e.to_string())
-                    );
-                    return None;
-                }
-                None => break,
+        let bytes = match rdlp_http::read_body_capped(response, MAX_THUMBNAIL_BODY_CAP).await {
+            Ok(bytes) => bytes,
+            Err(rdlp_http::BodyCapError::Oversized { limit, .. }) => {
+                warn!(
+                    url = RedactedUrl::new(thumbnail_url);
+                    "Thumbnail exceeds {limit}-byte cap; aborting"
+                );
+                return None;
             }
-        }
+            Err(rdlp_http::BodyCapError::Transport(e)) => {
+                warn!(
+                    "Failed to read thumbnail response: {}",
+                    rdlp_redact::redact_str(&e.to_string())
+                );
+                return None;
+            }
+        };
 
         if bytes.is_empty() {
             warn!("Thumbnail response was empty");

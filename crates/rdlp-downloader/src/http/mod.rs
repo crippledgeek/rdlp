@@ -33,6 +33,35 @@ use crate::retry::{RetryPolicy, with_retry};
 use config::{DownloaderConfig, PROGRESS_UPDATE_INTERVAL};
 use rdlp_ratelimit::RateLimiter;
 
+/// Map a `rdlp_http::BodyCapError` into the `RdlpError` shape shared by every
+/// fragment/segment body read (#569): the pre-resolved-fragments path
+/// (`fragments.rs`) and the DASH static-VoD segment fetcher
+/// (`dash/download.rs`) previously each hand-wrote an identical match with
+/// the same two error branches and near-identical prose; this is the one
+/// place that mapping is written.
+///
+/// `what` names the caller's noun for its own error message (e.g.
+/// `"fragment"`, `"DASH segment"`); `url` is the raw (unredacted) URL — this
+/// function is what redacts it into the returned error's `url` field.
+pub(crate) fn body_cap_error(e: rdlp_http::BodyCapError, url: &str, what: &str) -> RdlpError {
+    match e {
+        rdlp_http::BodyCapError::Oversized {
+            limit,
+            seen_at_least,
+        } => RdlpError::Download {
+            url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
+            message: format!(
+                "{what} exceeds {limit}-byte cap (observed at least {seen_at_least} bytes); \
+                 a server sending an oversized body will do it again, so this is not retried"
+            ),
+        },
+        rdlp_http::BodyCapError::Transport(e) => RdlpError::Network {
+            message: format!("{what} read error: {e}"),
+            url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
+        },
+    }
+}
+
 /// Convert optional `HashMap` headers to wreq `HeaderMap`
 fn to_header_map(headers: Option<&HashMap<String, String>>) -> HeaderMap {
     let Some(headers) = headers else {
@@ -442,6 +471,22 @@ impl HttpDownloader {
     #[must_use = "builder methods consume self and return a new instance"]
     pub fn with_parallel_threshold(mut self, bytes: u64) -> Self {
         Arc::make_mut(&mut self.config).parallel_threshold = bytes.max(1);
+        self
+    }
+
+    /// Set the ceiling on a single fragment/segment body (#569).
+    ///
+    /// `bytes == 0` is silently ignored — the previously configured cap is
+    /// kept unchanged, NOT clamped to 1 — because `BodyCap::new(0)` returns
+    /// `None` and there is no non-zero value to clamp to that wouldn't be a
+    /// guess. In practice this is unreachable from `Config`:
+    /// `Config::validate()` already refuses `max_fragment_bytes = Some(0)`
+    /// before `build_registry` ever calls this builder.
+    #[must_use = "builder methods consume self and return a new instance"]
+    pub fn with_max_fragment_bytes(mut self, bytes: u64) -> Self {
+        if let Some(cap) = rdlp_http::BodyCap::new(bytes) {
+            Arc::make_mut(&mut self.config).max_fragment_bytes = cap;
+        }
         self
     }
 
