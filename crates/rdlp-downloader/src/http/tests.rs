@@ -968,6 +968,12 @@ async fn download_with_resume_with_cancel_aborts_on_cancel() {
         .await;
 
     assert!(matches!(res, Err(RdlpError::Cancelled)));
+    // A cancel mid-stream is not success: the sidecar stays so the next
+    // attempt can send the same validator (#565).
+    assert!(
+        HttpResumeState::sidecar_path(&out).exists(),
+        "sidecar must survive a mid-stream cancel"
+    );
 }
 
 #[tokio::test]
@@ -3301,4 +3307,150 @@ async fn resume_keeps_sidecar_on_failure_and_on_cancel() {
     assert!(matches!(err, RdlpError::Cancelled), "{err:?}");
     assert_eq!(tokio::fs::read(&out).await.unwrap(), b"0123");
     assert!(HttpResumeState::sidecar_path(&out).exists());
+}
+
+/// The rewrite after a 200-to-`If-Range` must never leave v1's bytes under a
+/// sidecar naming v2: a later resume would append v2's tail to v1's prefix —
+/// the corruption #565 exists to prevent. Discarding the partial (and its
+/// v1 sidecar) comes FIRST, so a failure anywhere in the window leaves "no
+/// sidecar" or the old one, both of which restart. Forced here by making the
+/// partial unwritable so `File::create` fails.
+#[cfg(unix)]
+#[tokio::test]
+async fn resume_200_rewrite_failure_never_leaves_new_sidecar_over_old_bytes() {
+    use mockito::Server;
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"old-", Some(("\"v1\"", Some(8)))).await;
+    let _m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=4-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(200)
+        .with_header("etag", "\"v2\"")
+        .with_body("newnew")
+        .create_async()
+        .await;
+
+    tokio::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o444))
+        .await
+        .unwrap();
+    let result = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
+        .await;
+    tokio::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o644))
+        .await
+        .unwrap();
+
+    assert!(matches!(result, Err(RdlpError::Io(_))), "{result:?}");
+    assert_eq!(
+        tokio::fs::read(&out).await.unwrap(),
+        b"old-",
+        "the unwritable partial still holds v1's bytes"
+    );
+    let left = HttpResumeState::load(&out).await;
+    assert!(
+        left.as_ref().is_none_or(|s| s.validator != etag("\"v2\"")),
+        "v1's bytes must not sit under a sidecar naming v2: {left:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `stream_body` — the one body loop; `StreamPolicy` is the only thing its
+// callers (file paths vs stdout) disagree on.
+// ---------------------------------------------------------------------------
+
+/// A writer that accepts `capacity` bytes and then reports `BrokenPipe`, as
+/// a consumer that closed its end of a pipe does.
+struct PipeWithCapacity {
+    accepted: Vec<u8>,
+    capacity: usize,
+}
+
+impl tokio::io::AsyncWrite for PipeWithCapacity {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let room = self.capacity - self.accepted.len();
+        if room == 0 {
+            return std::task::Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()));
+        }
+        let n = buf.len().min(room);
+        self.accepted.extend_from_slice(&buf[..n]);
+        std::task::Poll::Ready(Ok(n))
+    }
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+/// Two body frames, `abc` then `def`, into a pipe that closes after three
+/// bytes: `StopOnBrokenPipe` (stdout) returns `Ok` with the bytes delivered
+/// before the break; `FailOnWriteError` (a file) surfaces the `Io` error.
+async fn stream_into_pipe(policy: StreamPolicy) -> (Result<u64>, Vec<u8>) {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let _m = server
+        .mock("GET", "/v")
+        .with_status(200)
+        .with_chunked_body(|w| {
+            w.write_all(b"abc")?;
+            // Keep the second frame off the wire until the first has been
+            // consumed, so the two arrive as distinct chunks.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            w.write_all(b"def")
+        })
+        .create_async()
+        .await;
+    let d = chunk_test_downloader(0);
+    let response = rdlp_http::download_request(d.client(), &format!("{}/v", server.url()), None)
+        .send()
+        .await
+        .unwrap();
+    let mut pipe = PipeWithCapacity {
+        accepted: Vec::new(),
+        capacity: 3,
+    };
+    let result = d
+        .stream_body(
+            response,
+            BodySink {
+                writer: &mut pipe,
+                policy,
+                offset: 0,
+            },
+            None,
+            None,
+        )
+        .await;
+    (result, pipe.accepted)
+}
+
+#[tokio::test]
+async fn stream_body_stop_on_broken_pipe_returns_bytes_before_the_break() {
+    let (result, accepted) = stream_into_pipe(StreamPolicy::StopOnBrokenPipe).await;
+    assert_eq!(accepted, b"abc");
+    assert!(matches!(result, Ok(3)), "{result:?}");
+}
+
+#[tokio::test]
+async fn stream_body_fail_on_write_error_surfaces_broken_pipe() {
+    let (result, accepted) = stream_into_pipe(StreamPolicy::FailOnWriteError).await;
+    assert_eq!(accepted, b"abc");
+    assert!(
+        matches!(&result, Err(RdlpError::Io(e)) if e.kind() == std::io::ErrorKind::BrokenPipe),
+        "{result:?}"
+    );
 }

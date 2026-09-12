@@ -6,25 +6,21 @@
 use async_trait::async_trait;
 use log::{debug, warn};
 use rdlp_core::{
-    DownloadProgress, DownloadStats, Downloader, ProgressCallback, RdlpError, Result,
-    check_http_response,
+    DownloadStats, Downloader, ProgressCallback, RdlpError, Result, check_http_response,
 };
 use rdlp_http::{RangeSpec, RangedRequest, StrongValidator};
 use rdlp_types::Format;
 use std::path::Path;
 use std::time::Instant;
-use tokio::io::{AsyncWriteExt, BufWriter};
+use tokio::io::BufWriter;
 use tokio_util::sync::CancellationToken;
 
-use super::config::PROGRESS_UPDATE_INTERVAL;
 use super::{
-    HttpDownloader, HttpResumeState, RangeVerdict, Sink, Source, WriteMode, admit_for_verdict,
-    range_verdict,
+    BodySink, HttpDownloader, HttpResumeState, RangeVerdict, Sink, Source, StreamPolicy, WriteMode,
+    admit_for_verdict, range_verdict,
 };
-use crate::progress::SpeedMeter;
 use crate::retry::{RetryPolicy, with_retry};
 
-#[allow(clippy::too_many_lines, clippy::option_if_let_else)]
 #[async_trait]
 impl Downloader for HttpDownloader {
     fn protocol(&self) -> &'static str {
@@ -128,7 +124,6 @@ impl Downloader for HttpDownloader {
     }
 }
 
-#[allow(clippy::too_many_lines)]
 impl HttpDownloader {
     /// A download from byte 0: probe, then parallel or sequential.
     ///
@@ -264,102 +259,21 @@ impl HttpDownloader {
             )
             .await?;
 
-            let total_size = response.content_length();
             let mut buf_writer = BufWriter::with_capacity(self.config.buffer_size, writer);
-
-            let stream = response.bytes_stream();
-            tokio::pin!(stream);
-            let mut downloaded: u64 = 0;
-            let mut last_update = Instant::now();
-            let update_interval = PROGRESS_UPDATE_INTERVAL;
-            let read_timeout = self.config.read_timeout;
-            let mut speed_meter = SpeedMeter::new();
-            speed_meter.update(downloaded, start_time);
-
-            loop {
-                let next = super::next_with_cancel_and_timeout(
-                    stream.as_mut(),
+            let downloaded = self
+                .stream_body(
+                    response,
+                    BodySink {
+                        writer: &mut buf_writer,
+                        policy: StreamPolicy::StopOnBrokenPipe,
+                        offset: 0,
+                    },
+                    progress.as_deref(),
                     cancel,
-                    read_timeout,
-                    &url_string,
                 )
-                .await;
-                // F6 / #307 follow-up: on cancel, flush whatever bytes are
-                // already in the BufWriter so any accumulator-mode caller
-                // gets all bytes that crossed the loop's write_all boundary
-                // before the cancel arm fired. Pattern matches
-                // download_with_resume_with_cancel below. Flush errors are
-                // swallowed in favour of surfacing the original Cancelled.
-                let next = match next {
-                    Err(RdlpError::Cancelled) => {
-                        let _ = buf_writer.flush().await;
-                        return Err(RdlpError::Cancelled);
-                    }
-                    other => other?,
-                };
-                match next {
-                    None => break,
-                    Some(Err(e)) => {
-                        return Err(RdlpError::Network {
-                            message: format!("Failed to read chunk: {e}"),
-                            url: Some(rdlp_redact::RedactedUrlBuf::from(url_string.as_str())),
-                        });
-                    }
-                    Some(Ok(chunk)) => {
-                        match buf_writer.write_all(&chunk).await {
-                            Ok(()) => {}
-                            Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
-                                debug!("Broken pipe on stdout, stopping gracefully");
-                                break;
-                            }
-                            Err(e) => return Err(RdlpError::Io(e)),
-                        }
-                        downloaded += chunk.len() as u64;
+                .await?;
 
-                        if let Some(ref callback) = progress {
-                            let now = Instant::now();
-                            if now.duration_since(last_update) >= update_interval {
-                                speed_meter.update(downloaded, now);
-                                let speed = speed_meter.bytes_per_sec().unwrap_or(0.0);
-
-                                let progress_info =
-                                    DownloadProgress::new(downloaded, total_size, speed);
-                                callback.on_progress(&progress_info);
-                                last_update = now;
-                            }
-                        }
-
-                        if let Some(ref limiter) = self.rate_limiter {
-                            limiter.acquire(chunk.len()).await;
-                        }
-                    }
-                }
-            }
-
-            // BrokenPipe accounting: when `write_all` hits BrokenPipe, we
-            // break before `downloaded +=`, so the failing chunk is excluded.
-            // However, earlier chunks that were written to the BufWriter's
-            // internal buffer may not have reached the pipe yet (up to
-            // `buffer_size` bytes). This means `downloaded` can *overstate*
-            // the bytes actually delivered to the consumer by up to one
-            // buffer's worth. This is inherent to buffered I/O and
-            // acceptable for stats/logging purposes.
-            match buf_writer.flush().await {
-                Ok(()) => {}
-                Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {
-                    debug!("Broken pipe on flush, ignoring");
-                }
-                Err(e) => return Err(RdlpError::Io(e)),
-            }
-
-            let duration = start_time.elapsed();
-            let stats = DownloadStats::new(downloaded, duration, 0);
-
-            if let Some(callback) = progress {
-                callback.on_complete(&stats);
-            }
-
-            Ok(stats)
+            Ok(finish(progress.as_deref(), start_time, downloaded))
         })
         .await
         .map_err(|_| RdlpError::Download {
@@ -544,6 +458,12 @@ impl HttpDownloader {
                     "Resource changed since the earlier attempt (200 to If-Range); discarding \
                      the {resume_from}-byte partial and writing the current representation"
                 );
+                // Discard BEFORE recording the new validator: every failure
+                // state in between is then "no sidecar" (or the old one),
+                // which restarts. The other order leaves v1's bytes under a
+                // sidecar naming v2, and the next resume would append v2's
+                // tail to v1's prefix.
+                self.discard_partial(path).await?;
                 match current {
                     Some(v) => HttpResumeState::new(v, response.content_length())
                         .save(path)

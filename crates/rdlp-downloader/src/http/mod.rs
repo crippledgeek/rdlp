@@ -21,6 +21,7 @@ pub(crate) use verdict::{
     RangeVerdict, RangedRequestMeta, admit_for_verdict, bounded_len, range_verdict,
 };
 
+use log::debug;
 use rdlp_core::{
     DownloadProgress, DownloadStats, ProgressCallback, RdlpError, Result, RetryConfig,
     check_http_response,
@@ -791,13 +792,9 @@ impl HttpDownloader {
     /// Stream `response`'s body into the sink; returns the bytes now on disk
     /// (`Append { from }`: `from` plus what was streamed).
     ///
-    /// The one body-to-file loop behind the fresh sequential GET, the resume
-    /// append, and the resume's 200-rewrite — so the cancel flush, the read
-    /// timeout, the rate limiter and the progress cadence exist once.
-    ///
-    /// `cancel` — when `Some`, each chunk poll races the token; on
-    /// cancellation the `BufWriter` is flushed before `RdlpError::Cancelled`
-    /// is returned so bytes already buffered reach disk.
+    /// Opens the file as [`WriteMode`] says and names the path in any I/O
+    /// error; the loop itself is [`Self::stream_body`], shared with the
+    /// stdout path.
     pub(crate) async fn stream_to_file(
         &self,
         response: wreq::Response,
@@ -805,26 +802,66 @@ impl HttpDownloader {
         progress: Option<&dyn ProgressCallback>,
         cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<u64> {
-        let start_time = Instant::now();
-        let url = response.uri().to_string();
         let path = sink.path;
-        let (file, mut downloaded) = match sink.mode {
+        let named = |verb: &str, e: std::io::Error| {
+            RdlpError::Io(std::io::Error::new(
+                e.kind(),
+                format!("failed to {verb} output file '{}': {e}", path.display()),
+            ))
+        };
+        let (file, offset) = match sink.mode {
             WriteMode::Create => (File::create(path).await, 0),
             WriteMode::Append { from } => (
                 tokio::fs::OpenOptions::new().append(true).open(path).await,
                 from,
             ),
         };
-        let file = file.map_err(|e| {
-            RdlpError::Io(std::io::Error::new(
-                e.kind(),
-                format!("failed to open output file '{}': {e}", path.display()),
-            ))
-        })?;
-        let total_size = response
-            .content_length()
-            .map(|remaining| remaining + downloaded);
+        let file = file.map_err(|e| named("open", e))?;
         let mut writer = BufWriter::with_capacity(self.config.buffer_size, file);
+
+        self.stream_body(
+            response,
+            BodySink {
+                writer: &mut writer,
+                policy: StreamPolicy::FailOnWriteError,
+                offset,
+            },
+            progress,
+            cancel,
+        )
+        .await
+        .map_err(|e| match e {
+            RdlpError::Io(e) => named("write", e),
+            other => other,
+        })
+    }
+
+    /// The one body-streaming loop: read-timeout and cancel racing, the rate
+    /// limiter, the progress cadence, and the flush that runs before any
+    /// return — behind the fresh sequential GET, the resume append, the
+    /// resume's 200-rewrite (all via [`Self::stream_to_file`]) and the stdout
+    /// path (`download_to_writer_with_cancel`). Returns `sink.offset` plus the
+    /// bytes handed to the writer.
+    ///
+    /// `cancel` — when `Some`, each chunk poll races the token; on
+    /// cancellation the writer is flushed before `RdlpError::Cancelled` is
+    /// returned so bytes already buffered reach their destination.
+    pub(crate) async fn stream_body<W: tokio::io::AsyncWrite + Unpin + Send>(
+        &self,
+        response: wreq::Response,
+        sink: BodySink<'_, W>,
+        progress: Option<&dyn ProgressCallback>,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
+    ) -> Result<u64> {
+        let start_time = Instant::now();
+        let url = response.uri().to_string();
+        let BodySink {
+            writer,
+            policy,
+            offset,
+        } = sink;
+        let mut downloaded = offset;
+        let total_size = response.content_length().map(|rest| rest + offset);
 
         let stream = response.bytes_stream();
         tokio::pin!(stream);
@@ -840,7 +877,8 @@ impl HttpDownloader {
                 {
                     Ok(item) => item,
                     Err(RdlpError::Cancelled) => {
-                        // Flush partial bytes already in BufWriter to disk.
+                        // Flush errors are swallowed in favour of surfacing
+                        // the original Cancelled.
                         writer.flush().await.ok();
                         return Err(RdlpError::Cancelled);
                     }
@@ -856,12 +894,14 @@ impl HttpDownloader {
                 url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
             })?;
 
-            writer.write_all(&chunk).await.map_err(|e| {
-                RdlpError::Io(std::io::Error::new(
-                    e.kind(),
-                    format!("failed to write to output file '{}': {e}", path.display()),
-                ))
-            })?;
+            match writer.write_all(&chunk).await {
+                Ok(()) => {}
+                Err(e) if policy.stops_on(&e) => {
+                    debug!("Broken pipe on writer, stopping gracefully");
+                    break;
+                }
+                Err(e) => return Err(RdlpError::Io(e)),
+            }
             downloaded += chunk.len() as u64;
 
             if let Some(callback) = progress {
@@ -881,15 +921,44 @@ impl HttpDownloader {
             }
         }
 
-        writer.flush().await.map_err(|e| {
-            RdlpError::Io(std::io::Error::new(
-                e.kind(),
-                format!("failed to flush output file '{}': {e}", path.display()),
-            ))
-        })?;
+        match writer.flush().await {
+            Ok(()) => {}
+            Err(e) if policy.stops_on(&e) => debug!("Broken pipe on flush, ignoring"),
+            Err(e) => return Err(RdlpError::Io(e)),
+        }
 
         Ok(downloaded)
     }
+}
+
+/// What a write failure means to [`HttpDownloader::stream_body`] — the one
+/// policy on which its callers differ.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StreamPolicy {
+    /// A file: any write or flush error is the download's error.
+    FailOnWriteError,
+    /// A pipe (stdout): the consumer going away is a graceful stop, not a
+    /// failure — the bytes delivered so far are the result. The count
+    /// returned excludes the chunk whose write hit the broken pipe but can
+    /// still overstate delivery by up to one `BufWriter` buffer that never
+    /// reached the pipe; inherent to buffered I/O, acceptable for stats.
+    StopOnBrokenPipe,
+}
+
+impl StreamPolicy {
+    fn stops_on(self, e: &std::io::Error) -> bool {
+        matches!(self, Self::StopOnBrokenPipe) && matches!(e.kind(), std::io::ErrorKind::BrokenPipe)
+    }
+}
+
+/// Where [`HttpDownloader::stream_body`] writes, how a write failure is
+/// treated, and how many bytes the destination already holds.
+pub(crate) struct BodySink<'a, W> {
+    pub writer: &'a mut W,
+    pub policy: StreamPolicy,
+    /// Bytes already at the destination before this body; progress reports
+    /// and the returned total count from here.
+    pub offset: u64,
 }
 
 /// How [`HttpDownloader::stream_to_file`] opens its file.
