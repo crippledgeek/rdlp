@@ -7,6 +7,7 @@ mod chunk_ledger;
 pub(crate) mod chunk_name;
 mod config;
 mod parallel;
+mod state;
 mod trait_impl;
 mod verdict;
 
@@ -15,6 +16,7 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use parallel::{ChunkRequestSpec, download_chunk_with_retry, verify_merged_size};
+pub(crate) use state::{HttpResumeState, Source};
 pub(crate) use verdict::{
     HTTP_PARTIAL_CONTENT, RangeVerdict, RangedRequestMeta, admit_for_verdict, bounded_len,
     range_verdict,
@@ -489,7 +491,7 @@ impl HttpDownloader {
     /// buffered reach disk.
     pub(crate) async fn download_range_with_progress(
         &self,
-        url: &str,
+        source: &Source,
         start: u64,
         end: u64,
         chunk_path: &Path,
@@ -504,7 +506,7 @@ impl HttpDownloader {
         }
 
         let client = self.client.clone();
-        let url = url.to_string();
+        let url = source.url.clone();
         let hdrs = self.headers();
 
         // Built once, before the retry loop: an inverted range is a caller
@@ -526,15 +528,20 @@ impl HttpDownloader {
         // `with_retry_cancellable`. A future caller
         // invoking this directly and expecting a cancel to interrupt a backoff
         // would not get one.
+        //
+        // `If-Range` carries the validator the download started under, so a
+        // server that changed the representation answers 200 instead of a
+        // 206 that would be spliced in as if nothing changed (§13.1.5).
         let response = with_retry(
             RetryPolicy::new(&self.config.retry_config, &"HTTP GET (range)"),
             || {
                 let client = client.clone();
                 let url = url.clone();
                 let hdrs = hdrs.clone();
+                let validator = source.validator.as_ref();
                 async move {
                     let response = rdlp_http::download_request(&client, &url, Some(&hdrs))
-                        .ranged(span, None)
+                        .ranged(span, validator)
                         .send()
                         .await
                         .map_err(|e| RdlpError::Network {
@@ -549,14 +556,10 @@ impl HttpDownloader {
         .await?;
 
         // Confirm the response encloses exactly the requested span, is not
-        // content-coded, and (if this ever gains a validator) still names the
-        // same representation — BEFORE any of its bytes reach the chunk file
-        // (#526).
-        let meta = RangedRequestMeta {
-            range: span,
-            sent_validator: None,
-        };
-        match range_verdict(&response, &meta, &url)? {
+        // content-coded, and still names the representation the download
+        // started with — BEFORE any of its bytes reach the chunk file (#526,
+        // #565).
+        match range_verdict(&response, &source.meta(span), &url)? {
             RangeVerdict::Partial { .. } => {}
             RangeVerdict::Replaced => {
                 return Err(RdlpError::Download {
@@ -726,6 +729,9 @@ impl HttpDownloader {
             return Err(RdlpError::Cancelled);
         }
 
+        // No `Range`, but the identity pin: a later resume computes its
+        // offset over these bytes, and §14.1.2 makes offsets comparable only
+        // under one coding.
         let response = with_retry(
             RetryPolicy::new(&self.config.retry_config, &"HTTP GET"),
             || {
@@ -733,12 +739,13 @@ impl HttpDownloader {
                 let url = url_string.clone();
                 let hdrs = hdrs.clone();
                 async move {
-                    let response = client.get(&*url).headers(hdrs).send().await.map_err(|e| {
-                        RdlpError::Network {
+                    let response = rdlp_http::download_request(&client, &url, Some(&hdrs))
+                        .send()
+                        .await
+                        .map_err(|e| RdlpError::Network {
                             message: format!("GET request failed: {e}"),
                             url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
-                        }
-                    })?;
+                        })?;
 
                     check_http_response(&response)?;
                     Ok(response)
@@ -748,6 +755,18 @@ impl HttpDownloader {
         .await?;
 
         let total_size = response.content_length();
+
+        // This GET, not the probe, produced the bytes about to land on disk,
+        // so its validator is the one a resume must send back — and when it
+        // offers none, the probe's must not survive to be sent on its behalf.
+        match rdlp_http::StrongValidator::from_headers(response.headers()) {
+            Some(v) => HttpResumeState::new(v, total_size)
+                .save(path)
+                .await
+                .map_err(RdlpError::Io)?,
+            None => HttpResumeState::remove(path).await,
+        }
+
         let file = File::create(path).await.map_err(|e| {
             RdlpError::Io(std::io::Error::new(
                 e.kind(),

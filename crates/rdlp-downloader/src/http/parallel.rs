@@ -2,10 +2,10 @@
 //!
 //! Provides parallel download using multiple range requests with fine-grained chunking.
 
-use super::HttpDownloader;
 use super::chunk_ledger::ChunkLedger;
 use super::chunk_name::{ChunkKind, ChunkSet};
 use super::config::DownloaderConfig;
+use super::{HttpDownloader, Source};
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, ChunkRequest, ControllerMode};
 use crate::chunking::{ChunkSizeStrategy, calculate_chunks};
 use crate::progress::{ProgressMetrics, ProgressReporterConfig, spawn_progress_reporter};
@@ -79,7 +79,7 @@ pub async fn download_chunk_with_retry(
     cancel: Option<&CancellationToken>,
 ) -> Result<u64> {
     let ChunkRequestSpec {
-        url,
+        source,
         start,
         end,
         chunk_path,
@@ -90,7 +90,7 @@ pub async fn download_chunk_with_retry(
 
     let outcome = with_retry_cancellable(RetryPolicy::new(&config, &label), cancel, || async {
         let attempt = downloader
-            .download_range_with_progress(url, start, end, chunk_path, progress.clone(), cancel)
+            .download_range_with_progress(source, start, end, chunk_path, progress.clone(), cancel)
             .await;
         if attempt.is_err() {
             // Drop this attempt's partial before returning. backon sleeps
@@ -111,7 +111,8 @@ pub async fn download_chunk_with_retry(
     outcome
 }
 
-/// Which bytes of which URL a chunk download covers, and where they land.
+/// Which bytes of which representation a chunk download covers, and where
+/// they land.
 ///
 /// These five values travel together through the AIMD unfold closure and the
 /// retry loop. Grouping them takes [`download_chunk_with_retry`] from eight
@@ -119,7 +120,8 @@ pub async fn download_chunk_with_retry(
 /// offsets and a `u64` id from sitting in a row where only their order
 /// distinguishes them.
 pub struct ChunkRequestSpec<'a> {
-    pub url: &'a str,
+    /// The URL and the validator every ranged request carries (#565).
+    pub source: &'a Source,
     /// First byte of the range, inclusive.
     pub start: u64,
     /// Last byte of the range, inclusive.
@@ -209,7 +211,7 @@ impl HttpDownloader {
     /// `chunk_strategy` is used with a fixed connection count.
     pub(super) async fn download_parallel(
         &self,
-        url: &str,
+        source: &Source,
         path: &Path,
         total_size: u64,
         progress: Option<Box<dyn rdlp_core::ProgressCallback>>,
@@ -223,7 +225,7 @@ impl HttpDownloader {
             ChunkSet::for_attempt(path, download_id, attempt.chunk_kind()).map_err(|e| {
                 RdlpError::Download {
                     message: format!("{e:#}"),
-                    url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
+                    url: Some(rdlp_redact::RedactedUrlBuf::from(source.url.as_str())),
                 }
             })?;
 
@@ -237,7 +239,7 @@ impl HttpDownloader {
 
         let (chunk_paths, total_downloaded) = if self.config.adaptive {
             self.download_parallel_adaptive(
-                url,
+                source,
                 total_size,
                 &chunk_set,
                 temp_dir,
@@ -249,7 +251,7 @@ impl HttpDownloader {
             .await?
         } else {
             self.download_parallel_static(
-                url,
+                source,
                 total_size,
                 &chunk_set,
                 temp_dir,
@@ -265,7 +267,7 @@ impl HttpDownloader {
 
         // Backstop (#526): the assembly must match the advertised length before
         // this file is handed back as a completed download.
-        verify_merged_size(path, total_size, url).await?;
+        verify_merged_size(path, total_size, &source.url).await?;
 
         let duration = start_time.elapsed();
         let stats = DownloadStats::new(total_downloaded, duration, 0);
@@ -288,7 +290,7 @@ impl HttpDownloader {
     /// Parallel resume: downloads remaining chunks in parallel.
     pub(super) async fn download_parallel_resume(
         &self,
-        url: &str,
+        source: &Source,
         path: &Path,
         resume_from: u64,
         total_size: u64,
@@ -304,7 +306,7 @@ impl HttpDownloader {
             ChunkSet::for_attempt(path, download_id, attempt.chunk_kind()).map_err(|e| {
                 RdlpError::Download {
                     message: format!("{e:#}"),
-                    url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
+                    url: Some(rdlp_redact::RedactedUrlBuf::from(source.url.as_str())),
                 }
             })?;
 
@@ -326,7 +328,7 @@ impl HttpDownloader {
 
         let result = if self.config.adaptive {
             self.download_parallel_adaptive(
-                url,
+                source,
                 remaining_size,
                 &chunk_set,
                 temp_dir,
@@ -338,7 +340,7 @@ impl HttpDownloader {
             .await
         } else {
             self.download_parallel_static(
-                url,
+                source,
                 remaining_size,
                 &chunk_set,
                 temp_dir,
@@ -363,7 +365,7 @@ impl HttpDownloader {
         // that disagreed with the file's real length: the appended bytes land
         // at EOF regardless of the offset the ranges were requested from, so a
         // mismatch shows up here as a wrong final size.
-        verify_merged_size(path, total_size, url).await?;
+        verify_merged_size(path, total_size, &source.url).await?;
 
         let duration = start_time.elapsed();
         let total_downloaded = resume_from + newly_downloaded;
@@ -406,11 +408,11 @@ impl HttpDownloader {
     /// cloned into the `try_unfold` closure. `CancellationToken` is cheaply cloneable.
     #[allow(
         clippy::too_many_arguments,
-        reason = "Each argument is a distinct piece of per-attempt state (url, size, chunk-name grammar, temp dir, progress sink, resume offset, log callback, cancel token) fed to the AIMD unfold closure; grouping them would either duplicate `Attempt` (already owns kind/offset) or bundle unrelated concerns just to hit a number."
+        reason = "Each argument is a distinct piece of per-attempt state (source, size, chunk-name grammar, temp dir, progress sink, resume offset, log callback, cancel token) fed to the AIMD unfold closure; grouping them would either duplicate `Attempt` (already owns kind/offset) or bundle unrelated concerns just to hit a number."
     )]
     async fn download_parallel_adaptive(
         &self,
-        url: &str,
+        source: &Source,
         size_to_download: u64,
         chunk_set: &ChunkSet,
         temp_dir: &Path,
@@ -422,7 +424,7 @@ impl HttpDownloader {
         let controller = self.build_controller(size_to_download, log_callback);
         let sem = controller.semaphore().clone();
 
-        let url_shared: Arc<str> = Arc::from(url);
+        let source_shared = Arc::new(source.clone());
 
         // Generate tasks lazily using stream::unfold driven by controller.next_chunk().
         // buffer_unordered with a generous buffer lets the semaphore control actual concurrency.
@@ -449,7 +451,7 @@ impl HttpDownloader {
 
         let buffered = {
             let downloader = self.clone();
-            let url_arc = url_shared.clone();
+            let source_arc = source_shared.clone();
             let progress = progress_counter.clone();
             let temp_dir_owned = temp_dir.to_path_buf();
             let chunk_set_owned = chunk_set.clone();
@@ -462,7 +464,7 @@ impl HttpDownloader {
             stream::try_unfold((controller.clone(), 0u64), move |(ctrl, chunk_id)| {
                 let sem = sem.clone();
                 let downloader = downloader.clone();
-                let url = url_arc.clone();
+                let source = source_arc.clone();
                 let progress = progress.clone();
                 let chunk_path = chunk_set_owned.path_in(&temp_dir_owned, chunk_id);
                 // Registered BEFORE this chunk's download starts (the future
@@ -495,7 +497,7 @@ impl HttpDownloader {
 
                     let job = AdaptiveChunkJob {
                         downloader,
-                        url,
+                        source,
                         chunk_id,
                         chunk_path,
                         byte_offset,
@@ -529,7 +531,7 @@ impl HttpDownloader {
     /// Returns `(chunk_paths_in_order, total_bytes_downloaded)`.
     async fn download_parallel_static(
         &self,
-        url: &str,
+        source: &Source,
         size_to_download: u64,
         chunk_set: &ChunkSet,
         temp_dir: &Path,
@@ -547,7 +549,7 @@ impl HttpDownloader {
             "Static chunk analysis"
         );
 
-        let url_shared: Arc<str> = Arc::from(url);
+        let source_shared = Arc::new(source.clone());
         let temp_dir_owned = temp_dir.to_path_buf();
 
         // Owns the deletion authority for every chunk path this attempt
@@ -563,14 +565,14 @@ impl HttpDownloader {
                 let chunk_path = chunk_set.path_in(&temp_dir_owned, chunk_id as u64);
                 ledger.register(chunk_path.clone());
                 let downloader = self.clone();
-                let url = Arc::clone(&url_shared);
+                let source = Arc::clone(&source_shared);
                 let progress = Some(progress_counter.clone());
 
                 async move {
                     let result = download_chunk_with_retry(
                         &downloader,
                         ChunkRequestSpec {
-                            url: &url,
+                            source: &source,
                             start,
                             end,
                             chunk_path: &chunk_path,
@@ -608,7 +610,7 @@ impl HttpDownloader {
 /// positional list.
 struct AdaptiveChunkJob {
     downloader: HttpDownloader,
-    url: Arc<str>,
+    source: Arc<Source>,
     chunk_id: u64,
     chunk_path: PathBuf,
     byte_offset: u64,
@@ -625,7 +627,7 @@ struct AdaptiveChunkJob {
 async fn run_adaptive_chunk(job: AdaptiveChunkJob) -> Result<(u64, PathBuf, u64)> {
     let AdaptiveChunkJob {
         downloader,
-        url,
+        source,
         chunk_id,
         chunk_path,
         byte_offset,
@@ -644,7 +646,7 @@ async fn run_adaptive_chunk(job: AdaptiveChunkJob) -> Result<(u64, PathBuf, u64)
             () = token.cancelled() => return Err(RdlpError::Cancelled),
             p = semaphore.acquire_owned() => p.map_err(|_| RdlpError::Download {
                 message: "Semaphore closed".to_string(),
-                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(source.url.as_str())),
             })?,
         }
     } else {
@@ -653,7 +655,7 @@ async fn run_adaptive_chunk(job: AdaptiveChunkJob) -> Result<(u64, PathBuf, u64)
             .await
             .map_err(|_| RdlpError::Download {
                 message: "Semaphore closed".to_string(),
-                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(source.url.as_str())),
             })?
     };
 
@@ -665,7 +667,7 @@ async fn run_adaptive_chunk(job: AdaptiveChunkJob) -> Result<(u64, PathBuf, u64)
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
-            url: &url,
+            source: &source,
             start: abs_start,
             end: abs_end,
             chunk_path: &chunk_path,

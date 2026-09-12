@@ -17,7 +17,7 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio_util::sync::CancellationToken;
 
 use super::config::PROGRESS_UPDATE_INTERVAL;
-use super::{ContentRange, HTTP_PARTIAL_CONTENT, HttpDownloader};
+use super::{ContentRange, HTTP_PARTIAL_CONTENT, HttpDownloader, HttpResumeState, Source};
 use crate::progress::SpeedMeter;
 use crate::retry::{RetryPolicy, with_retry};
 
@@ -30,11 +30,11 @@ impl Downloader for HttpDownloader {
 
     /// F6: Override `download_format` to thread `cancel` into the download path.
     ///
-    /// The trait's default impl discards `cancel`. This override re-implements
-    /// the `download_to_file` body inline — probe, then parallel-or-sequential
-    /// dispatch — and passes `cancel` to `download_sequential`. The probe itself
-    /// is wrapped in a `tokio::select!` so cancellation fires even before the
-    /// first byte arrives.
+    /// The trait's default impl discards `cancel`. This override runs the
+    /// shared [`HttpDownloader::fresh_download`] and passes `cancel` through
+    /// to it. The whole download — probe included — is wrapped in a
+    /// `tokio::select!` so cancellation fires even before the first byte
+    /// arrives.
     ///
     /// Note: `download_parallel` does not yet take `cancel`; the outer
     /// orchestrator `select!` provides cancellation for the parallel path.
@@ -48,39 +48,7 @@ impl Downloader for HttpDownloader {
         let url = &format.url;
         let timeout = self.config.download_timeout;
 
-        let download_fut = async {
-            let probe = self.probe(url).await?;
-            let size = probe.size;
-            let supports_ranges = probe.supports_ranges;
-
-            debug!(
-                "Probe result: size={} MB, concurrent={}, ranges={}",
-                size.map_or(0, |s| s / 1024 / 1024),
-                self.config.concurrent_fragments,
-                supports_ranges
-            );
-
-            let parallel_size = match size {
-                Some(s) if s > self.config.parallel_threshold => {
-                    if self.config.concurrent_fragments > 1 && supports_ranges {
-                        Some(s)
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
-
-            if let Some(ps) = parallel_size {
-                // Parallel-path cooperative cancel is pre-existing AIMD work,
-                // out of scope for F6; outer select! at the orchestrator covers it.
-                return self.download_parallel(url, path, ps, progress).await;
-            }
-
-            self.download_sequential(url, path, progress, cancel).await
-        };
-
-        let timed = tokio::time::timeout(timeout, download_fut);
+        let timed = tokio::time::timeout(timeout, self.fresh_download(url, path, progress, cancel));
 
         match cancel {
             Some(token) => {
@@ -109,59 +77,12 @@ impl Downloader for HttpDownloader {
         progress: Option<Box<dyn ProgressCallback>>,
     ) -> Result<DownloadStats> {
         let timeout = self.config.download_timeout;
-        tokio::time::timeout(timeout, async {
-            // F3: single GET probe replaces HEAD x2 + Range:bytes=0-0 sequence.
-            // See docs/superpowers/specs/2026-05-21-f3-f6-download-optimization-design.md
-            let probe = self.probe(url).await?;
-            let size = probe.size;
-            let supports_ranges = probe.supports_ranges;
-
-            debug!(
-                "Probe result: size={} MB, concurrent={}, ranges={}",
-                size.map_or(0, |s| s / 1024 / 1024),
-                self.config.concurrent_fragments,
-                supports_ranges
-            );
-
-            let parallel_size = match size {
-                Some(s) if s > self.config.parallel_threshold => {
-                    if self.config.concurrent_fragments > 1 && supports_ranges {
-                        Some(s)
-                    } else {
-                        None
-                    }
-                }
-                _ => None,
-            };
-
-            if let Some(ps) = parallel_size {
-                debug!(
-                    "Using parallel download mode ({} connections)",
-                    self.config.concurrent_fragments
-                );
-                return self.download_parallel(url, path, ps, progress).await;
-            }
-
-            let reason = match size {
-                None | Some(0) => "could not detect file size",
-                Some(s) if s <= self.config.parallel_threshold => "file too small for parallel",
-                Some(_) if self.config.concurrent_fragments <= 1 => "concurrent_fragments <= 1",
-                Some(_) if !supports_ranges => "server doesn't support ranges",
-                Some(_) => "unknown reason",
-            };
-            debug!(
-                "Using sequential download - reason: {reason} (size: {:?} MB, fragments: {}, ranges: {supports_ranges})",
-                size.map(|s| s / 1024 / 1024),
-                self.config.concurrent_fragments
-            );
-
-            self.download_sequential(url, path, progress, None).await
-        })
-        .await
-        .map_err(|_| RdlpError::Download {
-            message: format!("Download timed out after {}s", timeout.as_secs()),
-            url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
-        })?
+        tokio::time::timeout(timeout, self.fresh_download(url, path, progress, None))
+            .await
+            .map_err(|_| RdlpError::Download {
+                message: format!("Download timed out after {}s", timeout.as_secs()),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
+            })?
     }
 
     /// Stream an HTTP download into an arbitrary async writer (e.g. stdout).
@@ -206,6 +127,89 @@ impl Downloader for HttpDownloader {
 
 #[allow(clippy::too_many_lines)]
 impl HttpDownloader {
+    /// A download from byte 0: probe, then parallel or sequential.
+    ///
+    /// The one body behind `download_format` and `download_to_file`, which
+    /// differ only in how they wrap it (a cancel-racing `select!` versus a
+    /// plain timeout with `cancel: None`).
+    ///
+    /// The probe's strong validator, when it offered one, is persisted to the
+    /// resume sidecar BEFORE any body byte is requested and handed to every
+    /// chunk as the [`Source`] it must verify against (#565, RFC 9110
+    /// §15.3.7.3). The sidecar is removed on success; on failure it stays, so
+    /// a later resume can send it as `If-Range`. A sidecar write failure is
+    /// surfaced as `RdlpError::Io` rather than downgraded, because a download
+    /// that cannot record what it fetched cannot later be resumed safely.
+    pub(crate) async fn fresh_download(
+        &self,
+        url: &str,
+        path: &Path,
+        progress: Option<Box<dyn ProgressCallback>>,
+        cancel: Option<&CancellationToken>,
+    ) -> Result<DownloadStats> {
+        // F3: single GET probe replaces HEAD x2 + Range:bytes=0-0 sequence.
+        let probe = self.probe(url).await?;
+        let size = probe.size;
+        let supports_ranges = probe.supports_ranges;
+
+        debug!(
+            "Probe result: size={} MB, concurrent={}, ranges={}",
+            size.map_or(0, |s| s / 1024 / 1024),
+            self.config.concurrent_fragments,
+            supports_ranges
+        );
+
+        // "No sidecar" must mean "no validator": one left by an earlier
+        // attempt would describe bytes this attempt is about to replace.
+        match probe.validator.clone() {
+            Some(v) => HttpResumeState::new(v, probe.complete_length)
+                .save(path)
+                .await
+                .map_err(RdlpError::Io)?,
+            None => HttpResumeState::remove(path).await,
+        }
+        let source = Source::new(url, probe.validator);
+
+        let parallel_size = match size {
+            Some(s) if s > self.config.parallel_threshold => {
+                if self.config.concurrent_fragments > 1 && supports_ranges {
+                    Some(s)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+
+        let stats = if let Some(ps) = parallel_size {
+            debug!(
+                "Using parallel download mode ({} connections)",
+                self.config.concurrent_fragments
+            );
+            // Parallel-path cooperative cancel is pre-existing AIMD work,
+            // out of scope for F6; outer select! at the orchestrator covers it.
+            self.download_parallel(&source, path, ps, progress).await?
+        } else {
+            let reason = match size {
+                None | Some(0) => "could not detect file size",
+                Some(s) if s <= self.config.parallel_threshold => "file too small for parallel",
+                Some(_) if self.config.concurrent_fragments <= 1 => "concurrent_fragments <= 1",
+                Some(_) if !supports_ranges => "server doesn't support ranges",
+                Some(_) => "unknown reason",
+            };
+            debug!(
+                "Using sequential download - reason: {reason} (size: {:?} MB, fragments: {}, ranges: {supports_ranges})",
+                size.map(|s| s / 1024 / 1024),
+                self.config.concurrent_fragments
+            );
+            self.download_sequential(url, path, progress, cancel)
+                .await?
+        };
+
+        HttpResumeState::remove(path).await;
+        Ok(stats)
+    }
+
     /// F6 (#307): cooperative-cancel-aware variant of `download_to_writer`.
     /// The trait method `download_to_writer` delegates here with `cancel: None`.
     /// Direct callers can pass a `CancellationToken` for mid-stream cancellation.
@@ -485,8 +489,16 @@ impl HttpDownloader {
                     );
 
                     drop(response);
+                    // No sidecar is consulted on this path yet, so the resume
+                    // chunks run unverified exactly as before #565's Task 4.
                     return self
-                        .download_parallel_resume(url, path, resume_from, total, progress)
+                        .download_parallel_resume(
+                            &Source::unverified(url),
+                            path,
+                            resume_from,
+                            total,
+                            progress,
+                        )
                         .await;
                 }
 
