@@ -6,7 +6,7 @@
 //! Load/save are async (`tokio::fs`) because the workspace clippy config
 //! bans blocking `std::fs` in async contexts. The file is tiny.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -15,8 +15,23 @@ use url::Url;
 
 use crate::atomic::now_secs;
 
-/// Current schema version. Bump on incompatible field changes.
-pub const STATE_VERSION: u32 = 1;
+/// Current schema version.
+///
+/// v2 (this version) adds the expected byte length alongside each recorded
+/// segment/init part (see #677): a part file was previously trusted as
+/// "done" purely on non-emptiness. Neither the part write nor the sidecar
+/// rename is fsynced (`crate::atomic`), so after a power loss the sidecar
+/// can survive with a part recorded while that part's data blocks never
+/// reached disk — a short file that was resumed as complete and never
+/// re-fetched. A v1 sidecar carries no lengths to validate against, so
+/// `load_matching` rejects it outright — the affected download restarts
+/// from scratch rather than risk trusting stale records.
+pub const STATE_VERSION: u32 = 2;
+
+/// Zero-based index of a media segment within one representation.
+pub type SegmentIndex = u64;
+/// Byte length of a part as written to disk.
+pub type ByteLen = u64;
 
 /// Persisted state of an in-progress DASH download.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,12 +44,16 @@ pub struct DashDownloadState {
     pub video_repr_id: String,
     /// `id` of the chosen audio representation, when one is present.
     pub audio_repr_id: Option<String>,
-    /// `true` once the video init segment has been written to disk.
-    pub init_video_done: bool,
-    /// `true` once the audio init segment has been written to disk.
-    pub init_audio_done: bool,
-    /// `repr_id -> sorted indices of completed segments`.
-    pub completed_segments: HashMap<String, Vec<u64>>,
+    /// Byte length of the video init segment once written to disk, `None`
+    /// until then. Resume trusts the on-disk part only when its length
+    /// matches this value exactly.
+    pub init_video_len: Option<ByteLen>,
+    /// Byte length of the audio init segment once written to disk, `None`
+    /// until then. Same matching rule as `init_video_len`.
+    pub init_audio_len: Option<ByteLen>,
+    /// `repr_id -> (segment index -> expected byte length)` for completed
+    /// segments. `BTreeMap` so the serialised sidecar is deterministic.
+    pub completed_segments: HashMap<String, BTreeMap<SegmentIndex, ByteLen>>,
     /// Unix epoch seconds — for stale-state diagnosis.
     pub updated_at: u64,
 }
@@ -48,8 +67,8 @@ impl DashDownloadState {
             mpd_path: mpd_url.path().to_string(),
             video_repr_id,
             audio_repr_id,
-            init_video_done: false,
-            init_audio_done: false,
+            init_video_len: None,
+            init_audio_len: None,
             completed_segments: HashMap::new(),
             updated_at: now_secs(),
         }
@@ -87,25 +106,46 @@ impl DashDownloadState {
         crate::atomic::atomic_write_json(path, self.clone()).await
     }
 
-    /// Mark segment `idx` of representation `repr_id` as completed.
-    /// Sorted-insert; idempotent for duplicates.
-    pub fn record_segment(&mut self, repr_id: &str, idx: u64) {
-        let entry = self
-            .completed_segments
+    /// Record segment `idx` of representation `repr_id` as completed with
+    /// its written byte length `len`. Overwrites any prior record for the
+    /// same index (idempotent for retries).
+    pub fn record_segment(&mut self, repr_id: &str, idx: SegmentIndex, len: ByteLen) {
+        self.completed_segments
             .entry(repr_id.to_string())
-            .or_default();
-        if !entry.contains(&idx) {
-            entry.push(idx);
-            entry.sort_unstable();
-        }
+            .or_default()
+            .insert(idx, len);
     }
 
-    /// Returns `true` if segment `idx` of `repr_id` has been recorded.
+    /// Returns the recorded byte length for segment `idx` of `repr_id`, or
+    /// `None` if it has not been recorded.
     #[must_use]
-    pub fn is_segment_done(&self, repr_id: &str, idx: u64) -> bool {
-        self.completed_segments
-            .get(repr_id)
-            .is_some_and(|v| v.binary_search(&idx).is_ok())
+    pub fn recorded_len(&self, repr_id: &str, idx: SegmentIndex) -> Option<ByteLen> {
+        self.completed_segments.get(repr_id)?.get(&idx).copied()
+    }
+
+    /// Drop the record for segment `idx` of `repr_id`, so the caller
+    /// re-fetches it. No-op if the segment was never recorded.
+    pub fn forget_segment(&mut self, repr_id: &str, idx: SegmentIndex) {
+        if let Some(v) = self.completed_segments.get_mut(repr_id) {
+            v.remove(&idx);
+        }
+    }
+}
+
+/// The byte length an on-disk part can be trusted for, given its actual
+/// length and the length recorded for it at write time — `None` when it
+/// must be re-fetched.
+///
+/// A part resumes only on an exact match — missing (`on_disk: None`),
+/// unrecorded (`recorded: None`), short, or even longer than recorded all
+/// re-fetch, since DASH segments are always written whole (#677). Returning
+/// the length (rather than a `bool`) means a caller cannot count a part
+/// without having passed this check.
+#[must_use]
+pub const fn intact_len(on_disk: Option<ByteLen>, recorded: Option<ByteLen>) -> Option<ByteLen> {
+    match (on_disk, recorded) {
+        (Some(a), Some(b)) if a == b => Some(a),
+        _ => None,
     }
 }
 
@@ -114,14 +154,14 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn save_then_load_matching_roundtrips_through_atomic_writer() {
+    async fn save_then_load_matching_roundtrips_lengths_through_atomic_writer() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("v.dash_state.json");
         let url = Url::parse("https://cdn.example.com/path/manifest.mpd").expect("url");
         let mut state = DashDownloadState::new(&url, "v1".into(), Some("a1".into()));
-        state.record_segment("v1", 0);
-        state.record_segment("v1", 1);
-        state.init_video_done = true;
+        state.record_segment("v1", 0, 100);
+        state.record_segment("v1", 1, 200);
+        state.init_video_len = Some(50);
         state.save(&path).await.expect("save");
 
         let loaded = DashDownloadState::load_matching(&path, &url, "v1", Some("a1"))
@@ -129,8 +169,88 @@ mod tests {
             .expect("must load matching state");
         assert_eq!(loaded.state_version, STATE_VERSION);
         assert_eq!(loaded.video_repr_id, "v1");
-        assert!(loaded.init_video_done);
-        assert!(loaded.is_segment_done("v1", 0));
-        assert!(loaded.is_segment_done("v1", 1));
+        assert_eq!(loaded.init_video_len, Some(50));
+        assert_eq!(loaded.recorded_len("v1", 0), Some(100));
+        assert_eq!(loaded.recorded_len("v1", 1), Some(200));
+    }
+
+    #[tokio::test]
+    async fn v1_shaped_sidecar_is_rejected_not_misread() {
+        // A v1 sidecar has no lengths to validate a resumed part against —
+        // it must be rejected outright rather than partially parsed, per
+        // the STATE_VERSION doc-comment (#677).
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("v.dash_state.json");
+        let url = Url::parse("https://cdn.example.com/path/manifest.mpd").expect("url");
+        let v1_json = format!(
+            r#"{{"state_version":1,"mpd_path":"{}","video_repr_id":"v1","audio_repr_id":null,"init_video_done":true,"init_audio_done":false,"completed_segments":{{"v1":[0]}},"updated_at":0}}"#,
+            url.path()
+        );
+        tokio::fs::write(&path, v1_json)
+            .await
+            .expect("write v1 sidecar");
+
+        assert!(
+            DashDownloadState::load_matching(&path, &url, "v1", None)
+                .await
+                .is_none(),
+            "a v1-shaped sidecar must not load — it carries no lengths"
+        );
+    }
+
+    #[test]
+    fn forget_segment_clears_recorded_len() {
+        let url = Url::parse("https://cdn.example.com/path/manifest.mpd").expect("url");
+        let mut state = DashDownloadState::new(&url, "v1".into(), None);
+        state.record_segment("v1", 0, 100);
+        assert_eq!(state.recorded_len("v1", 0), Some(100));
+
+        state.forget_segment("v1", 0);
+        assert_eq!(state.recorded_len("v1", 0), None);
+    }
+
+    #[tokio::test]
+    async fn v2_shaped_sidecar_with_old_version_number_is_rejected() {
+        // Pins the version gate itself: the body parses as v2, so only the
+        // `state_version` comparison in `load_matching` can reject it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("v.dash_state.json");
+        let url = Url::parse("https://cdn.example.com/path/manifest.mpd").expect("url");
+        let mut state = DashDownloadState::new(&url, "v1".into(), None);
+        state.record_segment("v1", 0, 2);
+        state.state_version = STATE_VERSION - 1;
+        state.save(&path).await.expect("save");
+
+        assert!(
+            DashDownloadState::load_matching(&path, &url, "v1", None)
+                .await
+                .is_none(),
+            "an older state_version must be rejected even when the body parses"
+        );
+    }
+
+    #[test]
+    fn intact_len_matches_exact_length_only() {
+        // Boundary pair per bug-fix-requires-failing-test.md: N accepted,
+        // N-1 and N+1 both re-fetched, and the two "nothing to compare"
+        // shapes (missing on disk / never recorded) also re-fetch.
+        assert_eq!(
+            intact_len(Some(100), Some(100)),
+            Some(100),
+            "exact match resumes"
+        );
+        assert_eq!(
+            intact_len(Some(99), Some(100)),
+            None,
+            "short-by-one must re-fetch"
+        );
+        assert_eq!(
+            intact_len(Some(101), Some(100)),
+            None,
+            "long-by-one must re-fetch"
+        );
+        assert_eq!(intact_len(None, Some(100)), None, "missing file re-fetches");
+        assert_eq!(intact_len(Some(100), None), None, "unrecorded re-fetches");
+        assert_eq!(intact_len(None, None), None, "neither present re-fetches");
     }
 }

@@ -86,11 +86,12 @@ async fn resume_skips_already_downloaded_segments() {
     assert!(init_part.exists(), "init part written");
     assert!(part0.exists(), "seg 0 part written");
 
-    // State JSON should record seg 0 as done.
+    // State JSON should record seg 0 as done, with its byte length (v2
+    // schema — #677).
     let body = tokio::fs::read_to_string(&state_file).await.unwrap();
     assert!(
-        body.contains("\"v1\":[0]") || body.contains("\"v1\": [0]"),
-        "state should record seg 0 done; got: {body}"
+        body.contains("\"0\":2"),
+        "state should record seg 0 done with its length (2 bytes, \"V1\"); got: {body}"
     );
 
     // Phase 2: drop the failing mock, replace with success. Wire a NEW
@@ -117,6 +118,163 @@ async fn resume_skips_already_downloaded_segments() {
     let _ = downloader.download_to_file(&url, &out, None).await;
 
     v1_replay.assert_async().await;
+}
+
+/// #677: a segment part that is durably recorded as done but is short on
+/// disk (unfsynced data lost after the sidecar had recorded it, or any other
+/// out-of-band truncation) must be re-fetched, not trusted on non-emptiness.
+#[tokio::test]
+async fn truncated_segment_part_is_refetched_on_resume() {
+    let mut server = Server::new_async().await;
+    let _mpd = server
+        .mock("GET", "/manifest.mpd")
+        .with_body(mpd_body(&server.url()))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let _vi = server
+        .mock("GET", "/vinit.mp4")
+        .with_body(b"VINIT")
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let v1_first = server
+        .mock("GET", "/vseg-1.m4s")
+        .with_body(b"V1")
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let v2_fail = server
+        .mock("GET", "/vseg-2.m4s")
+        .with_status(503)
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("out.mp4");
+    let url = format!("{}/manifest.mpd", server.url());
+    let downloader = fast_dl();
+
+    let _err = downloader
+        .download_to_file(&url, &out, None)
+        .await
+        .expect_err("seg 2 503 → fail");
+
+    let parts = dir.path().join("out.video.parts");
+    let part0 = parts.join("0000.m4s");
+    assert!(part0.exists(), "seg 0 part written");
+
+    // Simulate lost unfsynced data: the sidecar durably recorded 2 bytes,
+    // but the part file on disk is a 1-byte remnant. Non-zero, so the old
+    // "on_disk_len > 0" check would have wrongly accepted it.
+    tokio::fs::write(&part0, b"V").await.unwrap();
+
+    drop(v2_fail);
+    drop(v1_first);
+
+    let v1_replay = server
+        .mock("GET", "/vseg-1.m4s")
+        .expect(1)
+        .with_body(b"V1")
+        .create_async()
+        .await;
+    let _v2_ok = server
+        .mock("GET", "/vseg-2.m4s")
+        .with_body(b"V2")
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    // Video-only representation: the download completes by renaming the
+    // concatenated intermediate straight to `out`, no FFmpeg mux involved,
+    // so a successful run's output is directly inspectable.
+    downloader
+        .download_to_file(&url, &out, None)
+        .await
+        .expect("second run must succeed once all segments are fetchable");
+
+    v1_replay.assert_async().await;
+    let output = tokio::fs::read(&out).await.unwrap();
+    assert_eq!(
+        output, b"VINITV1V2",
+        "truncated segment must be replaced by a full re-fetch, not left corrupt in the output"
+    );
+}
+
+/// #677 sibling: the same truncation defect on the init segment.
+#[tokio::test]
+async fn truncated_init_part_is_refetched_on_resume() {
+    let mut server = Server::new_async().await;
+    let _mpd = server
+        .mock("GET", "/manifest.mpd")
+        .with_body(mpd_body(&server.url()))
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let vi_first = server
+        .mock("GET", "/vinit.mp4")
+        .with_body(b"VINIT")
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let _v1_ok1 = server
+        .mock("GET", "/vseg-1.m4s")
+        .with_body(b"V1")
+        .expect_at_least(1)
+        .create_async()
+        .await;
+    let v2_fail = server
+        .mock("GET", "/vseg-2.m4s")
+        .with_status(503)
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("out.mp4");
+    let url = format!("{}/manifest.mpd", server.url());
+    let downloader = fast_dl();
+
+    let _err = downloader
+        .download_to_file(&url, &out, None)
+        .await
+        .expect_err("seg 2 503 → fail");
+
+    let parts = dir.path().join("out.video.parts");
+    let init_part = parts.join("init.m4s");
+    assert!(init_part.exists(), "init part written");
+
+    // "VINIT" is 5 bytes; truncate to a non-empty 1-byte remnant.
+    tokio::fs::write(&init_part, b"V").await.unwrap();
+
+    drop(v2_fail);
+    drop(vi_first);
+
+    let vi_replay = server
+        .mock("GET", "/vinit.mp4")
+        .expect(1)
+        .with_body(b"VINIT")
+        .create_async()
+        .await;
+    let _v2_ok = server
+        .mock("GET", "/vseg-2.m4s")
+        .with_body(b"V2")
+        .expect_at_least(1)
+        .create_async()
+        .await;
+
+    downloader
+        .download_to_file(&url, &out, None)
+        .await
+        .expect("second run must succeed once all segments are fetchable");
+
+    vi_replay.assert_async().await;
+    let output = tokio::fs::read(&out).await.unwrap();
+    assert_eq!(
+        output, b"VINITV1V2",
+        "truncated init segment must be replaced by a full re-fetch, not left corrupt in the output"
+    );
 }
 
 /// State file path is `<output>.dash_state.json` — i.e. the FULL output
