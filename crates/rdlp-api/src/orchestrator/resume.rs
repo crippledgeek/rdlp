@@ -153,6 +153,13 @@ async fn detect_chunk_files(output_path: &Path) -> Option<ChunkInfo> {
 /// (`download_id` + `kind` + per-chunk length), which is the ownership proof
 /// [`log_legacy_chunks`] and [`log_orphaned_resume_chunks`] cannot obtain for
 /// an orphaned set found lying around.
+///
+/// Deletes what it copied, after the merged output is flushed, so a failed
+/// merge leaves every chunk in place (#573 follow-up): copying a chunk and
+/// deleting it immediately, before `flush()`, meant a failure on chunk N
+/// (open/copy, or the flush itself) had already unlinked chunks `0..N` while
+/// their bytes existed only in a truncated, unflushed output — data loss on
+/// the very path meant to be recoverable.
 pub async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo) -> anyhow::Result<u64> {
     use tokio::fs::File;
     use tokio::io::{AsyncWriteExt, BufWriter};
@@ -172,8 +179,10 @@ pub async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo) -> an
     let mut writer = BufWriter::with_capacity(2 * 1024 * 1024, file); // 2 MB buffer
 
     let mut total_size = 0u64;
+    let mut copied_paths = Vec::with_capacity(chunk_count);
 
-    // Merge each chunk in order
+    // Merge each chunk in order — no deletion here; a chunk is only ever
+    // removed once every chunk has been copied AND the output is flushed.
     for (idx, chunk_path) in chunk_info.chunk_paths.iter().enumerate() {
         if !chunk_path.exists() {
             anyhow::bail!("missing chunk file: {}", chunk_path.display());
@@ -188,16 +197,12 @@ pub async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo) -> an
             .with_context(|| format!("failed to copy chunk {} to output", chunk_path.display()))?;
 
         total_size += bytes_copied;
+        copied_paths.push(chunk_path.clone());
 
         // Progress update every 100 chunks
         if (idx + 1) % 100 == 0 || idx == chunk_count - 1 {
             debug!(merged = idx + 1, total = chunk_count; "   Merge progress");
         }
-
-        // Delete chunk file after successful merge
-        tokio::fs::remove_file(chunk_path)
-            .await
-            .with_context(|| format!("failed to remove chunk file {}", chunk_path.display()))?;
     }
 
     writer
@@ -205,7 +210,27 @@ pub async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo) -> an
         .await
         .context("failed to flush merged output file")?;
 
-    debug!(chunk_count; "Cleaned up chunk files");
+    // The merge has succeeded and the output is durable on disk from this
+    // process's point of view — now, and only now, remove the chunks it
+    // consumed. A delete failure here does not undo a successful merge, so
+    // it is logged rather than propagated as an error.
+    let mut left_behind = 0usize;
+    for chunk_path in &copied_paths {
+        if let Err(e) = tokio::fs::remove_file(chunk_path).await {
+            left_behind += 1;
+            warn!(
+                "Failed to remove merged chunk file {} (the merged output is complete; \
+                 remove it by hand): {e}",
+                chunk_path.display()
+            );
+        }
+    }
+
+    if left_behind == 0 {
+        debug!(chunk_count; "Cleaned up chunk files");
+    } else {
+        debug!(chunk_count, left_behind; "Merged chunk files; some could not be removed");
+    }
 
     Ok(total_size)
 }
@@ -493,13 +518,16 @@ impl Orchestrator {
                     // on retry, so deleting it buys nothing and risks a
                     // concurrent writer's file. Log, never delete.
                     //
-                    // `merge_chunk_files` copies-then-deletes each chunk in
-                    // order, so a failure partway through has already
-                    // consumed and removed the earlier chunks (and left a
-                    // truncated `output_path` behind — the next run's
-                    // partial/oversized check will see it). Only the chunks
-                    // still on disk are "remaining"; stat each rather than
-                    // trusting the full `chunk_paths` list.
+                    // `merge_chunk_files` only deletes a chunk after the
+                    // merged output is flushed, so on failure every chunk it
+                    // was given should still be on disk — but stat each
+                    // rather than trusting the full `chunk_paths` list, since
+                    // that's a probe, not a guarantee (e.g. a concurrent
+                    // process racing the same paths). Whether `output_path`
+                    // itself was left behind partially written depends on
+                    // *where* the merge failed (nothing was written if
+                    // `File::create` itself failed), so check rather than
+                    // assert it.
                     let mut remaining = Vec::new();
                     for chunk_path in &chunk_info.chunk_paths {
                         match tokio::fs::metadata(chunk_path).await {
@@ -510,12 +538,18 @@ impl Orchestrator {
                             }
                         }
                     }
+                    let output_note = if output_path.exists() {
+                        format!(
+                            "any partially written {} was left in place; ",
+                            output_path.display()
+                        )
+                    } else {
+                        String::new()
+                    };
                     warn!(
                         chunk_count = remaining.len();
-                        "Failed to merge chunks: {e}. Starting fresh; a truncated \
-                         {} was left behind, and not deleting the {} remaining \
-                         chunk file(s).",
-                        output_path.display(),
+                        "Failed to merge chunks: {e}. Starting fresh; {output_note}not \
+                         deleting the {} remaining chunk file(s).",
                         remaining.len(),
                     );
                     for chunk_path in &remaining {

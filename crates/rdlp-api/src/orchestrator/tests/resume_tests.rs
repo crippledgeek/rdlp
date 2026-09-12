@@ -60,6 +60,54 @@ async fn test_merge_chunk_files_success() {
     assert!(!chunk2_path.exists());
 }
 
+/// #573 follow-up: pins that a successful merge still ends in the same
+/// observable state as before the fix — every chunk copied into a flushed,
+/// fully-readable output, then removed — now that deletion happens strictly
+/// after `flush()` rather than interleaved with each copy. Reads the output
+/// back via a fresh `tokio::fs::read` (so a merge that "succeeded" but left
+/// buffered, unflushed bytes would fail the content check) and asserts every
+/// consumed chunk is gone only after that content check passes.
+#[tokio::test]
+async fn test_merge_chunk_files_deletes_only_after_flush() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let output_path = temp_dir.path().join("video.mp4");
+
+    let chunks: Vec<Vec<u8>> = (0..5).map(|i| vec![i as u8; 300]).collect();
+    let chunk_paths: Vec<_> = (0..5)
+        .map(|i| temp_dir.path().join(format!("video.mp4.part{i}")))
+        .collect();
+    for (path, data) in chunk_paths.iter().zip(&chunks) {
+        tokio::fs::write(path, data).await.unwrap();
+    }
+
+    let chunk_info = resume::ChunkInfo {
+        download_id: None,
+        chunk_paths: chunk_paths.clone(),
+        total_size: 1500,
+    };
+
+    let total_size = resume::merge_chunk_files(&output_path, &chunk_info)
+        .await
+        .unwrap();
+    assert_eq!(total_size, 1500);
+
+    // The output must be fully flushed and readable — a merge that deleted
+    // chunks before flushing could still pass a size-only check.
+    let content = tokio::fs::read(&output_path).await.unwrap();
+    assert_eq!(content.len(), 1500);
+    for (i, chunk) in chunks.iter().enumerate() {
+        assert_eq!(&content[i * 300..(i + 1) * 300], chunk.as_slice());
+    }
+
+    for path in &chunk_paths {
+        assert!(
+            !path.exists(),
+            "{} should be removed once the merge succeeded and flushed",
+            path.display()
+        );
+    }
+}
+
 #[tokio::test]
 async fn test_merge_chunk_files_missing_chunk() {
     let temp_dir = tempfile::tempdir().unwrap();
@@ -721,11 +769,14 @@ mod resume_compatibility_tests {
     /// deleting them buys nothing and risks a concurrent writer's file. This
     /// must log, never delete.
     ///
-    /// `chunk0` does NOT survive: `merge_chunk_files` copies-then-deletes
-    /// each chunk in order, so by the time it fails opening `chunk1` it has
-    /// already consumed and removed `chunk0` — that deletion is
-    /// `merge_chunk_files`'s own (unchanged) behavior, not the fallback arm
-    /// under test here, and `output_path` itself is left truncated behind.
+    /// `chunk0` ALSO survives: `merge_chunk_files` now copies every chunk,
+    /// flushes the merged output, and only THEN deletes the chunks it
+    /// consumed — so a failure opening `chunk1` means nothing has been
+    /// deleted yet, `chunk0` included. (Chunk deletion used to happen
+    /// immediately after each copy, before the flush — a failure on chunk N
+    /// had already unlinked chunks 0..N while their bytes existed only in an
+    /// unflushed, now-abandoned output. Fixed in the same change that landed
+    /// this test.)
     /// `chunk1` is made unreadable (not the *directory*) so `File::open`
     /// fails inside `merge_chunk_files` while directory-level unlink
     /// permission stays intact — proving `chunk1`/`chunk2` survive because of
@@ -762,9 +813,9 @@ mod resume_compatibility_tests {
             "a failed merge resets to a fresh download"
         );
         assert!(
-            !chunk0.exists(),
-            "chunk0 was already consumed by merge_chunk_files before the \
-             failure at chunk1 — that deletion is unrelated to #573"
+            chunk0.exists(),
+            "chunk0 should survive a failed merge: nothing is deleted until \
+             the merged output is flushed"
         );
         assert!(
             chunk1.exists(),
