@@ -25,7 +25,11 @@ use rdlp_security::validate_url_security;
 use std::time::Duration;
 use wasmtime::component::Linker;
 
-const MAX_BODY_BYTES: usize = 32 * 1024 * 1024;
+const MAX_BODY_BYTES: u64 = 32 * 1024 * 1024;
+const MAX_BODY_CAP: rdlp_http::BodyCap = match rdlp_http::BodyCap::new(MAX_BODY_BYTES) {
+    Some(cap) => cap,
+    None => panic!("MAX_BODY_BYTES must be nonzero"),
+};
 const MAX_TIMEOUT_MS: u64 = 60_000;
 
 /// Per-plugin fetch context. Owns a clone of the shared `wreq::Client`
@@ -148,30 +152,25 @@ impl crate::bindings::rdlp::plugin::host_fetch::Host for PluginStoreData {
             .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
             .collect();
 
-        // Streaming body cap: abort the moment the cumulative byte count
-        // exceeds MAX_BODY_BYTES so an adversarial server cannot exhaust
-        // plugin memory before the cap fires (the previous `resp.bytes()`
-        // path buffered the entire response BEFORE checking).
-        use futures_util::StreamExt;
-        let cancel2 = cancel.clone();
-        let mut stream = resp.bytes_stream();
-        let mut body: Vec<u8> = Vec::new();
-        loop {
-            tokio::select! {
-                biased;
-                () = cancel2.cancelled() => return Err(FetchError::Cancelled),
-                chunk = stream.next() => match chunk {
-                    Some(Ok(bytes)) => {
-                        if body.len().saturating_add(bytes.len()) > MAX_BODY_BYTES {
-                            return Err(FetchError::BodyTooLarge);
-                        }
-                        body.extend_from_slice(&bytes);
-                    }
-                    Some(Err(e)) => return Err(FetchError::Network(e.to_string())),
-                    None => break,
-                }
-            }
-        }
+        // `read_body_capped` (rdlp-http, #569) is the single streaming
+        // implementation; this cap is this call site's own constant.
+        //
+        // Cancellation here races the WHOLE `read_body_capped` future
+        // against the token, rather than interleaving a `select!` per
+        // chunk as the previous hand-rolled loop did. Dropping the future
+        // mid-poll drops the `bytes_stream()` it owns, which drops the
+        // underlying connection — the same cancellation granularity (abort
+        // as soon as possible, discard whatever was buffered so far), just
+        // expressed as one `select!` instead of one per chunk.
+        let body = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(FetchError::Cancelled),
+            r = rdlp_http::read_body_capped(resp, MAX_BODY_CAP) => match r {
+                Ok(body) => body,
+                Err(rdlp_http::BodyCapError::Oversized { .. }) => return Err(FetchError::BodyTooLarge),
+                Err(rdlp_http::BodyCapError::Transport(e)) => return Err(FetchError::Network(e.to_string())),
+            },
+        };
         Ok(Response {
             status,
             headers,

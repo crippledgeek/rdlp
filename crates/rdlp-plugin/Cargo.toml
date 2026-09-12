@@ -37,7 +37,6 @@ anyhow = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["sync", "macros", "time", "rt"] }
 tokio-util = { workspace = true }
-futures-util = { workspace = true }
 async-trait = { workspace = true }
 log = { workspace = true }
 

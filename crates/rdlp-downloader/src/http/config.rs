@@ -50,6 +50,20 @@ const DEFAULT_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(3600);
 /// Default merge operation timeout (30 minutes)
 const DEFAULT_MERGE_TIMEOUT: Duration = Duration::from_secs(1800);
 
+/// [`rdlp_types::config::DEFAULT_MAX_FRAGMENT_BYTES`] as the validated cap
+/// type `rdlp_http::read_body_capped` takes, used when
+/// `Config::max_fragment_bytes` is `None`. `rdlp-types` is the single source
+/// for the byte value (#569 review: two independent copies had drifted into
+/// existence with a same-crate test as the only thing keeping them in sync);
+/// this crate only owns the conversion into `BodyCap`, built once at compile
+/// time so a future edit that zeroed the upstream constant fails the build
+/// rather than panicking at runtime on the first fragment fetch.
+const DEFAULT_MAX_FRAGMENT_BODY_CAP: rdlp_http::BodyCap =
+    match rdlp_http::BodyCap::new(rdlp_types::config::DEFAULT_MAX_FRAGMENT_BYTES) {
+        Some(cap) => cap,
+        None => panic!("rdlp_types::config::DEFAULT_MAX_FRAGMENT_BYTES must be nonzero"),
+    };
+
 /// Downloader configuration (shared across clones via Arc)
 ///
 /// This struct consolidates all config fields into a single Arc,
@@ -78,6 +92,11 @@ pub struct DownloaderConfig {
     /// Minimum file size at which `download_to_file` switches to parallel chunked
     /// download. Defaults to `DEFAULT_PARALLEL_THRESHOLD_BYTES` (10 MiB).
     pub parallel_threshold: u64,
+    /// Ceiling on a single fragment/segment body (#569). Defaults to
+    /// `DEFAULT_MAX_FRAGMENT_BYTES` (512 MiB). Read by both the
+    /// pre-resolved-fragments path (`fragments.rs`) and the DASH static-VoD
+    /// segment fetcher (`dash/download.rs`).
+    pub max_fragment_bytes: rdlp_http::BodyCap,
     /// Per-read idle timeout (no data received for this long = abort)
     pub read_timeout: Duration,
     /// Total download timeout (entire operation must complete within this)
@@ -108,6 +127,7 @@ impl Default for DownloaderConfig {
             concurrent_fragments,
             chunk_strategy: ChunkSizeStrategy::Auto,
             parallel_threshold: DEFAULT_PARALLEL_THRESHOLD_BYTES,
+            max_fragment_bytes: DEFAULT_MAX_FRAGMENT_BODY_CAP,
             read_timeout: DEFAULT_READ_TIMEOUT,
             download_timeout: DEFAULT_DOWNLOAD_TIMEOUT,
             merge_timeout: DEFAULT_MERGE_TIMEOUT,

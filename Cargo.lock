@@ -6527,6 +6527,8 @@ dependencies = [
 name = "rdlp-http"
 version = "0.1.0"
 dependencies = [
+ "bytes",
+ "futures-util",
  "mockito",
  "openssl-sys",
  "rdlp-redact",
@@ -6560,7 +6562,6 @@ dependencies = [
  "async-trait",
  "base64 0.22.1",
  "ed25519-dalek",
- "futures-util",
  "hex",
  "log",
  "percent-encoding",

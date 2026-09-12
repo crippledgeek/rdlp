@@ -2164,3 +2164,82 @@ async fn hls_path_forwards_adaptive_logs_to_the_callback() {
          path; got {logs:?}"
     );
 }
+
+/// #569 regression guard: an unranged fragment body larger than the
+/// configured cap must be refused, not buffered in full.
+///
+/// RED against the unpatched code: before #569, `fetch_with_optional_range`
+/// read the whole body via `resp.bytes()` with no size check at all, so this
+/// download would succeed with a 200-byte file instead of erroring.
+#[tokio::test]
+async fn unranged_fragment_over_cap_is_rejected() {
+    let mut server = mockito::Server::new_async().await;
+    let _f1 = server
+        .mock("GET", "/big")
+        .with_body(vec![0u8; 200])
+        .create_async()
+        .await;
+    let frags = vec![frag(format!("{}/big", server.url()))];
+    let tmp = tempfile::NamedTempFile::new().expect("tmp");
+    let http = HttpDownloader::with_client(wreq::Client::new()).with_max_fragment_bytes(100);
+
+    let err =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+            .await
+            .expect_err("a 200-byte fragment must be rejected by a 100-byte cap");
+    assert!(
+        matches!(err, rdlp_core::RdlpError::Download { .. }),
+        "expected RdlpError::Download, got {err:?}"
+    );
+}
+
+/// A fragment at or under the cap is unaffected — the cap does not disturb
+/// the normal path.
+#[tokio::test]
+async fn unranged_fragment_under_cap_succeeds() {
+    let mut server = mockito::Server::new_async().await;
+    let _f1 = server
+        .mock("GET", "/small")
+        .with_body(vec![0u8; 50])
+        .create_async()
+        .await;
+    let frags = vec![frag(format!("{}/small", server.url()))];
+    let tmp = tempfile::NamedTempFile::new().expect("tmp");
+    let http = HttpDownloader::with_client(wreq::Client::new()).with_max_fragment_bytes(100);
+
+    let stats =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+            .await
+            .expect("a 50-byte fragment must pass a 100-byte cap");
+    assert_eq!(stats.bytes_downloaded, 50);
+}
+
+/// A ranged fragment stays governed by its own Content-Range length check
+/// (positive control: the cap wiring did not disturb the ranged path).
+#[tokio::test]
+async fn ranged_fragment_under_cap_still_validates_content_range() {
+    let mut server = mockito::Server::new_async().await;
+    let _seg = server
+        .mock("GET", "/seg.m4s")
+        .with_status(206)
+        .with_header("Content-Range", "bytes 0-49/8192")
+        .with_body(vec![0u8; 50])
+        .create_async()
+        .await;
+    let frags = vec![Fragment {
+        url: format!("{}/seg.m4s", server.url()),
+        byte_range: Some((0, 50)),
+        init_url: None,
+        init_byte_range: None,
+        duration: None,
+        filesize: None,
+    }];
+    let tmp = tempfile::NamedTempFile::new().expect("tmp");
+    let http = HttpDownloader::with_client(wreq::Client::new()).with_max_fragment_bytes(100);
+
+    let stats =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+            .await
+            .expect("a 50-byte ranged fragment must pass a 100-byte cap");
+    assert_eq!(stats.bytes_downloaded, 50);
+}

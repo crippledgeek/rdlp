@@ -79,6 +79,17 @@ pub(crate) use rdlp_security::MAX_URL_LENGTH;
 /// JSON-LD payload with multiple orders of magnitude of headroom.
 pub(crate) const MAX_WEBPAGE_BYTES: usize = 50 * 1024 * 1024;
 
+/// [`MAX_WEBPAGE_BYTES`] as the validated cap type `read_body_capped` takes.
+///
+/// Built once at compile time (not a per-call `.expect()`) so a future edit
+/// that zeroed the constant would fail the build rather than panic at
+/// runtime on the first fetch.
+const MAX_WEBPAGE_BODY_CAP: rdlp_http::BodyCap =
+    match rdlp_http::BodyCap::new(MAX_WEBPAGE_BYTES as u64) {
+        Some(cap) => cap,
+        None => panic!("MAX_WEBPAGE_BYTES must be nonzero"),
+    };
+
 /// Transient-failure retry budget for `fetch_webpage_with_retry`.
 ///
 /// 2 retries (3 attempts total) with a 500 ms exponential base back off. This
@@ -120,30 +131,31 @@ pub struct BaseExtractor;
 
 /// Read an HTTP response body as UTF-8 with a size cap.
 ///
-/// Streams via `bytes_stream()` so the cap fires the moment cumulative
-/// bytes exceed `MAX_WEBPAGE_BYTES`. The previous `response.text()` path
-/// buffered the entire response before any check, allowing an
-/// adversarial server to OOM the host with a 10 GB body.
+/// Delegates the streaming/size-check mechanism to `rdlp_http::read_body_capped`
+/// — the same one `rdlp-downloader` uses for fragment/segment bodies (#569) —
+/// so there is one implementation of "stream a response and abort past a
+/// byte ceiling", not a copy per crate. The previous private loop here
+/// buffered nothing extra over that shared version; this rewrite keeps this
+/// function's behavior and error messages unchanged for its ~15 call sites.
 pub(crate) async fn fetch_capped_text(response: wreq::Response, url: &str) -> Result<String> {
-    use futures::StreamExt;
-    let mut stream = response.bytes_stream();
-    let mut buf: Vec<u8> = Vec::new();
-    while let Some(chunk) = stream.next().await {
-        let bytes = chunk.map_err(|e| RdlpError::Network {
-            message: format!("Failed to read response body: {e}"),
-            url: Some(url.to_string().into()),
-        })?;
-        let chunk_ref: &[u8] = bytes.as_ref();
-        if buf.len().saturating_add(chunk_ref.len()) > MAX_WEBPAGE_BYTES {
-            return Err(RdlpError::Network {
-                message: format!(
-                    "Response body exceeds {MAX_WEBPAGE_BYTES}-byte cap (host integrity guard)"
-                ),
+    let buf = rdlp_http::read_body_capped(response, MAX_WEBPAGE_BODY_CAP)
+        .await
+        .map_err(|e| match e {
+            // Non-retryable (`RdlpError::Download`, not `Network`): a server
+            // that sends an oversized body will send it again, so retrying
+            // `fetch_webpage_with_retry` at this error would just re-fetch
+            // (and re-reject) the same body — matches the convention
+            // `rdlp-downloader::http::body_cap_error` established for
+            // fragment/segment bodies (#569 review).
+            rdlp_http::BodyCapError::Oversized { limit, .. } => RdlpError::Download {
+                message: format!("Response body exceeds {limit}-byte cap (host integrity guard)"),
                 url: Some(url.to_string().into()),
-            });
-        }
-        buf.extend_from_slice(chunk_ref);
-    }
+            },
+            rdlp_http::BodyCapError::Transport(e) => RdlpError::Network {
+                message: format!("Failed to read response body: {e}"),
+                url: Some(url.to_string().into()),
+            },
+        })?;
     String::from_utf8(buf).map_err(|e| RdlpError::Network {
         message: format!("Response body is not valid UTF-8: {e}"),
         url: Some(url.to_string().into()),

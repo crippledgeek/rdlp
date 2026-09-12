@@ -659,14 +659,9 @@ async fn fetch_with_optional_range(
         None
     };
 
-    let body =
-        resp.bytes()
-            .await
-            .map(|b| b.to_vec())
-            .map_err(|e| rdlp_core::RdlpError::Network {
-                message: format!("read {safe_url}: {e}"),
-                url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
-            })?;
+    let body = rdlp_http::read_body_capped(resp, http.config.max_fragment_bytes)
+        .await
+        .map_err(|e| crate::http::body_cap_error(e, url, "fragment"))?;
 
     // The Content-Range check above only inspected headers; confirm the body
     // that actually arrived is exactly the promised length. This single

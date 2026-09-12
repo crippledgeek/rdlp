@@ -426,7 +426,27 @@ async fn fetch_webpage_with_retry_enforces_body_cap() {
     // The body cap `fetch_webpage` enforces via `fetch_capped_text` — which
     // the hand-rolled retry copies dropped in favour of an uncapped
     // `response.text()`. A body one byte over `MAX_WEBPAGE_BYTES` must abort
-    // mid-stream with a Network error rather than buffer to completion.
+    // mid-stream with a non-retryable `Download` error rather than buffer to
+    // completion.
+    //
+    // `Download`, not `Network`: a server sending an oversized body will
+    // send it again, so this must NOT be retryable — `Network` is (per
+    // `is_retryable_error`), and this crate's own `fetch_webpage_with_retry`
+    // convention is what a caller retrying on `is_retryable_error` (or a
+    // future revision of this function's own `.retry()` scope) would act on.
+    //
+    // Measured, not assumed: `fetch_webpage_with_retry`'s `.retry().when(...)`
+    // wraps only the `send()` future, not `fetch_capped_text`, so THIS
+    // function never re-issues the request on a body-cap error today —
+    // `.expect(1)` passes under both the old `Network` mapping and the fixed
+    // `Download` one (verified: still exactly 1 hit with `Network` restored).
+    // It stays as the correct, load-bearing invariant regardless: it pins
+    // "the fetch never repeats itself for an error the server will keep
+    // producing", so a future change that widens the retry scope to cover
+    // the body read regresses loudly here instead of quietly amplifying an
+    // oversized-body attack into repeated fetches. The variant assertion
+    // below is the part that is RED against the unpatched `Network` mapping.
+    //
     // Intentionally large (~50 MB) — the sole functional guard that the
     // retry path routes through the streaming cap; freed immediately.
     let mut server = mockito::Server::new_async().await;
@@ -435,6 +455,7 @@ async fn fetch_webpage_with_retry_enforces_body_cap() {
         .mock("GET", mockito::Matcher::Any)
         .with_status(200)
         .with_body(oversized)
+        .expect(1)
         .create_async()
         .await;
 
@@ -442,8 +463,8 @@ async fn fetch_webpage_with_retry_enforces_body_cap() {
     let result = BaseExtractor::fetch_webpage_with_retry(&server.url(), &ctx).await;
 
     assert!(
-        matches!(result, Err(RdlpError::Network { .. })),
-        "a body over the cap must be rejected as a Network error, got: {result:?}"
+        matches!(result, Err(RdlpError::Download { .. })),
+        "a body over the cap must be rejected as a non-retryable Download error, got: {result:?}"
     );
     mock.assert_async().await;
 }

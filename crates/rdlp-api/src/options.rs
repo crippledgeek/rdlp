@@ -26,7 +26,7 @@ pub struct OptionEntry {
     pub gui: Gui,
 }
 
-/// The registry. One entry per `Config`/`PostProcess` leaf field (96 total).
+/// The registry. One entry per `Config`/`PostProcess` leaf field (97 total).
 pub const OPTION_REGISTRY: &[OptionEntry] = &[
     OptionEntry {
         field: "output_to_stdout",
@@ -127,6 +127,10 @@ pub const OPTION_REGISTRY: &[OptionEntry] = &[
     OptionEntry {
         field: "parallel_threshold",
         gui: Gui::Control("parallel_threshold"),
+    },
+    OptionEntry {
+        field: "max_fragment_bytes",
+        gui: Gui::Missing("#602"),
     },
     OptionEntry {
         field: "source_address",
@@ -456,6 +460,7 @@ mod tests {
             merge_timeout: _,
             hls_head_probe_timeout: _,
             parallel_threshold: _,
+            max_fragment_bytes: _,
             source_address: _,
             user_agent: _,
             browser_emulation: _,
@@ -560,6 +565,7 @@ mod tests {
             "merge_timeout",
             "hls_head_probe_timeout",
             "parallel_threshold",
+            "max_fragment_bytes",
             "source_address",
             "user_agent",
             "browser_emulation",
@@ -642,11 +648,11 @@ mod tests {
         );
         assert_eq!(
             OPTION_REGISTRY.len(),
-            96,
-            "registry must have exactly 96 entries"
+            97,
+            "registry must have exactly 97 entries"
         );
         let expected: HashSet<&str> = EXPECTED.iter().copied().collect();
-        assert_eq!(expected.len(), 96, "EXPECTED drifted from 96");
+        assert_eq!(expected.len(), 97, "EXPECTED drifted from 97");
         assert_eq!(
             registry, expected,
             "OPTION_REGISTRY fields must exactly match Config+PostProcess"
@@ -665,7 +671,7 @@ mod tests {
         }
         assert_eq!(control, 40, "Control count drifted");
         assert_eq!(na, 5, "NotApplicable count drifted");
-        assert_eq!(missing, 51, "Missing count drifted");
+        assert_eq!(missing, 52, "Missing count drifted");
     }
 
     #[test]

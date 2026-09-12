@@ -28,6 +28,24 @@ const MAX_RETRIES: usize = 100;
 /// Ceiling for both retry delay settings: one hour.
 const MAX_RETRY_DELAY_MS: u64 = 60 * 60 * 1000;
 
+/// Default ceiling on a single HLS/DASH fragment or segment body (#569).
+///
+/// A 4K HLS segment at ~40 Mbps over a typical 10 s target duration is
+/// roughly `40_000_000 / 8 * 10` ≈ 50 MB; DASH segments at comparable
+/// bitrates land in the same range. 512 MiB gives roughly 10x headroom over
+/// that for unusually long or high-bitrate segments, while still bounding
+/// per-fragment peak memory to a fixed, operator-visible number instead of
+/// "whatever the server decides to send".
+pub const DEFAULT_MAX_FRAGMENT_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Ceiling for an explicit [`Config::max_fragment_bytes`] override.
+///
+/// 2 GiB comfortably exceeds even an 8K segment at a very high bitrate
+/// (100 Mbps) over a long 90 s segment (~1.1 GB) — headroom for legitimate
+/// outliers — while still keeping worst-case per-fragment memory bounded to
+/// a fixed number rather than unbounded.
+pub const MAX_FRAGMENT_BYTES_UPPER_BOUND: u64 = 2 * 1024 * 1024 * 1024;
+
 /// Errors from configuration validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConfigValidationError {
@@ -139,9 +157,11 @@ pub struct Config {
     /// H1.1 fallback. Validated 1..=64.
     ///
     /// Memory note: under the parallel pre-resolved-fragments path, peak
-    /// transient memory ≈ `concurrent_fragments × max_fragment_size`. With the
+    /// transient memory ≈ `concurrent_fragments × max_fragment_bytes`. With the
     /// default 8 and typical 2–5 MiB segments this is ~16–40 MiB. The 64 cap
-    /// keeps the worst case bounded under operator-tunable configurations.
+    /// on this field, combined with [`Config::max_fragment_bytes`]'s own
+    /// ceiling, keeps the worst case bounded under operator-tunable
+    /// configurations.
     pub concurrent_fragments: usize,
 
     /// Rate limit in bytes per second
@@ -229,6 +249,21 @@ pub struct Config {
     /// (`DEFAULT_PARALLEL_THRESHOLD_BYTES`, currently 10 MiB).
     /// Validated post-load by `Config::validate()`: must be `1..=1_073_741_824` bytes (1 GiB).
     pub parallel_threshold: Option<u64>,
+
+    /// Ceiling on a single HLS/DASH fragment or segment body, in bytes.
+    ///
+    /// Both the pre-resolved-fragments downloader (`rdlp-downloader::fragments`)
+    /// and the DASH static-VoD segment fetcher buffer one fragment/segment body
+    /// fully in memory; without a cap, a misbehaving or adversarial server can
+    /// stream an arbitrarily large body and exhaust host memory (#569). See
+    /// [`concurrent_fragments`](Config::concurrent_fragments) for how this
+    /// combines with fragment concurrency to bound peak memory.
+    ///
+    /// Default: [`DEFAULT_MAX_FRAGMENT_BYTES`] (512 MiB). Validated post-load
+    /// by `Config::validate()`: must be `1..=MAX_FRAGMENT_BYTES_UPPER_BOUND`
+    /// (2 GiB) if set.
+    #[serde(default)]
+    pub max_fragment_bytes: Option<u64>,
 
     /// Source IP address to bind to
     pub source_address: Option<String>,
@@ -419,6 +454,7 @@ impl Default for Config {
             merge_timeout: None,
             hls_head_probe_timeout: Some(5),
             parallel_threshold: Some(10 * 1024 * 1024),
+            max_fragment_bytes: Some(DEFAULT_MAX_FRAGMENT_BYTES),
             source_address: None,
             user_agent: Some(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36".to_string(),
@@ -700,6 +736,14 @@ impl Config {
             return Err(ConfigValidationError::OutOfRange {
                 field: "parallel_threshold",
                 reason: "must be 1..=1_073_741_824 bytes (1 GiB)",
+            });
+        }
+        if let Some(t) = self.max_fragment_bytes
+            && !(1..=MAX_FRAGMENT_BYTES_UPPER_BOUND).contains(&t)
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "max_fragment_bytes",
+                reason: "must be 1..=2_147_483_648 bytes (2 GiB)",
             });
         }
 

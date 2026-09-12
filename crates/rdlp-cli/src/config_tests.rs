@@ -1304,6 +1304,7 @@ fn every_config_field_is_classified() {
         merge_timeout: _,
         hls_head_probe_timeout: _,
         parallel_threshold: _,
+        max_fragment_bytes: _,
         source_address: _,
         user_agent: _,
         browser_emulation: _,
