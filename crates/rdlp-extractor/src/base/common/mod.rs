@@ -476,9 +476,18 @@ impl BaseExtractor {
         // Single Range GET — saves one RTT vs the previous HEAD-then-Range
         // fallback. window_bytes=1 keeps bandwidth at "header-only" cost since
         // the extractor only needs the size header, not body bytes.
-        let res = rdlp_http::probe_size(http_client, url, None, 1, timeout)
-            .await
-            .ok()?;
+        let res = rdlp_http::probe_size(
+            http_client,
+            rdlp_http::ProbeSpec {
+                url,
+                headers: None,
+                window_bytes: 1,
+                timeout,
+                validator: None,
+            },
+        )
+        .await
+        .ok()?;
         let size = res.size?;
         if let Some(prefix) = log_prefix {
             let method = if res.supports_ranges {

@@ -1,0 +1,219 @@
+//! The one way a download request is built.
+//!
+//! Every request whose bytes may later be resumed or spliced pins
+//! `Accept-Encoding: identity`: RFC 9110 §14.1.2 computes byte ranges over the
+//! *encoded* sequence and §8.4 defines the representation in terms of its
+//! coded form, so offsets are comparable between attempts only under one
+//! coding. wreq 6.0.0-rc.28 inserts its own `Accept-Encoding` whenever the
+//! header is vacant (the documented `Range` exemption is not implemented) and
+//! decodes any `Content-Encoding` it recognises, stripping the header — so the
+//! four toggles below disable both for this request only, leaving a rogue
+//! `Content-Encoding` visible for the downloader to reject.
+
+use wreq::header::{HeaderMap, HeaderValue};
+
+use crate::validator::StrongValidator;
+
+/// A GET with the encoding pin applied; `headers` are the operator's.
+#[must_use = "a RequestBuilder does nothing until `.send()`d"]
+pub fn download_request(
+    client: &wreq::Client,
+    url: &str,
+    headers: Option<&HeaderMap>,
+) -> wreq::RequestBuilder {
+    let mut req = client.get(url);
+    if let Some(h) = headers {
+        req = req.headers(h.clone());
+    }
+    req.header("Accept-Encoding", HeaderValue::from_static("identity"))
+        .gzip(false)
+        .brotli(false)
+        .zstd(false)
+        .deflate(false)
+}
+
+/// The byte range a request asks for; both bounds inclusive (§14.1.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RangeSpec {
+    /// `bytes=start-end`.
+    Span {
+        /// First byte offset, inclusive.
+        start: u64,
+        /// Last byte offset, inclusive.
+        end: u64,
+    },
+    /// `bytes=start-` — everything from `start` to the end.
+    From(u64),
+}
+
+impl RangeSpec {
+    /// `None` for an inverted span, so [`Self::len`] can never underflow.
+    #[must_use]
+    pub const fn span(start: u64, end: u64) -> Option<Self> {
+        if end < start {
+            None
+        } else {
+            Some(Self::Span { start, end })
+        }
+    }
+
+    /// The starting byte offset.
+    #[must_use]
+    pub const fn start(self) -> u64 {
+        match self {
+            Self::Span { start, .. } | Self::From(start) => start,
+        }
+    }
+
+    /// Bytes covered; unknown for an open-ended range.
+    ///
+    /// No `is_empty` counterpart: [`Self::span`] rejects `end < start`, so
+    /// every constructed `Span` has `len() >= 1` and `From` is unbounded —
+    /// "empty" is not a state this type can hold, not merely one it avoids
+    /// at runtime.
+    #[allow(
+        clippy::len_without_is_empty,
+        reason = "RangeSpec::span's guard makes a zero-length range unconstructible; an is_empty() would always return false and could never fail, so it would document the invariant a second time rather than check anything"
+    )]
+    #[must_use]
+    pub const fn len(self) -> Option<u64> {
+        match self {
+            Self::Span { start, end } => Some(end - start + 1),
+            Self::From(_) => None,
+        }
+    }
+
+    /// The `Range` header value (`bytes=a-b` / `bytes=a-`).
+    #[must_use]
+    pub fn header_value(self) -> String {
+        match self {
+            Self::Span { start, end } => format!("bytes={start}-{end}"),
+            Self::From(start) => format!("bytes={start}-"),
+        }
+    }
+}
+
+/// Adds `Range` and, with a validator, `If-Range` — always together, so
+/// §13.1.5's "no If-Range without Range" holds by construction.
+pub trait RangedRequest {
+    /// Attach `range` (and `validator`'s `If-Range`, when given) to `self`.
+    #[must_use]
+    fn ranged(self, range: RangeSpec, validator: Option<&StrongValidator>) -> Self;
+}
+
+impl RangedRequest for wreq::RequestBuilder {
+    fn ranged(self, range: RangeSpec, validator: Option<&StrongValidator>) -> Self {
+        let req = self.header("Range", range.header_value());
+        match validator {
+            Some(v) => req.header("If-Range", v.if_range_value()),
+            None => req,
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::significant_drop_tightening,
+    reason = "mockito::Server is a temporary owned by each test fn and dropped at end of scope; tightening would require restructuring every test"
+)]
+mod tests {
+    use super::*;
+    use mockito::{Matcher, Server};
+
+    #[test]
+    fn range_spec_header_values() {
+        assert_eq!(RangeSpec::span(0, 9).unwrap().header_value(), "bytes=0-9");
+        assert_eq!(RangeSpec::From(1000).header_value(), "bytes=1000-");
+        assert!(RangeSpec::span(5, 4).is_none());
+        assert_eq!(RangeSpec::span(5, 5).unwrap().len(), Some(1));
+        assert_eq!(RangeSpec::From(5).len(), None);
+    }
+
+    #[tokio::test]
+    async fn download_request_pins_identity_and_suppresses_wreq_auto_encoding() {
+        let mut server = Server::new_async().await;
+        let m = server
+            .mock("GET", "/f")
+            .match_header("accept-encoding", "identity")
+            .with_status(200)
+            .with_body("ok")
+            .create_async()
+            .await;
+        let client =
+            crate::HttpClientFactory::from_config(&crate::HttpClientConfig::default()).build();
+        let resp = download_request(&client, &format!("{}/f", server.url()), None)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 200);
+        m.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn download_request_leaves_a_rogue_content_encoding_visible() {
+        // With decoding disabled per request the header must survive so the
+        // downloader can reject it (spec: the response check is load-bearing).
+        let mut server = Server::new_async().await;
+        let _m = server
+            .mock("GET", "/f")
+            .with_status(200)
+            .with_header("content-encoding", "gzip")
+            .with_body("not really gzip")
+            .create_async()
+            .await;
+        let client =
+            crate::HttpClientFactory::from_config(&crate::HttpClientConfig::default()).build();
+        let resp = download_request(&client, &format!("{}/f", server.url()), None)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
+        assert_eq!(resp.bytes().await.unwrap().as_ref(), b"not really gzip");
+    }
+
+    #[tokio::test]
+    async fn ranged_sends_range_and_if_range_together() {
+        let mut server = Server::new_async().await;
+        let m = server
+            .mock("GET", "/f")
+            .match_header("range", "bytes=10-")
+            .match_header("if-range", "\"v1\"")
+            .with_status(206)
+            .with_header("content-range", "bytes 10-19/20")
+            .with_body("0123456789")
+            .create_async()
+            .await;
+        let client =
+            crate::HttpClientFactory::from_config(&crate::HttpClientConfig::default()).build();
+        let v = StrongValidator::ETag(crate::validator::StrongEntityTag::parse("\"v1\"").unwrap());
+        let resp = download_request(&client, &format!("{}/f", server.url()), None)
+            .ranged(RangeSpec::From(10), Some(&v))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 206);
+        m.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn ranged_without_validator_sends_no_if_range() {
+        let mut server = Server::new_async().await;
+        let m = server
+            .mock("GET", "/f")
+            .match_header("range", "bytes=0-1")
+            .match_header("if-range", Matcher::Missing)
+            .with_status(206)
+            .with_header("content-range", "bytes 0-1/2")
+            .with_body("ab")
+            .create_async()
+            .await;
+        let client =
+            crate::HttpClientFactory::from_config(&crate::HttpClientConfig::default()).build();
+        download_request(&client, &format!("{}/f", server.url()), None)
+            .ranged(RangeSpec::span(0, 1).unwrap(), None)
+            .send()
+            .await
+            .unwrap();
+        m.assert_async().await;
+    }
+}

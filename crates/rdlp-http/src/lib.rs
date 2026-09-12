@@ -34,11 +34,13 @@ mod client;
 mod config;
 pub mod probe;
 mod redirect;
+pub mod request;
 pub mod validator;
 
 pub use client::HttpClientFactory;
 pub use config::HttpClientConfig;
-pub use probe::{DEFAULT_PROBE_WINDOW_BYTES, ProbeError, ProbeResult, probe_size};
+pub use probe::{DEFAULT_PROBE_WINDOW_BYTES, ProbeError, ProbeResult, ProbeSpec, probe_size};
+pub use request::{RangeSpec, RangedRequest, download_request};
 pub use validator::{StrongValidator, ValidatorMismatch};
 
 /// Re-export `wreq` for downstream crates so they can consume the HTTP

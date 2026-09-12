@@ -546,12 +546,21 @@ impl HttpDownloader {
                 let url = url_string.clone();
                 let hdrs = hdrs.clone();
                 async move {
-                    rdlp_http::probe_size(&client, &url, Some(&hdrs), window, timeout)
-                        .await
-                        .map_err(|e| RdlpError::Network {
-                            message: format!("probe failed: {e}"),
-                            url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
-                        })
+                    rdlp_http::probe_size(
+                        &client,
+                        rdlp_http::ProbeSpec {
+                            url: &url,
+                            headers: Some(&hdrs),
+                            window_bytes: window,
+                            timeout,
+                            validator: None,
+                        },
+                    )
+                    .await
+                    .map_err(|e| RdlpError::Network {
+                        message: format!("probe failed: {e}"),
+                        url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
+                    })
                 }
             },
         )
@@ -560,6 +569,8 @@ impl HttpDownloader {
         Ok(probed.unwrap_or(ProbeResult {
             size: None,
             supports_ranges: false,
+            validator: None,
+            complete_length: None,
         }))
     }
 
