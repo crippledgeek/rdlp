@@ -53,6 +53,12 @@ pub struct ProbeResult {
     /// The 206 `Content-Range` total only; `None` on a 200 (a 200 body is
     /// not partial, so it has no "complete length" distinct from `size`).
     pub complete_length: Option<u64>,
+    /// The response headers as received (empty on a network failure a
+    /// caller folds into this shape), so a resume can judge a probe's 206
+    /// with [`StrongValidator::verify_partial`] — which is lenient about an
+    /// absent `Last-Modified` (§15.3.7: a 206 to `If-Range` SHOULD NOT
+    /// repeat it) where comparing [`Self::validator`] would not be.
+    pub headers: HeaderMap,
 }
 
 /// Errors that can arise during a single probe.
@@ -104,27 +110,31 @@ pub async fn probe_size(
         .ranged(range, spec.validator)
         .send()
         .await?;
+    let headers = resp.headers().clone();
     Ok(match resp.status().as_u16() {
         206 => {
-            let complete_length = parse_content_range_total(resp.headers());
+            let complete_length = parse_content_range_total(&headers);
             ProbeResult {
                 size: complete_length,
                 supports_ranges: true,
-                validator: StrongValidator::from_headers(resp.headers()),
+                validator: StrongValidator::from_headers(&headers),
                 complete_length,
+                headers,
             }
         }
         200 => ProbeResult {
             size: resp.content_length(),
             supports_ranges: false,
-            validator: StrongValidator::from_headers(resp.headers()),
+            validator: StrongValidator::from_headers(&headers),
             complete_length: None,
+            headers,
         },
         _ => ProbeResult {
             size: None,
             supports_ranges: false,
             validator: None,
             complete_length: None,
+            headers,
         },
     })
 }
@@ -370,6 +380,42 @@ mod tests {
         .await
         .unwrap();
         m.assert_async().await;
+    }
+
+    /// A 206 to `If-Range` that omits `Last-Modified` (§15.3.7 SHOULD NOT
+    /// repeat it) still confirms a `Last-Modified` validator through the
+    /// carried headers, where `validator` alone would read as "none offered".
+    #[tokio::test]
+    async fn probe_carries_headers_so_a_last_modified_validator_can_be_confirmed() {
+        const LAST_MODIFIED: &str = "Sun, 06 Nov 1994 08:49:37 GMT";
+        let mut server = Server::new_async().await;
+        let _m = server
+            .mock("GET", "/f")
+            .with_status(206)
+            .with_header("content-range", "bytes 0-0/10")
+            .with_body("x")
+            .create_async()
+            .await;
+        let client =
+            crate::HttpClientFactory::from_config(&crate::HttpClientConfig::default()).build();
+        let lm = StrongValidator::LastModified(
+            crate::validator::ImfFixdate::parse(LAST_MODIFIED).unwrap(),
+        );
+        let r = probe_size(
+            &client,
+            ProbeSpec {
+                url: &format!("{}/f", server.url()),
+                headers: None,
+                window_bytes: 1,
+                timeout: Duration::from_secs(5),
+                validator: Some(&lm),
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(r.validator, None);
+        assert_eq!(r.headers.get("content-range").unwrap(), "bytes 0-0/10");
+        assert_eq!(lm.verify_partial(&r.headers), Ok(()));
     }
 
     #[tokio::test]

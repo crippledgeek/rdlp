@@ -3454,3 +3454,102 @@ async fn stream_body_fail_on_write_error_surfaces_broken_pipe() {
         "{result:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// #565 final-review fixes: the plain GET's coding gate, and the 416 re-probe
+// under a `Last-Modified` validator.
+// ---------------------------------------------------------------------------
+
+/// The plain sequential GET has no `Range`, so `range_verdict` never sees it —
+/// yet RFC 9110 §12.5.3 makes honouring `Accept-Encoding: identity` only a
+/// SHOULD. A server that answers the pin with `Content-Encoding: gzip` must be
+/// refused before a byte lands or a sidecar names the coded length; otherwise
+/// the final file is gzip bytes and a later resume computes offsets over them
+/// (§14.1.2).
+#[tokio::test]
+async fn sequential_get_rejects_content_coded_200_before_writing() {
+    use mockito::{Matcher, Server};
+    let mut server = Server::new_async().await;
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("v.mp4");
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", Matcher::Missing)
+        .match_header("accept-encoding", "identity")
+        .with_status(200)
+        .with_header("content-encoding", "gzip")
+        .with_header("etag", "\"v1\"")
+        .with_body("not really gzip")
+        .expect(1)
+        .create_async()
+        .await;
+
+    let d = chunk_test_downloader(0);
+    let err = d
+        .download_sequential(&format!("{}/v", server.url()), &out, None, None)
+        .await
+        .unwrap_err();
+    m.assert_async().await;
+    assert!(
+        matches!(&err, RdlpError::Download { message, .. } if message.contains("content-coded")),
+        "{err:?}"
+    );
+    assert!(
+        !out.exists() || tokio::fs::metadata(&out).await.unwrap().len() == 0,
+        "no coded byte may reach the output file"
+    );
+    assert!(
+        !HttpResumeState::sidecar_path(&out).exists(),
+        "no sidecar may describe a body that was refused"
+    );
+}
+
+/// §15.3.7: a 206 to an `If-Range` request SHOULD NOT repeat `Last-Modified`,
+/// so the re-probe after a 416-without-`Content-Range` must apply the same
+/// lenient rule `verify_partial` does for a `Last-Modified` sidecar — an
+/// absent `Last-Modified` on the probe's 206 confirms the partial rather than
+/// forcing a restart.
+#[tokio::test]
+async fn resume_416_without_content_range_probe_confirms_last_modified_partial() {
+    use mockito::Server;
+    const LAST_MODIFIED: &str = "Sun, 06 Nov 1994 08:49:37 GMT";
+    let lm = StrongValidator::LastModified(
+        rdlp_http::validator::ImfFixdate::parse(LAST_MODIFIED).unwrap(),
+    );
+
+    let mut server = Server::new_async().await;
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("v.mp4");
+    tokio::fs::write(&out, b"done").await.unwrap();
+    HttpResumeState::new(lm, None).save(&out).await.unwrap();
+    let d = chunk_test_downloader(0).with_parallel_threshold(u64::MAX);
+
+    let m416 = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=4-")
+        .match_header("if-range", LAST_MODIFIED)
+        .with_status(416)
+        .expect(1)
+        .create_async()
+        .await;
+    let probe = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=0-262143")
+        .match_header("if-range", LAST_MODIFIED)
+        .with_status(206)
+        .with_header("content-range", "bytes 0-0/4")
+        .with_body("d")
+        .expect(1)
+        .create_async()
+        .await;
+
+    let stats = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
+        .await
+        .unwrap();
+    m416.assert_async().await;
+    probe.assert_async().await;
+    assert_eq!(stats.bytes_downloaded, 4);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"done");
+    assert!(!HttpResumeState::sidecar_path(&out).exists());
+}

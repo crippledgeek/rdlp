@@ -82,6 +82,40 @@ pub(crate) fn admit_for_verdict(response: wreq::Response) -> Result<wreq::Respon
     }
 }
 
+/// The only `Content-Encoding` a download may accept is `identity`.
+///
+/// Byte offsets are over the coded form (RFC 9110 §14.1.2; §8.4 defines the
+/// representation "in terms of the coded form"), so a coded body can never be
+/// placed at an offset computed for the identity form — and a plain GET
+/// written from zero is equally wrong, because the offset a later resume
+/// computes from the file on disk would then be over gzip bytes. The request
+/// pins `Accept-Encoding: identity`, but honouring it is only a SHOULD
+/// (§12.5.3), so this response-side check is load-bearing on every status
+/// and every path: `range_verdict` for ranged requests, and the sequential
+/// GET directly.
+///
+/// Fails closed on every uncertainty. `get_all` sees every `Content-Encoding`
+/// line, so `identity` followed by `gzip` on a second line is coded; a value
+/// that is not exactly `identity` (ASCII case-insensitive, surrounding
+/// whitespace ignored) is coded, including a non-UTF-8 one — an unparsable
+/// coding is not evidence of the identity form.
+pub(crate) fn reject_content_coding(headers: &wreq::header::HeaderMap, url: &str) -> Result<()> {
+    let coded = headers
+        .get_all("content-encoding")
+        .iter()
+        .find(|v| !v.as_bytes().trim_ascii().eq_ignore_ascii_case(b"identity"));
+    coded.map_or(Ok(()), |coding| {
+        Err(download_err(
+            url,
+            format!(
+                "response is content-coded ({}); byte offsets are over the coded form \
+                 (RFC 9110 §14.1.2) and the body cannot be placed at a byte position",
+                String::from_utf8_lossy(coding.as_bytes())
+            ),
+        ))
+    })
+}
+
 pub(crate) fn range_verdict(
     response: &wreq::Response,
     meta: &RangedRequestMeta<'_>,
@@ -90,22 +124,7 @@ pub(crate) fn range_verdict(
     let headers = response.headers();
     let status = response.status();
 
-    // §14.1.2 / §8.4: offsets are over the coded form; a coded body can never
-    // be spliced at an offset computed for the identity form. Checked on every
-    // status because a 200 written from zero is equally wrong when coded.
-    if let Some(coding) = headers
-        .get("content-encoding")
-        .and_then(|v| v.to_str().ok())
-        && !coding.trim().eq_ignore_ascii_case("identity")
-    {
-        return Err(download_err(
-            url,
-            format!(
-                "response is content-coded ({coding}); byte offsets are over the coded form \
-                 (RFC 9110 §14.1.2) and the body cannot be placed at a byte position"
-            ),
-        ));
-    }
+    reject_content_coding(headers, url)?;
 
     match status.as_u16() {
         HTTP_PARTIAL_CONTENT => {
@@ -388,6 +407,36 @@ mod tests {
             Err(RdlpError::Http { status: 503, .. })
         ));
     }
+    fn coding_headers(values: &[&[u8]]) -> wreq::header::HeaderMap {
+        let mut h = wreq::header::HeaderMap::new();
+        for v in values {
+            h.append(
+                "content-encoding",
+                wreq::header::HeaderValue::from_bytes(v).unwrap(),
+            );
+        }
+        h
+    }
+    /// A second `Content-Encoding` line after an `identity` one is a coding
+    /// the first-line-only check used to wave through.
+    #[test]
+    fn content_coding_rejects_a_second_line_after_identity() {
+        let err = reject_content_coding(&coding_headers(&[b"identity", b"gzip"]), "u").unwrap_err();
+        assert!(err.to_string().contains("content-coded"), "{err}");
+    }
+    /// A value `to_str` cannot read is not evidence of the identity form.
+    #[test]
+    fn content_coding_rejects_a_non_utf8_value() {
+        let err = reject_content_coding(&coding_headers(&[b"\xff"]), "u").unwrap_err();
+        assert!(err.to_string().contains("content-coded"), "{err}");
+    }
+    #[test]
+    fn content_coding_accepts_identity_in_any_case_and_absence() {
+        assert!(reject_content_coding(&coding_headers(&[]), "u").is_ok());
+        assert!(reject_content_coding(&coding_headers(&[b" Identity "]), "u").is_ok());
+        assert!(reject_content_coding(&coding_headers(&[b"identity", b"IDENTITY"]), "u").is_ok());
+    }
+
     #[test]
     fn parse_unsatisfied() {
         assert_eq!(ContentRange::parse_unsatisfied("bytes */1234"), Some(1234));

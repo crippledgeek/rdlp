@@ -20,6 +20,7 @@ pub(crate) use parallel::{ChunkRequestSpec, download_chunk_with_retry, verify_me
 pub(crate) use state::{HttpResumeState, Source};
 pub(crate) use verdict::{
     RangeVerdict, RangedRequestMeta, admit_for_verdict, bounded_len, range_verdict,
+    reject_content_coding,
 };
 
 use log::debug;
@@ -485,7 +486,42 @@ impl HttpDownloader {
             supports_ranges: false,
             validator: None,
             complete_length: None,
+            headers: HeaderMap::new(),
         }))
+    }
+
+    /// Send one download request under the retry policy: `build` a fresh
+    /// request per attempt, map a transport failure to a retryable
+    /// `Network` error, and let `spec.gate` decide which statuses come back
+    /// as a response and which as an error for the retry layer to judge.
+    ///
+    /// The one seam behind the fresh sequential GET, the ranged chunk fetch,
+    /// the resume request and the stdout path; they differ only in the label,
+    /// the request and the gate, which is exactly what [`SendSpec`] and
+    /// `build` carry. `probe_with` is the documented exception: it wraps
+    /// `rdlp_http::probe_size`, which sends internally and yields a
+    /// `ProbeResult` rather than a response, so folding it in would mean
+    /// splitting that public helper into a request half and a parse half.
+    ///
+    /// `build` borrows rather than clones: the retry closure is re-entered per
+    /// attempt and each attempt needs a new `RequestBuilder`, but nothing it
+    /// is built from changes between attempts.
+    pub(crate) async fn send_with_retry(
+        &self,
+        spec: SendSpec<'_>,
+        build: impl Fn() -> wreq::RequestBuilder + Send + Sync,
+    ) -> Result<wreq::Response> {
+        with_retry(
+            RetryPolicy::new(&self.config.retry_config, &spec.label),
+            || async {
+                let response = build().send().await.map_err(|e| RdlpError::Network {
+                    message: format!("{} request failed: {e}", spec.label),
+                    url: Some(rdlp_redact::RedactedUrlBuf::from(spec.url)),
+                })?;
+                (spec.gate)(response)
+            },
+        )
+        .await
     }
 
     /// Download a specific byte range with shared progress tracking.
@@ -510,7 +546,6 @@ impl HttpDownloader {
             return Err(RdlpError::Cancelled);
         }
 
-        let client = self.client.clone();
         let url = source.url.clone();
         let hdrs = self.headers();
 
@@ -537,28 +572,19 @@ impl HttpDownloader {
         // `If-Range` carries the validator the download started under, so a
         // server that changed the representation answers 200 instead of a
         // 206 that would be spliced in as if nothing changed (RFC 9110 §13.1.5).
-        let response = with_retry(
-            RetryPolicy::new(&self.config.retry_config, &"HTTP GET (range)"),
-            || {
-                let client = client.clone();
-                let url = url.clone();
-                let hdrs = hdrs.clone();
-                let validator = source.validator.as_ref();
-                async move {
-                    let response = rdlp_http::download_request(&client, &url, Some(&hdrs))
-                        .ranged(span, validator)
-                        .send()
-                        .await
-                        .map_err(|e| RdlpError::Network {
-                            message: format!("Range request failed: {e}"),
-                            url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
-                        })?;
-
-                    admit_for_verdict(response)
-                }
-            },
-        )
-        .await?;
+        let response = self
+            .send_with_retry(
+                SendSpec {
+                    label: "HTTP GET (range)",
+                    url: &url,
+                    gate: admit_for_verdict,
+                },
+                || {
+                    rdlp_http::download_request(&self.client, &url, Some(&hdrs))
+                        .ranged(span, source.validator.as_ref())
+                },
+            )
+            .await?;
 
         // Confirm the response encloses exactly the requested span, is not
         // content-coded, and still names the representation the download
@@ -722,8 +748,6 @@ impl HttpDownloader {
         cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<DownloadStats> {
         let start_time = Instant::now();
-        let client = self.client.clone();
-        let url_string: Arc<str> = Arc::from(url);
         let hdrs = self.headers();
 
         // Check for pre-cancelled token before issuing the network request.
@@ -736,27 +760,22 @@ impl HttpDownloader {
         // No `Range`, but the identity pin: a later resume computes its
         // offset over these bytes, and RFC 9110 §14.1.2 makes offsets comparable only
         // under one coding.
-        let response = with_retry(
-            RetryPolicy::new(&self.config.retry_config, &"HTTP GET"),
-            || {
-                let client = client.clone();
-                let url = url_string.clone();
-                let hdrs = hdrs.clone();
-                async move {
-                    let response = rdlp_http::download_request(&client, &url, Some(&hdrs))
-                        .send()
-                        .await
-                        .map_err(|e| RdlpError::Network {
-                            message: format!("GET request failed: {e}"),
-                            url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
-                        })?;
+        let response = self
+            .send_with_retry(
+                SendSpec {
+                    label: "HTTP GET",
+                    url,
+                    gate: require_success,
+                },
+                || rdlp_http::download_request(&self.client, url, Some(&hdrs)),
+            )
+            .await?;
 
-                    check_http_response(&response)?;
-                    Ok(response)
-                }
-            },
-        )
-        .await?;
+        // No `Range` means `range_verdict` never sees this response, so the
+        // coding check it would have run is applied here — before the sidecar
+        // can name a coded length and before `File::create` (§12.5.3 makes
+        // the identity pin only a SHOULD).
+        reject_content_coding(response.headers(), url)?;
 
         let total_size = response.content_length();
 
@@ -979,6 +998,27 @@ pub(crate) enum WriteMode {
 pub(crate) struct Sink<'a> {
     pub path: &'a Path,
     pub mode: WriteMode,
+}
+
+/// How one [`HttpDownloader::send_with_retry`] call names itself and admits
+/// a response.
+#[derive(Clone, Copy)]
+pub(crate) struct SendSpec<'a> {
+    /// Names the request in retry log lines and the transport-failure error.
+    pub label: &'static str,
+    /// Redacted into the transport-failure error.
+    pub url: &'a str,
+    /// Which statuses come back as a response: [`require_success`] for a
+    /// plain GET, [`admit_for_verdict`] for a ranged one whose 200/206/416
+    /// are answers rather than failures.
+    pub gate: fn(wreq::Response) -> Result<wreq::Response>,
+}
+
+/// [`check_http_response`] as a [`SendSpec::gate`]: only a success status
+/// comes back as a response.
+pub(crate) fn require_success(response: wreq::Response) -> Result<wreq::Response> {
+    check_http_response(&response)?;
+    Ok(response)
 }
 
 impl Default for HttpDownloader {

@@ -628,12 +628,16 @@ async fn fetch_with_optional_range(
             range: span,
             sent_validator: None,
         };
+        // No `If-Range` is sent here, so `range_verdict` already turns a 200
+        // into an error; the only non-`Partial` verdict that can reach this
+        // arm is a 416.
         let RangeVerdict::Partial { .. } = range_verdict(&resp, &meta, url)? else {
             return Err(rdlp_core::RdlpError::Download {
                 url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
                 message: format!(
-                    "fragment fetch {safe_url} got a non-partial answer after passing the \
-                     earlier status check; cannot place it in the merged output."
+                    "ranged fragment fetch {safe_url} got 416 (Range Not Satisfiable) for bytes \
+                     {start}-{end_inclusive}; the fragment's byte range is not satisfiable on \
+                     the current representation"
                 ),
             });
         };

@@ -24,9 +24,10 @@ const RFC850_DATE: &str = "%A, %d-%b-%y %H:%M:%S GMT";
 /// space-padded day.
 const ASCTIME_DATE: &str = "%a %b %e %H:%M:%S %Y";
 
-/// §8.8.3 `etagc = %x21 / %x23-7E / obs-text` — the exclamation mark, the
-/// lone byte excluded on either side of it (`)`, `%x22 DQUOTE`, is handled by
-/// the surrounding-quote check, not this constant).
+/// §8.8.3 `etagc = %x21 / %x23-7E / obs-text` — `!` (0x21) stands alone in
+/// the grammar because its neighbours on either side, SP (0x20) and DQUOTE
+/// (0x22), are both excluded from `etagc`; DQUOTE is the delimiter the
+/// surrounding-quote check consumes.
 const ETAGC_BANG: u8 = 0x21;
 /// §8.8.3 `etagc` printable range: everything from `#` to `~`, which skips
 /// `DQUOTE` (0x22, the delimiter) and `DEL` (0x7F).
