@@ -29,7 +29,7 @@ use crate::atomic::{SIDECAR_SAVE_FAILURE_THRESHOLD, SaveFailureTracker};
 use crate::dash::errors::DashError;
 use crate::dash::manifest;
 use crate::dash::segments::SegmentPlan;
-use crate::dash::state::DashDownloadState;
+use crate::dash::state::{self, DashDownloadState};
 use crate::http::HttpDownloader;
 use crate::retry::{RetryPolicy, with_retry_cancellable};
 
@@ -354,24 +354,27 @@ async fn download_representation(
     // ----- Init segment -----
     let init_part_path = parts_dir.join("init.m4s");
     if let Some(u) = init_url {
-        let init_done = {
+        let recorded_len = {
             let s = state_arc.lock().await;
             if is_video {
-                s.init_video_done
+                s.init_video_len
             } else {
-                s.init_audio_done
+                s.init_audio_len
             }
         };
-        let on_disk = fs::metadata(&init_part_path)
-            .await
-            .is_ok_and(|m| m.len() > 0);
-        if init_done && on_disk {
+        let on_disk_len = fs::metadata(&init_part_path).await.ok().map(|m| m.len());
+        if let Some(len) = state::intact_len(on_disk_len, recorded_len) {
             // Resume — count existing bytes toward total.
-            let len = fs::metadata(&init_part_path).await?.len();
             bytes_counter.fetch_add(len, Ordering::Relaxed);
             total += len;
             debug!("DASH repr {repr_id}: init resumed ({len} bytes)");
         } else {
+            if recorded_len.is_some() {
+                debug!(
+                    "DASH repr {repr_id}: init part mismatch (on disk {on_disk_len:?}, \
+                     recorded {recorded_len:?}) — re-fetching"
+                );
+            }
             let bytes = download_one(http, retry, &u, mpd_origin, cancel).await?;
             let len = bytes.len() as u64;
             fs::write(&init_part_path, &bytes).await?;
@@ -380,9 +383,9 @@ async fn download_representation(
             {
                 let mut s = state_arc.lock().await;
                 if is_video {
-                    s.init_video_done = true;
+                    s.init_video_len = Some(len);
                 } else {
-                    s.init_audio_done = true;
+                    s.init_audio_len = Some(len);
                 }
                 crate::atomic::note_sidecar_save(
                     s.save(state_path).await,
@@ -404,16 +407,21 @@ async fn download_representation(
         let mut s = state_arc.lock().await;
         for (i, u) in seg_urls.into_iter().enumerate() {
             let part_path = parts_dir.join(segment_filename(i));
-            let recorded_done = s.is_segment_done(repr_id, i as u64);
-            let on_disk_len = fs::metadata(&part_path).await.map_or(0, |m| m.len());
-            if recorded_done && on_disk_len > 0 {
-                bytes_counter.fetch_add(on_disk_len, Ordering::Relaxed);
-                total += on_disk_len;
+            let recorded_len = s.recorded_len(repr_id, i as u64);
+            let on_disk_len = fs::metadata(&part_path).await.ok().map(|m| m.len());
+            if let Some(len) = state::intact_len(on_disk_len, recorded_len) {
+                bytes_counter.fetch_add(len, Ordering::Relaxed);
+                total += len;
             } else {
-                // If state said done but file is missing or zero-length, drop
-                // the bookkeeping so we re-fetch.
-                if recorded_done && let Some(v) = s.completed_segments.get_mut(repr_id) {
-                    v.retain(|x| *x != i as u64);
+                // If state recorded a length that doesn't match what's on
+                // disk (missing, short, or long), drop the bookkeeping so we
+                // re-fetch — see `intact_len` (#677).
+                if recorded_len.is_some() {
+                    debug!(
+                        "DASH repr {repr_id}: segment {i} mismatch (on disk \
+                         {on_disk_len:?}, recorded {recorded_len:?}) — re-fetching"
+                    );
+                    s.forget_segment(repr_id, i as u64);
                 }
                 to_fetch.push((i, u));
             }
@@ -493,7 +501,7 @@ async fn download_representation(
                 bytes_counter.fetch_add(len, Ordering::Relaxed);
                 total += len;
                 let mut s = state_arc.lock().await;
-                s.record_segment(repr_id, i as u64);
+                s.record_segment(repr_id, i as u64, len);
                 completed_since_save += 1;
                 if completed_since_save >= STATE_SAVE_BATCH {
                     crate::atomic::note_sidecar_save(
