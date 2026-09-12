@@ -66,6 +66,29 @@ impl HttpResumeState {
         (s.state_version == STATE_VERSION).then_some(s)
     }
 
+    /// Make the sidecar say exactly what `validator` says: write it when the
+    /// response offered a strong validator, remove any sidecar when it did
+    /// not. "No sidecar" must mean "no validator" — a sidecar left by an
+    /// earlier response would describe bytes this one is about to replace —
+    /// so the two outcomes are one operation, shared by the fresh probe, the
+    /// sequential GET and the resume's 200-rewrite.
+    ///
+    /// # Errors
+    /// The write's I/O error; a download that cannot record what it fetched
+    /// cannot later be resumed safely, so this is surfaced, not downgraded.
+    pub(crate) async fn record(
+        output: &Path,
+        validator: Option<StrongValidator>,
+        complete_length: Option<u64>,
+    ) -> std::io::Result<()> {
+        if let Some(v) = validator {
+            Self::new(v, complete_length).save(output).await
+        } else {
+            Self::remove(output).await;
+            Ok(())
+        }
+    }
+
     /// Persist atomically next to `output`, refreshing `updated_at`.
     ///
     /// # Errors

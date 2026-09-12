@@ -9,7 +9,7 @@
 //! precondition held). Everything else is an error before any byte is written.
 
 use rdlp_core::{RdlpError, Result, check_http_response};
-use rdlp_http::{RangeSpec, StrongValidator};
+use rdlp_http::{RangeSpec, StrongValidator, ValidatorMismatch};
 use rdlp_redact::RedactedUrlBuf;
 
 use super::ContentRange;
@@ -27,7 +27,7 @@ pub(crate) struct RangedRequestMeta<'a> {
     pub sent_validator: Option<&'a StrongValidator>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum RangeVerdict {
     /// 206 enclosing exactly the requested span, same representation.
     Partial { range: ContentRange },
@@ -35,6 +35,14 @@ pub(crate) enum RangeVerdict {
     Replaced,
     /// 416, with `bytes */complete-length` when the server sent it (§14.4).
     Unsatisfiable { complete_length: Option<u64> },
+    /// 206 at the requested offset whose validator is absent, not strong, or
+    /// different — produced ONLY for an open-ended resume (`RangeSpec::From`).
+    /// §15.3.7.3 forbids combining without a shared strong validator, and a
+    /// resume's only exit is the fresh download; an error would send the
+    /// orchestrator straight back into the same resume. A bounded chunk
+    /// (`Span`) has no partial to restart and keeps erroring inside
+    /// [`range_verdict`], so this variant never reaches the chunk paths.
+    Mismatched { mismatch: ValidatorMismatch },
 }
 
 fn download_err(url: &str, message: String) -> RdlpError {
@@ -99,6 +107,10 @@ pub(crate) fn admit_for_verdict(response: wreq::Response) -> Result<wreq::Respon
 /// that is not exactly `identity` (ASCII case-insensitive, surrounding
 /// whitespace ignored) is coded, including a non-UTF-8 one — an unparsable
 /// coding is not evidence of the identity form.
+///
+/// Applied to the statuses whose body is placed (200, 206) and never to a
+/// 416, whose body is an error page no path writes: a gzipped 416 must
+/// still yield its `*/L` verdict, not a `Download` error.
 pub(crate) fn reject_content_coding(headers: &wreq::header::HeaderMap, url: &str) -> Result<()> {
     let coded = headers
         .get_all("content-encoding")
@@ -124,10 +136,9 @@ pub(crate) fn range_verdict(
     let headers = response.headers();
     let status = response.status();
 
-    reject_content_coding(headers, url)?;
-
     match status.as_u16() {
         HTTP_PARTIAL_CONTENT => {
+            reject_content_coding(headers, url)?;
             let Some(range) = ContentRange::from_headers(headers) else {
                 return Err(download_err(
                     url,
@@ -170,18 +181,24 @@ pub(crate) fn range_verdict(
             if let Some(sent) = meta.sent_validator
                 && let Err(mismatch) = sent.verify_partial(headers)
             {
-                return Err(download_err(
-                    url,
-                    format!(
-                        "ranged response for {} is not the representation this download started \
-                         with: {mismatch}",
-                        meta.range.header_value()
-                    ),
-                ));
+                return match meta.range {
+                    RangeSpec::From(_) => Ok(RangeVerdict::Mismatched { mismatch }),
+                    RangeSpec::Span { .. } => Err(download_err(
+                        url,
+                        format!(
+                            "ranged response for {} is not the representation this download \
+                             started with: {mismatch}",
+                            meta.range.header_value()
+                        ),
+                    )),
+                };
             }
             Ok(RangeVerdict::Partial { range })
         }
-        HTTP_OK if meta.sent_validator.is_some() => Ok(RangeVerdict::Replaced),
+        HTTP_OK if meta.sent_validator.is_some() => {
+            reject_content_coding(headers, url)?;
+            Ok(RangeVerdict::Replaced)
+        }
         HTTP_OK => Err(download_err(
             url,
             format!(
@@ -284,6 +301,36 @@ mod tests {
         assert!(matches!(err, RdlpError::Download { .. }));
         assert!(err.to_string().contains("validator changed"));
     }
+    /// The same mismatch on an open-ended resume is data, not an error: the
+    /// resume path restarts on it. Both the absent and the different shape.
+    #[tokio::test]
+    async fn open_ended_partial_with_mismatched_validator_is_a_verdict() {
+        let mut s = Server::new_async().await;
+        let v = etag("\"a\"");
+        let meta = RangedRequestMeta {
+            range: RangeSpec::From(0),
+            sent_validator: Some(&v),
+        };
+        let (_m, r) = served(
+            &mut s,
+            206,
+            &[("content-range", "bytes 0-0/10"), ("etag", "\"b\"")],
+        )
+        .await;
+        assert!(matches!(
+            range_verdict(&r, &meta, "u").unwrap(),
+            RangeVerdict::Mismatched {
+                mismatch: ValidatorMismatch::Different { .. }
+            }
+        ));
+        let (_m2, r2) = served(&mut s, 206, &[("content-range", "bytes 0-0/10")]).await;
+        assert_eq!(
+            range_verdict(&r2, &meta, "u").unwrap(),
+            RangeVerdict::Mismatched {
+                mismatch: ValidatorMismatch::Missing
+            }
+        );
+    }
     #[tokio::test]
     async fn partial_wrong_span_is_retryable_network_error() {
         let mut s = Server::new_async().await;
@@ -324,7 +371,7 @@ mod tests {
         ));
     }
     #[tokio::test]
-    async fn content_coded_response_is_rejected_on_any_status() {
+    async fn content_coded_response_is_rejected_when_its_body_would_be_placed() {
         let mut s = Server::new_async().await;
         let (_m, r) = served(
             &mut s,
@@ -340,6 +387,28 @@ mod tests {
         let (_m2, r2) = served(&mut s, 200, &[("content-encoding", "br")]).await;
         let v = etag("\"a\"");
         assert!(range_verdict(&r2, &span_meta(0, 0, Some(&v)), "u").is_err());
+    }
+    /// A 416's body is an error page that is never placed, so its coding is
+    /// irrelevant; the verdict must still carry the `*/L` length rather than
+    /// turning a gzipped error page into a `Download` error.
+    #[tokio::test]
+    async fn content_coded_416_is_still_unsatisfiable() {
+        let mut s = Server::new_async().await;
+        let (_m, r) = served(
+            &mut s,
+            416,
+            &[
+                ("content-range", "bytes */1234"),
+                ("content-encoding", "gzip"),
+            ],
+        )
+        .await;
+        assert_eq!(
+            range_verdict(&r, &span_meta(0, 0, None), "u").unwrap(),
+            RangeVerdict::Unsatisfiable {
+                complete_length: Some(1234)
+            }
+        );
     }
     #[tokio::test]
     async fn content_encoding_identity_is_accepted() {

@@ -68,6 +68,17 @@ pub(crate) use rdlp_http::ProbeResult;
 /// The one `Content-Range` grammar (RFC 9110 §14.4), shared with the probe.
 pub(crate) use rdlp_http::ContentRange;
 
+/// The representation's total length implied by a body of `remaining` bytes
+/// arriving at `offset`: `None` when the length is unknown, or when the sum
+/// would not fit — a server-supplied `Content-Length` is untrusted input, and
+/// an overflowed total must read as "unknown", never as a small number.
+pub(crate) const fn total_from_remaining(remaining: Option<u64>, offset: u64) -> Option<u64> {
+    match remaining {
+        Some(rest) => rest.checked_add(offset),
+        None => None,
+    }
+}
+
 /// Multiple of the idle timeout used as a whole-request backstop.
 ///
 /// Sized so only a request that is pathological reaches it, never one that is
@@ -481,6 +492,19 @@ impl HttpDownloader {
                     ),
                 });
             }
+            // `span` is bounded, so `range_verdict` reports a validator
+            // mismatch as an error above; this arm exists for the match to
+            // stay exhaustive and reads the same as that error if it were
+            // ever reached.
+            RangeVerdict::Mismatched { mismatch } => {
+                return Err(RdlpError::Download {
+                    url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
+                    message: format!(
+                        "chunk response for bytes {start}-{end} is not the representation this \
+                         download started with: {mismatch}"
+                    ),
+                });
+            }
         }
         let expected_len = bounded_len(span, &url)?;
 
@@ -646,13 +670,13 @@ impl HttpDownloader {
         // This GET, not the probe, produced the bytes about to land on disk,
         // so its validator is the one a resume must send back — and when it
         // offers none, the probe's must not survive to be sent on its behalf.
-        match rdlp_http::StrongValidator::from_headers(response.headers()) {
-            Some(v) => HttpResumeState::new(v, total_size)
-                .save(path)
-                .await
-                .map_err(RdlpError::Io)?,
-            None => HttpResumeState::remove(path).await,
-        }
+        HttpResumeState::record(
+            path,
+            rdlp_http::StrongValidator::from_headers(response.headers()),
+            total_size,
+        )
+        .await
+        .map_err(RdlpError::Io)?;
 
         let downloaded = self
             .stream_to_file(
@@ -745,7 +769,7 @@ impl HttpDownloader {
             offset,
         } = sink;
         let mut downloaded = offset;
-        let total_size = response.content_length().map(|rest| rest + offset);
+        let total_size = total_from_remaining(response.content_length(), offset);
 
         let stream = response.bytes_stream();
         tokio::pin!(stream);
@@ -934,6 +958,21 @@ where
         None => tokio::time::timeout(read_timeout, stream.next())
             .await
             .map_or_else(|_| Err(timeout_err()), Ok),
+    }
+}
+
+#[cfg(test)]
+mod total_from_remaining_tests {
+    use super::total_from_remaining;
+
+    /// The sum is exact up to `u64::MAX` and unknown one past it: a
+    /// server-supplied `Content-Length` must never wrap into a small total.
+    #[test]
+    fn sums_exactly_and_reports_overflow_as_unknown() {
+        assert_eq!(total_from_remaining(Some(5), 3), Some(8));
+        assert_eq!(total_from_remaining(None, 3), None);
+        assert_eq!(total_from_remaining(Some(u64::MAX - 3), 3), Some(u64::MAX));
+        assert_eq!(total_from_remaining(Some(u64::MAX - 2), 3), None);
     }
 }
 

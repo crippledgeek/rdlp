@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 
 use super::{
     BodySink, HttpDownloader, HttpResumeState, RangeVerdict, SendSpec, Sink, Source, StreamPolicy,
-    WriteMode, admit_for_verdict, range_verdict, require_success,
+    WriteMode, admit_for_verdict, range_verdict, require_success, total_from_remaining,
 };
 
 #[async_trait]
@@ -159,15 +159,9 @@ impl HttpDownloader {
             supports_ranges
         );
 
-        // "No sidecar" must mean "no validator": one left by an earlier
-        // attempt would describe bytes this attempt is about to replace.
-        match probe.validator.clone() {
-            Some(v) => HttpResumeState::new(v, probe.complete_length)
-                .save(path)
-                .await
-                .map_err(RdlpError::Io)?,
-            None => HttpResumeState::remove(path).await,
-        }
+        HttpResumeState::record(path, probe.validator.clone(), probe.complete_length)
+            .await
+            .map_err(RdlpError::Io)?;
         let source = Source::new(url, probe.validator);
 
         let parallel_size = match size {
@@ -310,9 +304,10 @@ impl HttpDownloader {
                 return self
                     .restart(
                         io,
-                        "no resume validator is recorded for the partial, and RFC 9110 \
-                         §15.3.7.3 permits combining parts only under a shared strong \
-                         validator",
+                        "no resume validator recorded — the partial predates this rdlp \
+                         version or the server offered no strong ETag/Last-Modified; RFC \
+                         9110 §15.3.7.3 permits combining parts only under a shared strong \
+                         validator, so the partial is discarded and the download restarts",
                     )
                     .await;
             };
@@ -366,13 +361,18 @@ impl HttpDownloader {
     ///   finish without writing. Otherwise write THIS body from zero and
     ///   record its validator, so an interruption of the rewrite resumes
     ///   correctly.
+    /// - `Mismatched` (206 naming another representation, or none): §15.3.7.3
+    ///   forbids combining, and the fresh download is the only exit — an
+    ///   error would send the orchestrator back into this same resume. Restart.
     /// - `Unsatisfiable` (416): `bytes */L` "indicates the current length"
-    ///   (§14.4). `L == N` is complete; `L < N` cannot contain the partial as
-    ///   a prefix, so restart; `L > N` contradicts §14.1.2 (satisfiable iff
-    ///   `first-pos < current length`) and is an error. Without `Content-Range`
-    ///   (only a SHOULD, §15.5.17) a probe under the same `If-Range` decides,
-    ///   judged with [`StrongValidator::verify_partial`]'s asymmetry: a 206
-    ///   must repeat `ETag` (§15.3.7) but SHOULD NOT repeat `Last-Modified`.
+    ///   (§14.4). `L < N` cannot contain the partial as a prefix, so restart;
+    ///   `L > N` contradicts §14.1.2 (satisfiable iff `first-pos < current
+    ///   length`) and is an error. `L == N`, and a 416 without `Content-Range`
+    ///   (only a SHOULD, §15.5.17), are both settled by
+    ///   [`Self::probe_confirms_partial`]: one `If-Range` probe, because 416
+    ///   implies the validator matched only on a conforming server (§14.2
+    ///   evaluates `Range` after the preconditions), and a server ignoring
+    ///   `If-Range` could otherwise pass off a different N-byte representation.
     async fn resume_from_response(
         &self,
         attempt: ResumeAttempt<'_>,
@@ -403,22 +403,22 @@ impl HttpDownloader {
 
                 let total_size = got
                     .complete_length()
-                    .or_else(|| response.content_length().map(|rest| rest + resume_from));
+                    .or_else(|| total_from_remaining(response.content_length(), resume_from));
                 if let Some(total) = total_size
                     && self.can_parallel_resume(&response, total, resume_from)
                 {
                     drop(response);
+                    let mut attempt = attempt;
                     let stats = self
                         .download_parallel_resume(
                             source,
                             path,
                             resume_from,
                             total,
-                            attempt.io.progress,
+                            attempt.io.progress.take(),
                         )
                         .await?;
-                    HttpResumeState::remove(path).await;
-                    return Ok(stats);
+                    return Ok(attempt.finished_with(stats).await);
                 }
 
                 let total = self
@@ -453,13 +453,9 @@ impl HttpDownloader {
                 // sidecar naming v2, and the next resume would append v2's
                 // tail to v1's prefix.
                 self.discard_partial(path).await?;
-                match current {
-                    Some(v) => HttpResumeState::new(v, response.content_length())
-                        .save(path)
-                        .await
-                        .map_err(RdlpError::Io)?,
-                    None => HttpResumeState::remove(path).await,
-                }
+                HttpResumeState::record(path, current, response.content_length())
+                    .await
+                    .map_err(RdlpError::Io)?;
                 let total = self
                     .stream_to_file(
                         response,
@@ -473,9 +469,16 @@ impl HttpDownloader {
                     .await?;
                 Ok(attempt.completed(total).await)
             }
-            RangeVerdict::Unsatisfiable {
-                complete_length: Some(len),
-            } if len == resume_from => Ok(attempt.completed(resume_from).await),
+            RangeVerdict::Mismatched { mismatch } => {
+                self.restart(
+                    attempt.io,
+                    &format!(
+                        "the resume response is not the representation the partial came from \
+                         ({mismatch})"
+                    ),
+                )
+                .await
+            }
             RangeVerdict::Unsatisfiable {
                 complete_length: Some(len),
             } if len < resume_from => {
@@ -490,35 +493,61 @@ impl HttpDownloader {
             }
             RangeVerdict::Unsatisfiable {
                 complete_length: Some(len),
-            } => Err(RdlpError::Download {
+            } if len > resume_from => Err(RdlpError::Download {
                 url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
                 message: format!(
                     "416 with complete-length {len} > partial size {resume_from}: a range \
                      starting inside the representation is satisfiable (RFC 9110 §14.1.2), so \
-                     this is not a satisfiable-range failure; leaving the partial for diagnosis"
+                     this is not a satisfiable-range failure. The partial and its \
+                     `.http_state.json` sidecar are left for diagnosis; delete both to \
+                     download from scratch"
                 ),
             }),
-            RangeVerdict::Unsatisfiable {
-                complete_length: None,
-            } => {
-                let probe = self.probe_with(url, Some(&sidecar.validator)).await?;
-                // `complete_length` is `Some` only on a 206, so the headers
-                // being judged are a partial's — the one shape
-                // `verify_partial` is defined over.
-                if probe.complete_length == Some(resume_from)
-                    && sidecar.validator.verify_partial(&probe.headers).is_ok()
+            // `Some(len)` with `len == resume_from`, or no `Content-Range` at
+            // all: one `If-Range` probe decides.
+            RangeVerdict::Unsatisfiable { complete_length } => {
+                if self
+                    .probe_confirms_partial(url, &sidecar.validator, resume_from)
+                    .await?
                 {
                     Ok(attempt.completed(resume_from).await)
                 } else {
+                    let reported = complete_length.map_or_else(
+                        || "416 without Content-Range".to_owned(),
+                        |len| format!("416 reporting {len} bytes"),
+                    );
                     self.restart(
                         attempt.io,
-                        "416 without Content-Range, and the probe does not confirm the \
-                         partial as the complete representation",
+                        &format!(
+                            "{reported}, and the If-Range probe does not confirm the partial \
+                             as the complete current representation"
+                        ),
                     )
                     .await
                 }
             }
         }
+    }
+
+    /// Whether one `If-Range` probe confirms that the `resume_from`-byte
+    /// partial IS the complete current representation: a 206 whose headers
+    /// still carry `validator` and whose complete-length is exactly
+    /// `resume_from`.
+    ///
+    /// `complete_length` is `Some` only on a 206, so the headers being judged
+    /// are a partial's — the one shape [`StrongValidator::verify_partial`] is
+    /// defined over, with its §15.3.7 asymmetry (a 206 must repeat `ETag`
+    /// but SHOULD NOT repeat `Last-Modified`). A probe that never answered
+    /// (`ProbeResult::unanswered`) has neither, and so does not confirm.
+    async fn probe_confirms_partial(
+        &self,
+        url: &str,
+        validator: &StrongValidator,
+        resume_from: u64,
+    ) -> Result<bool> {
+        let probe = self.probe_with(url, Some(validator)).await?;
+        Ok(probe.complete_length == Some(resume_from)
+            && validator.verify_partial(&probe.headers).is_ok())
     }
 
     /// Discard the partial and go through the fresh path, saying why.
@@ -624,14 +653,23 @@ struct ResumeAttempt<'a> {
 }
 
 impl ResumeAttempt<'_> {
-    /// The download ends with `total` bytes on disk: drop the sidecar and
-    /// report. `total == resume_from` is the "already complete" ending shared
-    /// by a same-validator 200, a 416 `*/N` and a confirming re-probe — the
-    /// partial already IS the representation and nothing was written; the
-    /// append and the 200-rewrite pass what they streamed.
+    /// The download ends with `total` bytes on disk: report, then finish.
+    /// `total == resume_from` is the "already complete" ending shared by a
+    /// same-validator 200 and a probe-confirmed 416 — the partial already IS
+    /// the representation and nothing was written; the append and the
+    /// 200-rewrite pass what they streamed.
     async fn completed(self, total: u64) -> DownloadStats {
+        let stats = finish(self.io.progress.as_deref(), self.start_time, total);
+        self.finished_with(stats).await
+    }
+
+    /// The one ending: the sidecar goes, the stats are the result. Reached
+    /// directly by the parallel fan-out, which built and reported its own
+    /// stats (its progress reporter owns the callback for the duration), and
+    /// through [`Self::completed`] by every sequential ending.
+    async fn finished_with(self, stats: DownloadStats) -> DownloadStats {
         HttpResumeState::remove(self.io.path).await;
-        finish(self.io.progress.as_deref(), self.start_time, total)
+        stats
     }
 }
 

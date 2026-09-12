@@ -3038,10 +3038,13 @@ async fn resume_200_same_validator_and_length_is_already_complete() {
     assert!(!HttpResumeState::sidecar_path(&out).exists());
 }
 
-/// §14.4 `bytes */L` "indicates the current length": `L == N` means the
-/// partial is complete — no body, sidecar removed, file untouched.
+/// §14.4 `bytes */L` "indicates the current length": `L == N` says the
+/// partial is complete — but only a conforming server reaches 416 after the
+/// `If-Range` precondition held (§14.2), so one `If-Range` probe confirms
+/// the validator before the partial is declared done: no body, sidecar
+/// removed, file untouched.
 #[tokio::test]
-async fn resume_416_with_matching_length_is_complete() {
+async fn resume_416_with_matching_length_is_complete_once_the_probe_confirms() {
     use mockito::Server;
     let mut server = Server::new_async().await;
     let (_dir, out, d) = resume_fixture(b"done", Some(("\"v1\"", None))).await;
@@ -3054,15 +3057,71 @@ async fn resume_416_with_matching_length_is_complete() {
         .expect(1)
         .create_async()
         .await;
+    let probe = confirming_probe(&mut server, "\"v1\"", 4).await;
 
     let stats = d
         .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
         .await
         .unwrap();
     m.assert_async().await;
+    probe.assert_async().await;
     assert_eq!(stats.bytes_downloaded, 4);
     assert_eq!(tokio::fs::read(&out).await.unwrap(), b"done");
     assert!(!HttpResumeState::sidecar_path(&out).exists());
+}
+
+/// A server that ignores `If-Range` can answer 416 `*/N` for a DIFFERENT
+/// N-byte representation. The confirming probe sees the other validator, so
+/// the partial is discarded and the download restarts rather than being
+/// declared complete on the strength of a length alone.
+#[tokio::test]
+async fn resume_416_with_matching_length_but_other_validator_restarts() {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"done", Some(("\"v1\"", None))).await;
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=4-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(416)
+        .with_header("content-range", "bytes */4")
+        .expect(1)
+        .create_async()
+        .await;
+    let probe = confirming_probe(&mut server, "\"v2\"", 4).await;
+    let (fresh_probe, get) = fresh_mocks(&mut server, b"DONE").await;
+
+    let stats = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
+        .await
+        .unwrap();
+    m.assert_async().await;
+    probe.assert_async().await;
+    fresh_probe.assert_async().await;
+    get.assert_async().await;
+    assert_eq!(stats.bytes_downloaded, 4);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"DONE");
+    assert!(!HttpResumeState::sidecar_path(&out).exists());
+}
+
+/// The `If-Range: "v1"` probe a resume sends to confirm a 416: a 206 whose
+/// `ETag` is `etag` and whose complete-length is `len`.
+async fn confirming_probe(
+    server: &mut mockito::ServerGuard,
+    etag: &str,
+    len: u64,
+) -> mockito::Mock {
+    server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=0-262143")
+        .match_header("if-range", "\"v1\"")
+        .with_status(206)
+        .with_header("content-range", &format!("bytes 0-0/{len}"))
+        .with_header("etag", etag)
+        .with_body("d")
+        .expect(1)
+        .create_async()
+        .await
 }
 
 /// `L < N`: the representation is now shorter than the partial, so the
@@ -3231,6 +3290,70 @@ async fn resume_206_with_changed_complete_length_restarts() {
     get.assert_async().await;
     assert_eq!(stats.bytes_downloaded, 10);
     assert_eq!(tokio::fs::read(&out).await.unwrap(), b"0123456789");
+    assert!(!HttpResumeState::sidecar_path(&out).exists());
+}
+
+/// A 206 to `If-Range: "v1"` that names another representation (or none:
+/// §15.3.7 requires `ETag` on a 206) cannot be combined with the partial
+/// (§15.3.7.3) — and the fresh download is the only exit, because an error
+/// here would send the orchestrator straight back into the same resume.
+/// Discard and restart; the file is then the fresh body.
+#[tokio::test]
+async fn resume_206_with_different_etag_restarts_instead_of_erroring() {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"0123", Some(("\"v1\"", Some(8)))).await;
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=4-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(206)
+        .with_header("content-range", "bytes 4-7/8")
+        .with_header("etag", "\"v2\"")
+        .with_body("4567")
+        .expect(1)
+        .create_async()
+        .await;
+    let (probe, get) = fresh_mocks(&mut server, b"ABCDEFGH").await;
+
+    let stats = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
+        .await
+        .unwrap();
+    m.assert_async().await;
+    probe.assert_async().await;
+    get.assert_async().await;
+    assert_eq!(stats.bytes_downloaded, 8);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"ABCDEFGH");
+    assert!(!HttpResumeState::sidecar_path(&out).exists());
+}
+
+#[tokio::test]
+async fn resume_206_without_etag_restarts_instead_of_erroring() {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"0123", Some(("\"v1\"", Some(8)))).await;
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=4-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(206)
+        .with_header("content-range", "bytes 4-7/8")
+        .with_body("4567")
+        .expect(1)
+        .create_async()
+        .await;
+    let (probe, get) = fresh_mocks(&mut server, b"ABCDEFGH").await;
+
+    let stats = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
+        .await
+        .unwrap();
+    m.assert_async().await;
+    probe.assert_async().await;
+    get.assert_async().await;
+    assert_eq!(stats.bytes_downloaded, 8);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"ABCDEFGH");
     assert!(!HttpResumeState::sidecar_path(&out).exists());
 }
 
