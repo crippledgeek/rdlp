@@ -4,20 +4,23 @@
 //! `download_to_writer`, `supports`, `file_size`, and `download_with_resume`.
 
 use async_trait::async_trait;
-use log::debug;
+use log::{debug, warn};
 use rdlp_core::{
     DownloadProgress, DownloadStats, Downloader, ProgressCallback, RdlpError, Result,
     check_http_response,
 };
+use rdlp_http::{RangeSpec, RangedRequest, StrongValidator};
 use rdlp_types::Format;
 use std::path::Path;
-use std::sync::Arc;
 use std::time::Instant;
 use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio_util::sync::CancellationToken;
 
 use super::config::PROGRESS_UPDATE_INTERVAL;
-use super::{ContentRange, HTTP_PARTIAL_CONTENT, HttpDownloader, HttpResumeState, Source};
+use super::{
+    HttpDownloader, HttpResumeState, RangeVerdict, Sink, Source, WriteMode, admit_for_verdict,
+    range_verdict,
+};
 use crate::progress::SpeedMeter;
 use crate::retry::{RetryPolicy, with_retry};
 
@@ -31,7 +34,7 @@ impl Downloader for HttpDownloader {
     /// F6: Override `download_format` to thread `cancel` into the download path.
     ///
     /// The trait's default impl discards `cancel`. This override runs the
-    /// shared [`HttpDownloader::fresh_download`] and passes `cancel` through
+    /// shared `HttpDownloader::fresh_download` and passes `cancel` through
     /// to it. The whole download — probe included — is wrapped in a
     /// `tokio::select!` so cancellation fires even before the first byte
     /// arrives.
@@ -369,6 +372,14 @@ impl HttpDownloader {
     /// The trait method `download_with_resume` delegates here, threading its
     /// `cancel` argument through (#347). Direct callers can also pass a
     /// `CancellationToken` for mid-stream cancellation.
+    ///
+    /// The resume request carries the sidecar's strong validator as
+    /// `If-Range` (RFC 9110 §13.1.5) and dispatches on what came back — see
+    /// [`range_verdict`] for the three answers and [`Self::resume_from_response`]
+    /// for what each one means for the partial on disk. No sidecar means no
+    /// validator, and §15.3.7.3 grants combining parts only under a shared
+    /// strong one: the partial is discarded and the download restarts through
+    /// the fresh path rather than growing a second one.
     pub(crate) async fn download_with_resume_with_cancel(
         &self,
         url: &str,
@@ -387,208 +398,56 @@ impl HttpDownloader {
 
         let timeout = self.config.download_timeout;
         tokio::time::timeout(timeout, async {
+            let Some(state) = HttpResumeState::load(path).await else {
+                warn!(
+                    "No resume validator recorded for '{}'; RFC 9110 §15.3.7.3 permits \
+                     combining parts only under a shared strong validator, so the \
+                     {resume_from}-byte partial is discarded and the download restarts",
+                    path.display()
+                );
+                self.discard_partial(path).await?;
+                return self.fresh_download(url, path, progress, cancel).await;
+            };
+
             let start_time = Instant::now();
             let client = self.client.clone();
-            let url_string: Arc<str> = Arc::from(url);
             let hdrs = self.headers();
+            let source = Source::new(url, Some(state.validator.clone()));
+            let range = RangeSpec::From(resume_from);
 
             let response = with_retry(
                 RetryPolicy::new(&self.config.retry_config, &"HTTP GET (resume)"),
                 || {
-                let client = client.clone();
-                let url = Arc::clone(&url_string);
-                let hdrs = hdrs.clone();
-                async move {
-                    let response = client
-                        .get(url.as_ref())
-                        .headers(hdrs)
-                        .header("Range", format!("bytes={resume_from}-"))
-                        .send()
-                        .await
-                        .map_err(|e| RdlpError::Network { message: format!("Resume request failed: {e}"), url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())) })?;
-
-                    if response.status().as_u16() != HTTP_PARTIAL_CONTENT {
-                        return Err(RdlpError::Download {
-                            url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
-                            message: format!(
-                                "Server does not support resume (expected HTTP \
-                                 {HTTP_PARTIAL_CONTENT}, got {}). Cannot continue download \
-                                 without overwriting existing data. Please delete the partial \
-                                 file and restart the download.",
-                                response.status()
-                            ),
-                        });
+                    let client = client.clone();
+                    let source = source.clone();
+                    let hdrs = hdrs.clone();
+                    async move {
+                        let response =
+                            rdlp_http::download_request(&client, &source.url, Some(&hdrs))
+                                .ranged(range, source.validator.as_ref())
+                                .send()
+                                .await
+                                .map_err(|e| RdlpError::Network {
+                                    message: format!("Resume request failed: {e}"),
+                                    url: Some(rdlp_redact::RedactedUrlBuf::from(
+                                        source.url.as_str(),
+                                    )),
+                                })?;
+                        admit_for_verdict(response)
                     }
-
-                    // A 206 alone does not prove the body starts where the
-                    // partial file ends. The resumed bytes are appended at EOF,
-                    // so a response enclosing a different span splices foreign
-                    // data into the file at the resume point — the #526
-                    // corruption shape on this path. RFC 9110 §15.3.7 requires
-                    // the client to inspect Content-Range; do so before any
-                    // byte is appended.
-                    match ContentRange::from_headers(response.headers()) {
-                        Some(range) if range.first_pos == resume_from => {}
-                        Some(range) => {
-                            return Err(RdlpError::Download {
-                                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
-                                message: format!(
-                                    "Resume response starts at byte {} but the partial file ends \
-                                     at {resume_from}; appending it would corrupt the file. \
-                                     Please delete the partial file and restart the download.",
-                                    range.first_pos
-                                ),
-                            });
-                        }
-                        None => {
-                            return Err(RdlpError::Download {
-                                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
-                                message: format!(
-                                    "Resume response has a missing, malformed, or invalid \
-                                     Content-Range header, so the span it encloses cannot be \
-                                     verified against the partial file's {resume_from} bytes. \
-                                     Please delete the partial file and restart the download."
-                                ),
-                            });
-                        }
-                    }
-
-                    Ok(response)
-                }
-            })
+                },
+            )
             .await?;
 
-            let total_size = crate::http::parse_content_range_total(response.headers())
-                .or_else(|| response.content_length().map(|size| size + resume_from));
-
-            // Check for parallel resume
-            if let Some(total) = total_size {
-                let progress_pct = (resume_from as f64 / total as f64) * 100.0;
-                let remaining_size = total - resume_from;
-                let supports_ranges = response
-                    .headers()
-                    .get("accept-ranges")
-                    .and_then(|v| v.to_str().ok())
-                    != Some("none");
-
-                debug!(
-                    "Resume analysis: {:.1}% ({} MB / {} MB), remaining={} MB, concurrent={}, ranges={}",
-                    progress_pct,
-                    resume_from / 1024 / 1024,
-                    total / 1024 / 1024,
-                    remaining_size / 1024 / 1024,
-                    self.config.concurrent_fragments,
-                    supports_ranges
-                );
-
-                let can_parallel = remaining_size > self.config.parallel_threshold
-                    && self.config.concurrent_fragments > 1
-                    && supports_ranges;
-
-                if can_parallel {
-                    debug!(
-                        "Using parallel resume mode ({} connections), keeping {} MB, parallelizing {} MB",
-                        self.config.concurrent_fragments,
-                        resume_from / 1024 / 1024,
-                        remaining_size / 1024 / 1024
-                    );
-
-                    drop(response);
-                    // No sidecar is consulted on this path yet, so the resume
-                    // chunks run unverified exactly as before #565's Task 4.
-                    return self
-                        .download_parallel_resume(
-                            &Source::unverified(url),
-                            path,
-                            resume_from,
-                            total,
-                            progress,
-                        )
-                        .await;
-                }
-
-                debug!(
-                    "Parallel resume not available (remaining: {} MB, concurrent: {}, ranges: {}), using sequential",
-                    remaining_size / 1024 / 1024,
-                    self.config.concurrent_fragments,
-                    supports_ranges
-                );
-            }
-
-            let file = tokio::fs::OpenOptions::new()
-                .append(true)
-                .open(path)
+            let attempt = ResumeAttempt {
+                source: &source,
+                state: &state,
+                path,
+                resume_from,
+                start_time,
+            };
+            self.resume_from_response(attempt, response, progress, cancel)
                 .await
-                .map_err(|e| RdlpError::Io(
-                    std::io::Error::new(e.kind(), format!("failed to open partial file for resume '{}': {e}", path.display()))
-                ))?;
-            let mut writer = BufWriter::with_capacity(self.config.buffer_size, file);
-
-            let stream = response.bytes_stream();
-            tokio::pin!(stream);
-            let mut downloaded = resume_from;
-            let mut last_update = Instant::now();
-            let update_interval = PROGRESS_UPDATE_INTERVAL;
-            let read_timeout = self.config.read_timeout;
-            let mut speed_meter = SpeedMeter::new();
-            speed_meter.update(downloaded, start_time);
-
-            loop {
-                let next = match crate::http::next_with_cancel_and_timeout(
-                    stream.as_mut(),
-                    cancel,
-                    read_timeout,
-                    &url_string,
-                )
-                .await
-                {
-                    Ok(item) => item,
-                    Err(RdlpError::Cancelled) => {
-                        // Flush partial bytes already in BufWriter to disk.
-                        writer.flush().await.ok();
-                        return Err(RdlpError::Cancelled);
-                    }
-                    Err(e) => return Err(e),
-                };
-
-                let Some(chunk_result) = next else { break };
-                let chunk = chunk_result
-                    .map_err(|e| RdlpError::Network { message: format!("Failed to read resume response body from {}: {e}", rdlp_redact::RedactedUrl::new(url_string.as_ref())), url: Some(rdlp_redact::RedactedUrlBuf::from(url_string.as_ref())) })?;
-
-                writer.write_all(&chunk).await.map_err(|e| RdlpError::Io(
-                    std::io::Error::new(e.kind(), format!("failed to write to resumed file '{}': {e}", path.display()))
-                ))?;
-                downloaded += chunk.len() as u64;
-
-                if let Some(ref callback) = progress {
-                    let now = Instant::now();
-                    if now.duration_since(last_update) >= update_interval {
-                        speed_meter.update(downloaded, now);
-                        let speed = speed_meter.bytes_per_sec().unwrap_or(0.0);
-
-                        let progress_info = DownloadProgress::new(downloaded, total_size, speed);
-                        callback.on_progress(&progress_info);
-                        last_update = now;
-                    }
-                }
-
-                if let Some(ref limiter) = self.rate_limiter {
-                    limiter.acquire(chunk.len()).await;
-                }
-            }
-
-            writer.flush().await.map_err(|e| RdlpError::Io(
-                std::io::Error::new(e.kind(), format!("failed to flush resumed file '{}': {e}", path.display()))
-            ))?;
-
-            let duration = start_time.elapsed();
-            let stats = DownloadStats::new(downloaded, duration, 0);
-
-            if let Some(callback) = progress {
-                callback.on_complete(&stats);
-            }
-
-            Ok(stats)
         })
         .await
         .map_err(|_| RdlpError::Download {
@@ -596,4 +455,249 @@ impl HttpDownloader {
             url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
         })?
     }
+
+    /// What each answer to `Range` + `If-Range` means for the partial.
+    ///
+    /// - `Partial` (206): append — or fan the remainder out as verified
+    ///   chunks — unless the sidecar and the response disagree about the
+    ///   complete length under the same validator, which §8.8.1's uniqueness
+    ///   says cannot both be right: restart.
+    /// - `Replaced` (200, §13.2.2 step 5): the body is the whole current
+    ///   representation. The same strong validator with `Content-Length == N`
+    ///   means the N-byte partial already IS it (§8.8.1; §15.5.17 notes
+    ///   servers answer 200 where 416 was apt), so finish without writing.
+    ///   Otherwise the resource changed: write THIS body from zero and record
+    ///   its validator, so an interruption of the rewrite resumes correctly.
+    /// - `Unsatisfiable` (416): `bytes */L` "indicates the current length"
+    ///   (§14.4). `L == N` is complete; `L < N` cannot contain the partial as
+    ///   a prefix, so restart; `L > N` contradicts §14.1.2 (satisfiable iff
+    ///   `first-pos < current length`) and is an error. Without `Content-Range`
+    ///   (only a SHOULD, §15.5.17) a probe under the same `If-Range` decides.
+    async fn resume_from_response(
+        &self,
+        attempt: ResumeAttempt<'_>,
+        response: wreq::Response,
+        progress: Option<Box<dyn ProgressCallback>>,
+        cancel: Option<&CancellationToken>,
+    ) -> Result<DownloadStats> {
+        let ResumeAttempt {
+            source,
+            state,
+            path,
+            resume_from,
+            start_time,
+        } = attempt;
+        let url = source.url.as_str();
+        let range = RangeSpec::From(resume_from);
+
+        match range_verdict(&response, &source.meta(range), url)? {
+            RangeVerdict::Partial { range: got } => {
+                if let (Some(stored), Some(now)) = (state.complete_length, got.complete_length())
+                    && stored != now
+                {
+                    warn!(
+                        "Validator matched but the complete length changed ({stored} → {now}); \
+                         the validator cannot be trusted, so the {resume_from}-byte partial is \
+                         discarded and the download restarts"
+                    );
+                    self.discard_partial(path).await?;
+                    return self.fresh_download(url, path, progress, cancel).await;
+                }
+
+                let total_size = got
+                    .complete_length()
+                    .or_else(|| response.content_length().map(|rest| rest + resume_from));
+                if let Some(total) = total_size
+                    && self.can_parallel_resume(&response, total, resume_from)
+                {
+                    drop(response);
+                    let stats = self
+                        .download_parallel_resume(source, path, resume_from, total, progress)
+                        .await?;
+                    HttpResumeState::remove(path).await;
+                    return Ok(stats);
+                }
+
+                let total = self
+                    .stream_to_file(
+                        response,
+                        Sink {
+                            path,
+                            mode: WriteMode::Append { from: resume_from },
+                        },
+                        progress.as_deref(),
+                        cancel,
+                    )
+                    .await?;
+                HttpResumeState::remove(path).await;
+                Ok(finish(progress.as_deref(), start_time, total))
+            }
+            RangeVerdict::Replaced => {
+                let current = StrongValidator::from_headers(response.headers());
+                if current.as_ref() == Some(&state.validator)
+                    && response.content_length() == Some(resume_from)
+                {
+                    HttpResumeState::remove(path).await;
+                    return Ok(finish(progress.as_deref(), start_time, resume_from));
+                }
+                warn!(
+                    "Resource changed since the earlier attempt (200 to If-Range); discarding \
+                     the {resume_from}-byte partial and writing the current representation"
+                );
+                match current {
+                    Some(v) => HttpResumeState::new(v, response.content_length())
+                        .save(path)
+                        .await
+                        .map_err(RdlpError::Io)?,
+                    None => HttpResumeState::remove(path).await,
+                }
+                let total = self
+                    .stream_to_file(
+                        response,
+                        Sink {
+                            path,
+                            mode: WriteMode::Create,
+                        },
+                        progress.as_deref(),
+                        cancel,
+                    )
+                    .await?;
+                HttpResumeState::remove(path).await;
+                Ok(finish(progress.as_deref(), start_time, total))
+            }
+            RangeVerdict::Unsatisfiable {
+                complete_length: Some(len),
+            } if len == resume_from => {
+                HttpResumeState::remove(path).await;
+                Ok(finish(progress.as_deref(), start_time, resume_from))
+            }
+            RangeVerdict::Unsatisfiable {
+                complete_length: Some(len),
+            } if len < resume_from => {
+                warn!(
+                    "Server reports the resource is now {len} bytes, shorter than the \
+                     {resume_from}-byte partial; discarding it and restarting"
+                );
+                self.discard_partial(path).await?;
+                self.fresh_download(url, path, progress, cancel).await
+            }
+            RangeVerdict::Unsatisfiable {
+                complete_length: Some(len),
+            } => Err(RdlpError::Download {
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
+                message: format!(
+                    "416 with complete-length {len} > partial size {resume_from}: a range \
+                     starting inside the representation is satisfiable (RFC 9110 §14.1.2), so \
+                     this is not a satisfiable-range failure; leaving the partial for diagnosis"
+                ),
+            }),
+            RangeVerdict::Unsatisfiable {
+                complete_length: None,
+            } => {
+                let probe = self.probe_with(url, Some(&state.validator)).await?;
+                if probe.validator.as_ref() == Some(&state.validator)
+                    && probe.complete_length == Some(resume_from)
+                {
+                    HttpResumeState::remove(path).await;
+                    Ok(finish(progress.as_deref(), start_time, resume_from))
+                } else {
+                    warn!(
+                        "416 without Content-Range and the probe does not confirm the \
+                         {resume_from}-byte partial as complete; discarding it and restarting"
+                    );
+                    self.discard_partial(path).await?;
+                    self.fresh_download(url, path, progress, cancel).await
+                }
+            }
+        }
+    }
+
+    /// Today's parallel-resume decision, unchanged: enough remains to be
+    /// worth splitting, more than one connection is allowed, and the server
+    /// did not declare `Accept-Ranges: none`.
+    fn can_parallel_resume(&self, response: &wreq::Response, total: u64, resume_from: u64) -> bool {
+        let remaining_size = total.saturating_sub(resume_from);
+        let supports_ranges = response
+            .headers()
+            .get("accept-ranges")
+            .and_then(|v| v.to_str().ok())
+            != Some("none");
+
+        debug!(
+            "Resume analysis: {:.1}% ({} MB / {} MB), remaining={} MB, concurrent={}, ranges={}",
+            (resume_from as f64 / total as f64) * 100.0,
+            resume_from / 1024 / 1024,
+            total / 1024 / 1024,
+            remaining_size / 1024 / 1024,
+            self.config.concurrent_fragments,
+            supports_ranges
+        );
+
+        let can_parallel = remaining_size > self.config.parallel_threshold
+            && self.config.concurrent_fragments > 1
+            && supports_ranges;
+        if can_parallel {
+            debug!(
+                "Using parallel resume mode ({} connections), keeping {} MB, parallelizing {} MB",
+                self.config.concurrent_fragments,
+                resume_from / 1024 / 1024,
+                remaining_size / 1024 / 1024
+            );
+        } else {
+            debug!(
+                "Parallel resume not available (remaining: {} MB, concurrent: {}, ranges: {}), using sequential",
+                remaining_size / 1024 / 1024,
+                self.config.concurrent_fragments,
+                supports_ranges
+            );
+        }
+        can_parallel
+    }
+
+    /// Truncate the partial in place and drop its sidecar, so the download
+    /// can restart from zero exactly as a fresh one does (`File::create`).
+    ///
+    /// `path` is rdlp's own `.rdlp-part` temp name (`rdlp-api`
+    /// `orchestrator/naming.rs` `part_path`), never the user's clean target,
+    /// so truncating it stays inside the #743/#744 doctrine: nothing a user
+    /// supplied is touched.
+    async fn discard_partial(&self, path: &Path) -> Result<()> {
+        tokio::fs::File::create(path).await.map_err(|e| {
+            RdlpError::Io(std::io::Error::new(
+                e.kind(),
+                format!("failed to discard partial file '{}': {e}", path.display()),
+            ))
+        })?;
+        HttpResumeState::remove(path).await;
+        Ok(())
+    }
+}
+
+/// Everything [`HttpDownloader::resume_from_response`] needs to know about the
+/// attempt it is judging, grouped so the verdict arms read as the spec does.
+struct ResumeAttempt<'a> {
+    /// The URL and the validator every ranged request carried as `If-Range`.
+    source: &'a Source,
+    /// The sidecar the partial was fetched under.
+    state: &'a HttpResumeState,
+    /// The partial file.
+    path: &'a Path,
+    /// Bytes already on disk.
+    resume_from: u64,
+    /// When the resume request went out; the stats' duration runs from here.
+    start_time: Instant,
+}
+
+/// Stats for a resume that ends with `total` bytes on disk, reported to the
+/// progress callback exactly as the fresh path does.
+fn finish(
+    progress: Option<&dyn ProgressCallback>,
+    start_time: Instant,
+    total: u64,
+) -> DownloadStats {
+    let stats = DownloadStats::new(total, start_time.elapsed(), 0);
+    if let Some(callback) = progress {
+        callback.on_complete(&stats);
+    }
+    stats
 }

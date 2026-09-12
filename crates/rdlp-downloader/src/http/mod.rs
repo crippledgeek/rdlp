@@ -18,8 +18,7 @@ mod tests;
 pub(crate) use parallel::{ChunkRequestSpec, download_chunk_with_retry, verify_merged_size};
 pub(crate) use state::{HttpResumeState, Source};
 pub(crate) use verdict::{
-    HTTP_PARTIAL_CONTENT, RangeVerdict, RangedRequestMeta, admit_for_verdict, bounded_len,
-    range_verdict,
+    RangeVerdict, RangedRequestMeta, admit_for_verdict, bounded_len, range_verdict,
 };
 
 use rdlp_core::{
@@ -38,7 +37,7 @@ use crate::chunking::ChunkSizeStrategy;
 use crate::progress::SpeedMeter;
 use crate::retry::{RetryPolicy, with_retry};
 use config::{DownloaderConfig, PROGRESS_UPDATE_INTERVAL};
-use rdlp_http::RangedRequest;
+use rdlp_http::{RangedRequest, StrongValidator};
 use rdlp_ratelimit::RateLimiter;
 
 /// Convert optional `HashMap` headers to wreq `HeaderMap`
@@ -229,6 +228,12 @@ impl ContentRange {
         self.last_pos
     }
 
+    /// The representation's complete length; `None` when the server sent `*`
+    /// (§14.4: "the representation length was unknown").
+    pub(crate) const fn complete_length(self) -> Option<u64> {
+        self.complete_length
+    }
+
     /// `bytes */complete-length` (§14.4 `unsatisfied-range`), as sent with a 416.
     pub(crate) fn parse_unsatisfied(value: &str) -> Option<u64> {
         let (unit, rest) = value.trim().split_once(' ')?;
@@ -246,20 +251,6 @@ impl ContentRange {
             .and_then(|v| v.to_str().ok())
             .and_then(Self::parse_unsatisfied)
     }
-}
-
-/// Parse the `Content-Range` header's total-bytes field.
-///
-/// Used by `trait_impl::download_with_resume_with_cancel` to discover the
-/// total resource size from a resume Range response. The probe path uses
-/// `rdlp_http::probe_size` (which has its own parser); this helper is kept
-/// for the resume path's standalone header inspection.
-///
-/// Returns the `complete-length` of a valid single-part `bytes` range, and
-/// `None` for `bytes 0-N/*` (server signalled unknown total), a missing
-/// header, or any value [`ContentRange::parse`] rejects.
-pub(crate) fn parse_content_range_total(headers: &wreq::header::HeaderMap) -> Option<u64> {
-    ContentRange::from_headers(headers).and_then(|range| range.complete_length)
 }
 
 /// HTTP/HTTPS downloader
@@ -434,6 +425,18 @@ impl HttpDownloader {
     ///   supports_ranges: false }`. Non-2xx is "no info", not an error;
     ///   caller falls to sequential.
     pub(crate) async fn probe(&self, url: &str) -> Result<ProbeResult> {
+        self.probe_with(url, None).await
+    }
+
+    /// [`Self::probe`] with an `If-Range` (§13.1.5): the resume path asks it
+    /// what a 416 without `Content-Range` left unsaid — whether the
+    /// representation the partial belongs to is still the current one, and
+    /// how long it is. One probe path; `probe` is this with no validator.
+    pub(crate) async fn probe_with(
+        &self,
+        url: &str,
+        validator: Option<&StrongValidator>,
+    ) -> Result<ProbeResult> {
         use config::PROBE_WINDOW_BYTES;
 
         // F3 probe delegates to the shared `rdlp_http::probe_size` helper
@@ -462,7 +465,7 @@ impl HttpDownloader {
                             headers: Some(&hdrs),
                             window_bytes: window,
                             timeout,
-                            validator: None,
+                            validator,
                         },
                     )
                     .await
@@ -716,7 +719,6 @@ impl HttpDownloader {
         progress: Option<Box<dyn ProgressCallback>>,
         cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<DownloadStats> {
-        let progress: Option<Arc<dyn ProgressCallback>> = progress.map(Arc::from);
         let start_time = Instant::now();
         let client = self.client.clone();
         let url_string: Arc<str> = Arc::from(url);
@@ -767,48 +769,91 @@ impl HttpDownloader {
             None => HttpResumeState::remove(path).await,
         }
 
-        let file = File::create(path).await.map_err(|e| {
+        let downloaded = self
+            .stream_to_file(
+                response,
+                Sink {
+                    path,
+                    mode: WriteMode::Create,
+                },
+                progress.as_deref(),
+                cancel,
+            )
+            .await?;
+
+        let stats = DownloadStats::new(downloaded, start_time.elapsed(), 0);
+        if let Some(callback) = progress {
+            callback.on_complete(&stats);
+        }
+        Ok(stats)
+    }
+
+    /// Stream `response`'s body into the sink; returns the bytes now on disk
+    /// (`Append { from }`: `from` plus what was streamed).
+    ///
+    /// The one body-to-file loop behind the fresh sequential GET, the resume
+    /// append, and the resume's 200-rewrite — so the cancel flush, the read
+    /// timeout, the rate limiter and the progress cadence exist once.
+    ///
+    /// `cancel` — when `Some`, each chunk poll races the token; on
+    /// cancellation the `BufWriter` is flushed before `RdlpError::Cancelled`
+    /// is returned so bytes already buffered reach disk.
+    pub(crate) async fn stream_to_file(
+        &self,
+        response: wreq::Response,
+        sink: Sink<'_>,
+        progress: Option<&dyn ProgressCallback>,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
+    ) -> Result<u64> {
+        let start_time = Instant::now();
+        let url = response.uri().to_string();
+        let path = sink.path;
+        let (file, mut downloaded) = match sink.mode {
+            WriteMode::Create => (File::create(path).await, 0),
+            WriteMode::Append { from } => (
+                tokio::fs::OpenOptions::new().append(true).open(path).await,
+                from,
+            ),
+        };
+        let file = file.map_err(|e| {
             RdlpError::Io(std::io::Error::new(
                 e.kind(),
-                format!("failed to create output file '{}': {e}", path.display()),
+                format!("failed to open output file '{}': {e}", path.display()),
             ))
         })?;
+        let total_size = response
+            .content_length()
+            .map(|remaining| remaining + downloaded);
         let mut writer = BufWriter::with_capacity(self.config.buffer_size, file);
 
         let stream = response.bytes_stream();
         tokio::pin!(stream);
-        let mut downloaded: u64 = 0;
         let mut last_update = Instant::now();
-        let update_interval = PROGRESS_UPDATE_INTERVAL;
         let read_timeout = self.config.read_timeout;
         let mut speed_meter = SpeedMeter::new();
         speed_meter.update(downloaded, start_time);
 
         loop {
-            let next = match next_with_cancel_and_timeout(
-                stream.as_mut(),
-                cancel,
-                read_timeout,
-                &url_string,
-            )
-            .await
-            {
-                Ok(item) => item,
-                Err(RdlpError::Cancelled) => {
-                    // Flush partial bytes already in BufWriter to disk.
-                    writer.flush().await.ok();
-                    return Err(RdlpError::Cancelled);
-                }
-                Err(e) => return Err(e),
-            };
+            let next =
+                match next_with_cancel_and_timeout(stream.as_mut(), cancel, read_timeout, &url)
+                    .await
+                {
+                    Ok(item) => item,
+                    Err(RdlpError::Cancelled) => {
+                        // Flush partial bytes already in BufWriter to disk.
+                        writer.flush().await.ok();
+                        return Err(RdlpError::Cancelled);
+                    }
+                    Err(e) => return Err(e),
+                };
 
             let Some(chunk_result) = next else { break };
             let chunk = chunk_result.map_err(|e| RdlpError::Network {
                 message: format!(
                     "Failed to read response body from {}: {e}",
-                    rdlp_redact::RedactedUrl::new(url_string.as_ref())
+                    rdlp_redact::RedactedUrl::new(&url)
                 ),
-                url: Some(rdlp_redact::RedactedUrlBuf::from(url_string.as_ref())),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
             })?;
 
             writer.write_all(&chunk).await.map_err(|e| {
@@ -819,9 +864,9 @@ impl HttpDownloader {
             })?;
             downloaded += chunk.len() as u64;
 
-            if let Some(ref callback) = progress {
+            if let Some(callback) = progress {
                 let now = Instant::now();
-                if now.duration_since(last_update) >= update_interval {
+                if now.duration_since(last_update) >= PROGRESS_UPDATE_INTERVAL {
                     speed_meter.update(downloaded, now);
                     let speed = speed_meter.bytes_per_sec().unwrap_or(0.0);
 
@@ -843,15 +888,27 @@ impl HttpDownloader {
             ))
         })?;
 
-        let duration = start_time.elapsed();
-        let stats = DownloadStats::new(downloaded, duration, 0);
-
-        if let Some(callback) = progress {
-            callback.on_complete(&stats);
-        }
-
-        Ok(stats)
+        Ok(downloaded)
     }
+}
+
+/// How [`HttpDownloader::stream_to_file`] opens its file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WriteMode {
+    /// Truncate and write from byte 0.
+    Create,
+    /// Append to an existing partial that already holds `from` bytes.
+    Append {
+        /// Bytes already on disk; the streamed body continues from here.
+        from: u64,
+    },
+}
+
+/// Where [`HttpDownloader::stream_to_file`] writes, and how.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Sink<'a> {
+    pub path: &'a Path,
+    pub mode: WriteMode,
 }
 
 impl Default for HttpDownloader {
@@ -908,10 +965,8 @@ where
 
 #[cfg(test)]
 mod content_range_tests {
-    //! Tests for the local `parse_content_range_total` helper. The probe
-    //! path uses `rdlp_http::probe_size`'s internal parser; this helper
-    //! is the standalone version used by the resume path in
-    //! `trait_impl::download_with_resume_with_cancel`.
+    //! `ContentRange` as read from a header map: the complete-length the
+    //! resume path compares against its sidecar, and the §14.4 grammar.
     use super::*;
     use wreq::header::HeaderMap;
 
@@ -921,6 +976,10 @@ mod content_range_tests {
             h.insert("content-range", cr.parse().unwrap());
         }
         h
+    }
+
+    fn parse_content_range_total(headers: &HeaderMap) -> Option<u64> {
+        ContentRange::from_headers(headers).and_then(ContentRange::complete_length)
     }
 
     #[test]
@@ -978,6 +1037,7 @@ mod content_range_tests {
         let range = ContentRange::parse("bytes 0-1023/2048").expect("valid range must parse");
         assert_eq!(range.first_pos(), range.first_pos);
         assert_eq!(range.last_pos(), range.last_pos);
+        assert_eq!(range.complete_length(), range.complete_length);
     }
 
     /// `*` for complete-length is explicitly legal — "An asterisk character

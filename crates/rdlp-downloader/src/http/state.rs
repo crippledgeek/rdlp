@@ -60,13 +60,6 @@ impl HttpResumeState {
 
     /// `None` when the sidecar is missing, unparsable, or of another schema
     /// version — every one of which means "start over" (fail-safe).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "first production caller is the resume path (#565 Task 5); `expect` errors out the moment it lands"
-        )
-    )]
     pub(crate) async fn load(output: &Path) -> Option<Self> {
         let body = tokio::fs::read_to_string(Self::sidecar_path(output))
             .await
@@ -118,7 +111,10 @@ impl Source {
         }
     }
 
-    /// A source with no validator — only where none was ever offered.
+    /// A source with no validator. Test-only: every production path now
+    /// threads the probe's or the sidecar's validator through [`Self::new`],
+    /// and a chunk test that wants "none was offered" says so here.
+    #[cfg(test)]
     pub(crate) fn unverified(url: &str) -> Self {
         Self::new(url, None)
     }
