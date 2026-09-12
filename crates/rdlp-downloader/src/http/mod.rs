@@ -4,6 +4,7 @@
 //! and automatic retry logic using the backon crate.
 
 mod chunk_ledger;
+pub(crate) mod chunk_manifest;
 pub(crate) mod chunk_name;
 mod config;
 mod parallel;

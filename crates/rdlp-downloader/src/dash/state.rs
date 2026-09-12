@@ -10,10 +10,9 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use tokio::fs;
 use url::Url;
 
-use crate::atomic::now_secs;
+use crate::atomic::{now_secs, read_json_sidecar};
 
 /// Current schema version. Bump on incompatible field changes.
 pub const STATE_VERSION: u32 = 1;
@@ -65,8 +64,7 @@ impl DashDownloadState {
         video_repr_id: &str,
         audio_repr_id: Option<&str>,
     ) -> Option<Self> {
-        let body = fs::read_to_string(path).await.ok()?;
-        let s: Self = serde_json::from_str(&body).ok()?;
+        let s: Self = read_json_sidecar(path).await?;
         if s.state_version != STATE_VERSION
             || s.mpd_path != mpd_url.path()
             || s.video_repr_id != video_repr_id

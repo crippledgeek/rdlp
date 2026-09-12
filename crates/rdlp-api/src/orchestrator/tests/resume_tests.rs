@@ -6,6 +6,31 @@
 )]
 
 use super::*;
+use rdlp_downloader::{ChunkKind, ChunkManifest, ChunkSet};
+
+/// Write a chunk-completion manifest (#675) for a new-style Fresh chunk set,
+/// standing in for what the real parallel downloader records as each chunk
+/// completes. Every test that expects `detect_resume_point` to merge a
+/// new-style chunk set now needs one — without it the set is unverifiable
+/// and is left in place rather than merged (#675's policy change).
+///
+/// Takes the already-built `ChunkSet` (rather than the `(filename,
+/// download_id)` pair it's built from) so this stays a 3-argument helper —
+/// `set.download_id()` recovers the id its manifest content needs.
+async fn write_chunk_manifest(set: &ChunkSet, dir: &std::path::Path, lengths: &[u64]) {
+    let download_id = set
+        .download_id()
+        .expect("a manifest is only ever written for a new-style (Fresh) set");
+    let total: u64 = lengths.iter().sum();
+    let mut manifest = ChunkManifest::new(download_id, ChunkKind::Fresh, 0, total);
+    for (chunk_id, len) in lengths.iter().enumerate() {
+        manifest.record_completed(chunk_id as u64, *len);
+    }
+    let manifest_path = set
+        .manifest_path_in(dir)
+        .expect("new-style set has a manifest path");
+    manifest.save(&manifest_path).await.expect("save manifest");
+}
 
 #[tokio::test]
 async fn test_merge_chunk_files_success() {
@@ -33,7 +58,10 @@ async fn test_merge_chunk_files_success() {
             chunk1_path.clone(),
             chunk2_path.clone(),
         ],
+        chunk_lengths: vec![512, 512, 512],
         total_size: 1536,
+        first_bad: None,
+        stranded_beyond_gap: 0,
     };
 
     // Merge chunks
@@ -78,7 +106,10 @@ async fn test_merge_chunk_files_missing_chunk() {
     let chunk_info = resume::ChunkInfo {
         download_id: None,
         chunk_paths: vec![chunk0_path, chunk1_path, chunk2_path.clone()],
+        chunk_lengths: vec![512, 512, 512],
         total_size: 1536,
+        first_bad: None,
+        stranded_beyond_gap: 0,
     };
 
     // Merge should fail
@@ -109,7 +140,10 @@ async fn test_merge_chunk_files_empty_chunks() {
     let chunk_info = resume::ChunkInfo {
         download_id: None,
         chunk_paths: vec![chunk0_path.clone(), chunk1_path.clone()],
+        chunk_lengths: vec![0, 0],
         total_size: 0,
+        first_bad: None,
+        stranded_beyond_gap: 0,
     };
 
     let total_size = resume::merge_chunk_files(&output_path, &chunk_info)
@@ -128,13 +162,17 @@ async fn test_merge_chunk_files_empty_chunks() {
 mod resume_compatibility_tests {
     use super::*;
 
+    /// #675 policy change: the legacy chunk grammar predates the
+    /// chunk-completion manifest and has no writer that could ever produce
+    /// one, so a legacy chunk set is now permanently unverifiable and is
+    /// never merged — this is a deliberate acceptance of the change, not the
+    /// pre-#675 behaviour this test used to pin (which merged on bare
+    /// non-empty-file trust).
     #[tokio::test]
-    async fn test_detect_old_style_chunks() {
-        // Test detecting old-style chunks: video.mp4.part0, video.mp4.part1, ...
+    async fn test_detect_old_style_chunks_unverifiable_without_manifest() {
         let temp_dir = tempfile::tempdir().unwrap();
         let output_path = temp_dir.path().join("video.mp4");
 
-        // Create old-style chunk files
         tokio::fs::write(temp_dir.path().join("video.mp4.part0"), &[1u8; 512])
             .await
             .unwrap();
@@ -151,18 +189,13 @@ mod resume_compatibility_tests {
             .await
             .unwrap();
 
-        // Should have merged the 3 chunks
-        assert_eq!(resume_offset, 1536);
-        assert!(output_path.exists());
+        assert_eq!(resume_offset, 0, "unverifiable legacy chunks start fresh");
+        assert!(!output_path.exists());
 
-        // Verify merged content
-        let content = tokio::fs::read(&output_path).await.unwrap();
-        assert_eq!(content.len(), 1536);
-
-        // Verify chunk files were deleted
-        assert!(!temp_dir.path().join("video.mp4.part0").exists());
-        assert!(!temp_dir.path().join("video.mp4.part1").exists());
-        assert!(!temp_dir.path().join("video.mp4.part2").exists());
+        // Left in place, not deleted — #675's "leave the files" policy.
+        assert!(temp_dir.path().join("video.mp4.part0").exists());
+        assert!(temp_dir.path().join("video.mp4.part1").exists());
+        assert!(temp_dir.path().join("video.mp4.part2").exists());
     }
 
     #[tokio::test]
@@ -187,6 +220,14 @@ mod resume_compatibility_tests {
         tokio::fs::write(temp_dir.path().join("video.mp4.0.part4"), &[5u8; 256])
             .await
             .unwrap();
+        // #675: without a manifest recording these 5 chunks complete, the
+        // set is unverifiable and would never be merged.
+        write_chunk_manifest(
+            &ChunkSet::for_attempt("video.mp4", 0, ChunkKind::Fresh).unwrap(),
+            temp_dir.path(),
+            &[256, 256, 256, 256, 256],
+        )
+        .await;
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
@@ -211,6 +252,10 @@ mod resume_compatibility_tests {
                     .exists()
             );
         }
+        assert!(
+            !temp_dir.path().join("video.mp4.0.chunks.json").exists(),
+            "the manifest must not outlive the merge it verified"
+        );
     }
 
     #[tokio::test]
@@ -238,6 +283,14 @@ mod resume_compatibility_tests {
             .await
             .unwrap();
         }
+        // #675: only the new-style set has a manifest — the legacy set can
+        // never have one, so it stays unverifiable regardless of priority.
+        write_chunk_manifest(
+            &ChunkSet::for_attempt("video.mp4", 0, ChunkKind::Fresh).unwrap(),
+            temp_dir.path(),
+            &[256, 256, 256, 256, 256],
+        )
+        .await;
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
@@ -522,11 +575,14 @@ mod resume_compatibility_tests {
             .await
             .unwrap();
 
-        // Legacy chunks merged normally.
-        assert_eq!(resume_offset, 1024);
-        assert!(!temp_dir.path().join("video.mp4.part0").exists());
-        assert!(!temp_dir.path().join("video.mp4.part1").exists());
-        // Orphaned resume chunk untouched.
+        // #675: the legacy set can never have a manifest, so it is
+        // unverifiable and is never merged — left in place, not "merged
+        // normally" as this test pinned before #675.
+        assert_eq!(resume_offset, 0);
+        assert!(temp_dir.path().join("video.mp4.part0").exists());
+        assert!(temp_dir.path().join("video.mp4.part1").exists());
+        // Orphaned resume chunk untouched (unrelated assertion, unaffected
+        // by #675 — this is what the test was originally pinning).
         assert!(temp_dir.path().join("video.mp4.7.resume0").exists());
     }
 
@@ -610,6 +666,17 @@ mod resume_compatibility_tests {
         tokio::fs::write(temp_dir.path().join("video.mp4.2.part2"), &[30u8; 512])
             .await
             .unwrap();
+        // #675: only download_id 2 gets a manifest — download_id 0 stays
+        // unverifiable, which is consistent with the pre-#675 assertion
+        // below that its chunks are simply never touched (not chosen,
+        // because it isn't the highest id — it was never merge-eligible
+        // either way once verification applies).
+        write_chunk_manifest(
+            &ChunkSet::for_attempt("video.mp4", 2, ChunkKind::Fresh).unwrap(),
+            temp_dir.path(),
+            &[512, 512, 512],
+        )
+        .await;
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
@@ -687,6 +754,12 @@ mod resume_compatibility_tests {
             .await
             .unwrap();
         }
+        write_chunk_manifest(
+            &ChunkSet::for_attempt("video.mp4", 0, ChunkKind::Fresh).unwrap(),
+            temp_dir.path(),
+            &[128; 100],
+        )
+        .await;
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
@@ -707,5 +780,239 @@ mod resume_compatibility_tests {
                     .exists()
             );
         }
+    }
+}
+
+/// #675: chunk length trust must come from a recorded manifest, not a bare
+/// non-empty-file check, and a gap must be reported rather than silently
+/// truncating the merge.
+mod issue_675_chunk_integrity_tests {
+    use super::*;
+
+    /// (i) A chunk truncated by one byte relative to its recorded length
+    /// must not be accepted into the merged prefix. RED against the
+    /// unpatched code, which trusted any non-empty file at its truncated
+    /// length.
+    #[tokio::test]
+    async fn truncated_chunk_is_not_merged() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+
+        tokio::fs::write(temp_dir.path().join("video.mp4.0.part0"), &[1u8; 256])
+            .await
+            .unwrap();
+        // Chunk 1 recorded as 256 bytes complete, but only 255 are on disk —
+        // an interrupted write.
+        tokio::fs::write(temp_dir.path().join("video.mp4.0.part1"), &[2u8; 255])
+            .await
+            .unwrap();
+        write_chunk_manifest(
+            &ChunkSet::for_attempt("video.mp4", 0, ChunkKind::Fresh).unwrap(),
+            temp_dir.path(),
+            &[256, 256],
+        )
+        .await;
+
+        let info = resume::detect_chunk_files(&output_path)
+            .await
+            .expect("chunk 0 alone is a verified, non-empty prefix");
+
+        assert_eq!(
+            info.chunk_paths.len(),
+            1,
+            "only the intact chunk 0 is trusted; the truncated chunk 1 is not"
+        );
+        assert_eq!(info.total_size, 256);
+        assert_eq!(
+            info.stranded_beyond_gap, 0,
+            "chunk 1 itself is the break, nothing recorded lies beyond it"
+        );
+        // Spec review finding 1: assert the REPORT itself, not just the
+        // merged offset — a truncated LAST chunk (nothing recorded beyond
+        // it) leaves `stranded_beyond_gap` at 0, so that alone can't tell
+        // this apart from "the manifest just ended cleanly at chunk 0".
+        assert_eq!(
+            info.first_bad,
+            Some(resume::BadChunk {
+                id: 1,
+                on_disk: Some(255),
+                recorded: Some(256),
+            }),
+            "the truncation must be reported with the chunk id and both lengths"
+        );
+
+        let orchestrator = create_test_orchestrator();
+        let resume_offset = orchestrator
+            .detect_resume_point(&output_path, None)
+            .await
+            .unwrap();
+        assert_eq!(resume_offset, 256, "only chunk 0 was merged");
+        assert!(
+            temp_dir.path().join("video.mp4.0.part1").exists(),
+            "the truncated chunk is left in place, not silently consumed"
+        );
+    }
+
+    /// (ii) A real gap (chunk 3 never recorded complete) with chunks 4 and 5
+    /// present and recorded beyond it: the merge uses the verified prefix
+    /// 0..=2, and the 2 chunks beyond the gap are reported rather than
+    /// silently dropped.
+    #[tokio::test]
+    async fn gap_reports_chunks_stranded_beyond_it() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+
+        for id in [0u64, 1, 2, 4, 5] {
+            tokio::fs::write(
+                temp_dir.path().join(format!("video.mp4.0.part{id}")),
+                &[id as u8; 64],
+            )
+            .await
+            .unwrap();
+        }
+        // Chunk 3 deliberately never recorded — a real gap. 4 and 5 ARE
+        // recorded complete, standing in for chunks that finished on the
+        // adaptive path's out-of-order completion before the process died.
+        let set = ChunkSet::for_attempt("video.mp4", 0, ChunkKind::Fresh).unwrap();
+        let mut manifest = ChunkManifest::new(0, ChunkKind::Fresh, 0, 384);
+        for id in [0u64, 1, 2, 4, 5] {
+            manifest.record_completed(id, 64);
+        }
+        manifest
+            .save(&set.manifest_path_in(temp_dir.path()).unwrap())
+            .await
+            .unwrap();
+
+        let info = resume::detect_chunk_files(&output_path)
+            .await
+            .expect("0..=2 is a verified prefix");
+
+        assert_eq!(info.chunk_paths.len(), 3, "only 0, 1, 2 are merge-eligible");
+        assert_eq!(info.total_size, 192);
+        assert_eq!(
+            info.stranded_beyond_gap, 2,
+            "chunks 4 and 5 are recorded complete but unreachable past the gap at 3"
+        );
+        assert_eq!(
+            info.first_bad,
+            Some(resume::BadChunk {
+                id: 3,
+                on_disk: None,
+                recorded: None,
+            }),
+            "the gap itself must be reported by id, not just its downstream effect"
+        );
+
+        let orchestrator = create_test_orchestrator();
+        let resume_offset = orchestrator
+            .detect_resume_point(&output_path, None)
+            .await
+            .unwrap();
+        assert_eq!(resume_offset, 192, "merge stops at the verified prefix");
+        assert!(temp_dir.path().join("video.mp4.0.part4").exists());
+        assert!(temp_dir.path().join("video.mp4.0.part5").exists());
+    }
+
+    /// (iii) If the assembled merge total no longer matches the recorded
+    /// sum (a chunk changed size between detection and merge), the merge
+    /// fails and `detect_resume_point` falls back to starting fresh rather
+    /// than accepting a misassembled file.
+    #[tokio::test]
+    async fn merge_total_mismatch_against_recorded_sum_fails_the_merge() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+
+        let chunk0 = temp_dir.path().join("video.mp4.0.part0");
+        tokio::fs::write(&chunk0, &[1u8; 256]).await.unwrap();
+
+        let chunk_info = resume::ChunkInfo {
+            download_id: Some(0),
+            chunk_paths: vec![chunk0.clone()],
+            // Recorded length disagrees with what's actually on disk — the
+            // scenario `merge_chunk_files` alone (not `detect_chunk_files`,
+            // which would already have rejected this) must still catch.
+            chunk_lengths: vec![512],
+            total_size: 512,
+            first_bad: None,
+            stranded_beyond_gap: 0,
+        };
+
+        let result = resume::merge_chunk_files(&output_path, &chunk_info).await;
+        assert!(
+            result.is_err(),
+            "a copied length disagreeing with the recorded one must fail the merge"
+        );
+    }
+
+    /// (iv) A new-style chunk set with NO manifest at all (pre-#675 run, or
+    /// the manifest itself lost) is unverifiable and is never merged — a
+    /// deliberate policy decision (#675's acceptance criteria), not a
+    /// default. Files are left in place.
+    #[tokio::test]
+    async fn chunk_set_with_no_manifest_is_never_merged() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+
+        tokio::fs::write(temp_dir.path().join("video.mp4.0.part0"), &[1u8; 256])
+            .await
+            .unwrap();
+        tokio::fs::write(temp_dir.path().join("video.mp4.0.part1"), &[2u8; 256])
+            .await
+            .unwrap();
+        // No manifest written.
+
+        assert!(
+            resume::detect_chunk_files(&output_path).await.is_none(),
+            "an unverifiable chunk set must not be reported as mergeable"
+        );
+
+        let orchestrator = create_test_orchestrator();
+        let resume_offset = orchestrator
+            .detect_resume_point(&output_path, None)
+            .await
+            .unwrap();
+        assert_eq!(resume_offset, 0);
+        assert!(temp_dir.path().join("video.mp4.0.part0").exists());
+        assert!(temp_dir.path().join("video.mp4.0.part1").exists());
+    }
+
+    /// Boundary pair for `intact_len` at the recorded chunk length N,
+    /// exercised through `detect_chunk_files` rather than the unit-level
+    /// `intact_len` tests in `rdlp-downloader` (those pin the helper; this
+    /// one pins that the caller actually wires it through).
+    #[tokio::test]
+    async fn on_disk_length_exactly_n_is_accepted() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+        tokio::fs::write(temp_dir.path().join("video.mp4.0.part0"), &[1u8; 512])
+            .await
+            .unwrap();
+        write_chunk_manifest(
+            &ChunkSet::for_attempt("video.mp4", 0, ChunkKind::Fresh).unwrap(),
+            temp_dir.path(),
+            &[512],
+        )
+        .await;
+
+        let info = resume::detect_chunk_files(&output_path).await.unwrap();
+        assert_eq!(info.chunk_paths.len(), 1);
+        assert_eq!(info.total_size, 512);
+    }
+
+    #[tokio::test]
+    async fn on_disk_length_n_minus_one_is_rejected() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+        tokio::fs::write(temp_dir.path().join("video.mp4.0.part0"), &[1u8; 511])
+            .await
+            .unwrap();
+        write_chunk_manifest(
+            &ChunkSet::for_attempt("video.mp4", 0, ChunkKind::Fresh).unwrap(),
+            temp_dir.path(),
+            &[512],
+        )
+        .await;
+
+        assert!(resume::detect_chunk_files(&output_path).await.is_none());
     }
 }

@@ -45,6 +45,7 @@
 //! `filename` is the full output file name including extension (e.g.
 //! `Title.mp4`), so a real chunk looks like `Title.mp4.7.resume3`.
 
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 /// Origin of a chunk within its download attempt: a fresh transfer or one
@@ -53,7 +54,12 @@ use std::path::{Path, PathBuf};
 /// Modeled as an enum (not a raw `&str` marker) because the set of markers is
 /// closed and a typo in a string literal would silently create an
 /// unclaimable chunk file.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// `Serialize`/`Deserialize` back the on-disk chunk manifest (#675,
+/// `chunk_manifest.rs`) so a manifest can assert it matches the kind of the
+/// set that's about to read it, the same way `ChunkManifest::load_matching`
+/// checks `download_id`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ChunkKind {
     /// A chunk written by a brand-new download attempt.
     Fresh,
@@ -166,6 +172,30 @@ impl ChunkSet {
     pub fn path_in(&self, dir: &Path, chunk_id: u64) -> PathBuf {
         dir.join(format!("{}{chunk_id}", self.prefix()))
     }
+
+    /// Path to this set's chunk-completion manifest (#675): the record of
+    /// which chunk ids this attempt has completed and at what length, used
+    /// by resume recovery to tell an intact chunk from one truncated by an
+    /// interrupted write.
+    ///
+    /// Only new-style sets (`download_id: Some`) have one — the legacy
+    /// grammar predates the manifest and has no writer that could ever
+    /// produce one, so legacy sets are permanently unverifiable and resume
+    /// recovery treats them accordingly (never merged).
+    #[must_use]
+    pub fn manifest_path_in(&self, dir: &Path) -> Option<PathBuf> {
+        self.download_id
+            .map(|id| dir.join(format!("{}.{id}.chunks.json", self.filename)))
+    }
+
+    /// This set's download attempt id, or `None` for the legacy grammar.
+    /// Lets a caller that already holds a `ChunkSet` recover the id it was
+    /// built from, rather than needing to thread it as a second value
+    /// alongside the set everywhere the set travels.
+    #[must_use]
+    pub const fn download_id(&self) -> Option<u64> {
+        self.download_id
+    }
 }
 
 #[cfg(test)]
@@ -212,5 +242,28 @@ mod tests {
     #[test]
     fn legacy_rejects_empty_filename() {
         assert!(ChunkSet::legacy("").is_err());
+    }
+
+    #[test]
+    fn manifest_path_in_is_some_for_new_style_set() {
+        let set = ChunkSet::for_attempt("Title.mp4", 7, ChunkKind::Fresh).expect("valid filename");
+        let dir = Path::new("/tmp/does-not-need-to-exist-for-this-test");
+        let path = set
+            .manifest_path_in(dir)
+            .expect("new-style set has a manifest path");
+        assert_eq!(
+            path.file_name().unwrap().to_str().unwrap(),
+            "Title.mp4.7.chunks.json"
+        );
+    }
+
+    #[test]
+    fn manifest_path_in_is_none_for_legacy_set() {
+        let set = ChunkSet::legacy("Title.mp4").expect("valid filename");
+        let dir = Path::new("/tmp/does-not-need-to-exist-for-this-test");
+        assert!(
+            set.manifest_path_in(dir).is_none(),
+            "legacy sets have no download_id to key a manifest on and no writer ever produces one"
+        );
     }
 }

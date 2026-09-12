@@ -7,6 +7,7 @@ use std::time::SystemTime;
 
 use log::warn;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 /// Atomically write `value` as JSON to `path` (write-temp-in-same-dir + rename).
 /// A kill mid-write leaves the previous file intact — never a torn file.
@@ -44,6 +45,37 @@ pub async fn atomic_write_json<T: Serialize + Send + 'static>(
     })
     .await
     .map_err(std::io::Error::other)?
+}
+
+/// Read and parse a JSON sidecar at `path`, or `None` for any reason it
+/// can't be trusted at the byte level: missing file, unreadable, or
+/// malformed JSON. Returns the raw deserialized value with NO identity or
+/// version check — every sidecar (HLS `HlsResumeState`, DASH
+/// `DashDownloadState`, and the chunk-completion `ChunkManifest`, #675) has
+/// its own notion of "matches what the caller expects" (a fingerprint, an
+/// MPD path + representation ids, a `download_id` + `ChunkKind`), so that
+/// gate stays in each type's own `load`/`load_matching`, which calls this
+/// for the read-and-parse mechanics they'd otherwise all duplicate.
+pub(crate) async fn read_json_sidecar<T: DeserializeOwned>(path: &Path) -> Option<T> {
+    let body = tokio::fs::read_to_string(path).await.ok()?;
+    serde_json::from_str(&body).ok()
+}
+
+/// Whether an on-disk artifact whose length was recorded at write time is
+/// still intact: an exact-match gate against silent truncation (#675, #677).
+///
+/// A chunk or segment file cut short by an interrupted write is still
+/// non-empty, so "the file exists and has bytes" is not evidence it is
+/// complete — only a length match against a value recorded when the write
+/// actually finished is. Returns the recorded length (not `on_disk_len`) so
+/// that a caller accumulating a verified total can only ever add up lengths
+/// it actually checked: both inputs are plain `u64`s captured before this
+/// call, so there is no stat/truncate race here to close — the point is
+/// simply that the return value traces back to the trusted record, not to
+/// whatever happened to be on disk at the moment it was measured.
+#[must_use]
+pub fn intact_len(on_disk_len: u64, recorded_len: u64) -> Option<u64> {
+    (on_disk_len == recorded_len).then_some(recorded_len)
 }
 
 /// Current Unix epoch seconds, or 0 if the system clock predates the epoch.
@@ -176,6 +208,26 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 1, "exactly one file (the destination) must remain");
+    }
+
+    #[test]
+    fn intact_len_accepts_exact_match_at_boundary() {
+        assert_eq!(intact_len(512, 512), Some(512));
+    }
+
+    #[test]
+    fn intact_len_rejects_one_byte_short() {
+        assert_eq!(intact_len(511, 512), None, "truncated by one byte");
+    }
+
+    #[test]
+    fn intact_len_rejects_one_byte_over() {
+        assert_eq!(intact_len(513, 512), None, "grew past the recorded length");
+    }
+
+    #[test]
+    fn intact_len_rejects_zero_on_disk_against_nonzero_recorded() {
+        assert_eq!(intact_len(0, 512), None);
     }
 
     #[cfg_attr(miri, ignore)]

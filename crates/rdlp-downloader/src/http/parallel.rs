@@ -4,6 +4,7 @@
 
 use super::HttpDownloader;
 use super::chunk_ledger::ChunkLedger;
+use super::chunk_manifest::{ChunkManifest, ChunkManifestTracker};
 use super::chunk_name::{ChunkKind, ChunkSet};
 use super::config::DownloaderConfig;
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, ChunkRequest, ControllerMode};
@@ -201,6 +202,75 @@ impl Attempt {
 /// Global atomic counter for generating unique download IDs
 static DOWNLOAD_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Everything one download attempt needs that stays fixed for its whole
+/// duration: where its chunks are fetched from and land (`url`,
+/// `chunk_set`, `temp_dir`), which attempt this is (`attempt`,
+/// `download_id`) and how many bytes it covers (`size_to_download` — used
+/// BOTH for the chunking plan and, via [`build_manifest_tracker`], for the
+/// manifest's recorded total, so it is carried exactly once rather than
+/// twice as an earlier version of this type did), and the two adaptive-only
+/// knobs (`log_callback`, `cancel`) that static ignores. One struct rather
+/// than two (attempt identity vs. call options) because every field here is
+/// decided once, before the first chunk is dispatched, and never changes
+/// for the rest of the attempt — unlike [`ChunkTracking`], whose fields are
+/// mutated as chunks complete.
+struct AttemptContext<'a> {
+    url: &'a str,
+    chunk_set: &'a ChunkSet,
+    temp_dir: &'a Path,
+    attempt: Attempt,
+    download_id: u64,
+    size_to_download: u64,
+    log_callback: Option<Arc<dyn ProgressCallback>>,
+    cancel: Option<CancellationToken>,
+}
+
+/// Build the write-side chunk-manifest handle for one download attempt
+/// (#675) from its [`AttemptContext`]. Centralized so `download_parallel`
+/// and `download_parallel_resume` build it identically instead of each
+/// re-deriving the manifest path from `chunk_set` and re-stating
+/// `ChunkManifest::new`'s arguments.
+fn build_manifest_tracker(ctx: &AttemptContext<'_>) -> ChunkManifestTracker {
+    let manifest = ChunkManifest::new(
+        ctx.download_id,
+        ctx.attempt.chunk_kind(),
+        ctx.attempt.byte_offset(),
+        ctx.size_to_download,
+    );
+    ChunkManifestTracker::new(manifest, ctx.chunk_set.manifest_path_in(ctx.temp_dir))
+}
+
+/// The three durability/observability handles one download attempt updates
+/// as each chunk completes: the ledger owning deletion authority over the
+/// attempt's chunk files (failure cleanup), the on-disk chunk-completion
+/// manifest recording which chunks finished and at what length (#675, crash
+/// recovery), and the shared byte counter progress reporting reads.
+///
+/// Grouped as one type because they are ALREADY threaded together at every
+/// call site that matters: both the adaptive `try_unfold` closure and the
+/// static `stream::iter` closure clone all three, side by side, into the
+/// same per-chunk future. An earlier version of this refactor grouped
+/// `{ progress_counter, manifest }` alone, which failed the deletion test —
+/// a byte counter for UI progress and a durability manifest have nothing to
+/// do with each other on their own. Adding the ledger (which every one of
+/// those per-chunk closures ALSO captures alongside the other two) is what
+/// makes the grouping genuine rather than a bag assembled to hit a number.
+struct ChunkTracking {
+    ledger: Arc<ChunkLedger>,
+    manifest: ChunkManifestTracker,
+    progress_counter: Arc<AtomicU64>,
+}
+
+impl ChunkTracking {
+    fn new(ctx: &AttemptContext<'_>, progress_counter: Arc<AtomicU64>) -> Self {
+        Self {
+            ledger: Arc::new(ChunkLedger::new()),
+            manifest: build_manifest_tracker(ctx),
+            progress_counter,
+        }
+    }
+}
+
 impl HttpDownloader {
     /// Parallel download using multiple range requests with fine-grained chunking.
     ///
@@ -235,28 +305,22 @@ impl HttpDownloader {
             ProgressReporterConfig::http(start_time, total_size, 0),
         );
 
+        let ctx = AttemptContext {
+            url,
+            chunk_set: &chunk_set,
+            temp_dir,
+            attempt,
+            download_id,
+            size_to_download: total_size,
+            log_callback: progress.clone(),
+            cancel: None,
+        };
+        let tracking = ChunkTracking::new(&ctx, downloaded.clone());
+
         let (chunk_paths, total_downloaded) = if self.config.adaptive {
-            self.download_parallel_adaptive(
-                url,
-                total_size,
-                &chunk_set,
-                temp_dir,
-                downloaded.clone(),
-                attempt.byte_offset(),
-                progress.clone(),
-                None,
-            )
-            .await?
+            self.download_parallel_adaptive(&ctx, &tracking).await?
         } else {
-            self.download_parallel_static(
-                url,
-                total_size,
-                &chunk_set,
-                temp_dir,
-                downloaded.clone(),
-                attempt.byte_offset(),
-            )
-            .await?
+            self.download_parallel_static(&ctx, &tracking).await?
         };
 
         let chunk_count = chunk_paths.len();
@@ -266,6 +330,11 @@ impl HttpDownloader {
         // Backstop (#526): the assembly must match the advertised length before
         // this file is handed back as a completed download.
         verify_merged_size(path, total_size, url).await?;
+
+        // The merge above succeeded, so the manifest's job for this attempt
+        // is done — leaving it behind would let a future scan trust stale
+        // per-chunk lengths against chunk files that no longer exist.
+        tracking.manifest.delete().await;
 
         let duration = start_time.elapsed();
         let stats = DownloadStats::new(total_downloaded, duration, 0);
@@ -324,28 +393,22 @@ impl HttpDownloader {
             self.config.concurrent_fragments
         );
 
+        let ctx = AttemptContext {
+            url,
+            chunk_set: &chunk_set,
+            temp_dir,
+            attempt,
+            download_id,
+            size_to_download: remaining_size,
+            log_callback: progress.clone(),
+            cancel: None,
+        };
+        let tracking = ChunkTracking::new(&ctx, downloaded.clone());
+
         let result = if self.config.adaptive {
-            self.download_parallel_adaptive(
-                url,
-                remaining_size,
-                &chunk_set,
-                temp_dir,
-                downloaded.clone(),
-                attempt.byte_offset(),
-                progress.clone(),
-                None,
-            )
-            .await
+            self.download_parallel_adaptive(&ctx, &tracking).await
         } else {
-            self.download_parallel_static(
-                url,
-                remaining_size,
-                &chunk_set,
-                temp_dir,
-                downloaded.clone(),
-                attempt.byte_offset(),
-            )
-            .await
+            self.download_parallel_static(&ctx, &tracking).await
         };
 
         let (chunk_paths, newly_downloaded) = match result {
@@ -364,6 +427,8 @@ impl HttpDownloader {
         // at EOF regardless of the offset the ranges were requested from, so a
         // mismatch shows up here as a wrong final size.
         verify_merged_size(path, total_size, url).await?;
+
+        tracking.manifest.delete().await;
 
         let duration = start_time.elapsed();
         let total_downloaded = resume_from + newly_downloaded;
@@ -400,29 +465,17 @@ impl HttpDownloader {
     /// Adaptive download: uses `AdaptiveController` for dynamic chunk sizing and concurrency.
     ///
     /// Returns `(chunk_paths_in_order, total_bytes_downloaded)`.
-    /// `byte_offset` is added to every chunk's start position (for resume).
-    ///
-    /// `cancel` is `Option<CancellationToken>` (owned, not a reference) so it can be
-    /// cloned into the `try_unfold` closure. `CancellationToken` is cheaply cloneable.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "Each argument is a distinct piece of per-attempt state (url, size, chunk-name grammar, temp dir, progress sink, resume offset, log callback, cancel token) fed to the AIMD unfold closure; grouping them would either duplicate `Attempt` (already owns kind/offset) or bundle unrelated concerns just to hit a number."
-    )]
+    /// `ctx.attempt`'s byte offset is added to every chunk's start position (for resume).
     async fn download_parallel_adaptive(
         &self,
-        url: &str,
-        size_to_download: u64,
-        chunk_set: &ChunkSet,
-        temp_dir: &Path,
-        progress_counter: Arc<AtomicU64>,
-        byte_offset: u64,
-        log_callback: Option<Arc<dyn ProgressCallback>>,
-        cancel: Option<CancellationToken>,
+        ctx: &AttemptContext<'_>,
+        tracking: &ChunkTracking,
     ) -> Result<(Vec<PathBuf>, u64)> {
-        let controller = self.build_controller(size_to_download, log_callback);
+        let byte_offset = ctx.attempt.byte_offset();
+        let controller = self.build_controller(ctx.size_to_download, ctx.log_callback.clone());
         let sem = controller.semaphore().clone();
 
-        let url_shared: Arc<str> = Arc::from(url);
+        let url_shared: Arc<str> = Arc::from(ctx.url);
 
         // Generate tasks lazily using stream::unfold driven by controller.next_chunk().
         // buffer_unordered with a generous buffer lets the semaphore control actual concurrency.
@@ -440,24 +493,18 @@ impl HttpDownloader {
         // itself.
         let stop_scheduling = Arc::new(AtomicBool::new(false));
 
-        // Owns the deletion authority for every chunk path this attempt
-        // creates. Registered from inside the `try_unfold` closure below,
-        // which runs concurrently across many in-flight futures — hence the
-        // `Arc` and the ledger's own interior `Mutex` rather than requiring
-        // exclusive access.
-        let ledger = Arc::new(ChunkLedger::new());
-
         let buffered = {
             let downloader = self.clone();
             let url_arc = url_shared.clone();
-            let progress = progress_counter.clone();
-            let temp_dir_owned = temp_dir.to_path_buf();
-            let chunk_set_owned = chunk_set.clone();
+            let progress = tracking.progress_counter.clone();
+            let temp_dir_owned = ctx.temp_dir.to_path_buf();
+            let chunk_set_owned = ctx.chunk_set.clone();
             // Clone once outside the closure; each iteration re-clones from this.
-            let cancel_outer = cancel.clone();
+            let cancel_outer = ctx.cancel.clone();
             let stop_flag = stop_scheduling.clone();
             let controller_for_jobs = controller.clone();
-            let ledger_for_unfold = ledger.clone();
+            let ledger_for_unfold = tracking.ledger.clone();
+            let manifest_for_unfold = tracking.manifest.clone();
 
             stream::try_unfold((controller.clone(), 0u64), move |(ctrl, chunk_id)| {
                 let sem = sem.clone();
@@ -473,6 +520,7 @@ impl HttpDownloader {
                 let cancel_for_unfold = cancel_outer.clone();
                 let stop_flag = stop_flag.clone();
                 let controller_for_job = controller_for_jobs.clone();
+                let manifest_for_job = manifest_for_unfold.clone();
 
                 async move {
                     // A sibling chunk has already failed terminally: stop
@@ -504,6 +552,7 @@ impl HttpDownloader {
                         semaphore: sem,
                         controller: controller_for_job,
                         cancel: cancel_for_unfold,
+                        manifest: manifest_for_job,
                     };
 
                     Ok(Some((run_adaptive_chunk(job), (ctrl_next, chunk_id + 1))))
@@ -517,7 +566,8 @@ impl HttpDownloader {
 
         if let Some(e) = first_err {
             error!("Adaptive download failed: {e}");
-            ledger.cleanup().await;
+            tracking.ledger.cleanup().await;
+            tracking.manifest.delete().await;
             return Err(e);
         }
 
@@ -529,42 +579,41 @@ impl HttpDownloader {
     /// Returns `(chunk_paths_in_order, total_bytes_downloaded)`.
     async fn download_parallel_static(
         &self,
-        url: &str,
-        size_to_download: u64,
-        chunk_set: &ChunkSet,
-        temp_dir: &Path,
-        progress_counter: Arc<AtomicU64>,
-        byte_offset: u64,
+        ctx: &AttemptContext<'_>,
+        tracking: &ChunkTracking,
     ) -> Result<(Vec<PathBuf>, u64)> {
-        let plan = StaticChunkPlan::new(size_to_download, byte_offset, self.config.chunk_strategy);
+        let chunk_set = ctx.chunk_set;
+        let plan = StaticChunkPlan::new(
+            ctx.size_to_download,
+            ctx.attempt.byte_offset(),
+            self.config.chunk_strategy,
+        );
 
         debug!(
             chunk_set:? = chunk_set,
-            size_mb = size_to_download / 1024 / 1024,
+            size_mb = ctx.size_to_download / 1024 / 1024,
             chunk_kb = plan.chunk_size / 1024,
             chunks = plan.total_chunks,
             concurrent = self.config.concurrent_fragments;
             "Static chunk analysis"
         );
 
-        let url_shared: Arc<str> = Arc::from(url);
-        let temp_dir_owned = temp_dir.to_path_buf();
-
-        // Owns the deletion authority for every chunk path this attempt
-        // creates. The chunk ids are known up front here (unlike the
-        // adaptive path), but registration still happens per-chunk, before
-        // that chunk's download starts, so the mechanism is uniform across
-        // both paths.
-        let ledger = ChunkLedger::new();
+        let url_shared: Arc<str> = Arc::from(ctx.url);
+        let temp_dir_owned = ctx.temp_dir.to_path_buf();
 
         let results: Vec<(usize, PathBuf, u64)> = match stream::iter(0..plan.total_chunks)
             .map(|chunk_id| {
                 let (start, end) = plan.range_of(chunk_id);
                 let chunk_path = chunk_set.path_in(&temp_dir_owned, chunk_id as u64);
-                ledger.register(chunk_path.clone());
+                // Registered BEFORE this chunk's download starts, so a
+                // chunk that fails mid-write is still tracked for cleanup
+                // — same mechanism as the adaptive path, just registered up
+                // front here since the chunk ids are all known in advance.
+                tracking.ledger.register(chunk_path.clone());
                 let downloader = self.clone();
                 let url = Arc::clone(&url_shared);
-                let progress = Some(progress_counter.clone());
+                let progress = Some(tracking.progress_counter.clone());
+                let manifest = tracking.manifest.clone();
 
                 async move {
                     let result = download_chunk_with_retry(
@@ -580,8 +629,9 @@ impl HttpDownloader {
                         None,
                     )
                     .await;
-                    if let Err(ref e) = result {
-                        error!("Chunk {chunk_id} failed after retries: {e}");
+                    match &result {
+                        Ok(bytes) => manifest.record_and_save(chunk_id as u64, *bytes).await,
+                        Err(e) => error!("Chunk {chunk_id} failed after retries: {e}"),
                     }
                     result.map(|bytes| (chunk_id, chunk_path, bytes))
                 }
@@ -593,7 +643,8 @@ impl HttpDownloader {
             Ok(r) => r,
             Err(e) => {
                 error!("Download failed: {e}");
-                ledger.cleanup().await;
+                tracking.ledger.cleanup().await;
+                tracking.manifest.delete().await;
                 return Err(e);
             }
         };
@@ -617,6 +668,7 @@ struct AdaptiveChunkJob {
     semaphore: Arc<Semaphore>,
     controller: Arc<AdaptiveController>,
     cancel: Option<CancellationToken>,
+    manifest: ChunkManifestTracker,
 }
 
 /// Run one adaptive chunk download: acquire a concurrency permit (racing
@@ -634,6 +686,7 @@ async fn run_adaptive_chunk(job: AdaptiveChunkJob) -> Result<(u64, PathBuf, u64)
         semaphore,
         controller,
         cancel,
+        manifest,
     } = job;
 
     // F6 (#308): race semaphore acquisition against cancel so a pending
@@ -679,6 +732,7 @@ async fn run_adaptive_chunk(job: AdaptiveChunkJob) -> Result<(u64, PathBuf, u64)
     match &result {
         Ok(bytes) => {
             controller.report_chunk_complete(*bytes, start_time.elapsed());
+            manifest.record_and_save(chunk_id, *bytes).await;
         }
         Err(e) => {
             error!("Adaptive chunk {chunk_id} failed after retries: {e}");
@@ -1086,5 +1140,143 @@ mod tests {
             vec![PathBuf::from("a"), PathBuf::from("b"), PathBuf::from("c")]
         );
         assert_eq!(total, 60);
+    }
+
+    // ── write-side manifest wiring (#675, spec review finding 4) ────────────
+    //
+    // Both tests call `download_parallel_static`/`_adaptive` DIRECTLY rather
+    // than through the public `download_to_file` — the public path deletes
+    // the manifest on success (via the caller, after `verify_merged_size`),
+    // which would make the manifest unreadable by the time a black-box test
+    // could inspect it. Calling the private methods directly leaves the
+    // manifest on disk for these tests to load back and assert on, exactly
+    // as recorded, without duplicating a second read of `tracking.manifest`'s
+    // interior lock.
+
+    /// One 256 KiB chunk per id — shared by both tests below so their
+    /// expected `completed` map is identical regardless of path.
+    const WIRING_TEST_CHUNK_BYTES: u64 = 256 * 1024;
+    const WIRING_TEST_CHUNK_COUNT: u64 = 3;
+
+    async fn mock_three_chunks(server: &mut mockito::ServerGuard, total_size: u64) {
+        for id in 0..WIRING_TEST_CHUNK_COUNT {
+            let start = id * WIRING_TEST_CHUNK_BYTES;
+            let end = start + WIRING_TEST_CHUNK_BYTES - 1;
+            server
+                .mock("GET", "/video.mp4")
+                .match_header("range", format!("bytes={start}-{end}").as_str())
+                .with_status(206)
+                .with_header(
+                    "content-range",
+                    &format!("bytes {start}-{end}/{total_size}"),
+                )
+                .with_body(vec![id as u8; WIRING_TEST_CHUNK_BYTES as usize])
+                .create_async()
+                .await;
+        }
+    }
+
+    #[tokio::test]
+    async fn static_download_records_every_chunk_length_in_the_manifest() {
+        use mockito::Server;
+        use tempfile::TempDir;
+
+        let mut server = Server::new_async().await;
+        let temp_dir = TempDir::new().unwrap();
+        let total_size = WIRING_TEST_CHUNK_BYTES * WIRING_TEST_CHUNK_COUNT;
+        mock_three_chunks(&mut server, total_size).await;
+
+        let url = format!("{}/video.mp4", server.url());
+        let downloader = HttpDownloader::new()
+            .with_concurrent_fragments(3)
+            .with_chunk_strategy(ChunkSizeStrategy::Legacy {
+                chunk_count: WIRING_TEST_CHUNK_COUNT as usize,
+            });
+        let download_id = DOWNLOAD_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let chunk_set = ChunkSet::for_attempt("video.mp4", download_id, ChunkKind::Fresh).unwrap();
+        let ctx = AttemptContext {
+            url: &url,
+            chunk_set: &chunk_set,
+            temp_dir: temp_dir.path(),
+            attempt: Attempt::Fresh,
+            download_id,
+            size_to_download: total_size,
+            log_callback: None,
+            cancel: None,
+        };
+        let tracking = ChunkTracking::new(&ctx, Arc::new(AtomicU64::new(0)));
+
+        let (chunk_paths, total_downloaded) = downloader
+            .download_parallel_static(&ctx, &tracking)
+            .await
+            .expect("static download must succeed");
+        assert_eq!(chunk_paths.len(), WIRING_TEST_CHUNK_COUNT as usize);
+        assert_eq!(total_downloaded, total_size);
+
+        let manifest_path = chunk_set.manifest_path_in(temp_dir.path()).unwrap();
+        let manifest = ChunkManifest::load_matching(&manifest_path, download_id, ChunkKind::Fresh)
+            .await
+            .expect(
+                "manifest must be readable after a successful static download — RED with \
+                 `record_and_save` removed from the static per-chunk closure",
+            );
+        for id in 0..WIRING_TEST_CHUNK_COUNT {
+            assert_eq!(
+                manifest.recorded_len(id),
+                Some(WIRING_TEST_CHUNK_BYTES),
+                "chunk {id} must be recorded at its actual length"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn adaptive_download_records_every_chunk_length_in_the_manifest() {
+        use mockito::Server;
+        use tempfile::TempDir;
+
+        let mut server = Server::new_async().await;
+        let temp_dir = TempDir::new().unwrap();
+        let total_size = WIRING_TEST_CHUNK_BYTES * WIRING_TEST_CHUNK_COUNT;
+        mock_three_chunks(&mut server, total_size).await;
+
+        let url = format!("{}/video.mp4", server.url());
+        let downloader = HttpDownloader::new()
+            .with_concurrent_fragments(3)
+            .with_adaptive(true);
+        let download_id = DOWNLOAD_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let chunk_set = ChunkSet::for_attempt("video.mp4", download_id, ChunkKind::Fresh).unwrap();
+        let ctx = AttemptContext {
+            url: &url,
+            chunk_set: &chunk_set,
+            temp_dir: temp_dir.path(),
+            attempt: Attempt::Fresh,
+            download_id,
+            size_to_download: total_size,
+            log_callback: None,
+            cancel: None,
+        };
+        let tracking = ChunkTracking::new(&ctx, Arc::new(AtomicU64::new(0)));
+
+        let (chunk_paths, total_downloaded) = downloader
+            .download_parallel_adaptive(&ctx, &tracking)
+            .await
+            .expect("adaptive download must succeed");
+        assert_eq!(chunk_paths.len(), WIRING_TEST_CHUNK_COUNT as usize);
+        assert_eq!(total_downloaded, total_size);
+
+        let manifest_path = chunk_set.manifest_path_in(temp_dir.path()).unwrap();
+        let manifest = ChunkManifest::load_matching(&manifest_path, download_id, ChunkKind::Fresh)
+            .await
+            .expect(
+                "manifest must be readable after a successful adaptive download — RED with \
+                 `record_and_save` removed from `run_adaptive_chunk`",
+            );
+        for id in 0..WIRING_TEST_CHUNK_COUNT {
+            assert_eq!(
+                manifest.recorded_len(id),
+                Some(WIRING_TEST_CHUNK_BYTES),
+                "chunk {id} must be recorded at its actual length"
+            );
+        }
     }
 }
