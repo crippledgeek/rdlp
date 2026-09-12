@@ -140,6 +140,11 @@ impl HttpDownloader {
     /// a later resume can send it as `If-Range`. A sidecar write failure is
     /// surfaced as `RdlpError::Io` rather than downgraded, because a download
     /// that cannot record what it fetched cannot later be resumed safely.
+    ///
+    /// Writing the sidecar this early is safe because the orchestrator takes
+    /// this path only at `resume_from == 0` (`rdlp-api` `execution.rs`), so a
+    /// sidecar left behind by a probe-then-GET failure meets a `load` with no
+    /// bytes on disk and the resume path simply restarts.
     pub(crate) async fn fresh_download(
         &self,
         url: &str,

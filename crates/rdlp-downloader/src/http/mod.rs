@@ -531,7 +531,7 @@ impl HttpDownloader {
         //
         // `If-Range` carries the validator the download started under, so a
         // server that changed the representation answers 200 instead of a
-        // 206 that would be spliced in as if nothing changed (§13.1.5).
+        // 206 that would be spliced in as if nothing changed (RFC 9110 §13.1.5).
         let response = with_retry(
             RetryPolicy::new(&self.config.retry_config, &"HTTP GET (range)"),
             || {
@@ -730,7 +730,7 @@ impl HttpDownloader {
         }
 
         // No `Range`, but the identity pin: a later resume computes its
-        // offset over these bytes, and §14.1.2 makes offsets comparable only
+        // offset over these bytes, and RFC 9110 §14.1.2 makes offsets comparable only
         // under one coding.
         let response = with_retry(
             RetryPolicy::new(&self.config.retry_config, &"HTTP GET"),

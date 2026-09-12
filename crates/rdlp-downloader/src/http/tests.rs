@@ -5,6 +5,7 @@
 use super::*;
 use rdlp_core::Downloader;
 use rdlp_core::is_retryable_error;
+use rdlp_http::StrongValidator;
 
 /// Downloader for the chunk-retry tests: retries are real but instant.
 ///
@@ -2498,8 +2499,6 @@ fn a_same_origin_target_with_a_different_path_or_query_still_matches() {
 /// Read the resume sidecar from a mockito body callback. The callback runs on
 /// mockito's own OS thread, never inside an async task, so the blocking read
 /// is not the hazard `clippy.toml` bans — this is policy (c), a test fixture.
-use rdlp_http::StrongValidator;
-
 #[allow(clippy::disallowed_methods)] // std::fs helpers in test fixtures — per clippy.toml policy (c)
 fn read_sidecar_sync(output: &Path) -> Option<String> {
     std::fs::read_to_string(HttpResumeState::sidecar_path(output)).ok()
