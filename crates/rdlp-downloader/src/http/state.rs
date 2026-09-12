@@ -18,7 +18,7 @@ use rdlp_http::{RangeSpec, StrongValidator};
 use serde::{Deserialize, Serialize};
 
 use super::verdict::RangedRequestMeta;
-use crate::atomic::{atomic_write_json, now_secs};
+use crate::atomic::{atomic_write_json, now_secs, read_small_json};
 
 /// Current schema version. Bump on incompatible field changes.
 pub(crate) const STATE_VERSION: u32 = 1;
@@ -58,13 +58,11 @@ impl HttpResumeState {
         output.with_file_name(name)
     }
 
-    /// `None` when the sidecar is missing, unparsable, or of another schema
-    /// version — every one of which means "start over" (fail-safe).
+    /// `None` when the sidecar is missing, unparsable, over the size bound,
+    /// or of another schema version — every one of which means "start over"
+    /// (fail-safe).
     pub(crate) async fn load(output: &Path) -> Option<Self> {
-        let body = tokio::fs::read_to_string(Self::sidecar_path(output))
-            .await
-            .ok()?;
-        let s: Self = serde_json::from_str(&body).ok()?;
+        let s: Self = read_small_json(&Self::sidecar_path(output)).await?;
         (s.state_version == STATE_VERSION).then_some(s)
     }
 
@@ -176,6 +174,23 @@ mod tests {
         HttpResumeState::remove(&out).await;
         HttpResumeState::remove(&out).await;
         assert!(!HttpResumeState::sidecar_path(&out).exists());
+    }
+
+    /// A sidecar over the size bound is not read, however well-formed: the
+    /// bound is what keeps a corrupt or hostile file from being pulled into
+    /// memory whole, so it must bite even when the JSON inside is valid.
+    #[tokio::test]
+    async fn oversized_sidecar_is_not_loaded_even_when_valid() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("v.mp4");
+        let mut body = serde_json::to_string(&HttpResumeState::new(etag("\"v1\""), None)).unwrap();
+        // JSON tolerates trailing whitespace, so the padded file still parses.
+        let pad = usize::try_from(crate::atomic::MAX_SIDECAR_BYTES).unwrap() + 1 - body.len();
+        body.extend(std::iter::repeat_n(' ', pad));
+        tokio::fs::write(HttpResumeState::sidecar_path(&out), &body)
+            .await
+            .unwrap();
+        assert!(HttpResumeState::load(&out).await.is_none());
     }
 
     /// `meta` is what every chunk's verdict is judged against, so the
