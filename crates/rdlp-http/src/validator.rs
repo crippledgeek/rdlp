@@ -36,26 +36,27 @@ const OBS_TEXT_START: u8 = 0x80;
 
 /// An entity tag known to be strong: `DQUOTE *etagc DQUOTE` with no `W/`.
 ///
-/// Carries the parsed `HeaderValue` alongside the raw `String` so
-/// `StrongValidator::if_range_value` never has to re-validate (and can never
-/// fail to) turn the stored bytes back into a header value.
+/// `etagc` is opaque octets (§8.8.3.1: "the string of text is a quoted
+/// string of octets"; `obs-text = %x80-FF` carries no encoding requirement),
+/// so this type never holds a `String` — only the validated `HeaderValue`,
+/// which is both the storage and what `StrongValidator::if_range_value`
+/// clones. Comparison, `Eq`, and `Hash` all follow the bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StrongEntityTag(String, HeaderValue);
+pub struct StrongEntityTag(HeaderValue);
 
 impl StrongEntityTag {
     /// `None` for a weak tag, an unquoted value, or a byte outside `etagc`
     /// (§8.8.3: `%x21 / %x23-7E / obs-text`).
     #[must_use]
-    pub fn parse(raw: &str) -> Option<Self> {
-        let bytes = raw.as_bytes();
-        if bytes.len() < 2 {
+    pub fn parse_bytes(raw: &[u8]) -> Option<Self> {
+        if raw.len() < 2 {
             return None;
         }
-        if *bytes.first()? != b'"' || *bytes.last()? != b'"' {
+        if *raw.first()? != b'"' || *raw.last()? != b'"' {
             return None;
         }
         // `len >= 2` above makes `len - 1 >= 1`, so this range never inverts.
-        let inner = bytes.get(1..bytes.len() - 1)?;
+        let inner = raw.get(1..raw.len() - 1)?;
         let etagc = |b: &u8| *b == ETAGC_BANG || ETAGC_RANGE.contains(b) || *b >= OBS_TEXT_START;
         if !inner.iter().all(etagc) {
             return None;
@@ -64,15 +65,24 @@ impl StrongEntityTag {
         // range `HeaderValue::from_bytes` accepts, so this Option is always
         // `Some` for input that reached this line — but building it here,
         // once, is what makes `if_range_value` infallible by construction
-        // rather than by an unenforced claim about `parse`'s own bytes.
-        let header_value = HeaderValue::from_bytes(bytes).ok()?;
-        Some(Self(raw.to_owned(), header_value))
+        // rather than by an unenforced claim about `parse_bytes`'s own bytes.
+        HeaderValue::from_bytes(raw).ok().map(Self)
     }
 
-    /// The raw field value, quotes included.
+    /// Convenience wrapper over [`Self::parse_bytes`] for a UTF-8 caller
+    /// (the serde `etag:` sidecar form, and every test in this module).
+    /// `obs-text` bytes need not form valid UTF-8 — read from a live header
+    /// via `parse_bytes(header_value.as_bytes())` instead of this method.
     #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
+    pub fn parse(raw: &str) -> Option<Self> {
+        Self::parse_bytes(raw.as_bytes())
+    }
+
+    /// The raw field value, quotes included, as the opaque octets §8.8.3.1
+    /// specifies — not necessarily valid UTF-8.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
     }
 }
 
@@ -102,16 +112,6 @@ impl ImfFixdate {
     }
 }
 
-/// Decode a header field value as UTF-8.
-///
-/// `HeaderValue::to_str` rejects any byte `>= 0x80` outright, which would
-/// also reject a legitimate `obs-text` entity-tag byte (§8.8.3) the moment
-/// it round-trips through a header map — the field grammar allows those
-/// bytes; only `to_str`'s narrower "visible ASCII" promise does not.
-fn header_value_as_str(v: &HeaderValue) -> Option<&str> {
-    std::str::from_utf8(v.as_bytes()).ok()
-}
-
 /// Parse any of the three §5.6.7 formats; `%S` accepts `60` (leap second).
 #[must_use]
 pub fn parse_http_date(raw: &str) -> Option<DateTime<Utc>> {
@@ -123,6 +123,13 @@ pub fn parse_http_date(raw: &str) -> Option<DateTime<Utc>> {
 
 /// A validator that may be sent in `If-Range` (§13.1.5) and used to combine
 /// parts (§15.3.7.3).
+///
+/// Serializes to one sidecar string. An `ETag` takes one of two forms,
+/// because its bytes are opaque octets (§8.8.3.1) and need not be UTF-8:
+/// `etag:<raw>` when the bytes happen to be valid UTF-8 (the common,
+/// human-readable case), else `etag-hex:<lowercase hex>` so the exact bytes
+/// still round-trip. `Last-Modified` is always `last-modified:<raw>` — an
+/// HTTP-date is pure ASCII by grammar (§5.6.7), so it never needs the hex form.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(into = "String", try_from = "String")]
 pub enum StrongValidator {
@@ -133,13 +140,17 @@ pub enum StrongValidator {
 }
 
 const ETAG_PREFIX: &str = "etag:";
+const ETAG_HEX_PREFIX: &str = "etag-hex:";
 const LAST_MODIFIED_PREFIX: &str = "last-modified:";
 
 impl From<StrongValidator> for String {
     fn from(v: StrongValidator) -> Self {
         match v {
-            StrongValidator::ETag(t) => format!("{ETAG_PREFIX}{}", t.0),
-            StrongValidator::LastModified(d) => format!("{LAST_MODIFIED_PREFIX}{}", d.0),
+            StrongValidator::ETag(t) => std::str::from_utf8(t.as_bytes()).map_or_else(
+                |_| format!("{ETAG_HEX_PREFIX}{}", hex::encode(t.as_bytes())),
+                |utf8| format!("{ETAG_PREFIX}{utf8}"),
+            ),
+            StrongValidator::LastModified(d) => format!("{LAST_MODIFIED_PREFIX}{}", d.as_str()),
         }
     }
 }
@@ -147,6 +158,13 @@ impl From<StrongValidator> for String {
 impl TryFrom<String> for StrongValidator {
     type Error = String;
     fn try_from(s: String) -> Result<Self, Self::Error> {
+        if let Some(raw) = s.strip_prefix(ETAG_HEX_PREFIX) {
+            let bytes =
+                hex::decode(raw).map_err(|e| format!("invalid hex in etag-hex sidecar: {e}"))?;
+            return StrongEntityTag::parse_bytes(&bytes)
+                .map(Self::ETag)
+                .ok_or_else(|| format!("not a strong entity-tag (hex): {raw}"));
+        }
         if let Some(raw) = s.strip_prefix(ETAG_PREFIX) {
             return StrongEntityTag::parse(raw)
                 .map(Self::ETag)
@@ -206,12 +224,15 @@ impl StrongValidator {
     #[must_use]
     pub fn from_headers(headers: &HeaderMap) -> Option<Self> {
         if let Some(etag) = headers.get("etag") {
-            return StrongEntityTag::parse(header_value_as_str(etag)?).map(Self::ETag);
+            return StrongEntityTag::parse_bytes(etag.as_bytes()).map(Self::ETag);
         }
-        let last_modified = header_value_as_str(headers.get("last-modified")?)?;
+        // An HTTP-date is pure ASCII by grammar (§5.6.7), so `to_str` — which
+        // rejects only bytes >= 0x80 — never rejects a well-formed one; a
+        // malformed non-ASCII `Last-Modified`/`Date` is correctly `None` here.
+        let last_modified = headers.get("last-modified")?.to_str().ok()?;
         // §6.6.1: only the server's own Date can adjudicate strength; the
         // receipt time is not the server's clock.
-        let date = parse_http_date(header_value_as_str(headers.get("date")?)?)?;
+        let date = parse_http_date(headers.get("date")?.to_str().ok()?)?;
         let modified = parse_http_date(last_modified)?;
         (date - modified >= LAST_MODIFIED_STRENGTH_GAP)
             .then(|| ImfFixdate::parse(last_modified))
@@ -226,7 +247,7 @@ impl StrongValidator {
     #[must_use]
     pub fn if_range_value(&self) -> HeaderValue {
         match self {
-            Self::ETag(t) => t.1.clone(),
+            Self::ETag(t) => t.0.clone(),
             Self::LastModified(d) => d.1.clone(),
         }
     }
@@ -245,21 +266,26 @@ impl StrongValidator {
     pub fn verify_partial(&self, headers: &HeaderMap) -> Result<(), ValidatorMismatch> {
         match self {
             Self::ETag(expected) => {
-                let got = headers
+                let got_bytes = headers
                     .get("etag")
-                    .and_then(header_value_as_str)
+                    .map(HeaderValue::as_bytes)
                     .ok_or(ValidatorMismatch::Missing)?;
-                match StrongEntityTag::parse(got) {
-                    Some(tag) if tag == *expected => Ok(()),
+                match StrongEntityTag::parse_bytes(got_bytes) {
+                    Some(tag) if tag.as_bytes() == expected.as_bytes() => Ok(()),
+                    // Display-only: a mismatch report may name a byte
+                    // sequence that isn't valid UTF-8 (§8.8.3.1 `obs-text`),
+                    // so this is never compared, only shown to a human.
                     Some(tag) => Err(ValidatorMismatch::Different {
-                        expected: expected.as_str().to_owned(),
-                        got: tag.as_str().to_owned(),
+                        expected: String::from_utf8_lossy(expected.as_bytes()).into_owned(),
+                        got: String::from_utf8_lossy(tag.as_bytes()).into_owned(),
                     }),
-                    None => Err(ValidatorMismatch::Weak(got.to_owned())),
+                    None => Err(ValidatorMismatch::Weak(
+                        String::from_utf8_lossy(got_bytes).into_owned(),
+                    )),
                 }
             }
             Self::LastModified(expected) => {
-                match headers.get("last-modified").and_then(header_value_as_str) {
+                match headers.get("last-modified").and_then(|v| v.to_str().ok()) {
                     None => Ok(()),
                     Some(got) if got == expected.as_str() => Ok(()),
                     Some(got) => Err(ValidatorMismatch::Different {
@@ -289,8 +315,8 @@ mod tests {
     #[test]
     fn strong_etag_parses_verbatim() {
         assert_eq!(
-            StrongEntityTag::parse("\"abc\"").unwrap().as_str(),
-            "\"abc\""
+            StrongEntityTag::parse("\"abc\"").unwrap().as_bytes(),
+            b"\"abc\""
         );
     }
     #[test]
@@ -313,13 +339,14 @@ mod tests {
     fn etag_with_embedded_dquote_is_rejected() {
         assert!(StrongEntityTag::parse("\"a\"b\"").is_none());
     }
-    // §8.8.3 `etagc`'s `obs-text = %x80-FF` arm: a non-ASCII opaque-tag byte
-    // (UTF-8 `é` is 0xC3 0xA9, both >= 0x80) is still a valid strong etag.
+    // §8.8.3 `etagc`'s `obs-text = %x80-FF` arm, UTF-8-encoded case: a
+    // non-ASCII opaque-tag byte (UTF-8 `é` is 0xC3 0xA9, both >= 0x80) is
+    // still a valid strong etag.
     #[test]
     fn obs_text_byte_in_opaque_tag_is_a_valid_strong_etag() {
         let raw = "\"caf\u{e9}\"";
         let tag = StrongEntityTag::parse(raw).unwrap();
-        assert_eq!(tag.as_str(), raw);
+        assert_eq!(tag.as_bytes(), raw.as_bytes());
     }
     #[test]
     fn obs_text_etag_if_range_value_round_trips_the_same_bytes() {
@@ -335,6 +362,64 @@ mod tests {
         let raw = "\"caf\u{e9}\"";
         let v = StrongValidator::ETag(StrongEntityTag::parse(raw).unwrap());
         assert_eq!(v.verify_partial(&headers(&[("etag", raw)])), Ok(()));
+    }
+
+    // §8.8.3 `obs-text` is opaque octets with NO UTF-8 requirement (§8.8.3.1
+    // is explicit: "the string of text"; obs-text carries no charset). A
+    // lone 0xE9 is a legal etagc byte and NOT valid UTF-8 on its own — the
+    // gap the UTF-8-encoded `café` tests above cannot see.
+    const NON_UTF8_ETAG_BYTES: &[u8] = b"\"\xE9\"";
+
+    fn header_map_with_etag_bytes(bytes: &'static [u8]) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.append("etag", HeaderValue::from_bytes(bytes).unwrap());
+        h
+    }
+
+    #[test]
+    fn non_utf8_obs_text_byte_in_opaque_tag_is_a_valid_strong_etag() {
+        assert_eq!(
+            StrongEntityTag::parse_bytes(NON_UTF8_ETAG_BYTES)
+                .unwrap()
+                .as_bytes(),
+            NON_UTF8_ETAG_BYTES
+        );
+    }
+    #[test]
+    fn non_utf8_obs_text_etag_is_read_from_headers() {
+        let h = header_map_with_etag_bytes(NON_UTF8_ETAG_BYTES);
+        assert_eq!(
+            StrongValidator::from_headers(&h),
+            Some(StrongValidator::ETag(
+                StrongEntityTag::parse_bytes(NON_UTF8_ETAG_BYTES).unwrap()
+            ))
+        );
+    }
+    #[test]
+    fn non_utf8_obs_text_etag_verify_partial_against_matching_header_passes() {
+        let v = StrongValidator::ETag(StrongEntityTag::parse_bytes(NON_UTF8_ETAG_BYTES).unwrap());
+        let h = header_map_with_etag_bytes(NON_UTF8_ETAG_BYTES);
+        assert_eq!(v.verify_partial(&h), Ok(()));
+    }
+    #[test]
+    fn non_utf8_etag_serde_round_trips_exact_bytes_via_hex_sidecar() {
+        let v = StrongValidator::ETag(StrongEntityTag::parse_bytes(NON_UTF8_ETAG_BYTES).unwrap());
+        let json = serde_json::to_string(&v).unwrap();
+        assert!(
+            json.starts_with("\"etag-hex:"),
+            "expected an etag-hex sidecar, got {json}"
+        );
+        let back: StrongValidator = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, v);
+    }
+    #[test]
+    fn utf8_etag_still_serializes_with_the_plain_prefix() {
+        let v = StrongValidator::ETag(StrongEntityTag::parse("\"abc\"").unwrap());
+        let json = serde_json::to_string(&v).unwrap();
+        assert!(
+            json.starts_with("\"etag:"),
+            "expected a plain etag sidecar, got {json}"
+        );
     }
 
     // §5.6.7: a recipient MUST accept all three formats; %S allows 60 (leap second)

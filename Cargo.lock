@@ -6528,6 +6528,7 @@ name = "rdlp-http"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "hex",
  "mockito",
  "openssl-sys",
  "rdlp-redact",
