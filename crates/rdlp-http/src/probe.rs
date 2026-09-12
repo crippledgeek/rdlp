@@ -94,6 +94,17 @@ pub async fn probe_size(
     client: &wreq::Client,
     spec: ProbeSpec<'_>,
 ) -> Result<ProbeResult, ProbeError> {
+    let resp = probe_request(client, &spec).send().await?;
+    Ok(ProbeResult::from_response(&resp))
+}
+
+/// The probe's request, unsent: `GET Range: bytes=0-{window_bytes - 1}`
+/// with the identity pin and, when given, `If-Range`.
+///
+/// Split from [`probe_size`] so a caller with its own retry policy can send
+/// it through that policy and parse with [`ProbeResult::from_response`] —
+/// one request half and one parse half, whichever seam sends.
+pub fn probe_request(client: &wreq::Client, spec: &ProbeSpec<'_>) -> wreq::RequestBuilder {
     // Clamp window_bytes to >= 1 (security-review LOW). Passing 0 would
     // wrap saturating_sub to u64::MAX, producing `bytes=0-18446744073709551615`
     // — effectively a full-body GET, defeating the probe's intent.
@@ -105,38 +116,58 @@ pub async fn probe_size(
         start: 0,
         end: window - 1,
     };
-    let resp = download_request(client, spec.url, spec.headers)
+    download_request(client, spec.url, spec.headers)
         .timeout(spec.timeout)
         .ranged(range, spec.validator)
-        .send()
-        .await?;
-    let headers = resp.headers().clone();
-    Ok(match resp.status().as_u16() {
-        206 => {
-            let complete_length = parse_content_range_total(&headers);
-            ProbeResult {
-                size: complete_length,
-                supports_ranges: true,
-                validator: StrongValidator::from_headers(&headers),
-                complete_length,
-                headers,
+}
+
+impl ProbeResult {
+    /// Read a probe's answer off its status and headers; every status is
+    /// data (see [`probe_size`] for the per-status mapping), never an error.
+    #[must_use]
+    pub fn from_response(resp: &wreq::Response) -> Self {
+        let headers = resp.headers().clone();
+        match resp.status().as_u16() {
+            206 => {
+                let complete_length = parse_content_range_total(&headers);
+                Self {
+                    size: complete_length,
+                    supports_ranges: true,
+                    validator: StrongValidator::from_headers(&headers),
+                    complete_length,
+                    headers,
+                }
             }
+            200 => Self {
+                size: resp.content_length(),
+                supports_ranges: false,
+                validator: StrongValidator::from_headers(&headers),
+                complete_length: None,
+                headers,
+            },
+            _ => Self {
+                size: None,
+                supports_ranges: false,
+                validator: None,
+                complete_length: None,
+                headers,
+            },
         }
-        200 => ProbeResult {
-            size: resp.content_length(),
-            supports_ranges: false,
-            validator: StrongValidator::from_headers(&headers),
-            complete_length: None,
-            headers,
-        },
-        _ => ProbeResult {
+    }
+
+    /// What a caller reports when the probe never produced a response
+    /// (transport failure after its retries): no size, no ranges, no
+    /// validator, no headers — the shape that sends a download sequential.
+    #[must_use]
+    pub fn unanswered() -> Self {
+        Self {
             size: None,
             supports_ranges: false,
             validator: None,
             complete_length: None,
-            headers,
-        },
-    })
+            headers: HeaderMap::new(),
+        }
+    }
 }
 
 fn parse_content_range_total(headers: &wreq::header::HeaderMap) -> Option<u64> {
@@ -380,6 +411,46 @@ mod tests {
         .await
         .unwrap();
         m.assert_async().await;
+    }
+
+    /// `from_response` is the parse half `probe_size` composes; a caller
+    /// that sends the request through its own retry seam must read the same
+    /// fields off the same response.
+    #[tokio::test]
+    async fn from_response_yields_what_probe_size_yields() {
+        let mut server = Server::new_async().await;
+        let _m = server
+            .mock("GET", "/f")
+            .with_status(206)
+            .with_header("content-range", "bytes 0-0/1234")
+            .with_header("etag", "\"v1\"")
+            .with_body("x")
+            .expect(2)
+            .create_async()
+            .await;
+        let client =
+            crate::HttpClientFactory::from_config(&crate::HttpClientConfig::default()).build();
+        let url = format!("{}/f", server.url());
+        let spec = || ProbeSpec {
+            url: &url,
+            headers: None,
+            window_bytes: 1,
+            timeout: Duration::from_secs(5),
+            validator: None,
+        };
+        let composed = probe_size(&client, spec()).await.unwrap();
+        let resp = probe_request(&client, &spec()).send().await.unwrap();
+        let parsed = ProbeResult::from_response(&resp);
+        assert_eq!(parsed.size, composed.size);
+        assert_eq!(parsed.size, Some(1234));
+        assert_eq!(parsed.supports_ranges, composed.supports_ranges);
+        assert!(parsed.supports_ranges);
+        assert_eq!(parsed.validator, composed.validator);
+        assert!(matches!(parsed.validator, Some(StrongValidator::ETag(_))));
+        assert_eq!(parsed.complete_length, composed.complete_length);
+        assert_eq!(parsed.complete_length, Some(1234));
+        assert_eq!(parsed.headers, composed.headers);
+        assert_eq!(parsed.headers.get("etag").unwrap(), "\"v1\"");
     }
 
     /// A 206 to `If-Range` that omits `Last-Modified` (§15.3.7 SHOULD NOT

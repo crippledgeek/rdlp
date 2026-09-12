@@ -440,54 +440,34 @@ impl HttpDownloader {
         url: &str,
         validator: Option<&StrongValidator>,
     ) -> Result<ProbeResult> {
-        use config::PROBE_WINDOW_BYTES;
-
-        // F3 probe delegates to the shared `rdlp_http::probe_size` helper
-        // (closes #306). Retry semantics preserved via the with_retry
-        // wrapper; the shared helper itself is leaf-level (no retry).
-        // Non-2xx and network errors after retry both produce the
-        // `ProbeResult { size: None, supports_ranges: false }` form so the
-        // caller falls back to sequential download.
-        let client = self.client.clone();
-        let url_string = url.to_string();
+        // The request half is `rdlp_http::probe_request` (the F3 shape,
+        // closes #306) and the parse half `ProbeResult::from_response`; the
+        // send between them rides the one retry seam. No status gate: every
+        // status is data to the probe, so `Ok` admits them all. A transport
+        // failure that outlives the retries folds into the unanswered shape,
+        // which sends the caller sequential.
         let hdrs = self.headers();
-        let window = PROBE_WINDOW_BYTES;
-        let timeout = self.config.read_timeout;
-
-        let probed = with_retry(
-            RetryPolicy::new(&self.config.retry_config, &"HTTP probe (F3)"),
-            || {
-                let client = client.clone();
-                let url = url_string.clone();
-                let hdrs = hdrs.clone();
-                async move {
-                    rdlp_http::probe_size(
-                        &client,
-                        rdlp_http::ProbeSpec {
-                            url: &url,
-                            headers: Some(&hdrs),
-                            window_bytes: window,
-                            timeout,
-                            validator,
-                        },
-                    )
-                    .await
-                    .map_err(|e| RdlpError::Network {
-                        message: format!("probe failed: {e}"),
-                        url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
-                    })
-                }
-            },
-        )
-        .await;
-
-        Ok(probed.unwrap_or(ProbeResult {
-            size: None,
-            supports_ranges: false,
-            validator: None,
-            complete_length: None,
-            headers: HeaderMap::new(),
-        }))
+        let spec = rdlp_http::ProbeSpec {
+            url,
+            headers: Some(&hdrs),
+            window_bytes: config::PROBE_WINDOW_BYTES,
+            timeout: self.config.read_timeout,
+            validator,
+        };
+        let probed = self
+            .send_with_retry(
+                SendSpec {
+                    label: "HTTP probe (F3)",
+                    url,
+                    gate: Ok,
+                },
+                || rdlp_http::probe_request(&self.client, &spec),
+            )
+            .await;
+        Ok(probed.map_or_else(
+            |_| ProbeResult::unanswered(),
+            |r| ProbeResult::from_response(&r),
+        ))
     }
 
     /// Send one download request under the retry policy: `build` a fresh
@@ -496,12 +476,9 @@ impl HttpDownloader {
     /// as a response and which as an error for the retry layer to judge.
     ///
     /// The one seam behind the fresh sequential GET, the ranged chunk fetch,
-    /// the resume request and the stdout path; they differ only in the label,
-    /// the request and the gate, which is exactly what [`SendSpec`] and
-    /// `build` carry. `probe_with` is the documented exception: it wraps
-    /// `rdlp_http::probe_size`, which sends internally and yields a
-    /// `ProbeResult` rather than a response, so folding it in would mean
-    /// splitting that public helper into a request half and a parse half.
+    /// the resume request, the stdout path and the probe; they differ only
+    /// in the label, the request and the gate, which is exactly what
+    /// [`SendSpec`] and `build` carry.
     ///
     /// `build` borrows rather than clones: the retry closure is re-entered per
     /// attempt and each attempt needs a new `RequestBuilder`, but nothing it
