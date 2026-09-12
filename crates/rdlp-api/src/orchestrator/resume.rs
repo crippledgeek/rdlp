@@ -3,7 +3,7 @@
 use super::{Orchestrator, errors::Result};
 use anyhow::Context;
 use log::{debug, warn};
-use rdlp_downloader::{CHUNK_SCAN_CEILING, ChunkKind, ChunkManifest, ChunkSet, intact_len};
+use rdlp_downloader::{ChunkKind, ChunkManifest, ChunkSet, intact_len};
 use std::path::{Path, PathBuf};
 use tracing::instrument;
 
@@ -13,25 +13,31 @@ use tracing::instrument;
 /// recently-abandoned download is well within this window.
 const MAX_DOWNLOAD_ID_SCAN: u64 = 100;
 
-// `CHUNK_SCAN_CEILING` (imported from `rdlp_downloader`, which owns the one
-// definition — see its doc there) is the sanity ceiling against a
-// pathological or corrupted directory, not a live limit on any grammar:
-// new-style power-of-two chunking (and the resume grammar, which chunks the
-// same way) can legitimately produce thousands of small chunks, and — per
-// #559's investigation — the legacy grammar's historical
-// `concurrent_fragments` cap of 10 was never itself enforced as a
-// scan/cleanup bound. A hardcoded `0..10` cleanup bound would silently
-// strand any legacy chunk set that ever did exceed 10 (see
-// `test_cleanup_legacy_chunks_beyond_old_ten_chunk_bound`); using the same
-// generous ceiling everywhere removes that trap.
-//
-// [`cleanup_old_chunks`] and [`log_orphaned_resume_chunks`] do NOT break on
-// a hole: an interrupted adaptive/resume download completes chunks out of
-// order, so a holed set (e.g. `resume0`, `resume2`, `resume4`) is the
-// normal case there, and breaking on the first hole would leak the
-// remainder (#568 C1). [`collect_contiguous_chunks`] additionally uses it
-// as a hard cap on how far a manifest's own (attacker-influenceable)
-// `completed` keys can drive its scan — see that function's doc.
+/// Ceiling on how many sequential chunk ids [`cleanup_old_chunks`] and
+/// [`log_orphaned_resume_chunks`] probe within one chunk set before
+/// concluding the set is exhausted.
+///
+/// This is a sanity ceiling against a pathological or corrupted directory,
+/// not a live limit on any grammar: new-style power-of-two chunking (and the
+/// resume grammar, which chunks the same way) can legitimately produce
+/// thousands of small chunks, and — per #559's investigation — the legacy
+/// grammar's historical `concurrent_fragments` cap of 10 was never itself
+/// enforced as a scan/cleanup bound. A hardcoded `0..10` cleanup bound would
+/// silently strand any legacy chunk set that ever did exceed 10 (see
+/// `test_cleanup_legacy_chunks_beyond_old_ten_chunk_bound`); using the same
+/// generous ceiling everywhere removes that trap.
+///
+/// Both of those functions probe the FILESYSTEM directly (one `stat`/
+/// `remove_file` per candidate id) rather than trusting a manifest, so a
+/// fixed ceiling is safe there: real chunk sets never come close to it, and
+/// an attacker can at most make the probe run to completion (no I/O is
+/// skipped, it always terminates). [`collect_contiguous_chunks`] does NOT
+/// use this — an id-span ceiling on a manifest's own (attacker-writable)
+/// keys rejected legitimate large-file manifests from the adaptive
+/// download path (its chunk size floors at 256 KiB indefinitely rather
+/// than shrinking further), so that scan is bounded by the manifest's
+/// entry COUNT instead (see that function's doc).
+const CHUNK_SCAN_CEILING: u64 = 10_000;
 
 /// The first chunk id that broke a manifest-verified prefix, and both
 /// lengths involved — the manifest's recorded length and whatever length
@@ -98,46 +104,65 @@ pub struct ContiguousChunks {
 /// (#675). Read-only: builds each candidate path via [`ChunkSet::path_in`]
 /// and checks its metadata, never enumerating the directory's contents.
 ///
-/// The manifest's own highest recorded chunk id would otherwise bound the
-/// scan directly — but that key comes from a file anyone who can write to
-/// the download's output directory can also write (`download_id`/`kind`
-/// carry no secret), so a single `{"<huge id>": len}` entry could drive an
-/// effectively unbounded loop. `ChunkManifest::load_matching` already
-/// rejects a manifest whose max id exceeds [`CHUNK_SCAN_CEILING`] before it
-/// ever reaches here — this `min()` is the second, redundant layer, so a
-/// manifest built directly (as tests do, or any future caller that
-/// bypasses the loader) can't reintroduce the same unbounded scan.
+/// Walks `manifest.completed` itself (a `BTreeMap`, so iteration is already
+/// in ascending key order) rather than an `0..=max_id` id-span loop: cost
+/// and iteration count are both O(the manifest's own entry count), never a
+/// function of the id VALUES it contains. An earlier version of this
+/// function scanned by id span, capped at a fixed ceiling to stop an
+/// attacker-controlled `{"<huge id>": len}` entry from making the scan
+/// effectively unbounded — but the ceiling was itself wrong for real
+/// inputs: the adaptive download path's chunk size floors at 256 KiB
+/// indefinitely (`CHUNK_LEVELS[MIN_CHUNK_LEVEL]`, never shrinking further
+/// the way the static `Auto` strategy does), so any download past ~2.44
+/// GiB can legitimately produce more chunks than any reasonable fixed
+/// ceiling. Walking the map instead removes the need for a ceiling at all —
+/// a huge id key costs one comparison, not an iteration up to its value —
+/// and the resource that DOES need bounding (the sidecar file's byte size)
+/// is bounded at the read, in `atomic::read_json_sidecar`'s
+/// `MAX_SIDECAR_BYTES` cap, not here.
 ///
-/// Scanning stops at the first break; every chunk the manifest still claims
-/// complete beyond it is counted via a direct map-range query
-/// (`stranded_beyond_gap`), not by continuing the per-id loop — O(entries
-/// beyond the break), not O(ids up to the manifest's max key). The
-/// truncation is reported, not silently dropped, per #675's acceptance
-/// criteria.
+/// At position `index` (0-based) in that ordered walk, the verified prefix
+/// holds exactly while the entry's key equals `index`: a key greater than
+/// `index` means id `index` itself was never recorded (a real gap), and a
+/// matching key whose on-disk length doesn't verify means that entry itself
+/// is corrupt/truncated. Either way scanning stops there; every entry
+/// strictly beyond the break is "stranded" — still recorded complete, but
+/// unreachable past it — and reported via [`ContiguousChunks::stranded_beyond_gap`]
+/// rather than silently dropped, per #675's acceptance criteria.
 pub async fn collect_contiguous_chunks(
     set: &ChunkSet,
     parent_dir: &Path,
     manifest: &ChunkManifest,
 ) -> ContiguousChunks {
     let mut out = ContiguousChunks::default();
+    let total_entries = manifest.completed.len();
 
-    let Some(&max_recorded_id) = manifest.completed.keys().next_back() else {
-        return out; // manifest exists but recorded nothing — nothing to merge
-    };
-    let scan_bound = max_recorded_id.min(CHUNK_SCAN_CEILING);
-
-    for chunk_id in 0..=scan_bound {
-        let Some(recorded_len) = manifest.recorded_len(chunk_id) else {
-            // A real gap: the manifest never recorded this id as complete.
-            // No file is expected here either, so `on_disk` is left `None`
-            // rather than spending a probe on an id nothing claims.
+    for (index, (&chunk_id, &recorded_len)) in manifest.completed.iter().enumerate() {
+        let Ok(expected_id) = u64::try_from(index) else {
+            // A manifest with more than u64::MAX entries cannot exist in
+            // practice (it would exceed any real filesystem's capacity many
+            // times over); treated as a break rather than panicking.
             out.first_bad = Some(BadChunk {
                 id: chunk_id,
                 on_disk: None,
-                recorded: None,
+                recorded: Some(recorded_len),
             });
             break;
         };
+
+        if chunk_id != expected_id {
+            // A real gap: id `expected_id` was never recorded as complete.
+            // No file is expected here either, so `on_disk` is left `None`
+            // rather than spending a probe on an id nothing claims. This
+            // entry (`chunk_id`) and everything after it are stranded.
+            out.first_bad = Some(BadChunk {
+                id: expected_id,
+                on_disk: None,
+                recorded: None,
+            });
+            out.stranded_beyond_gap = total_entries - index;
+            break;
+        }
 
         let chunk_path = set.path_in(parent_dir, chunk_id);
         let on_disk_len = tokio::fs::metadata(&chunk_path).await.ok().map(|m| m.len());
@@ -147,18 +172,17 @@ pub async fn collect_contiguous_chunks(
             out.chunk_paths.push(chunk_path);
         } else {
             // Missing file, or present but truncated/grown since it was
-            // recorded — either way this id itself cannot be trusted.
+            // recorded — either way this id itself cannot be trusted. It
+            // IS the break, not something stranded "beyond" it, so it is
+            // excluded from the stranded count.
             out.first_bad = Some(BadChunk {
                 id: chunk_id,
                 on_disk: on_disk_len,
                 recorded: Some(recorded_len),
             });
+            out.stranded_beyond_gap = total_entries - index - 1;
             break;
         }
-    }
-
-    if let Some(bad) = out.first_bad {
-        out.stranded_beyond_gap = manifest.completed.range((bad.id + 1)..).count();
     }
 
     out

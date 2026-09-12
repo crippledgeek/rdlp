@@ -232,17 +232,15 @@ struct AttemptContext<'a> {
 /// re-deriving the manifest path from `chunk_set` and re-stating
 /// `ChunkManifest::new`'s arguments.
 fn build_manifest_tracker(ctx: &AttemptContext<'_>) -> ChunkManifestTracker {
-    // `AttemptContext` is only ever built from a new-style (Fresh/Resume)
-    // chunk set (both `download_parallel` and `download_parallel_resume`
-    // build `chunk_set` via `ChunkSet::for_attempt`, never `::legacy`), so
-    // `download_id()` returning `None` here is a broken invariant, not a
-    // reachable runtime condition — `unreachable!` says that plainly,
-    // without routing a documented-impossible case through `Option::expect`.
-    let Some(download_id) = ctx.chunk_set.download_id() else {
-        unreachable!("AttemptContext's chunk_set must always be new-style (have a download_id)");
+    // A legacy `chunk_set` (no `download_id`) has nowhere to write a
+    // manifest — `ChunkSet::manifest` already encodes that as `None`, so
+    // this falls straight out to a tracker whose recording is a no-op,
+    // rather than treating "no manifest" as an impossible case to panic on.
+    let Some((download_id, path)) = ctx.chunk_set.manifest(ctx.temp_dir) else {
+        return ChunkManifestTracker::disabled();
     };
     let manifest = ChunkManifest::new(download_id, ctx.attempt.chunk_kind(), ctx.size_to_download);
-    ChunkManifestTracker::new(manifest, ctx.chunk_set.manifest_path_in(ctx.temp_dir))
+    ChunkManifestTracker::new(manifest, Some(path))
 }
 
 /// The three durability/observability handles one download attempt updates
@@ -1106,6 +1104,41 @@ mod tests {
             ChunkSizeStrategy::Fixed(1024 * 1024),
         );
         assert_eq!(plan.range_of(0), (5 * 1024 * 1024, 6 * 1024 * 1024 - 1));
+    }
+
+    // ── build_manifest_tracker / legacy chunk sets ──────────────────────────
+
+    /// A legacy `ChunkSet` (no `download_id`) has no manifest to write to —
+    /// `build_manifest_tracker` must fall out to a disabled tracker
+    /// structurally (via `ChunkSet::manifest` returning `None`), not panic.
+    /// The disabled tracker's `record_and_save` must be a genuine no-op:
+    /// no file written, for any path this attempt might otherwise have used.
+    #[tokio::test]
+    async fn legacy_chunk_set_yields_a_disabled_manifest_tracker() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let chunk_set = ChunkSet::legacy("video.mp4").unwrap();
+        assert!(
+            chunk_set.manifest(temp_dir.path()).is_none(),
+            "a legacy set has no download_id to key a manifest on"
+        );
+
+        let ctx = AttemptContext {
+            url: "http://example.invalid/video.mp4",
+            chunk_set: &chunk_set,
+            temp_dir: temp_dir.path(),
+            attempt: Attempt::Fresh,
+            size_to_download: 100,
+            log_callback: None,
+            cancel: None,
+        };
+        let tracking = ChunkTracking::new(&ctx, Arc::new(AtomicU64::new(0)));
+        tracking.manifest.record_and_save(0, 100).await;
+
+        let mut entries = tokio::fs::read_dir(temp_dir.path()).await.unwrap();
+        assert!(
+            entries.next_entry().await.unwrap().is_none(),
+            "a disabled tracker must never write a manifest file"
+        );
     }
 
     // ── Attempt ──────────────────────────────────────────────────────────────

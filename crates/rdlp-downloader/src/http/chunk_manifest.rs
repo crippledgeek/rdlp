@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use log::{debug, warn};
+use log::warn;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -93,23 +93,26 @@ impl ChunkManifest {
     }
 
     /// Load a manifest from `path`, accepting it only if it matches
-    /// `download_id` and `kind`, carries the current schema version, and its
-    /// highest recorded chunk id is within [`crate::chunking::CHUNK_SCAN_CEILING`].
+    /// `download_id` and `kind` and carries the current schema version.
     ///
-    /// The ceiling check is a security boundary, not a correctness nicety:
-    /// this file is attacker-influenceable by anyone who can write to the
-    /// download's output directory (no secret gates it), and its
-    /// `completed` keys drive recovery's scan range directly. A single
-    /// entry near `u64::MAX` would otherwise make that scan effectively
-    /// unbounded — no real plan can produce an id anywhere near this
-    /// ceiling (see `CHUNK_SCAN_CEILING`'s doc), so rejecting one here is
-    /// pure loss-prevention with no cost to a legitimate manifest.
+    /// Returns `None` for: missing file, oversized file (see
+    /// `atomic::read_json_sidecar`'s `MAX_SIDECAR_BYTES` cap — the resource
+    /// bound lives at the read, not here), parse failure, schema mismatch,
+    /// `download_id` mismatch, or `kind` mismatch — every one of these
+    /// means the manifest cannot be trusted to describe the chunk set being
+    /// probed, so the caller must treat the set as unverifiable rather than
+    /// guess at a partial match.
     ///
-    /// Returns `None` for: missing file, parse failure, schema mismatch,
-    /// `download_id` mismatch, `kind` mismatch, or an oversized max chunk id
-    /// — every one of these means the manifest cannot be trusted to
-    /// describe the chunk set being probed, so the caller must treat the
-    /// set as unverifiable rather than guess at a partial match.
+    /// Deliberately does NOT reject on the manifest's max recorded chunk
+    /// id: an earlier version of this check rejected anything past a fixed
+    /// ceiling, but the adaptive download path's chunk size floors at 256
+    /// KiB indefinitely (`CHUNK_LEVELS[MIN_CHUNK_LEVEL]`) rather than
+    /// shrinking further like the `Auto` static strategy does, so any
+    /// download past ~2.44 GiB can legitimately produce more chunks than
+    /// any fixed ceiling chosen for the common case — that check produced
+    /// a false "start fresh" on real large files. `collect_contiguous_chunks`
+    /// (`rdlp-api`) no longer scans by id span at all, so no per-id bound is
+    /// needed here either.
     #[must_use]
     pub async fn load_matching(path: &Path, download_id: u64, kind: ChunkKind) -> Option<Self> {
         let manifest: Self = crate::atomic::read_json_sidecar(path).await?;
@@ -117,19 +120,6 @@ impl ChunkManifest {
             || manifest.download_id != download_id
             || manifest.kind != kind
         {
-            return None;
-        }
-        if let Some(&max_id) = manifest.completed.keys().next_back()
-            && max_id > crate::chunking::CHUNK_SCAN_CEILING
-        {
-            debug!(
-                max_id,
-                ceiling = crate::chunking::CHUNK_SCAN_CEILING;
-                "Rejecting chunk manifest at {}: max recorded chunk id {max_id} exceeds the \
-                 scan ceiling of {}",
-                path.display(),
-                crate::chunking::CHUNK_SCAN_CEILING
-            );
             return None;
         }
         Some(manifest)
@@ -169,6 +159,18 @@ pub(super) struct ChunkManifestTracker {
 }
 
 impl ChunkManifestTracker {
+    /// A tracker whose recording is permanently a no-op: `path` is `None`,
+    /// so `record_and_save` never touches disk. For chunk sets that have no
+    /// manifest to write to at all — the legacy grammar, via
+    /// `ChunkSet::manifest` returning `None`. The wrapped `ChunkManifest`'s
+    /// content is a placeholder; nothing ever reads or persists it.
+    pub(super) fn disabled() -> Self {
+        Self {
+            manifest: Arc::new(Mutex::new(ChunkManifest::new(0, ChunkKind::Fresh, 0))),
+            path: None,
+        }
+    }
+
     pub(super) fn new(manifest: ChunkManifest, path: Option<PathBuf>) -> Self {
         Self {
             manifest: Arc::new(Mutex::new(manifest)),

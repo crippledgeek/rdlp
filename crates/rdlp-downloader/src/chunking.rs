@@ -7,27 +7,6 @@
 
 use std::fmt;
 
-/// Maximum number of chunks any download plan may produce.
-///
-/// The shared scan/validation ceiling used everywhere chunk ids are
-/// enumerated or validated: `rdlp-downloader`'s own cleanup/orphan-discovery
-/// scans (`http::parallel`/legacy resume-chunk cleanup) and `rdlp-api`'s
-/// crash-recovery chunk-manifest validation (#675) both import this rather
-/// than each choosing their own number, so it is defined once here.
-///
-/// `calculate_chunks` enforces this as an invariant below (`debug_assert!`):
-/// chunk size is floored at 64 KiB (`chunk_size_for_file`'s `MIN_CHUNK`), so
-/// the chunk count for a file of size S is at most `S / 64 KiB`. A file
-/// large enough to exceed this ceiling at that floor would need to be
-/// `CHUNK_SCAN_CEILING * 64 KiB` ≈ 640 MB — but `chunk_size_for_file` grows
-/// the chunk size with file size well before that point (it targets ~1024
-/// chunks per file), so no `Auto`-strategy plan gets remotely close in
-/// practice. `Legacy { chunk_count }` is caller-supplied and not derived
-/// from file size, so it is the one strategy this invariant can't prove
-/// statically — the `debug_assert!` still catches an unreasonable caller
-/// value in tests/dev builds.
-pub const CHUNK_SCAN_CEILING: u64 = 10_000;
-
 /// Strategy for determining chunk size
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ChunkSizeStrategy {
@@ -137,12 +116,6 @@ pub fn calculate_chunks(file_size: u64, strategy: ChunkSizeStrategy) -> (usize, 
     };
 
     let total_chunks = file_size.div_ceil(chunk_size as u64) as usize;
-
-    debug_assert!(
-        (total_chunks as u64) <= CHUNK_SCAN_CEILING,
-        "plan produced {total_chunks} chunks, exceeding the shared scan ceiling of \
-         {CHUNK_SCAN_CEILING} — every scanner/validator downstream assumes this bound holds"
-    );
 
     (chunk_size, total_chunks)
 }

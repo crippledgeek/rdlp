@@ -56,7 +56,32 @@ pub async fn atomic_write_json<T: Serialize + Send + 'static>(
 /// MPD path + representation ids, a `download_id` + `ChunkKind`), so that
 /// gate stays in each type's own `load`/`load_matching`, which calls this
 /// for the read-and-parse mechanics they'd otherwise all duplicate.
+/// Maximum size, in bytes, of any JSON sidecar [`read_json_sidecar`] will
+/// read. A bound on the RESOURCE the read touches (memory for
+/// `read_to_string`, parse time), not on any semantic property of the
+/// content — deliberately not tied to a chunk count or id value (see the
+/// history in `rdlp-api`'s `collect_contiguous_chunks` for why an id-shaped
+/// bound was wrong). The largest legitimate sidecar in this codebase is the
+/// chunk-completion manifest (#675), whose `completed` map serializes at
+/// roughly 25-30 bytes per entry (`"<digits>":<digits>,`); even an extreme
+/// but entirely legitimate ~24 GiB adaptive download (100,000 chunks at the
+/// 256 KiB AIMD floor) produces a manifest of a few MB. This cap leaves
+/// roughly an order of magnitude of headroom above that before refusing to
+/// read a sidecar at all.
+pub(crate) const MAX_SIDECAR_BYTES: u64 = 16 * 1024 * 1024; // 16 MiB
+
 pub(crate) async fn read_json_sidecar<T: DeserializeOwned>(path: &Path) -> Option<T> {
+    let len = tokio::fs::metadata(path).await.ok()?.len();
+    if len > MAX_SIDECAR_BYTES {
+        warn!(
+            len,
+            max = MAX_SIDECAR_BYTES;
+            "Refusing to read oversized sidecar {}: {len} bytes exceeds the {MAX_SIDECAR_BYTES} \
+             byte cap",
+            path.display()
+        );
+        return None;
+    }
     let body = tokio::fs::read_to_string(path).await.ok()?;
     serde_json::from_str(&body).ok()
 }
@@ -166,6 +191,53 @@ mod tests {
     struct Sample {
         a: u32,
         b: String,
+    }
+
+    #[tokio::test]
+    async fn read_json_sidecar_accepts_a_file_exactly_at_the_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("state.json");
+        // Pad the JSON body with whitespace (valid, ignored by serde) up to
+        // exactly `MAX_SIDECAR_BYTES` so the boundary is pinned precisely,
+        // not merely "some file under the cap".
+        let value = serde_json::to_vec(&Sample {
+            a: 1,
+            b: String::new(),
+        })
+        .unwrap();
+        let padding = usize::try_from(MAX_SIDECAR_BYTES).unwrap() - value.len();
+        let mut body = vec![b' '; padding];
+        body.extend_from_slice(&value);
+        tokio::fs::write(&path, &body).await.expect("write");
+        assert_eq!(
+            tokio::fs::metadata(&path).await.unwrap().len(),
+            MAX_SIDECAR_BYTES
+        );
+
+        let loaded: Option<Sample> = read_json_sidecar(&path).await;
+        assert!(loaded.is_some(), "a file exactly at the cap must be read");
+    }
+
+    #[tokio::test]
+    async fn read_json_sidecar_rejects_a_file_one_byte_over_the_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("state.json");
+        let value = serde_json::to_vec(&Sample {
+            a: 1,
+            b: String::new(),
+        })
+        .unwrap();
+        let padding = usize::try_from(MAX_SIDECAR_BYTES).unwrap() - value.len() + 1;
+        let mut body = vec![b' '; padding];
+        body.extend_from_slice(&value);
+        tokio::fs::write(&path, &body).await.expect("write");
+        assert_eq!(
+            tokio::fs::metadata(&path).await.unwrap().len(),
+            MAX_SIDECAR_BYTES + 1
+        );
+
+        let loaded: Option<Sample> = read_json_sidecar(&path).await;
+        assert!(loaded.is_none(), "one byte over the cap must be refused");
     }
 
     #[tokio::test]

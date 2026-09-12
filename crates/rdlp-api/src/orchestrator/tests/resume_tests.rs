@@ -1061,62 +1061,21 @@ mod issue_675_chunk_integrity_tests {
         assert!(resume::detect_chunk_files(&output_path).await.is_none());
     }
 
-    // ── security review: unbounded scan via an attacker-controlled manifest key ──
+    // ── security review: the scan must be bounded by manifest ENTRY COUNT,
+    //    never by an id VALUE the manifest itself claims ──
     //
     // The manifest file is attacker-influenceable by anyone who can write to
-    // the output directory (schema/download_id/kind carry no secret), and
-    // its `completed` keys used to drive `collect_contiguous_chunks`'s scan
-    // range directly. A single `{"<huge id>": len}` entry made recovery
-    // iterate towards that id — near `u64::MAX` it never finished.
-
-    /// RED against the pre-fix loader: a manifest recording a chunk id near
-    /// `u64::MAX` used to load successfully.
-    #[tokio::test]
-    async fn manifest_with_near_max_key_is_rejected_at_load() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("m.json");
-        let mut manifest = ChunkManifest::new(0, ChunkKind::Fresh, 1);
-        manifest.record_completed(u64::MAX - 1, 1);
-        manifest.save(&path).await.unwrap();
-
-        assert!(
-            ChunkManifest::load_matching(&path, 0, ChunkKind::Fresh)
-                .await
-                .is_none(),
-            "a manifest key near u64::MAX must never be trusted"
-        );
-    }
-
-    #[tokio::test]
-    async fn manifest_with_key_one_beyond_ceiling_is_rejected() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("m.json");
-        let mut manifest = ChunkManifest::new(0, ChunkKind::Fresh, 1);
-        manifest.record_completed(rdlp_downloader::CHUNK_SCAN_CEILING + 1, 1);
-        manifest.save(&path).await.unwrap();
-
-        assert!(
-            ChunkManifest::load_matching(&path, 0, ChunkKind::Fresh)
-                .await
-                .is_none()
-        );
-    }
-
-    #[tokio::test]
-    async fn manifest_with_key_exactly_at_ceiling_is_accepted() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("m.json");
-        let mut manifest = ChunkManifest::new(0, ChunkKind::Fresh, 1);
-        manifest.record_completed(rdlp_downloader::CHUNK_SCAN_CEILING, 1);
-        manifest.save(&path).await.unwrap();
-
-        assert!(
-            ChunkManifest::load_matching(&path, 0, ChunkKind::Fresh)
-                .await
-                .is_some(),
-            "the ceiling itself is a legitimate boundary value, not a rejection"
-        );
-    }
+    // the output directory (schema/download_id/kind carry no secret). An
+    // earlier fix rejected any manifest whose max recorded id exceeded a
+    // fixed ceiling at load time — but that ceiling was itself wrong for
+    // real inputs: the adaptive download path's chunk size floors at 256
+    // KiB indefinitely, so a legitimate download past ~2.44 GiB can produce
+    // more chunks than any such ceiling, and would be wrongly rejected as
+    // "start fresh". `collect_contiguous_chunks` now walks
+    // `manifest.completed` in key order instead of scanning by id span, so
+    // its cost is O(entries) regardless of what id values those entries
+    // name — these tests pin that directly, including a key near
+    // `u64::MAX` completing instantly rather than being rejected or hung.
 
     /// Pins the count-from-map path: a sparse manifest `{0: n, 5000: n}`
     /// must complete quickly and report exactly 1 stranded chunk, without
@@ -1158,5 +1117,73 @@ mod issue_675_chunk_integrity_tests {
             scanned.stranded_beyond_gap, 1,
             "chunk 5000 is recorded complete but unreachable past the gap at 1"
         );
+    }
+
+    /// A two-chunk verified prefix followed by a large-valued stranded key:
+    /// pins that the prefix length and stranded count are correct when the
+    /// break isn't at position 0, and that a large id value (20,000, well
+    /// past the old fixed ceiling of 10,000) neither slows nor rejects the
+    /// scan — only entry COUNT matters now, not id VALUE.
+    #[tokio::test]
+    async fn prefix_of_two_then_a_large_valued_stranded_key() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        for id in [0u64, 1] {
+            tokio::fs::write(
+                temp_dir.path().join(format!("video.mp4.0.part{id}")),
+                &[id as u8; 4],
+            )
+            .await
+            .unwrap();
+        }
+
+        let set = ChunkSet::for_attempt("video.mp4", 0, ChunkKind::Fresh).unwrap();
+        let mut manifest = ChunkManifest::new(0, ChunkKind::Fresh, 12);
+        manifest.record_completed(0, 4);
+        manifest.record_completed(1, 4);
+        manifest.record_completed(20_000, 4);
+
+        let scanned = resume::collect_contiguous_chunks(&set, temp_dir.path(), &manifest).await;
+
+        assert_eq!(scanned.chunk_paths.len(), 2, "chunks 0 and 1 verify");
+        assert_eq!(
+            scanned.first_bad,
+            Some(resume::BadChunk {
+                id: 2,
+                on_disk: None,
+                recorded: None,
+            }),
+            "id 2 is the first gap"
+        );
+        assert_eq!(scanned.stranded_beyond_gap, 1, "chunk 20,000 is stranded");
+    }
+
+    /// A manifest recording a single chunk id near `u64::MAX` must complete
+    /// essentially instantly. The pre-fix, id-span scanning implementation
+    /// (`for chunk_id in 0..=max_recorded_id`) would have iterated toward
+    /// that value and never realistically finished; run here instead of
+    /// described only, since walking the map is O(1) for a single entry and
+    /// cannot hang — the point being pinned is that a huge key is not
+    /// itself special-cased or rejected, just cheap by construction.
+    #[tokio::test]
+    async fn manifest_with_key_near_u64_max_completes_immediately() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let set = ChunkSet::for_attempt("video.mp4", 0, ChunkKind::Fresh).unwrap();
+        let mut manifest = ChunkManifest::new(0, ChunkKind::Fresh, 1);
+        manifest.record_completed(u64::MAX - 1, 1);
+
+        let started = std::time::Instant::now();
+        let scanned = resume::collect_contiguous_chunks(&set, temp_dir.path(), &manifest).await;
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+
+        assert_eq!(scanned.chunk_paths.len(), 0, "id 0 itself is the gap");
+        assert_eq!(
+            scanned.first_bad,
+            Some(resume::BadChunk {
+                id: 0,
+                on_disk: None,
+                recorded: None,
+            })
+        );
+        assert_eq!(scanned.stranded_beyond_gap, 1);
     }
 }

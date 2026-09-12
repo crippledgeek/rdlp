@@ -196,6 +196,18 @@ impl ChunkSet {
     pub const fn download_id(&self) -> Option<u64> {
         self.download_id
     }
+
+    /// This set's `download_id` and manifest path, zipped: both are `Some`
+    /// together (new-style) or both `None` together (legacy) by
+    /// construction, so a caller building a manifest can never read one
+    /// without the other — the structural alternative to calling
+    /// `download_id()` and `manifest_path_in()` separately and treating a
+    /// mismatch as an unreachable case.
+    #[must_use]
+    pub fn manifest(&self, dir: &Path) -> Option<(u64, PathBuf)> {
+        let id = self.download_id?;
+        Some((id, self.manifest_path_in(dir)?))
+    }
 }
 
 #[cfg(test)]
