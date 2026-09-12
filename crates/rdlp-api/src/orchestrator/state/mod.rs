@@ -366,23 +366,17 @@ impl DownloadPhase {
                         // Probe resume against the deterministic .rdlp-part name —
                         // the download writes there, not to the clean name (#406).
                         let part = super::naming::part_path(&output_path);
-                        let resume_offset = orchestrator
-                            .detect_resume_point(&part, format.filesize)
-                            .await?;
-
-                        // Already complete: the bytes are under .rdlp-part; commit
-                        // them to the clean name before returning Complete.
-                        if let Some(expected_size) = format.filesize
-                            && resume_offset == expected_size
-                        {
-                            super::naming::finalize_part(&part, &output_path).await?;
-                            return Ok(Self::Complete { path: output_path });
-                        }
-
-                        if resume_offset > 0 {
-                            DownloadState::Resume(resume_offset)
-                        } else {
-                            DownloadState::Fresh
+                        match orchestrator.resolve_resume(&part, format.filesize).await? {
+                            super::resume::ResumeOutcome::Complete { .. } => {
+                                // Already complete: the bytes are under .rdlp-part;
+                                // commit them to the clean name before returning Complete.
+                                super::naming::finalize_part(&part, &output_path).await?;
+                                return Ok(Self::Complete { path: output_path });
+                            }
+                            super::resume::ResumeOutcome::Resume(offset) => {
+                                DownloadState::Resume(offset)
+                            }
+                            super::resume::ResumeOutcome::Fresh => DownloadState::Fresh,
                         }
                     }
                 };

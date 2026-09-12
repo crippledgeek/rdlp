@@ -316,12 +316,12 @@ async fn test_select_format_empty_formats() {
 }
 
 #[tokio::test]
-async fn test_detect_resume_point_no_file() {
+async fn test_resolve_resume_no_file() {
     let orchestrator = create_test_orchestrator();
     let path = Path::new("nonexistent_file.mp4");
 
-    let resume_from = orchestrator.detect_resume_point(path, None).await.unwrap();
-    assert_eq!(resume_from, 0);
+    let outcome = orchestrator.resolve_resume(path, None).await.unwrap();
+    assert_eq!(outcome, crate::orchestrator::resume::ResumeOutcome::Fresh);
 }
 
 #[test]

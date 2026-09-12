@@ -208,7 +208,7 @@ pub async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo) -> an
 ///
 /// # Sentinel gate
 ///
-/// This runs on essentially every `detect_resume_point` call (up to 3x per
+/// This runs on essentially every `resolve_resume` call (up to 3x per
 /// call — see the branches below), so its cost has to be bounded for the
 /// overwhelmingly common case where there is no legacy chunk set at all.
 /// Chunk id 0 is checked first: a legacy download always writes id 0 first,
@@ -355,8 +355,175 @@ pub async fn log_orphaned_resume_chunks(output_path: &Path) -> Vec<PathBuf> {
     discovered
 }
 
+/// What [`resolve_resume`] will enact for an output path — the decision
+/// alone, produced by [`plan_resume`] without touching the disk.
+#[derive(Debug)]
+pub(super) enum ResumePlan {
+    /// The `.rdlp-part` file's on-disk size matches `expected_size` exactly.
+    AlreadyComplete(u64),
+    /// The `.rdlp-part` file is smaller than `expected_size` (or
+    /// `expected_size` is unknown) — resume from this byte offset.
+    Resume(u64),
+    /// The `.rdlp-part` file is LARGER than the extractor-reported
+    /// `expected_size`. Extractor sizes are unverified (#674 reports
+    /// mismatches), so the on-disk bytes are the more trustworthy artifact:
+    /// the resolved policy is to set the file aside for inspection rather
+    /// than delete it (#561), never to trust the smaller reported figure.
+    LargerThanReported { size: u64, expected: u64 },
+    /// No main file (or an empty one), but an interrupted chunk set was
+    /// found and can be merged.
+    MergeChunks(ChunkInfo),
+    /// No main file and no chunk set — nothing to resume from.
+    Fresh,
+}
+
+/// Determine [`ResumePlan`] for `output_path` without mutating anything on
+/// disk (#561: `detect_resume_point` mixed this decision with the
+/// deletes/merges that acted on it, so a caller that only wanted the plan
+/// had no way to get one without also triggering the side effects).
+///
+/// `log_orphaned_resume_chunks` is the one exception: it is itself a
+/// log-only query (see its own doc comment) and is folded in here so every
+/// caller of `plan_resume` still gets the discovery, not just callers of
+/// [`resolve_resume`].
+///
+/// Mirrors the two-step shape `detect_resume_point` used to inline: check
+/// the main file, then fall back to chunk detection.
+pub(super) async fn plan_resume(output_path: &Path, expected_size: Option<u64>) -> ResumePlan {
+    // Discover (and log-only) any orphaned resume-kind chunk sets. Runs
+    // unconditionally so every plan_resume call sees it, matching the
+    // previous unconditional placement in detect_resume_point (#568 C3).
+    log_orphaned_resume_chunks(output_path).await;
+
+    if output_path.exists()
+        && let Ok(metadata) = tokio::fs::metadata(output_path).await
+    {
+        let size = metadata.len();
+        if size > 0 {
+            if let Some(expected) = expected_size {
+                match size.cmp(&expected) {
+                    std::cmp::Ordering::Equal => return ResumePlan::AlreadyComplete(size),
+                    std::cmp::Ordering::Greater => {
+                        return ResumePlan::LargerThanReported { size, expected };
+                    }
+                    std::cmp::Ordering::Less => {}
+                }
+            }
+            return ResumePlan::Resume(size);
+        }
+    }
+
+    detect_chunk_files(output_path)
+        .await
+        .map_or(ResumePlan::Fresh, ResumePlan::MergeChunks)
+}
+
+/// The enacted outcome of [`Orchestrator::resolve_resume`] — what a caller
+/// should do next, converging the `offset == expected_size` /
+/// `offset > 0` mapping that both `state/mod.rs` and `playlist/episode.rs`
+/// previously duplicated (#561).
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum ResumeOutcome {
+    /// The output is already complete at `size` bytes. The caller still
+    /// owns finalizing `.rdlp-part` -> the clean output path, since only the
+    /// caller knows that path.
+    Complete { size: u64 },
+    /// Resume the download from this byte offset.
+    Resume(u64),
+    /// Start fresh.
+    Fresh,
+}
+
+#[cfg(test)]
+impl ResumeOutcome {
+    /// Test-only convenience: the byte count a caller would resume-or-finalize
+    /// from, collapsing `Complete`/`Resume`/`Fresh` the way the old
+    /// `detect_resume_point` u64 return did. Production code matches on the
+    /// variant directly instead — this exists so the pre-existing chunk-merge
+    /// tests (which only care about "how many bytes ended up on disk") don't
+    /// need to be rewritten variant-by-variant.
+    pub(super) fn size(&self) -> u64 {
+        match self {
+            Self::Complete { size } | Self::Resume(size) => *size,
+            Self::Fresh => 0,
+        }
+    }
+}
+
+/// Decide whether `size` on-disk bytes represent a complete download or a
+/// partial one to resume from.
+///
+/// The single place both the main-file check (`ResumePlan::AlreadyComplete`
+/// / `Resume`, already split by `plan_resume`) and the post-merge check ask
+/// this question, so the answer can't drift between them (#561 spec review:
+/// the first cut of this split returned `Resume(size)` unconditionally after
+/// a merge, so a chunk set whose recorded total equaled `expected_size` was
+/// asked to resume from EOF instead of finalizing).
+const fn outcome_for_size(size: u64, expected_size: Option<u64>) -> ResumeOutcome {
+    match expected_size {
+        Some(expected) if size == expected => ResumeOutcome::Complete { size },
+        _ => ResumeOutcome::Resume(size),
+    }
+}
+
+/// Move an oversized `.rdlp-part` file aside instead of deleting it (#561).
+///
+/// Extractor-reported sizes are unverified (#674 already reports
+/// mismatches), so an on-disk file larger than the reported size is treated
+/// as suspect metadata, not corrupt data — the bytes are kept for manual
+/// inspection. Reuses the `.rdlp-bak-{uuid}` naming `finalize_part` uses for
+/// its Windows backup path (see `naming::BAK_MARKER`): that name is already
+/// proven invisible to `TempRegistry::cleanup_stale`'s `.rdlp-tmp-` marker
+/// scan, which is the exact trap a fresh naming scheme here could reintroduce
+/// — but that same invisibility means nothing ever automatically removes a
+/// `.rdlp-bak-*` sidecar (see `paths.rs`'s `neutralize_temp_markers` doc
+/// comment): it is a deliberately permanent artifact until a human clears it.
+///
+/// Every error propagates — a failed rename must not be swallowed into a
+/// silent "proceed as Fresh" the way the old `.ok()` did, because that would
+/// leave the caller believing the file is gone when it might still be in
+/// place at `output_path` (#561).
+async fn set_aside_oversized(output_path: &Path, size: u64, expected: u64) -> anyhow::Result<()> {
+    let backup = super::naming::bak_sidecar_path(output_path);
+
+    tokio::fs::rename(output_path, &backup)
+        .await
+        .with_context(|| {
+            format!(
+                "failed to set aside oversized partial download {} ({size} bytes > \
+                 extractor-reported {expected} bytes) to {}",
+                output_path.display(),
+                backup.display()
+            )
+        })?;
+
+    warn!(
+        size,
+        expected;
+        "Partial file is larger than the extractor-reported size — extractor sizes are \
+         unverified (#674), so the on-disk bytes are kept rather than deleted; set aside to {} \
+         for manual inspection (nothing automatically removes it — clear it by hand once \
+         inspected), starting fresh",
+        backup.display(),
+    );
+    Ok(())
+}
+
 impl Orchestrator {
-    /// Detect the resume point for a download
+    /// Determine the resume plan for a download. Pure query — see
+    /// [`plan_resume`]. Exposed on `Orchestrator` only so test/caller call
+    /// sites read consistently with [`Self::resolve_resume`]; delegates
+    /// entirely to the free function.
+    #[cfg(test)]
+    pub(super) async fn plan_resume(
+        &self,
+        output_path: &Path,
+        expected_size: Option<u64>,
+    ) -> ResumePlan {
+        plan_resume(output_path, expected_size).await
+    }
+
+    /// Resolve the resume point for a download and enact the plan.
     ///
     /// Checks for:
     /// 1. Existing complete or partial download file
@@ -367,104 +534,89 @@ impl Orchestrator {
     /// Prioritizes new-style chunks (highest download ID) over old-style.
     /// Automatically merges and cleans up chunk files.
     ///
-    /// Returns the byte offset to resume from (0 for fresh download)
+    /// This is the single call both `state/mod.rs` and
+    /// `playlist/episode.rs` use — previously each duplicated the
+    /// `offset == expected_size` / `offset > 0` mapping over the raw u64
+    /// `detect_resume_point` returned (#561); that mapping now lives once,
+    /// in the match below.
     #[instrument(skip(self), fields(path = %output_path.display()))]
-    pub(super) async fn detect_resume_point(
+    pub(super) async fn resolve_resume(
         &self,
         output_path: &Path,
         expected_size: Option<u64>,
-    ) -> Result<u64> {
-        // 0. Discover (and log-only) any orphaned resume-kind chunk sets.
-        // Unconditional and first, so every branch below sees it run — not
-        // just the branches that also happen to run legacy cleanup (#568 C3:
-        // the old call was nested inside `cleanup_old_chunks`/one `else`
-        // arm, so the legacy-chunk-present branch never reached it).
-        log_orphaned_resume_chunks(output_path).await;
-
-        // 1. Check for existing complete or partial download file
-        if output_path.exists()
-            && let Ok(metadata) = tokio::fs::metadata(output_path).await
-        {
-            let size = metadata.len();
-            if size > 0 {
-                // Check if file is already complete
-                if let Some(expected) = expected_size {
-                    if size == expected {
-                        #[allow(clippy::cast_precision_loss)] // display-only MB value
-                        let mb = size as f64 / (1024.0 * 1024.0);
-                        debug!("File already downloaded ({mb:.1} MB), skipping...");
-                        // Clean up any orphaned chunks
-                        cleanup_old_chunks(output_path).await;
-                        return Ok(size);
-                    } else if size > expected {
-                        #[allow(clippy::cast_precision_loss)] // display-only MB values
-                        let (size_mb, exp_mb) = (
-                            size as f64 / (1024.0 * 1024.0),
-                            expected as f64 / (1024.0 * 1024.0),
-                        );
-                        warn!(
-                            "Partial file is larger than expected ({size_mb:.1} MB > {exp_mb:.1} MB), starting fresh..."
-                        );
-                        tokio::fs::remove_file(output_path).await.ok();
-                        cleanup_old_chunks(output_path).await;
-                        return Ok(0);
-                    }
-                }
+    ) -> Result<ResumeOutcome> {
+        match plan_resume(output_path, expected_size).await {
+            ResumePlan::AlreadyComplete(size) => {
+                #[allow(clippy::cast_precision_loss)] // display-only MB value
+                let mb = size as f64 / (1024.0 * 1024.0);
+                debug!("File already downloaded ({mb:.1} MB), skipping...");
+                // Best-effort: a legacy chunk set left over next to an
+                // already-complete file is cosmetic clutter, not correctness
+                // — worth cleaning up, but not worth failing the whole
+                // resolve over (matches the pre-#561 behavior).
+                cleanup_old_chunks(output_path).await;
+                Ok(outcome_for_size(size, expected_size))
+            }
+            ResumePlan::Resume(size) => {
                 #[allow(clippy::cast_precision_loss)] // display-only MB value
                 let size_mb = size as f64 / (1024.0 * 1024.0);
                 debug!("Found partial download ({size_mb:.1} MB), resuming...");
-                // Clean up any orphaned chunks from failed parallel attempts
                 cleanup_old_chunks(output_path).await;
-                return Ok(size);
+                Ok(outcome_for_size(size, expected_size))
             }
-        }
-
-        // 2. Check for interrupted parallel download chunks
-        if let Some(chunk_info) = detect_chunk_files(output_path).await {
-            let chunk_type = chunk_info.download_id.map_or_else(
-                || "old-style".to_owned(),
-                |id| format!("new-style (download ID: {id})"),
-            );
-
-            #[allow(clippy::cast_precision_loss)] // display-only MB value
-            let total_mb = chunk_info.total_size as f64 / (1024.0 * 1024.0);
-            debug!(
-                "Found {} interrupted {} chunk files ({total_mb:.1} MB), merging and resuming...",
-                chunk_info.chunk_paths.len(),
-                chunk_type,
-            );
-
-            // If using new-style chunks, clean up any old-style chunks first
-            if chunk_info.download_id.is_some() {
+            ResumePlan::LargerThanReported { size, expected } => {
+                set_aside_oversized(output_path, size, expected).await?;
                 cleanup_old_chunks(output_path).await;
+                Ok(ResumeOutcome::Fresh)
             }
+            ResumePlan::MergeChunks(chunk_info) => {
+                let chunk_type = chunk_info.download_id.map_or_else(
+                    || "old-style".to_owned(),
+                    |id| format!("new-style (download ID: {id})"),
+                );
+                #[allow(clippy::cast_precision_loss)] // display-only MB value
+                let total_mb = chunk_info.total_size as f64 / (1024.0 * 1024.0);
+                debug!(
+                    "Found {} interrupted {} chunk files ({total_mb:.1} MB), merging and resuming...",
+                    chunk_info.chunk_paths.len(),
+                    chunk_type,
+                );
 
-            // Merge chunks into the main file
-            match merge_chunk_files(output_path, &chunk_info).await {
-                Ok(size) => {
-                    #[allow(clippy::cast_precision_loss)] // display-only MB value
-                    let mb = size as f64 / (1024.0 * 1024.0);
-                    debug!(
-                        chunks = chunk_info.chunk_paths.len(),
-                        mb:?;
-                        "Merged chunks into main file"
-                    );
-                    Ok(size)
+                // If using new-style chunks, clean up any old-style chunks first
+                if chunk_info.download_id.is_some() {
+                    cleanup_old_chunks(output_path).await;
                 }
-                Err(e) => {
-                    warn!("Failed to merge chunks: {e}. Starting fresh.");
-                    // Clean up partial chunks
-                    for chunk_path in &chunk_info.chunk_paths {
-                        let _ = tokio::fs::remove_file(chunk_path).await;
+
+                match merge_chunk_files(output_path, &chunk_info).await {
+                    Ok(size) => {
+                        #[allow(clippy::cast_precision_loss)] // display-only MB value
+                        let mb = size as f64 / (1024.0 * 1024.0);
+                        debug!(
+                            chunks = chunk_info.chunk_paths.len(),
+                            mb:?;
+                            "Merged chunks into main file"
+                        );
+                        // #561 spec review: a merged total that equals
+                        // expected_size is complete, not "resume from EOF" —
+                        // route through the same decision `AlreadyComplete`
+                        // uses so the two paths can't drift.
+                        Ok(outcome_for_size(size, expected_size))
                     }
-                    Ok(0)
+                    Err(e) => {
+                        warn!("Failed to merge chunks: {e}. Starting fresh.");
+                        for chunk_path in &chunk_info.chunk_paths {
+                            let _ = tokio::fs::remove_file(chunk_path).await;
+                        }
+                        Ok(ResumeOutcome::Fresh)
+                    }
                 }
             }
-        } else {
-            // No main file, and no legacy/new-style Fresh chunk set found
-            // either. Orphaned resume chunks (if any) were already
-            // discovered and logged by step 0 above.
-            Ok(0)
+            ResumePlan::Fresh => {
+                // No main file, and no legacy/new-style chunk set found
+                // either. Orphaned resume chunks (if any) were already
+                // discovered and logged inside plan_resume.
+                Ok(ResumeOutcome::Fresh)
+            }
         }
     }
 }

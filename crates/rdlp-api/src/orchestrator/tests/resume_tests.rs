@@ -147,9 +147,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, None)
+            .resolve_resume(&output_path, None)
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         // Should have merged the 3 chunks
         assert_eq!(resume_offset, 1536);
@@ -190,9 +191,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, None)
+            .resolve_resume(&output_path, None)
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         // Should have merged the 5 chunks
         assert_eq!(resume_offset, 1280);
@@ -241,9 +243,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, None)
+            .resolve_resume(&output_path, None)
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         // Should have merged the new-style chunks (1280 bytes), not old-style
         assert_eq!(resume_offset, 1280);
@@ -296,9 +299,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, Some(4096))
+            .resolve_resume(&output_path, Some(4096))
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         assert_eq!(resume_offset, 4096);
         for i in 0..12 {
@@ -341,9 +345,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, Some(4096))
+            .resolve_resume(&output_path, Some(4096))
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         assert_eq!(resume_offset, 4096);
         assert!(
@@ -387,9 +392,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, Some(4096))
+            .resolve_resume(&output_path, Some(4096))
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         assert_eq!(resume_offset, 4096);
         assert!(
@@ -423,9 +429,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, Some(1024))
+            .resolve_resume(&output_path, Some(1024))
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         assert_eq!(resume_offset, 1024);
         assert!(!temp_dir.path().join("video.mp4.part0").exists());
@@ -458,9 +465,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, None)
+            .resolve_resume(&output_path, None)
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         assert_eq!(resume_offset, 1000);
         // Never deleted: a live concurrent process could own this download_id.
@@ -482,9 +490,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, None)
+            .resolve_resume(&output_path, None)
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         assert_eq!(resume_offset, 0);
         assert!(temp_dir.path().join("video.mp4.5.resume0").exists());
@@ -518,9 +527,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, None)
+            .resolve_resume(&output_path, None)
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         // Legacy chunks merged normally.
         assert_eq!(resume_offset, 1024);
@@ -613,9 +623,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, None)
+            .resolve_resume(&output_path, None)
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         // Should have merged the download ID 2 chunks (3 x 512 = 1536 bytes)
         assert_eq!(resume_offset, 1536);
@@ -661,9 +672,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, Some(2048))
+            .resolve_resume(&output_path, Some(2048))
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         // Should detect file is complete
         assert_eq!(resume_offset, 2048);
@@ -690,9 +702,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, None)
+            .resolve_resume(&output_path, None)
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         // Should have merged all 100 chunks (100 x 128 = 12800 bytes)
         assert_eq!(resume_offset, 12800);
@@ -707,5 +720,239 @@ mod resume_compatibility_tests {
                     .exists()
             );
         }
+    }
+}
+
+/// #561: `plan_resume`/`resolve_resume` CQS split. `plan_resume` must be a
+/// pure query and `resolve_resume` must never silently delete data it can't
+/// verify against an (unverified, #674) extractor-reported size.
+///
+/// The explicit `#[cfg(test)]` below is redundant (this whole file is only
+/// ever compiled under `#[cfg(test)] mod tests;` in `orchestrator/mod.rs`),
+/// but `scripts/check-no-dir-sweep-delete.sh` textually treats everything
+/// before a file's first literal `#[cfg(test)]` as production code; without
+/// this marker, this module itself trips the gate: it contains both a
+/// `read_dir` call (the survivor assertion in
+/// `resolve_resume_never_deletes_an_oversized_file`) and a `remove_file`
+/// call (the read-only-dir write probe in
+/// `resolve_resume_propagates_a_failed_set_aside`), and the gate cannot tell
+/// that neither deletes what the other enumerated.
+#[cfg(test)]
+mod cqs_resume_split_tests {
+    use super::*;
+    use crate::orchestrator::resume::ResumeOutcome;
+
+    /// Negative (the issue's own repro): a COMPLETE file whose reported
+    /// `expected_size` under-counts it (4096 bytes on disk, 2048 reported)
+    /// must survive `resolve_resume` — RED against the pre-#561 code, which
+    /// deleted it via `remove_file(..).ok()`.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // std::fs helpers in test fixtures — per clippy.toml policy (c)
+    async fn resolve_resume_never_deletes_an_oversized_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+        tokio::fs::write(&output_path, vec![9u8; 4096])
+            .await
+            .unwrap();
+
+        let orchestrator = create_test_orchestrator();
+        let outcome = orchestrator
+            .resolve_resume(&output_path, Some(2048))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome, ResumeOutcome::Fresh);
+
+        // The bytes must still exist SOMEWHERE under the directory — set
+        // aside, not deleted.
+        let mut entries: Vec<_> = std::fs::read_dir(temp_dir.path())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .map(|e| e.path())
+            .collect();
+        assert_eq!(
+            entries.len(),
+            1,
+            "exactly one file must remain: {entries:?}"
+        );
+        let survivor = entries.remove(0);
+        assert_ne!(
+            survivor, output_path,
+            "the survivor must have been renamed off the original name"
+        );
+        assert_eq!(
+            tokio::fs::read(&survivor).await.unwrap().len(),
+            4096,
+            "the set-aside file must retain the original bytes"
+        );
+
+        // Pin the naming invariant, not just "some file survived": the
+        // set-aside must use the `.rdlp-bak-` marker specifically (invisible
+        // to `TempRegistry::cleanup_stale`), never `.rdlp-tmp-` (which that
+        // sweep marker-scans and would delete on the next stale-cleanup
+        // pass — see `naming::bak_sidecar_path`).
+        let survivor_name = survivor.file_name().unwrap().to_str().unwrap();
+        assert!(
+            survivor_name.contains(crate::orchestrator::naming::BAK_MARKER),
+            "survivor must carry the .rdlp-bak- marker, got: {survivor_name}"
+        );
+        assert!(
+            !survivor_name.contains(".rdlp-tmp-"),
+            "survivor must NOT carry the .rdlp-tmp- marker \
+             (TempRegistry::cleanup_stale would delete it), got: {survivor_name}"
+        );
+    }
+
+    /// `plan_resume` performs no mutation: legacy chunks + an oversized main
+    /// file must all still be present on disk after the call. RED against
+    /// the pre-#561 `detect_resume_point`, which deleted the oversized file
+    /// and the legacy chunks as part of computing the answer.
+    #[tokio::test]
+    async fn plan_resume_never_mutates_the_filesystem() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+        tokio::fs::write(&output_path, vec![9u8; 4096])
+            .await
+            .unwrap();
+        tokio::fs::write(temp_dir.path().join("video.mp4.part0"), &[1u8; 64])
+            .await
+            .unwrap();
+
+        let orchestrator = create_test_orchestrator();
+        let _plan = orchestrator.plan_resume(&output_path, Some(2048)).await;
+
+        assert!(
+            output_path.exists(),
+            "plan_resume must not delete the main file"
+        );
+        assert!(
+            temp_dir.path().join("video.mp4.part0").exists(),
+            "plan_resume must not delete legacy chunks"
+        );
+    }
+
+    /// A failed set-aside must surface as `Err`, never silently fall back to
+    /// `Fresh` — RED against the pre-#561 `.ok()`. Making the containing
+    /// directory read-only forces the rename underlying
+    /// `set_aside_oversized` to fail with a permission error.
+    ///
+    /// Unix-only: mode-bit permissions are a POSIX concept, and
+    /// `PermissionsExt::set_mode` doesn't exist on Windows.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // std::fs helpers in test fixtures — per clippy.toml policy (c)
+    async fn resolve_resume_propagates_a_failed_set_aside() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+        std::fs::write(&output_path, vec![9u8; 4096]).unwrap();
+
+        let mut perms = std::fs::metadata(temp_dir.path()).unwrap().permissions();
+        perms.set_mode(0o555); // read + execute only: rename needs write on the dir
+        std::fs::set_permissions(temp_dir.path(), perms.clone()).unwrap();
+
+        // Mode bits are advisory to a privileged process: CAP_DAC_OVERRIDE
+        // (i.e. running as root) bypasses the read-only dir above, which
+        // would make the assertion below vacuous. Rather than trust an env
+        // var or add a uid syscall dependency, probe directly — attempt a
+        // write to the dir we just locked down; if it succeeds, permissions
+        // aren't actually being enforced here and the test can't say anything.
+        let probe = temp_dir.path().join(".write-probe");
+        let permissions_enforced = std::fs::write(&probe, b"x").is_err();
+        let _ = std::fs::remove_file(&probe);
+
+        if !permissions_enforced {
+            perms.set_mode(0o755);
+            std::fs::set_permissions(temp_dir.path(), perms).unwrap();
+            eprintln!(
+                "skipping resolve_resume_propagates_a_failed_set_aside: \
+                 write succeeded through a read-only dir (running as root?) — \
+                 the permission-denial this test relies on isn't being enforced"
+            );
+            return;
+        }
+
+        let orchestrator = create_test_orchestrator();
+        let result = orchestrator.resolve_resume(&output_path, Some(2048)).await;
+
+        // Restore write permission before the TempDir's Drop tries to clean up.
+        perms.set_mode(0o755);
+        std::fs::set_permissions(temp_dir.path(), perms).unwrap();
+
+        assert!(
+            result.is_err(),
+            "a failed set-aside rename must propagate as Err, not silently become Fresh"
+        );
+    }
+
+    /// The `state/mod.rs` / `playlist/episode.rs` mapping (Complete / Resume
+    /// / Fresh) now lives once, inside `resolve_resume` itself.
+    #[tokio::test]
+    async fn resolve_resume_maps_complete_resume_and_fresh() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let orchestrator = create_test_orchestrator();
+
+        let complete_path = temp_dir.path().join("complete.mp4");
+        tokio::fs::write(&complete_path, vec![1u8; 100])
+            .await
+            .unwrap();
+        assert_eq!(
+            orchestrator
+                .resolve_resume(&complete_path, Some(100))
+                .await
+                .unwrap(),
+            ResumeOutcome::Complete { size: 100 }
+        );
+
+        let partial_path = temp_dir.path().join("partial.mp4");
+        tokio::fs::write(&partial_path, vec![1u8; 50])
+            .await
+            .unwrap();
+        assert_eq!(
+            orchestrator
+                .resolve_resume(&partial_path, Some(100))
+                .await
+                .unwrap(),
+            ResumeOutcome::Resume(50)
+        );
+
+        let fresh_path = temp_dir.path().join("fresh.mp4");
+        assert_eq!(
+            orchestrator
+                .resolve_resume(&fresh_path, Some(100))
+                .await
+                .unwrap(),
+            ResumeOutcome::Fresh
+        );
+    }
+
+    /// #561 spec-review MEDIUM: a chunk set whose merged total equals
+    /// `expected_size` must finalize as `Complete`, not `Resume(expected)`
+    /// (which would ask the downloader to resume from EOF and never call
+    /// `finalize_part`).
+    #[tokio::test]
+    async fn resolve_resume_completes_when_merged_total_matches_expected() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+
+        tokio::fs::write(temp_dir.path().join("video.mp4.part0"), &[1u8; 1024])
+            .await
+            .unwrap();
+        tokio::fs::write(temp_dir.path().join("video.mp4.part1"), &[2u8; 1024])
+            .await
+            .unwrap();
+
+        let orchestrator = create_test_orchestrator();
+        let outcome = orchestrator
+            .resolve_resume(&output_path, Some(2048))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outcome,
+            ResumeOutcome::Complete { size: 2048 },
+            "a merged total equal to expected_size must be Complete, not Resume(expected)"
+        );
     }
 }

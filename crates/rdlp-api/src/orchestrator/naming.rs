@@ -185,6 +185,32 @@ pub async fn finalize_part(part: &Path, clean: &Path) -> anyhow::Result<()> {
     })
 }
 
+/// Derive the `.rdlp-bak-{uuid}` sidecar path for `path`: same directory,
+/// `path`'s own file name with the marker and a fresh uuid appended.
+///
+/// Shared by `finalize_part`'s Windows backup-restore step and
+/// `resume::set_aside_oversized`'s "set aside, don't delete" policy (#561
+/// code-quality review) so the naming construction exists once instead of
+/// being duplicated at both call sites.
+pub(super) fn bak_sidecar_path(path: &Path) -> PathBuf {
+    // A real media output path always has a file name; a root or directory
+    // path reaching this helper would be a caller-contract violation.
+    // Verified here so the `.unwrap_or_default()` fallback is known-safe and
+    // an assertion fires in debug builds.
+    debug_assert!(
+        path.file_name().is_some(),
+        "bak_sidecar_path: path has no file name component (degenerate path?) — \
+         backup name would be empty: {}",
+        path.display()
+    );
+    let mut name = path
+        .file_name()
+        .map(std::ffi::OsStr::to_os_string)
+        .unwrap_or_default();
+    name.push(format!("{BAK_MARKER}{}", uuid::Uuid::new_v4().simple()));
+    path.with_file_name(name)
+}
+
 /// Windows-only helper: replace a pre-existing `clean` file with `part`.
 ///
 /// `tokio::fs::rename` on Windows does NOT set `MOVEFILE_REPLACE_EXISTING`, so it
@@ -201,25 +227,7 @@ pub async fn finalize_part(part: &Path, clean: &Path) -> anyhow::Result<()> {
 async fn finalize_part_replace_windows(part: &Path, clean: &Path) -> anyhow::Result<()> {
     use anyhow::Context as _;
 
-    let backup = {
-        // A real media output path always has a file name; a root or directory
-        // path reaching this branch would be a caller-contract violation (the
-        // orchestrator only calls finalize_part on actual file paths). Verified
-        // here so the `.unwrap_or_default()` fallback is known-safe and an
-        // assertion fires in debug builds.
-        debug_assert!(
-            clean.file_name().is_some(),
-            "finalize_part: clean path has no file name component (degenerate path?) — \
-             backup name would be empty: {}",
-            clean.display()
-        );
-        let mut name = clean
-            .file_name()
-            .map(std::ffi::OsStr::to_os_string)
-            .unwrap_or_default();
-        name.push(format!("{BAK_MARKER}{}", uuid::Uuid::new_v4().simple()));
-        clean.with_file_name(name)
-    };
+    let backup = bak_sidecar_path(clean);
     // NOTE (#416-M1): a second Ctrl+C force-exit (process::exit) in the micro-window
     // between the two renames inside `replace_with_backup` would orphan the
     // `.rdlp-bak-{uuid}` file (it holds the user's data — no loss, just a leftover).

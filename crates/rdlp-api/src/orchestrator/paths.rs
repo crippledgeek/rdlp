@@ -163,8 +163,8 @@ impl Orchestrator {
     ///
     /// NTFS and default-configured APFS fold case, so `Title.RDLP-PART.mp4`
     /// and `Title.rdlp-part.mp4` are one file — and the second is
-    /// `naming::part_path`, which `detect_resume_point` stats and then trusts
-    /// the bytes of. A case-sensitive `str::replace` sees nothing to defuse
+    /// `naming::part_path`, which `plan_resume` stats and `resolve_resume`
+    /// then trusts the bytes of. A case-sensitive `str::replace` sees nothing to defuse
     /// and one uppercase letter walks past the guard. Note this is the
     /// opposite direction from the deliberate over-match documented on
     /// [`Self::neutralize_temp_markers`]: there the neutralizer must match
