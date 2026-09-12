@@ -678,4 +678,27 @@ mod detect_file_size_timeout_tests {
             "expected elapsed >= {configured:?}, got {elapsed:?}",
         );
     }
+
+    /// A typed `ProbeError::Status` (e.g. a transient 503) must still
+    /// collapse to `None` here — `detect_file_size` has no retry policy
+    /// of its own, so any probe error (network or status) is "no size
+    /// detected", not a propagated error (issue #735).
+    #[tokio::test]
+    async fn detect_file_size_returns_none_on_non_2xx_status() {
+        let mut server = mockito::Server::new_async().await;
+        let mock = server
+            .mock("GET", "/probe")
+            .with_status(503)
+            .create_async()
+            .await;
+
+        let client = wreq::Client::new();
+        let url = format!("{}/probe", server.url());
+
+        let result =
+            BaseExtractor::detect_file_size(&url, &client, None, Duration::from_secs(5)).await;
+
+        assert_eq!(result, None);
+        mock.assert_async().await;
+    }
 }
