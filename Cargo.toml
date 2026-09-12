@@ -83,7 +83,14 @@ ipnet = "2.11"
 # can't resolve, breaking the link.
 # `deflate` joins gzip/brotli/zstd so `RequestBuilder::deflate(false)` compiles
 # (issue #565 task 2) — the per-request encoding-suppression toggle needs the
-# feature just as its three siblings do.
+# feature just as its three siblings do. Cross-cutting effect: this also turns
+# on the client-wide DEFAULT of decoding `Content-Encoding: deflate` for every
+# request that does NOT call `.deflate(false)` — i.e. every extractor/search
+# request, which only rdlp-http's resume/download path opts out of via
+# `download_request`. The `Accept-Encoding` a request advertises is unchanged
+# by this (the Chrome-emulation default header is merged before the
+# decompression layer runs), so this is purely a decode-on-receipt change,
+# not an advertise-on-send one.
 wreq = { version = "6.0.0-rc.28", features = ["cookies", "json", "stream", "gzip", "brotli", "zstd", "deflate", "socks", "form"] }
 wreq-util = "3.0.0-rc.10"
 # Explicit OpenSSL link — required on Linux because FFmpeg's libavformat.a

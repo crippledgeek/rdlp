@@ -29,6 +29,15 @@
 //! ```
 
 #![warn(missing_docs)]
+// A `mockito::ServerGuard` in this crate's tests must outlive the mock
+// asserts that follow its last request use — the assertion is what proves
+// the mock was hit, so holding the guard there is the point. Clippy's
+// `significant_drop_tightening` reads that as "drop it earlier," which would
+// tear the mock server down before the assertion runs: a false positive for
+// every mockito test in this crate. One crate-wide, test-only decision
+// instead of a per-module copy (`probe.rs`/`request.rs` each carried an
+// identical `#[allow]` before this).
+#![cfg_attr(test, allow(clippy::significant_drop_tightening))]
 
 mod client;
 mod config;

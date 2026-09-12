@@ -141,10 +141,6 @@ fn parse_content_range_total(headers: &wreq::header::HeaderMap) -> Option<u64> {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::significant_drop_tightening,
-    reason = "mockito::Server is a temporary owned by each test fn and dropped at end of scope; tightening would require restructuring every test"
-)]
 mod tests {
     use super::*;
     use mockito::Server;
