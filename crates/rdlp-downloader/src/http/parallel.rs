@@ -232,6 +232,30 @@ impl Attempt {
 /// Global atomic counter for generating unique download IDs
 static DOWNLOAD_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// A fresh (non-resume) HTTP download's fixed target: the resource, its
+/// destination file, and the server-advertised total size the assembled
+/// output must match (`verify_merged_size`'s backstop). The three are
+/// meaningless apart — a URL with no destination, a destination with no
+/// expected size to verify against, or a size with nothing to check it
+/// against are each an incomplete description of the same download.
+pub(super) struct DownloadTarget<'a> {
+    pub(super) url: &'a str,
+    pub(super) path: &'a Path,
+    pub(super) total_size: u64,
+}
+
+/// Where a resumed download picks up: the resource, the destination file,
+/// the byte offset already on disk, and the server-advertised total size
+/// the finished file must match. Same rationale as [`DownloadTarget`], plus
+/// `resume_from` — none of the four means "resume this transfer" without
+/// the other three.
+pub(super) struct ResumeTarget<'a> {
+    pub(super) url: &'a str,
+    pub(super) path: &'a Path,
+    pub(super) resume_from: u64,
+    pub(super) total_size: u64,
+}
+
 impl HttpDownloader {
     /// Parallel download using multiple range requests with fine-grained chunking.
     ///
@@ -240,12 +264,15 @@ impl HttpDownloader {
     /// `chunk_strategy` is used with a fixed connection count.
     pub(super) async fn download_parallel(
         &self,
-        url: &str,
-        path: &Path,
-        total_size: u64,
+        target: DownloadTarget<'_>,
         progress: Option<Box<dyn rdlp_core::ProgressCallback>>,
         retries: Arc<AtomicU64>,
     ) -> Result<DownloadStats> {
+        let DownloadTarget {
+            url,
+            path,
+            total_size,
+        } = target;
         let start_time = Instant::now();
         let download_id = DOWNLOAD_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
         let attempt = Attempt::Fresh;
@@ -280,10 +307,23 @@ impl HttpDownloader {
             temp_dir,
         };
         let (chunk_paths, total_downloaded) = if self.config.adaptive {
-            self.download_parallel_adaptive(span, layout, progress.clone(), None, tallies)
-                .await?
+            self.download_parallel_adaptive(
+                ParallelRun {
+                    span,
+                    layout,
+                    tallies,
+                },
+                progress.clone(),
+                None,
+            )
+            .await?
         } else {
-            self.download_parallel_static(span, layout, tallies).await?
+            self.download_parallel_static(ParallelRun {
+                span,
+                layout,
+                tallies,
+            })
+            .await?
         };
 
         let chunk_count = chunk_paths.len();
@@ -319,13 +359,16 @@ impl HttpDownloader {
     /// Parallel resume: downloads remaining chunks in parallel.
     pub(super) async fn download_parallel_resume(
         &self,
-        url: &str,
-        path: &Path,
-        resume_from: u64,
-        total_size: u64,
+        target: ResumeTarget<'_>,
         progress: Option<Box<dyn rdlp_core::ProgressCallback>>,
         retries: Arc<AtomicU64>,
     ) -> Result<DownloadStats> {
+        let ResumeTarget {
+            url,
+            path,
+            resume_from,
+            total_size,
+        } = target;
         let start_time = Instant::now();
         let remaining_size = total_size - resume_from;
         let download_id = DOWNLOAD_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -369,10 +412,23 @@ impl HttpDownloader {
             temp_dir,
         };
         let result = if self.config.adaptive {
-            self.download_parallel_adaptive(span, layout, progress.clone(), None, tallies)
-                .await
+            self.download_parallel_adaptive(
+                ParallelRun {
+                    span,
+                    layout,
+                    tallies,
+                },
+                progress.clone(),
+                None,
+            )
+            .await
         } else {
-            self.download_parallel_static(span, layout, tallies).await
+            self.download_parallel_static(ParallelRun {
+                span,
+                layout,
+                tallies,
+            })
+            .await
         };
 
         let (chunk_paths, newly_downloaded) = match result {
@@ -443,12 +499,15 @@ impl HttpDownloader {
     /// through), and `parallel_adaptive_cancel_uses_biased_select` guards it.
     async fn download_parallel_adaptive(
         &self,
-        span: TransferSpan<'_>,
-        layout: ChunkLayout<'_>,
+        run: ParallelRun<'_>,
         log_callback: Option<Arc<dyn ProgressCallback>>,
         cancel: Option<CancellationToken>,
-        tallies: Tallies,
     ) -> Result<(Vec<PathBuf>, u64)> {
+        let ParallelRun {
+            span,
+            layout,
+            tallies,
+        } = run;
         let TransferSpan {
             url,
             offset: byte_offset,
@@ -569,12 +628,12 @@ impl HttpDownloader {
     /// Static download: uses a fixed chunk size and connection count.
     ///
     /// Returns `(chunk_paths_in_order, total_bytes_downloaded)`.
-    async fn download_parallel_static(
-        &self,
-        span: TransferSpan<'_>,
-        layout: ChunkLayout<'_>,
-        tallies: Tallies,
-    ) -> Result<(Vec<PathBuf>, u64)> {
+    async fn download_parallel_static(&self, run: ParallelRun<'_>) -> Result<(Vec<PathBuf>, u64)> {
+        let ParallelRun {
+            span,
+            layout,
+            tallies,
+        } = run;
         let TransferSpan {
             url,
             offset: byte_offset,
@@ -672,6 +731,20 @@ struct TransferSpan<'a> {
 struct ChunkLayout<'a> {
     chunk_set: &'a ChunkSet,
     temp_dir: &'a Path,
+}
+
+/// One parallel-download attempt, fully described: the transfer to perform,
+/// where its chunks land on disk, and the run's shared byte/retry
+/// accounting. Grouped because each is meaningless alone for a parallel
+/// run — a `span` with nowhere to put its chunks, a `layout` with no span to
+/// fill it, or `tallies` with no run to tally are all incomplete on their
+/// own (Fowler's deletion test), unlike the `RunControls{log_callback,
+/// cancel}` pairing a prior review rejected as unrelated concerns bagged
+/// together.
+struct ParallelRun<'a> {
+    span: TransferSpan<'a>,
+    layout: ChunkLayout<'a>,
+    tallies: Tallies,
 }
 
 /// Everything one adaptive-chunk worker future needs to run to completion,

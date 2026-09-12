@@ -97,7 +97,7 @@ pub async fn run(
     // this legacy path, so its origin is the seed against which all segment
     // URLs are compared. Cross-origin segments (CDN-redirected media) get
     // operator-set headers stripped. Same gate pattern as PR #273 for the
-    // modern per-Repr path; gate applied inside `SegmentFetchCtx::fetch`.
+    // modern per-Repr path; gate applied inside `RepresentationRunCtx::fetch`.
     let mpd_origin = mpd_url_parsed.origin();
 
     let started = Instant::now();
@@ -151,35 +151,37 @@ pub async fn run(
             url: Some(rdlp_redact::RedactedUrlBuf::from(mpd_url)),
         });
     }
-    let segment_ctx = SegmentFetchCtx {
+    let segment_ctx = RepresentationRunCtx {
         http: http_downloader.clone(),
         retry: Arc::clone(&retry_config),
         mpd_origin: mpd_origin.clone(),
         cancel: cancel.cloned(),
         tallies: tallies.clone(),
+        log_callback: progress_arc.clone(),
+        transfer: TransferOptions {
+            concurrent: concurrent_segments,
+            buffer_size,
+        },
     };
 
     let video_bytes = download_representation(
         segment_ctx.clone(),
-        RepresentationTarget {
-            repr_id: video_repr_id.clone(),
-            is_video: true,
-            init_url: video_init,
-            seg_urls: video_seg_urls,
-        },
-        RepresentationPaths {
-            final_path: &video_final,
-            parts_dir: &video_parts,
-        },
-        TransferOptions {
-            concurrent: concurrent_segments,
-            buffer_size,
+        Representation {
+            target: RepresentationTarget {
+                repr_id: video_repr_id.clone(),
+                is_video: true,
+                init_url: video_init,
+                seg_urls: video_seg_urls,
+            },
+            paths: RepresentationPaths {
+                final_path: &video_final,
+                parts_dir: &video_parts,
+            },
         },
         ResumeState {
             shared: Arc::clone(&state_arc),
             path: &state_file,
         },
-        progress_arc.clone(),
     )
     .await?;
 
@@ -199,25 +201,22 @@ pub async fn run(
         }
         download_representation(
             segment_ctx,
-            RepresentationTarget {
-                repr_id: audio_repr.id.clone(),
-                is_video: false,
-                init_url: audio_init,
-                seg_urls: audio_seg_urls,
-            },
-            RepresentationPaths {
-                final_path: &audio_final,
-                parts_dir: &audio_parts,
-            },
-            TransferOptions {
-                concurrent: concurrent_segments,
-                buffer_size,
+            Representation {
+                target: RepresentationTarget {
+                    repr_id: audio_repr.id.clone(),
+                    is_video: false,
+                    init_url: audio_init,
+                    seg_urls: audio_seg_urls,
+                },
+                paths: RepresentationPaths {
+                    final_path: &audio_final,
+                    parts_dir: &audio_parts,
+                },
             },
             ResumeState {
                 shared: Arc::clone(&state_arc),
                 path: &state_file,
             },
-            progress_arc.clone(),
         )
         .await?
     } else {
@@ -352,6 +351,16 @@ struct RepresentationPaths<'a> {
     parts_dir: &'a Path,
 }
 
+/// What to fetch for one representation, and where it lands. Grouped
+/// because a [`RepresentationTarget`] with nowhere to write its output, or
+/// [`RepresentationPaths`] with nothing to fetch, are each only half a
+/// representation — the deletion test the run-wide [`RepresentationRunCtx`]
+/// fields below are held to as well.
+struct Representation<'a> {
+    target: RepresentationTarget,
+    paths: RepresentationPaths<'a>,
+}
+
 /// Transfer tuning shared by every segment fetch in one representation.
 #[derive(Clone, Copy)]
 struct TransferOptions {
@@ -372,13 +381,11 @@ struct ResumeState<'a> {
 
 #[allow(clippy::too_many_lines)]
 async fn download_representation(
-    ctx: SegmentFetchCtx,
-    target: RepresentationTarget,
-    paths: RepresentationPaths<'_>,
-    transfer: TransferOptions,
+    ctx: RepresentationRunCtx,
+    representation: Representation<'_>,
     resume: ResumeState<'_>,
-    log_callback: Option<Arc<dyn ProgressCallback>>,
 ) -> Result<u64> {
+    let Representation { target, paths } = representation;
     let RepresentationTarget {
         repr_id,
         is_video,
@@ -392,15 +399,16 @@ async fn download_representation(
     let TransferOptions {
         concurrent,
         buffer_size,
-    } = transfer;
+    } = ctx.transfer;
+    let log_callback = ctx.log_callback.clone();
     let ResumeState {
         shared: state_arc,
         path: state_path,
     } = resume;
     // Read through `ctx.tallies` (not a separate parameter) — `ctx` already
-    // carries the run's shared byte/retry tallies for `SegmentFetchCtx::fetch`,
-    // and this loop's own byte accounting must land in the SAME `bytes`
-    // counter, not a second clone of it.
+    // carries the run's shared byte/retry tallies for
+    // `RepresentationRunCtx::fetch`, and this loop's own byte accounting
+    // must land in the SAME `bytes` counter, not a second clone of it.
     let bytes_counter = Arc::clone(&ctx.tallies.bytes);
     // #347: cooperative-cancel gate before any work for this representation
     // (init segment + segment loop). Mirrors the fragment downloader idiom
@@ -522,7 +530,7 @@ async fn download_representation(
             // The check below short-circuits a segment whose task starts after
             // cancel; an in-flight segment body is ALSO interrupted mid-read by
             // the `biased` select! in `crate::retry::with_retry_cancellable`,
-            // which `SegmentFetchCtx::fetch` and the fragment path both go
+            // which `RepresentationRunCtx::fetch` and the fragment path both go
             // through, so a stalled CDN body no longer blocks until
             // `read_timeout` fires.
             if ctx
@@ -715,10 +723,15 @@ async fn mux_outputs(
     }
 }
 
-/// Everything a DASH segment fetch needs that is fixed for the whole
-/// representation: the HTTP client, retry policy, the MPD origin behind the
-/// same-origin header gate, the cancellation token, and the shared
-/// byte/retry tallies (issue #672).
+/// Everything one DASH representation-download run holds constant across
+/// both the segment fetches and the loop around them: the HTTP client,
+/// retry policy, the MPD origin behind the same-origin header gate, the
+/// cancellation token, the shared byte/retry tallies (issue #672), the AIMD
+/// log sink, and the transfer tuning. Named for what it now is rather than
+/// "SegmentFetchCtx" (its original, narrower scope) — `log_callback` and
+/// `transfer` are per-run constants of the same kind as the rest, not
+/// segment-fetch-specific, so they belong here rather than as separate
+/// `download_representation` parameters.
 ///
 /// Mirrors `crate::fragments::FragmentFetchCtx` — same shape, same reason:
 /// each parallel segment task builds its own cheap clone, and the tallies
@@ -729,15 +742,17 @@ async fn mux_outputs(
 /// through `ctx.tallies.bytes` rather than taking a second, separate
 /// `Tallies` parameter of its own.
 #[derive(Clone)]
-struct SegmentFetchCtx {
+struct RepresentationRunCtx {
     http: HttpDownloader,
     retry: Arc<RetryConfig>,
     mpd_origin: url::Origin,
     cancel: Option<CancellationToken>,
     tallies: Tallies,
+    log_callback: Option<Arc<dyn ProgressCallback>>,
+    transfer: TransferOptions,
 }
 
-impl SegmentFetchCtx {
+impl RepresentationRunCtx {
     /// Fetch one DASH segment (init or media), retrying transient failures.
     ///
     /// Delegates to `fetch_with_optional_range` with `byte_range: None` —
@@ -761,25 +776,32 @@ impl SegmentFetchCtx {
 }
 
 /// Test fixture only (not used in production code): builds a one-off
-/// [`SegmentFetchCtx`], so the cancel/origin-gate tests below can exercise
-/// the same mechanism `download_representation` uses without constructing a
-/// whole representation. Plain positional parameters are unambiguous here —
-/// the four types (`&HttpDownloader`, `&Arc<RetryConfig>`, `&url::Origin`,
-/// `Option<&CancellationToken>`) are all distinct, so there is no risk of
-/// silently swapping two same-typed arguments at a call site.
+/// [`RepresentationRunCtx`], so the cancel/origin-gate tests below can
+/// exercise the same mechanism `download_representation` uses without
+/// constructing a whole representation. `log_callback`/`transfer` are set to
+/// harmless test defaults since `fetch()` never reads them. Plain positional
+/// parameters are unambiguous here — the four types (`&HttpDownloader`,
+/// `&Arc<RetryConfig>`, `&url::Origin`, `Option<&CancellationToken>`) are all
+/// distinct, so there is no risk of silently swapping two same-typed
+/// arguments at a call site.
 #[cfg(test)]
 fn test_ctx(
     http: &HttpDownloader,
     retry: &Arc<RetryConfig>,
     mpd_origin: &url::Origin,
     cancel: Option<&CancellationToken>,
-) -> SegmentFetchCtx {
-    SegmentFetchCtx {
+) -> RepresentationRunCtx {
+    RepresentationRunCtx {
         http: http.clone(),
         retry: Arc::clone(retry),
         mpd_origin: mpd_origin.clone(),
         cancel: cancel.cloned(),
         tallies: Tallies::new(),
+        log_callback: None,
+        transfer: TransferOptions {
+            concurrent: 1,
+            buffer_size: 64 * 1024,
+        },
     }
 }
 
@@ -830,35 +852,37 @@ mod cancel_tests {
         let token = CancellationToken::new();
         token.cancel(); // pre-cancel
 
-        let ctx = SegmentFetchCtx {
+        let ctx = RepresentationRunCtx {
             http,
             retry,
             mpd_origin,
             cancel: Some(token),
             tallies: tallies.clone(),
+            log_callback: None,
+            transfer: TransferOptions {
+                concurrent: 8,
+                buffer_size: 64 * 1024,
+            },
         };
 
         let res = download_representation(
             ctx,
-            RepresentationTarget {
-                repr_id: "v0".to_string(),
-                is_video: true,
-                init_url: None, // no init segment
-                seg_urls: vec![seg_url],
-            },
-            RepresentationPaths {
-                final_path: &final_path,
-                parts_dir: &parts,
-            },
-            TransferOptions {
-                concurrent: 8,
-                buffer_size: 64 * 1024,
+            Representation {
+                target: RepresentationTarget {
+                    repr_id: "v0".to_string(),
+                    is_video: true,
+                    init_url: None, // no init segment
+                    seg_urls: vec![seg_url],
+                },
+                paths: RepresentationPaths {
+                    final_path: &final_path,
+                    parts_dir: &parts,
+                },
             },
             ResumeState {
                 shared: state,
                 path: &state_file,
             },
-            None,
         )
         .await;
 
@@ -876,7 +900,7 @@ mod cancel_tests {
     const MID_READ_CANCEL_TIMEOUT_SECS: u64 = 5;
 
     /// Negative (mid-read interrupt, this PR): a cancel that fires while a
-    /// segment body is IN-FLIGHT must abort `SegmentFetchCtx::fetch` immediately via the
+    /// segment body is IN-FLIGHT must abort `RepresentationRunCtx::fetch` immediately via the
     /// `biased` select! wrapper — NOT wait for the body to finish or for the
     /// `read_timeout` to fire. The mockito mock writes one chunk then sleeps
     /// 30s inside `with_chunked_body`, stalling the body read. We cancel the
@@ -889,7 +913,7 @@ mod cancel_tests {
         let mut server = mockito::Server::new_async().await;
         // Write the first byte, then stall for 30s before completing the body.
         // This holds the connection open mid-read so the `resp.bytes()` future
-        // inside `SegmentFetchCtx::fetch` is parked when the cancel fires.
+        // inside `RepresentationRunCtx::fetch` is parked when the cancel fires.
         let _mock = server
             .mock("GET", "/seg.m4s")
             .with_chunked_body(|w| {

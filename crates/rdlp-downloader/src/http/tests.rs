@@ -851,7 +851,7 @@ async fn download_sequential_cancel_mid_stream_returns_cancelled() {
     std::thread::spawn(move || {
         if let Ok((mut stream, _)) = listener.accept() {
             // Read and discard the request.
-            let mut buf = [0u8; 4096];
+            let mut buf = [0u8; REQUEST_BUF];
             let _ = stream.read(&mut buf);
             // Send HTTP 200 with chunked encoding but no body chunks.
             let _ = stream.write_all(
@@ -1150,7 +1150,7 @@ async fn download_to_writer_cancel_mid_stream_returns_cancelled() {
     let port = listener.local_addr().unwrap().port();
     std::thread::spawn(move || {
         if let Ok((mut stream, _)) = listener.accept() {
-            let mut buf = [0u8; 4096];
+            let mut buf = [0u8; REQUEST_BUF];
             let _ = stream.read(&mut buf);
             let _ = stream.write_all(
                 b"HTTP/1.1 200 OK\r\n\
@@ -1375,9 +1375,13 @@ fn validation_test_downloader() -> HttpDownloader {
     ))
 }
 
-/// A one-off [`ChunkRequestSpec`] for the range-validation tests below,
-/// which care about `url`/`start`/`end`/`chunk_path` only — `chunk_id` is an
-/// arbitrary log label and `retries` a fresh, unread counter.
+/// Test fixture only (not used in production code): a one-off
+/// [`ChunkRequestSpec`] for the range-validation tests below, which care
+/// about `url`/`start`/`end`/`chunk_path` only — `chunk_id` is an arbitrary
+/// log label and `retries` a fresh, unread counter. Plain positional
+/// parameters are unambiguous here — `start`/`end` are both `u64` but always
+/// supplied as a literal pair at the call site, matching `ChunkRequestSpec`'s
+/// own field order.
 fn range_request<'a>(
     url: &'a str,
     start: u64,
@@ -2562,8 +2566,10 @@ async fn download_to_writer_get_retry_is_reported_in_stats() {
 /// ~800-950 bytes; 4096 comfortably fits one `read` without leaving unread
 /// request bytes behind (which would surface as an RST instead of a clean
 /// FIN on the "drop" leg below and could flip a success leg into
-/// `ECONNRESET`). Matches the pre-existing stall-forever fixtures at
-/// `:849`/`:1149`.
+/// `ECONNRESET`). Shared with the pre-existing stall-forever fixtures
+/// `download_sequential_cancel_mid_stream_returns_cancelled` and
+/// `download_to_writer_cancel_mid_stream_returns_cancelled`, which use this
+/// same constant rather than a second hardcoded `4096`.
 const REQUEST_BUF: usize = 4096;
 
 /// A raw, scripted `TcpListener` server for tests that need a genuine

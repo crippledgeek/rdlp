@@ -18,6 +18,7 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio_util::sync::CancellationToken;
 
 use super::config::PROGRESS_UPDATE_INTERVAL;
+use super::parallel::{DownloadTarget, ResumeTarget};
 use super::{ContentRange, HTTP_PARTIAL_CONTENT, HttpDownloader};
 use crate::progress::SpeedMeter;
 use crate::retry::{RetryPolicy, retries_taken, with_retry};
@@ -81,7 +82,15 @@ impl Downloader for HttpDownloader {
                 // Parallel-path cooperative cancel is pre-existing AIMD work,
                 // out of scope for F6; outer select! at the orchestrator covers it.
                 return self
-                    .download_parallel(url, path, ps, progress, Arc::clone(&retries))
+                    .download_parallel(
+                        DownloadTarget {
+                            url,
+                            path,
+                            total_size: ps,
+                        },
+                        progress,
+                        Arc::clone(&retries),
+                    )
                     .await;
             }
 
@@ -152,7 +161,15 @@ impl Downloader for HttpDownloader {
                     self.config.concurrent_fragments
                 );
                 return self
-                    .download_parallel(url, path, ps, progress, Arc::clone(&retries))
+                    .download_parallel(
+                        DownloadTarget {
+                            url,
+                            path,
+                            total_size: ps,
+                        },
+                        progress,
+                        Arc::clone(&retries),
+                    )
                     .await;
             }
 
@@ -510,10 +527,12 @@ impl HttpDownloader {
                     drop(response);
                     return self
                         .download_parallel_resume(
-                            url,
-                            path,
-                            resume_from,
-                            total,
+                            ResumeTarget {
+                                url,
+                                path,
+                                resume_from,
+                                total_size: total,
+                            },
                             progress,
                             Arc::clone(&retries),
                         )
