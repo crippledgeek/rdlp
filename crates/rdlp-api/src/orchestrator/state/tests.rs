@@ -60,10 +60,14 @@ mod part_lock_tests {
     use tokio::sync::mpsc;
     use tokio_util::sync::CancellationToken;
 
-    /// Two orchestrators, each with its OWN `TempRegistry` — what two
-    /// separate rdlp processes look like from inside one test process
-    /// (same-instance registration is deliberately idempotent, so a shared
-    /// registry would pass trivially and prove nothing; see `TempRegistry::register`).
+    /// Two orchestrators, each with its OWN `TempRegistry` — one registry
+    /// per orchestrator models two separate rdlp processes from inside one
+    /// test process. Same-registry refusal (two orchestrators sharing ONE
+    /// registry, what `RdlpClient` actually hands two queued desktop
+    /// downloads) is a DIFFERENT scenario, covered separately in
+    /// `part_lock.rs::claim_refuses_when_held_by_the_same_registry` —
+    /// `TempRegistry::claim` is deliberately non-idempotent, so that case is
+    /// refused too, not "trivially passed".
     fn orchestrator_with_own_registry(config: &Arc<Config>) -> Orchestrator {
         let (tx, _rx) = mpsc::channel::<Event>(64);
         Orchestrator::new_with_registry(
@@ -162,5 +166,36 @@ mod part_lock_tests {
             .await
             .expect("claim must be reusable once the first holder released it");
         assert!(matches!(second, DownloadPhase::Downloading { .. }));
+    }
+
+    /// Security review MEDIUM (fail-closed): a DIRECTORY pre-existing at the
+    /// `.rdlp-part` file's `.lock` sidecar path — plantable by anyone with
+    /// write access to the output directory — makes the claim's own
+    /// `File::create` fail. `Preparing::advance` must surface
+    /// `OutputUnclaimable`, never `Ok(Downloading)` with zero exclusivity
+    /// actually verified.
+    #[tokio::test]
+    async fn preparing_fails_closed_when_lock_sidecar_path_is_a_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = shared_config(&dir);
+        let orch = orchestrator_with_own_registry(&config);
+        let (info, format) = same_target_info_and_format();
+
+        let clean_path = orch.generate_output_path(&info, &format).unwrap();
+        let part = crate::orchestrator::naming::part_path(&clean_path);
+        let mut lock_path = part.clone().into_os_string();
+        lock_path.push(".lock");
+        std::fs::create_dir(std::path::PathBuf::from(lock_path)).unwrap();
+
+        let result = preparing_phase(&orch, &info, &format)
+            .advance(&orch, false)
+            .await;
+        assert!(
+            matches!(
+                result,
+                Err(OrchestratorError::OutputUnclaimable { ref path, .. }) if *path == part
+            ),
+            "must fail closed as OutputUnclaimable, got: {result:?}"
+        );
     }
 }

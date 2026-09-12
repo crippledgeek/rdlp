@@ -62,12 +62,17 @@ impl PartLock {
     ///
     /// # Errors
     /// Returns [`OrchestratorError::OutputBusy`] when `path` is already
-    /// claimed elsewhere.
+    /// claimed elsewhere, or [`OrchestratorError::OutputUnclaimable`] when
+    /// the exclusivity check itself could not be performed (fail closed —
+    /// see [`TempRegistry::claim`]'s doc comment).
     pub fn claim(registry: Arc<TempRegistry>, path: PathBuf) -> Result<Self> {
         let key = canonical_lock_key(&path);
         match registry.claim(&key) {
             Ok(()) => Ok(Self { registry, key }),
             Err(RegistryError::HeldElsewhere { .. }) => Err(OrchestratorError::OutputBusy { path }),
+            Err(RegistryError::CannotVerifyExclusivity { source, .. }) => {
+                Err(OrchestratorError::OutputUnclaimable { path, source })
+            }
         }
     }
 }
@@ -79,8 +84,10 @@ impl PartLock {
 /// Canonicalizing `path` itself would fail — the `.rdlp-part` file usually
 /// does not exist yet at claim time (that's the point: the claim precedes
 /// resume detection and the download). The parent directory DOES exist by
-/// then (`Orchestrator::ensure_parent_dir` runs before the caller computes
-/// `path`), so canonicalizing it is reliable.
+/// then: the Single-video path creates it via `Orchestrator::ensure_parent_dir`
+/// before computing `path`, and the playlist-episode path via its own
+/// `create_dir_all` at the playlist output directory (`playlist/mod.rs`) —
+/// so canonicalizing the parent is reliable on both call sites.
 ///
 /// Without this, two differently-spelled references to the SAME file from
 /// the SAME process — a relative path and its absolute equivalent, or a path

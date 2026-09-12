@@ -103,6 +103,7 @@ pub const fn exit_code_for(e: &RdlpApiError) -> i32 {
         | RdlpApiError::FfmpegError { .. }
         | RdlpApiError::UnsupportedPlatform { .. }
         | RdlpApiError::OutputBusy { .. }
+        | RdlpApiError::OutputUnclaimable { .. }
         | RdlpApiError::Soft { .. } => 1,
     }
 }
@@ -201,6 +202,14 @@ mod tests {
     fn exit_code_for_output_busy_is_general_error() {
         let err = rdlp_api::RdlpApiError::OutputBusy {
             message: "another rdlp process is downloading to Title.rdlp-part.mp4".to_owned(),
+        };
+        assert_eq!(super::exit_code_for(&err), 1);
+    }
+
+    #[test]
+    fn exit_code_for_output_unclaimable_is_general_error() {
+        let err = rdlp_api::RdlpApiError::OutputUnclaimable {
+            message: "cannot verify exclusive ownership of Title.rdlp-part.mp4".to_owned(),
         };
         assert_eq!(super::exit_code_for(&err), 1);
     }

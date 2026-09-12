@@ -38,6 +38,16 @@
 //! `File::create` on the sidecar, which truncates the stale (unlocked)
 //! sidecar in place and re-locks it.
 //!
+//! **A Claim fails closed, never falls back.** `Temp`'s I/O-error fallback
+//! (best-effort, unlocked placeholder — see below) is deliberately NOT
+//! shared with `Claim`: for a Claim, a sidecar that can't be created or
+//! locked (a pre-existing directory at the `.lock` path, permissions, a
+//! full/read-only filesystem) means the exclusivity check was never even
+//! attempted, so reporting success would hand the caller an unverified
+//! "claim" — the #572 collision again, and this one is triggerable by
+//! anyone with write access to the output directory. `claim()` returns
+//! [`RegistryError::CannotVerifyExclusivity`] instead.
+//!
 //! # Lint allowances
 //!
 //! - `clippy::case_sensitive_file_extension_comparisons`: `.lock` and `.rdlp-tmp-`
@@ -73,6 +83,30 @@ pub enum RegistryError {
     HeldElsewhere {
         /// The path that could not be claimed.
         path: PathBuf,
+    },
+
+    /// A [`TempRegistry::claim`] could not even ATTEMPT the exclusivity
+    /// check — the `.lock` sidecar couldn't be created or locked (a
+    /// pre-existing directory at the sidecar path, permissions, a
+    /// read-only/full filesystem). For a `Claim` entry this MUST fail
+    /// closed rather than fall back to an unlocked placeholder: an
+    /// unverified "claim" is worse than no claim, because the caller
+    /// believes it holds exclusivity when it does not — the #572
+    /// collision, reachable this time via an I/O condition instead of a
+    /// real contending lock, and triggerable by anyone with write access
+    /// to the output directory (pre-create `<part>.lock` as a directory).
+    #[error(
+        "cannot verify exclusive ownership of {}: {source}",
+        path.display()
+    )]
+    CannotVerifyExclusivity {
+        /// The path the claim was for.
+        path: PathBuf,
+        /// The `.lock` sidecar path the failure occurred on.
+        lock_path: PathBuf,
+        /// The underlying I/O failure.
+        #[source]
+        source: std::io::Error,
     },
 }
 
@@ -190,8 +224,23 @@ impl TempRegistry {
         let lock_file = match File::create(&lock_path) {
             Ok(f) => f,
             Err(e) => {
-                // Non-fatal: log and fall back to a non-locking entry. The temp
-                // will still be cleaned up on Drop; it just won't be skipped by
+                // For a Claim, an unverifiable exclusivity check MUST fail
+                // closed: falling back to an unlocked placeholder here would
+                // report Ok(()) to a caller that believes it holds exclusive
+                // ownership when NOTHING was checked or registered — the
+                // #572 collision again, this time triggerable by anyone with
+                // write access to the output directory (pre-create
+                // `<part>.lock` as a directory to force this exact branch).
+                if kind == EntryKind::Claim {
+                    return Err(RegistryError::CannotVerifyExclusivity {
+                        path: path.to_path_buf(),
+                        lock_path,
+                        source: e,
+                    });
+                }
+                // Temp entries only affect cleanup hygiene, not correctness:
+                // log and fall back to a non-locking entry. The temp will
+                // still be cleaned up on Drop; it just won't be skipped by
                 // cleanup_stale in concurrent processes.
                 log::warn!(
                     "TempRegistry: could not create lock file {}: {e}; \
@@ -233,6 +282,16 @@ impl TempRegistry {
                 });
             }
             Err(e) => {
+                // Same fail-closed reasoning as the File::create branch
+                // above: a Claim whose lock couldn't even be ATTEMPTED must
+                // not report success.
+                if kind == EntryKind::Claim {
+                    return Err(RegistryError::CannotVerifyExclusivity {
+                        path: path.to_path_buf(),
+                        lock_path,
+                        source: e,
+                    });
+                }
                 log::warn!(
                     "TempRegistry: could not lock {}: {e}; advisory lock not held",
                     lock_path.display()
@@ -249,13 +308,14 @@ impl TempRegistry {
     }
 
     /// Insert `new_entry` for `path`, UNLESS `path` is already held by a
-    /// live `Claim` — an I/O-error fallback branch of [`Self::acquire`] has
-    /// no working `flock` to rely on, so this reproduces the same refusal by
-    /// hand. Fixes a #572 reintroduction: an unconditional `insert` here
-    /// would silently replace an existing Claim entry, dropping the first
-    /// holder's `_lock_file` (releasing its advisory lock) and reporting
-    /// `Ok(())` to the second caller — the exact collision #572 exists to
-    /// prevent, reached via the I/O-error path instead of `try_lock_exclusive`.
+    /// live `Claim`. A `Claim` never reaches [`Self::acquire`]'s I/O-error
+    /// fallbacks (it fails closed there, #572), so on the success path the
+    /// `flock` has already refused a second holder and this check is
+    /// defence-in-depth; it still matters for the `Temp` fallback, whose
+    /// placeholder has no working `flock`: an unconditional `insert` there
+    /// would replace an existing Claim entry, dropping the first holder's
+    /// `_lock_file` (releasing its advisory lock) and reporting `Ok(())` to
+    /// the second caller — the collision #572 exists to prevent.
     ///
     /// An existing `Temp` entry is kept as-is and this reports `Ok(())`:
     /// `register`'s caller already short-circuits on `contains_key` before
@@ -561,6 +621,56 @@ mod tests {
         drop(other_holder);
     }
 
+    /// Security review MEDIUM (fail-closed): when the `.lock` sidecar path
+    /// is occupied by a DIRECTORY, `File::create` fails and `claim()` must
+    /// refuse with `CannotVerifyExclusivity` — not silently register an
+    /// unverified placeholder. Nothing must be registered, and no
+    /// placeholder fd left open (the pre-fix path opened `path` itself as a
+    /// stand-in and inserted it via `insert_or_conflict`, reporting `Ok(())`
+    /// with zero cross-process exclusivity actually checked).
+    #[test]
+    fn test_claim_fails_closed_when_sidecar_path_is_a_directory() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("video.rdlp-part.mp4");
+        fs::write(&path, b"partial").unwrap();
+        let lock_path = lock_path_for(&path);
+        fs::create_dir(&lock_path).unwrap();
+
+        let reg = TempRegistry::new();
+        let result = reg.claim(&path);
+        assert!(
+            matches!(result, Err(RegistryError::CannotVerifyExclusivity { .. })),
+            "claim() must fail closed when the sidecar can't be created, got: {result:?}"
+        );
+        assert!(
+            !reg.contains(&path),
+            "an unverifiable claim must not be registered"
+        );
+    }
+
+    /// Same directory-at-sidecar condition, but for `register()` (Temp
+    /// entries): pins the kind split — Temp keeps the lenient best-effort
+    /// fallback because it only affects cleanup hygiene, never correctness.
+    #[test]
+    fn test_register_still_succeeds_best_effort_when_sidecar_path_is_a_directory() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("video.rdlp-tmp-abc.mp4");
+        fs::write(&path, b"temp bytes").unwrap();
+        let lock_path = lock_path_for(&path);
+        fs::create_dir(&lock_path).unwrap();
+
+        let reg = TempRegistry::new();
+        let result = reg.register(&path);
+        assert!(
+            result.is_ok(),
+            "register() (Temp) must still succeed best-effort, got: {result:?}"
+        );
+        assert!(
+            reg.contains(&path),
+            "the Temp entry must be registered via the placeholder fallback"
+        );
+    }
+
     #[test]
     fn test_drop_deletes_remaining_files() {
         let dir = TempDir::new().unwrap();
@@ -697,10 +807,15 @@ mod tests {
         fs::remove_file(&lock_path).expect("remove real sidecar");
         fs::create_dir(&lock_path).expect("replace sidecar with a directory");
 
+        // Fail-closed (security review MEDIUM): a Claim whose sidecar can't
+        // even be created now refuses with CannotVerifyExclusivity BEFORE
+        // ever reaching insert_or_conflict's Occupied-check — it errors
+        // closed rather than falling through to (and being caught by) the
+        // map-based guard. Either way the first claim must survive.
         let result = reg.claim(&path);
         assert!(
-            matches!(result, Err(RegistryError::HeldElsewhere { .. })),
-            "second claim hitting the I/O-error fallback must still be refused, got: {result:?}"
+            matches!(result, Err(RegistryError::CannotVerifyExclusivity { .. })),
+            "second claim hitting the I/O-error fallback must fail closed, got: {result:?}"
         );
         assert!(
             reg.contains(&path),
