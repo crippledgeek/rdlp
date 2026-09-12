@@ -12,6 +12,7 @@ mod gated_plan;
 mod interactive;
 mod merge_download;
 pub mod naming;
+mod part_lock;
 mod paths;
 pub mod pipeline_availability;
 mod playlist;
@@ -135,6 +136,13 @@ pub struct Orchestrator {
     pub(super) downloader_registry: Arc<dyn DownloaderRegistryTrait>,
     /// Channel-based post-processing pipeline, or why there isn't one.
     pub(super) pipeline: PipelineAvailability,
+    /// Crash-safe temp/output-path registry, shared with the pipeline when
+    /// one exists. Kept as its own field (not reached only through
+    /// `pipeline`) so the output-path claim in `DownloadPhase::advance`
+    /// (rdlp#572) is available even when `FFmpeg` is unavailable — a
+    /// download still runs without post-processing in that case, and the
+    /// two-process collision it guards against is unrelated to `FFmpeg`.
+    pub(super) temp_registry: Arc<TempRegistry>,
     pub(super) extraction_context: Arc<ExtractionContext>,
     pub(super) config: Arc<Config>,
     /// Event sender for download lifecycle events
@@ -262,7 +270,7 @@ impl Orchestrator {
         ));
 
         let pipeline_registry = temp_registry.unwrap_or_else(|| Arc::new(TempRegistry::new()));
-        let pipeline = Self::create_pipeline(&config, pipeline_registry);
+        let pipeline = Self::create_pipeline(&config, Arc::clone(&pipeline_registry));
 
         // Use the provided registry if given (built with plugins by RdlpClient),
         // otherwise fall back to the process-level cached built-in-only registry.
@@ -288,6 +296,7 @@ impl Orchestrator {
                 downloader_client,
             )),
             pipeline,
+            temp_registry: pipeline_registry,
             extraction_context,
             config,
             event_tx,
@@ -363,6 +372,13 @@ impl Orchestrator {
     /// Whether a cancellation should keep the resumable download partial.
     pub(super) fn should_keep_partial(&self) -> bool {
         self.cancel_disposition.should_keep()
+    }
+
+    /// The shared crash-safe temp/output-path registry (rdlp#572's claim
+    /// target). A cheap `Arc` clone — callers hold it for the duration of
+    /// a single output-path claim, not for the orchestrator's lifetime.
+    pub(super) fn temp_registry(&self) -> Arc<TempRegistry> {
+        Arc::clone(&self.temp_registry)
     }
 
     /// Emit an event to the event channel, ignoring send failures.

@@ -6,6 +6,7 @@ pub use download_state::DownloadState;
 
 use super::DownloadPlan;
 use super::gated_plan::GatedPlan;
+use super::part_lock::PartLock;
 use super::session_state::{self, SessionState, SingleVideoState};
 use super::{
     Orchestrator,
@@ -89,6 +90,13 @@ pub enum DownloadPhase {
         /// straight into it would otherwise reinstate the bypass with no
         /// compile error, which is the failure this type exists to prevent.
         plan: GatedPlan,
+        /// Output-path claim for a Single download (rdlp#572); `None` for
+        /// Merge (which writes to derived per-stream paths, not the shared
+        /// `.rdlp-part` name) and for the stdout sentinel. Held from just
+        /// before resume detection until the `.rdlp-part` file is renamed
+        /// away in this phase's own `advance()` — dropping it releases the
+        /// claim on every exit path (success, cancel, error).
+        part_lock: Option<PartLock>,
     },
     /// Download completed successfully.
     ///
@@ -347,6 +355,7 @@ impl DownloadPhase {
                         state: DownloadState::Fresh,
                         subtitle_selection,
                         plan,
+                        part_lock: None,
                     });
                 }
 
@@ -360,18 +369,26 @@ impl DownloadPhase {
                 // Resume detection only applies to Single downloads.
                 // Merge downloads create separate stream files (video + audio)
                 // at derived paths and always start fresh.
-                let state = match plan.plan() {
-                    DownloadPlan::Merge { .. } => DownloadState::Fresh,
+                let (state, part_lock) = match plan.plan() {
+                    DownloadPlan::Merge { .. } => (DownloadState::Fresh, None),
                     DownloadPlan::Single(_) => {
                         // Probe resume against the deterministic .rdlp-part name —
                         // the download writes there, not to the clean name (#406).
                         let part = super::naming::part_path(&output_path);
-                        let resume_offset = orchestrator
-                            .detect_resume_point(&part, format.filesize)
+
+                        // Claim the output path BEFORE resume detection (#572):
+                        // a second rdlp process — or a second queued download
+                        // sharing this orchestrator's registry — racing the
+                        // same target must be refused here, not allowed to
+                        // also read/write `part`. Shared helper: the
+                        // playlist-episode path routes through the same one.
+                        let (lock, resume_offset) = orchestrator
+                            .claim_part_and_detect_resume(&part, format.filesize)
                             .await?;
 
                         // Already complete: the bytes are under .rdlp-part; commit
-                        // them to the clean name before returning Complete.
+                        // them to the clean name before returning Complete. `lock`
+                        // drops (releasing the claim) when this fn returns.
                         if let Some(expected_size) = format.filesize
                             && resume_offset == expected_size
                         {
@@ -379,11 +396,12 @@ impl DownloadPhase {
                             return Ok(Self::Complete { path: output_path });
                         }
 
-                        if resume_offset > 0 {
+                        let state = if resume_offset > 0 {
                             DownloadState::Resume(resume_offset)
                         } else {
                             DownloadState::Fresh
-                        }
+                        };
+                        (state, Some(lock))
                     }
                 };
 
@@ -394,6 +412,7 @@ impl DownloadPhase {
                     state,
                     subtitle_selection,
                     plan,
+                    part_lock,
                 })
             }
 
@@ -404,6 +423,7 @@ impl DownloadPhase {
                 state,
                 subtitle_selection,
                 plan,
+                part_lock,
             } => {
                 let plan = plan.into_inner();
                 // Stdout mode: stream directly, skip post-processing
@@ -455,6 +475,11 @@ impl DownloadPhase {
                         // created here — the coordinator finalizes after PP (#406).
                         let seam = super::naming::seam_path(&output_path);
                         super::naming::finalize_part(&part, &seam).await?;
+                        // Release the output-path claim (#572) now that `part`
+                        // no longer exists under that name — a second process
+                        // racing this target can start as soon as it's gone,
+                        // rather than waiting out the whole post-processing run.
+                        drop(part_lock);
                         (vec![seam], outcome.is_hls)
                     }
                     DownloadPlan::Merge {

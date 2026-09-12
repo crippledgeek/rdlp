@@ -22,6 +22,22 @@
 //! This prevents one rdlp process from deleting another process's in-progress
 //! temp files during startup cleanup.
 //!
+//! ## Claim entries (#572)
+//!
+//! [`TempRegistry::claim`] registers an entry of a SECOND kind: an ownership
+//! lock on a path rdlp does not create or own the lifecycle of (the
+//! `.rdlp-part` download-in-progress file). Sweeps (`cleanup_all`, `Drop`)
+//! release a Claim entry's lock exactly like a Temp entry's, but NEVER
+//! delete the tracked file itself — the download layer (`finalize_part` /
+//! `discard_part`) owns that decision.
+//!
+//! `cleanup_stale()` filters on the `.rdlp-tmp-` marker, so it never even
+//! looks at a `.rdlp-part` file or its `.lock` sidecar — a sidecar orphaned
+//! by a `SIGKILL` (no graceful `release()`) is simply never swept. It is
+//! reclaimed the ordinary way: the next `claim()` on that path calls
+//! `File::create` on the sidecar, which truncates the stale (unlocked)
+//! sidecar in place and re-locks it.
+//!
 //! # Lint allowances
 //!
 //! - `clippy::case_sensitive_file_extension_comparisons`: `.lock` and `.rdlp-tmp-`
@@ -42,6 +58,41 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use fs4::fs_std::FileExt;
+use thiserror::Error;
+
+/// Errors raised by [`TempRegistry::register`] and [`TempRegistry::claim`].
+#[derive(Debug, Error)]
+pub enum RegistryError {
+    /// Another process — or another `TempRegistry` instance, which is what a
+    /// second rdlp process looks like — already holds the advisory lock on
+    /// `path`. Two processes writing the same output path is a conflict
+    /// worth reporting, not one worth silently making safe (rdlp#572): the
+    /// caller must refuse the claim rather than let a second writer share
+    /// the same chunk files.
+    #[error("path already claimed by another rdlp process: {}", path.display())]
+    HeldElsewhere {
+        /// The path that could not be claimed.
+        path: PathBuf,
+    },
+}
+
+/// What a registered entry means for the sweeps (`cleanup_all`, `Drop`).
+///
+/// The two are NOT interchangeable: a `Temp` entry names a file rdlp itself
+/// created and owns outright, so a sweep deleting it is correct. A `Claim`
+/// entry (rdlp#572) is a lock on a path rdlp does NOT own the lifecycle of —
+/// the `.rdlp-part` download-in-progress file, which `finalize_part` /
+/// `discard_part` manage explicitly. A sweep that can't tell the two apart
+/// deletes a live, resumable download out from under its owner the moment
+/// `cleanup_all` runs on process shutdown while a download is still active.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum EntryKind {
+    /// Rdlp created and owns `path`; sweeps may delete it.
+    Temp,
+    /// Rdlp only holds an ownership claim on `path`; sweeps must NEVER
+    /// delete the file itself, only release the lock and its sidecar.
+    Claim,
+}
 
 /// Entry stored for each registered temp file.
 ///
@@ -50,6 +101,8 @@ use fs4::fs_std::FileExt;
 struct TempEntry {
     /// Open handle to the `.lock` sidecar — holds the exclusive advisory lock.
     _lock_file: File,
+    /// Whether a sweep may delete the tracked file itself.
+    kind: EntryKind,
 }
 
 /// Global registry of pipeline temp files for crash-safe cleanup.
@@ -69,13 +122,70 @@ impl TempRegistry {
         }
     }
 
-    /// Register a temp file path. Called by `FileTracker::temp_path()`.
+    /// Register a temp file rdlp itself owns. Called by
+    /// `FileTracker::temp_path()`. Sweeps (`cleanup_all`, `Drop`) may delete
+    /// the file itself once registered this way.
     ///
-    /// Creates a `.lock` sidecar and acquires an exclusive advisory lock on it.
-    /// The lock is held until the entry is released or the registry drops.
+    /// Idempotent within one registry instance: re-registering a path this
+    /// SAME instance already holds succeeds trivially. This idempotence is
+    /// specific to `Temp` entries (a UUID temp name is never re-registered
+    /// in practice, but a coincidental re-registration must not collide with
+    /// our own lock) — [`Self::claim`] deliberately does NOT share it; see
+    /// its doc comment.
+    ///
+    /// # Errors
+    /// Returns [`RegistryError::HeldElsewhere`] when another live holder
+    /// already has `path` locked. I/O failures opening the sidecar are
+    /// non-fatal (see the private `acquire` helper below) — they predate #572 and are
+    /// unrelated to the ownership-conflict guarantee this fn makes.
+    pub fn register(&self, path: &Path) -> Result<(), RegistryError> {
+        if self
+            .active
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .contains_key(path)
+        {
+            return Ok(());
+        }
+        self.acquire(path, EntryKind::Temp)
+    }
+
+    /// Claim `path` as an ownership lock rdlp does NOT own the file
+    /// lifecycle of — the `.rdlp-part` download-in-progress path (rdlp#572).
+    /// Sweeps (`cleanup_all`, `Drop`) release the lock but NEVER delete the
+    /// file itself; the caller (`finalize_part` / `discard_part`) owns that.
+    ///
+    /// Deliberately NOT idempotent, unlike [`Self::register`]: two
+    /// concurrent downloads of the SAME target sharing one registry (e.g.
+    /// two queued desktop downloads, `RdlpClient` hands every orchestrator
+    /// the same registry) must be `HeldElsewhere` to the second caller, not
+    /// a silent no-op success — the whole point is "this path already has an
+    /// owner", regardless of whether that owner is this registry instance or
+    /// another process's. `flock` is per-open-file-description, so opening a
+    /// FRESH fd and locking naturally returns `Ok(false)` in exactly that
+    /// case (verified in `test_register_refuses_when_lock_held_elsewhere`) —
+    /// no separate same-instance check is needed here.
+    ///
+    /// # Errors
+    /// Returns [`RegistryError::HeldElsewhere`] when `path` is already
+    /// claimed or registered — by this registry instance or another.
+    pub fn claim(&self, path: &Path) -> Result<(), RegistryError> {
+        self.acquire(path, EntryKind::Claim)
+    }
+
+    /// Shared lock-acquisition mechanics for [`Self::register`] and
+    /// [`Self::claim`] — the only difference between the two call sites is
+    /// the idempotence check ([`Self::register`]'s, run by the caller before
+    /// this fn) and the [`EntryKind`] recorded.
+    ///
+    /// Creates a `.lock` sidecar and acquires an exclusive advisory lock on
+    /// it. Holding this lock IS the ownership claim on `path`: a second
+    /// acquisition for the same path is a genuine conflict, reported as
+    /// [`RegistryError::HeldElsewhere`], not a duplicate to paper over. The
+    /// lock is held until the entry is released or the registry drops.
     // Safe: sync helper — never called inside an async executor worker.
     #[allow(clippy::disallowed_methods)]
-    pub fn register(&self, path: &Path) {
+    fn acquire(&self, path: &Path, kind: EntryKind) -> Result<(), RegistryError> {
         let lock_path = lock_path_for(path);
         let lock_file = match File::create(&lock_path) {
             Ok(f) => f,
@@ -101,36 +211,74 @@ impl TempRegistry {
                              skipping registration",
                             path.display()
                         );
-                        return;
+                        return Ok(());
                     }
                 };
-                self.active
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .insert(
-                        path.to_path_buf(),
-                        TempEntry {
-                            _lock_file: placeholder,
-                        },
-                    );
-                return;
+                return self.insert_or_conflict(
+                    path,
+                    TempEntry {
+                        _lock_file: placeholder,
+                        kind,
+                    },
+                );
             }
         };
-        if let Err(e) = lock_file.try_lock_exclusive() {
-            log::warn!(
-                "TempRegistry: could not lock {}: {e}; advisory lock not held",
-                lock_path.display()
-            );
+        match lock_file.try_lock_exclusive() {
+            Ok(true) => {}
+            Ok(false) => {
+                // Held by a live process — the whole point of #572: refuse
+                // rather than silently register a second, unlocked claim.
+                return Err(RegistryError::HeldElsewhere {
+                    path: path.to_path_buf(),
+                });
+            }
+            Err(e) => {
+                log::warn!(
+                    "TempRegistry: could not lock {}: {e}; advisory lock not held",
+                    lock_path.display()
+                );
+            }
         }
-        self.active
+        self.insert_or_conflict(
+            path,
+            TempEntry {
+                _lock_file: lock_file,
+                kind,
+            },
+        )
+    }
+
+    /// Insert `new_entry` for `path`, UNLESS `path` is already held by a
+    /// live `Claim` — an I/O-error fallback branch of [`Self::acquire`] has
+    /// no working `flock` to rely on, so this reproduces the same refusal by
+    /// hand. Fixes a #572 reintroduction: an unconditional `insert` here
+    /// would silently replace an existing Claim entry, dropping the first
+    /// holder's `_lock_file` (releasing its advisory lock) and reporting
+    /// `Ok(())` to the second caller — the exact collision #572 exists to
+    /// prevent, reached via the I/O-error path instead of `try_lock_exclusive`.
+    ///
+    /// An existing `Temp` entry is kept as-is and this reports `Ok(())`:
+    /// `register`'s caller already short-circuits on `contains_key` before
+    /// reaching `acquire` in the common case, so this only matters for a
+    /// `claim` racing a `Temp` entry, which is not the conflict #572 guards.
+    fn insert_or_conflict(&self, path: &Path, new_entry: TempEntry) -> Result<(), RegistryError> {
+        use std::collections::hash_map::Entry;
+        let mut map = self
+            .active
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .insert(
-                path.to_path_buf(),
-                TempEntry {
-                    _lock_file: lock_file,
-                },
-            );
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        match map.entry(path.to_path_buf()) {
+            Entry::Occupied(occupied) => match occupied.get().kind {
+                EntryKind::Claim => Err(RegistryError::HeldElsewhere {
+                    path: path.to_path_buf(),
+                }),
+                EntryKind::Temp => Ok(()),
+            },
+            Entry::Vacant(vacant) => {
+                vacant.insert(new_entry);
+                Ok(())
+            }
+        }
     }
 
     /// Release a path — file has been moved to its final location and no
@@ -177,10 +325,12 @@ impl TempRegistry {
             .drain()
             .collect();
         for (path, entry) in entries {
-            // Drop the advisory lock first, then delete both files.
-            drop(entry);
+            // Capture kind before dropping: a Claim entry's file is NOT ours
+            // to delete (rdlp#572) — only Temp entries are swept.
+            let kind = entry.kind;
+            drop(entry); // release the advisory lock
             let lock_path = lock_path_for(&path);
-            if path.exists() {
+            if kind == EntryKind::Temp && path.exists() {
                 if let Err(e) = std::fs::remove_file(&path) {
                     log::warn!(
                         "TempRegistry: cleanup_all failed for {}: {e}",
@@ -319,9 +469,11 @@ impl Drop for TempRegistry {
             .map(|m| m.drain().collect())
             .unwrap_or_default();
         for (path, entry) in entries {
+            // Same Claim-vs-Temp guard as cleanup_all (rdlp#572).
+            let kind = entry.kind;
             drop(entry); // release advisory lock
             let lock_path = lock_path_for(&path);
-            if path.exists() {
+            if kind == EntryKind::Temp && path.exists() {
                 if let Err(e) = std::fs::remove_file(&path) {
                     log::warn!(
                         "TempRegistry: drop cleanup failed for {}: {e}",
@@ -350,7 +502,7 @@ mod tests {
         let path = dir.path().join("test.rdlp-tmp-abc.mp4");
         fs::write(&path, b"test").unwrap();
         let reg = TempRegistry::new();
-        reg.register(&path);
+        reg.register(&path).unwrap();
         assert!(reg.contains(&path));
         // Lock sidecar should exist while registered.
         assert!(lock_path_for(&path).exists());
@@ -358,6 +510,55 @@ mod tests {
         assert!(!reg.contains(&path));
         // Lock sidecar should be gone after release.
         assert!(!lock_path_for(&path).exists());
+    }
+
+    /// #572 regression: `register` must refuse when another handle already
+    /// holds the sidecar lock, instead of silently registering a second,
+    /// unlocked claim.
+    ///
+    /// `flock` locks are per-open-file-description: a second `open()` +
+    /// `try_lock_exclusive()` on the SAME file from the SAME process reads
+    /// back `Ok(false)` exactly like a real external holder would, which is
+    /// what makes this a valid same-process simulation of "another rdlp
+    /// process already owns this path" without spawning a child process.
+    /// Verified directly below before asserting on `register`.
+    #[test]
+    fn test_register_refuses_when_lock_held_elsewhere() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.rdlp-part.mp4");
+        fs::write(&path, b"test").unwrap();
+        let lock_path = lock_path_for(&path);
+
+        // Simulate another process: hold the lock on a fd this test controls
+        // directly, bypassing TempRegistry entirely.
+        let other_holder = File::create(&lock_path).unwrap();
+        assert!(
+            other_holder.try_lock_exclusive().unwrap(),
+            "flock-semantics precondition: the first exclusive lock must succeed"
+        );
+        let second_fd = File::open(&lock_path).unwrap();
+        assert!(
+            !second_fd.try_lock_exclusive().unwrap(),
+            "flock-semantics precondition: a second fd on the SAME process must be refused, \
+             confirming try_lock_exclusive is a reliable same-process stand-in for \
+             \"held by another process\""
+        );
+        drop(second_fd);
+
+        // RED against the unpatched code: register() ignored Ok(false) and
+        // registered anyway.
+        let reg = TempRegistry::new();
+        let result = reg.register(&path);
+        assert!(
+            matches!(result, Err(RegistryError::HeldElsewhere { .. })),
+            "register() must refuse a path whose lock is held elsewhere, got: {result:?}"
+        );
+        assert!(
+            !reg.contains(&path),
+            "a refused claim must not be recorded in the registry"
+        );
+
+        drop(other_holder);
     }
 
     #[test]
@@ -368,7 +569,7 @@ mod tests {
         assert!(path.exists());
         {
             let reg = TempRegistry::new();
-            reg.register(&path);
+            reg.register(&path).unwrap();
             // reg drops here — should delete the file and sidecar
         }
         assert!(!path.exists());
@@ -382,7 +583,7 @@ mod tests {
         fs::write(&path, b"test").unwrap();
         {
             let reg = TempRegistry::new();
-            reg.register(&path);
+            reg.register(&path).unwrap();
             reg.release(&path);
             // reg drops — path was released so NOT deleted
         }
@@ -420,8 +621,8 @@ mod tests {
         fs::write(&path2, b"test").unwrap();
 
         let reg = TempRegistry::new();
-        reg.register(&path1);
-        reg.register(&path2);
+        reg.register(&path1).unwrap();
+        reg.register(&path2).unwrap();
 
         reg.cleanup_all();
 
@@ -432,6 +633,83 @@ mod tests {
         assert!(!reg.contains(&path2));
     }
 
+    /// #572 review finding 3: `cleanup_all` must NEVER delete a `Claim`
+    /// entry's file — it does not own that file's lifecycle. RED against the
+    /// pre-fix code: registering `.rdlp-part` (via `register`, the only
+    /// entry point that existed) made it a `cleanup_all` target exactly like
+    /// any pipeline temp, so a shutdown mid-download deleted the resumable
+    /// partial.
+    #[test]
+    fn test_cleanup_all_preserves_claimed_file_releases_lock_only() {
+        let dir = TempDir::new().unwrap();
+        let claimed = dir.path().join("video.rdlp-part.mp4");
+        let owned = dir.path().join("owned.rdlp-tmp-abc.mp4");
+        fs::write(&claimed, b"partial download bytes").unwrap();
+        fs::write(&owned, b"pipeline temp").unwrap();
+
+        let reg = TempRegistry::new();
+        reg.claim(&claimed).unwrap();
+        reg.register(&owned).unwrap();
+
+        reg.cleanup_all();
+
+        assert!(
+            claimed.exists(),
+            "cleanup_all must NEVER delete a Claim entry's file"
+        );
+        assert_eq!(
+            fs::read(&claimed).unwrap(),
+            b"partial download bytes",
+            "claimed file content must survive untouched"
+        );
+        assert!(
+            !owned.exists(),
+            "cleanup_all must still delete a Temp entry's file as before"
+        );
+        // The lock sidecar IS released — a fresh claim on the same path
+        // must succeed afterward.
+        assert!(!reg.contains(&claimed));
+        let reg2 = TempRegistry::new();
+        reg2.claim(&claimed)
+            .expect("lock must be released so a later claim can succeed");
+    }
+
+    /// Code-quality review finding 1: the I/O-error fallback in `acquire`
+    /// (sidecar `File::create` fails) must NOT unconditionally overwrite an
+    /// existing `Claim` entry. Forces the fallback by replacing the sidecar
+    /// with a DIRECTORY (Linux `File::create` on a directory path fails with
+    /// EISDIR) after a genuine first claim already holds a real flock, then
+    /// asserts the first claim survives and the second is refused.
+    #[test]
+    fn test_io_error_fallback_does_not_replace_an_existing_claim() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("video.rdlp-part.mp4");
+        fs::write(&path, b"partial").unwrap();
+
+        let reg = TempRegistry::new();
+        reg.claim(&path).expect("first claim must succeed normally");
+
+        // Force the SECOND acquire's File::create(sidecar) to fail: replace
+        // the sidecar with a directory. The first holder's already-open fd
+        // is unaffected — Unix allows unlinking a path out from under an
+        // open file.
+        let lock_path = lock_path_for(&path);
+        fs::remove_file(&lock_path).expect("remove real sidecar");
+        fs::create_dir(&lock_path).expect("replace sidecar with a directory");
+
+        let result = reg.claim(&path);
+        assert!(
+            matches!(result, Err(RegistryError::HeldElsewhere { .. })),
+            "second claim hitting the I/O-error fallback must still be refused, got: {result:?}"
+        );
+        assert!(
+            reg.contains(&path),
+            "the first claim's entry must survive the second's fallback attempt"
+        );
+
+        fs::remove_dir(&lock_path).ok(); // cleanup for the directory sidecar
+    }
+
     #[test]
     fn test_cleanup_all_idempotent() {
         let dir = TempDir::new().unwrap();
@@ -439,7 +717,7 @@ mod tests {
         fs::write(&path, b"test").unwrap();
 
         let reg = TempRegistry::new();
-        reg.register(&path);
+        reg.register(&path).unwrap();
         reg.cleanup_all();
         // Second call must not panic — file is gone, map is empty
         reg.cleanup_all();
@@ -461,7 +739,7 @@ mod tests {
         fs::write(&path, b"data").unwrap();
 
         let reg = TempRegistry::new();
-        reg.register(&path);
+        reg.register(&path).unwrap();
 
         // Make the file appear very old so the age-based check would normally
         // trigger deletion. The lock check must prevent deletion.

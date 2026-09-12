@@ -7,6 +7,7 @@ use super::{
     DownloadPlan, DownloadResult, Duration, Instant, Orchestrator, OrchestratorError, PathBuf,
     Result, TOKEN_MAX_AGE, debug, extract_cdn_host, is_reextractable_error, warn,
 };
+use crate::orchestrator::part_lock::PartLock;
 
 impl Orchestrator {
     /// Download from pre-extracted `InfoDict` to a specific directory
@@ -46,6 +47,15 @@ impl Orchestrator {
         let mut output_path: Option<PathBuf> = None;
         let mut download_result: DownloadResult = None;
         let mut last_info_ref: Option<rdlp_types::InfoDict> = None;
+        // Output-path claim (#572), Single downloads only — claimed once on
+        // the first attempt and held across CDN-fallback retries within
+        // this function (never re-claimed on retry: the retry recomputes
+        // `resume_offset` but reuses the SAME `part` path, and `PartLock`
+        // is deliberately non-idempotent, so a re-claim by this same
+        // holder would self-collide via flock and wrongly report Busy).
+        // Released explicitly right after the seam-finalize below, or via
+        // Drop at any early return (cancel, error) or at function end.
+        let mut part_lock: Option<PartLock> = None;
 
         for attempt in 0..=MAX_EXTRACT_RETRIES {
             if attempt > 0 {
@@ -162,9 +172,18 @@ impl Orchestrator {
                     // name appears only after the download commits (#406).
                     let part = crate::orchestrator::naming::part_path(path);
 
-                    // Detect resume point against the part name (recalculate on
-                    // retry for partial HLS).
-                    let resume_offset = self.detect_resume_point(&part, format.filesize).await?;
+                    // Claim the output path on the FIRST attempt only (#572);
+                    // recalculate resume on every retry (partial HLS) without
+                    // re-claiming — see the `part_lock` doc comment above.
+                    let resume_offset = if part_lock.is_some() {
+                        self.detect_resume_point(&part, format.filesize).await?
+                    } else {
+                        let (lock, offset) = self
+                            .claim_part_and_detect_resume(&part, format.filesize)
+                            .await?;
+                        part_lock = Some(lock);
+                        offset
+                    };
 
                     // Check if file is already complete: commit .rdlp-part -> clean.
                     if let Some(expected_size) = format.filesize
@@ -186,6 +205,9 @@ impl Orchestrator {
                             // minted only after PP by the coordinator finalize (#406).
                             let seam = crate::orchestrator::naming::seam_path(path);
                             crate::orchestrator::naming::finalize_part(&part, &seam).await?;
+                            // Release the claim now that `part` no longer
+                            // exists under that name (mirrors state/mod.rs).
+                            drop(part_lock.take());
                             download_result = Some((vec![seam], outcome.is_hls, None));
                             break;
                         }

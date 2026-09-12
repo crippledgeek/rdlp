@@ -38,7 +38,7 @@ use rdlp_core::PostProcessCallbackFactory;
 use rdlp_types::InfoDict;
 use rdlp_types::PostProcess;
 
-pub use registry::TempRegistry;
+pub use registry::{RegistryError, TempRegistry};
 pub use sidecar::{DiscoveredSidecar, SidecarOwnership};
 pub use tracker::FileTracker;
 

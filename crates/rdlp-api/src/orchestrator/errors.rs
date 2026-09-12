@@ -85,6 +85,20 @@ pub enum OrchestratorError {
         path: PathBuf,
     },
 
+    /// Another rdlp process already holds the output path's advisory lock.
+    ///
+    /// Two processes downloading the same target to the same path is a
+    /// conflict worth reporting, not one worth silently making safe
+    /// (rdlp#572) — surfaced instead of letting a second writer share the
+    /// same `.rdlp-part` chunk files.
+    #[error(
+        "another rdlp process is downloading to {path}; wait for it to finish or choose a different output"
+    )]
+    OutputBusy {
+        /// The output path already claimed by another process.
+        path: PathBuf,
+    },
+
     /// Chunk merge failed
     #[error("Failed to merge chunk files: {0}")]
     ChunkMergeFailed(#[source] std::io::Error),
@@ -141,6 +155,7 @@ impl std::fmt::Debug for OrchestratorError {
             Self::MissingChunk { path } => {
                 f.debug_struct("MissingChunk").field("path", path).finish()
             }
+            Self::OutputBusy { path } => f.debug_struct("OutputBusy").field("path", path).finish(),
             Self::ExtractionFailed(e) => f.debug_tuple("ExtractionFailed").field(e).finish(),
             Self::DownloadFailed(e) => f.debug_tuple("DownloadFailed").field(e).finish(),
             Self::ChunkMergeFailed(e) => f.debug_tuple("ChunkMergeFailed").field(e).finish(),
