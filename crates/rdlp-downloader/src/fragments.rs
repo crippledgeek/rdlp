@@ -25,7 +25,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, ControllerMode};
 use crate::atomic::{SIDECAR_SAVE_FAILURE_THRESHOLD, SaveFailureTracker};
-use crate::http::{HttpDownloader, RangeVerdict, RangedRequestMeta, range_verdict};
+use crate::http::{HttpDownloader, RangeVerdict, RangedRequestMeta, bounded_len, range_verdict};
 use crate::progress::SpeedMeter;
 use crate::retry::{LazyLabel, RetryPolicy, with_retry_cancellable};
 use rdlp_security;
@@ -637,9 +637,7 @@ async fn fetch_with_optional_range(
                 ),
             });
         };
-        // `RangeSpec::span` above already rejected `end_inclusive < start`, so
-        // this subtraction cannot underflow.
-        (resp, Some(end_inclusive - start + 1))
+        (resp, Some(bounded_len(span, url)?))
     } else {
         // Unranged fetch (whole-segment): plain GET, no identity pin — a
         // whole-segment body has no offsets to protect against a coded

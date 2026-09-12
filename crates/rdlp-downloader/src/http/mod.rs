@@ -15,7 +15,10 @@ mod tests;
 
 #[cfg(test)]
 pub(crate) use parallel::{ChunkRequestSpec, download_chunk_with_retry, verify_merged_size};
-pub(crate) use verdict::{HTTP_PARTIAL_CONTENT, RangeVerdict, RangedRequestMeta, range_verdict};
+pub(crate) use verdict::{
+    HTTP_PARTIAL_CONTENT, RangeVerdict, RangedRequestMeta, admit_for_verdict, bounded_len,
+    range_verdict,
+};
 
 use rdlp_core::{
     DownloadProgress, DownloadStats, ProgressCallback, RdlpError, Result, RetryConfig,
@@ -539,8 +542,7 @@ impl HttpDownloader {
                             url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
                         })?;
 
-                    check_http_response(&response)?;
-                    Ok(response)
+                    admit_for_verdict(response)
                 }
             },
         )
@@ -554,18 +556,35 @@ impl HttpDownloader {
             range: span,
             sent_validator: None,
         };
-        let RangeVerdict::Partial { .. } = range_verdict(&response, &meta, &url)? else {
-            return Err(RdlpError::Download {
-                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
-                message: format!(
-                    "chunk request for bytes {start}-{end} got a non-partial answer after \
-                     passing the earlier status check; cannot place it in the merged output."
-                ),
-            });
-        };
-        // `RangeSpec::span` above already rejected `end < start`, so this
-        // subtraction cannot underflow.
-        let expected_len = end - start + 1;
+        match range_verdict(&response, &meta, &url)? {
+            RangeVerdict::Partial { .. } => {}
+            RangeVerdict::Replaced => {
+                return Err(RdlpError::Download {
+                    url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
+                    message: format!(
+                        "resource changed under a parallel chunk fetch for bytes {start}-{end} \
+                         (server answered 200 to a Range request it previously honoured); \
+                         cannot place a whole-resource body at this position in the merged \
+                         output."
+                    ),
+                });
+            }
+            RangeVerdict::Unsatisfiable { complete_length } => {
+                let representation = complete_length.map_or_else(
+                    || "of unreported length".to_string(),
+                    |n| format!("now {n} bytes"),
+                );
+                return Err(RdlpError::Download {
+                    url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
+                    message: format!(
+                        "chunk request for bytes {start}-{end} was refused as unsatisfiable \
+                         (416); the representation is {representation}. A chunk range cannot be \
+                         unsatisfiable unless the representation shrank underneath this download."
+                    ),
+                });
+            }
+        }
+        let expected_len = bounded_len(span, &url)?;
 
         let file = File::create(chunk_path).await.map_err(|e| {
             RdlpError::Io(std::io::Error::new(

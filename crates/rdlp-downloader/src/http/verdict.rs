@@ -8,7 +8,7 @@
 //! representation"), and 416 (range unsatisfiable; only reachable when the
 //! precondition held). Everything else is an error before any byte is written.
 
-use rdlp_core::{RdlpError, Result};
+use rdlp_core::{RdlpError, Result, check_http_response};
 use rdlp_http::{RangeSpec, StrongValidator};
 use rdlp_redact::RedactedUrlBuf;
 
@@ -41,6 +41,44 @@ fn download_err(url: &str, message: String) -> RdlpError {
     RdlpError::Download {
         url: Some(RedactedUrlBuf::from(url)),
         message,
+    }
+}
+
+/// A bounded span's length, or a typed error naming the caller bug.
+///
+/// Both `download_range_with_progress` and `fetch_with_optional_range` ask
+/// for the length of a span they just built via `RangeSpec::span`, which
+/// never yields `RangeSpec::From` — so `byte_len()` returning `None` here
+/// would be a caller bug (an open-ended range slipped into a bounded-span
+/// call site), never a legitimate runtime condition. One helper so neither
+/// site re-derives the arithmetic `byte_len` already owns.
+pub(crate) fn bounded_len(span: RangeSpec, url: &str) -> Result<u64> {
+    span.byte_len().ok_or_else(|| {
+        download_err(
+            url,
+            "internal error: open-ended range where a bounded span was required".to_string(),
+        )
+    })
+}
+
+/// Let a verdict-bearing status through untouched; everything else still
+/// goes through [`check_http_response`] so 5xx/429 stay retryable at the
+/// caller's retry layer exactly as before this function existed.
+///
+/// 200 (§13.2.2 step 5), 206 (§15.3.7) and 416 (§15.5.17) are not failures —
+/// they are the three answers [`range_verdict`] interprets. Filtering them
+/// out here (as a bare `check_http_response` call did) makes 416 and any
+/// other non-2xx status unreachable in `range_verdict`, discarding a 416's
+/// `complete_length` and reporting the generic `Http` shape for the other
+/// two even though `range_verdict` already builds the identical shape for
+/// truly-unhandled statuses.
+pub(crate) fn admit_for_verdict(response: wreq::Response) -> Result<wreq::Response> {
+    match response.status().as_u16() {
+        HTTP_OK | HTTP_PARTIAL_CONTENT | HTTP_RANGE_NOT_SATISFIABLE => Ok(response),
+        _ => {
+            check_http_response(&response)?;
+            Ok(response)
+        }
     }
 }
 

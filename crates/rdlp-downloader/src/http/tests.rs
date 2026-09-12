@@ -1586,6 +1586,71 @@ async fn range_fetch_accepts_conformant_206() {
     );
 }
 
+/// `admit_for_verdict` must let a 416 through to `range_verdict` rather than
+/// having it rejected upstream as a generic non-2xx failure — otherwise the
+/// server's reported `complete_length` never reaches the caller. Retries off
+/// (0): this is about the verdict this one response produces, not a retry.
+#[tokio::test]
+async fn chunk_416_reaches_the_verdict_and_names_the_reported_length() {
+    use mockito::Server;
+    use tempfile::TempDir;
+
+    let mut server = Server::new_async().await;
+    let temp_dir = TempDir::new().unwrap();
+    let chunk_path = temp_dir.path().join("chunk_0");
+
+    let _mock = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(416)
+        .with_header("content-range", "bytes */12345")
+        .create_async()
+        .await;
+
+    let url = format!("{}/video.mp4", server.url());
+    let result = validation_test_downloader()
+        .download_range_with_progress(&url, 0, 1023, &chunk_path, None, None)
+        .await;
+
+    let err = result.expect_err("a 416 must be refused, not silently accepted");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("12345"),
+        "the reported complete length must reach the caller, proving the verdict path (not a \
+         generic non-2xx rejection) handled this response, got: {msg}"
+    );
+}
+
+/// A genuine 5xx must still be rejected exactly as before — `admit_for_verdict`
+/// only special-cases 200/206/416, so this still surfaces as the plain `Http`
+/// error the retry layer above this function keys its retry decision on.
+#[tokio::test]
+async fn chunk_503_is_still_a_plain_http_error() {
+    use mockito::Server;
+    use tempfile::TempDir;
+
+    let mut server = Server::new_async().await;
+    let temp_dir = TempDir::new().unwrap();
+    let chunk_path = temp_dir.path().join("chunk_0");
+
+    let _mock = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(503)
+        .create_async()
+        .await;
+
+    let url = format!("{}/video.mp4", server.url());
+    let result = validation_test_downloader()
+        .download_range_with_progress(&url, 0, 1023, &chunk_path, None, None)
+        .await;
+
+    assert!(
+        matches!(result, Err(RdlpError::Http { status: 503, .. })),
+        "a 503 must still surface as a plain Http error, got {result:?}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Merged-output size verification (#526)
 //
