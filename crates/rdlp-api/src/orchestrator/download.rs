@@ -9,7 +9,7 @@ use super::{
 };
 use log::{debug, info, warn};
 use rdlp_core::{DownloadStats, RdlpError};
-use rdlp_redact::RedactedUrlBuf;
+use rdlp_redact::{RedactedUrl, RedactedUrlBuf};
 use rdlp_security::validate_url_security;
 use rdlp_types::{DownloadProtocol, Format, Fragment};
 use std::path::Path;
@@ -168,7 +168,15 @@ impl Orchestrator {
             .chain(format.fallback_urls.iter().flatten().map(String::as_str))
             .collect();
 
-        let mut stats = None;
+        // Cloned (not borrowed) because `effective_format` only lives for its
+        // loop iteration; a fallback CDN's own `filesize`/`url` — not the
+        // original `format`'s — is what the size-mismatch report below must
+        // compare against when a fallback is what actually served the bytes.
+        // Paired in one `Option` (rather than two, each with its own
+        // `.expect()`) so the "both set together or neither" loop invariant
+        // is structural: there is exactly one success arm, and it sets this
+        // one value.
+        let mut outcome: Option<(DownloadStats, Format)> = None;
         let mut last_err = None;
         for (i, download_url) in download_urls.iter().enumerate() {
             if i > 0 {
@@ -267,7 +275,7 @@ impl Orchestrator {
                 .await
             {
                 Ok(Some(s)) => {
-                    stats = Some(s);
+                    outcome = Some((s, effective_format.clone()));
                     last_err = None;
                     break;
                 }
@@ -283,10 +291,12 @@ impl Orchestrator {
         if let Some(e) = last_err {
             return Err(e);
         }
-        #[allow(clippy::expect_used)] // loop invariant: last_err is None iff stats was set
-        let stats = stats.expect("stats is Some when no error occurred");
+        #[allow(clippy::expect_used)] // loop invariant: last_err is None iff outcome was set
+        let (stats, winning_format) = outcome.expect("outcome is Some when no error occurred");
         debug!("Downloaded successfully: {}", output_path.display());
         debug!("   Stats: {stats:?}");
+
+        report_expected_size_mismatch(&winning_format, &stats);
 
         Ok(Some(DownloadOutcome { is_hls }))
     }
@@ -417,6 +427,49 @@ impl Orchestrator {
             }
         }
         Ok(())
+    }
+}
+
+/// Compare the final downloaded byte count against `Format.filesize` as
+/// reported by the extractor, and log any mismatch.
+///
+/// `format` MUST be the format that actually served the bytes — the caller
+/// passes the winning `effective_format` (which may be a re-expanded or
+/// minimally-rebuilt fallback CDN row, not the original `format` the
+/// orchestrator started with), so a mismatch is never blamed on the wrong
+/// CDN's metadata.
+///
+/// How thoroughly `stats.bytes_downloaded` has already been checked depends
+/// on the transfer shape, not uniformly "server-verified": for an HTTP
+/// single-file download it has been checked against the server's own
+/// declared total (the per-chunk `Content-Range` span checks and the
+/// `ExpectedTransfer` / `verify_output_size` byte-count and final-size checks
+/// in `rdlp-downloader`, #674); for a fragmented (HLS/DASH) or unsized
+/// (chunked, no `Content-Length`) transfer there is no such total to check
+/// against, and `bytes_downloaded` is simply the byte count received. Either
+/// way, a mismatch against `Format.filesize` here means the EXTRACTOR's size
+/// estimate was wrong, not that the file is corrupt — this function is
+/// reported-only: never deletes the file, never fails the download, and does
+/// no file I/O of its own since `stats.bytes_downloaded` already carries the
+/// actual final size (a resume's `downloaded` counter starts at the resume
+/// offset, so it is the whole-file count, not just the resumed tail).
+fn report_expected_size_mismatch(format: &Format, stats: &DownloadStats) {
+    let actual = stats.bytes_downloaded;
+    match format.filesize {
+        Some(expected) if expected != actual => {
+            warn!(
+                "extractor reported {expected} bytes for {}; server delivered {actual}",
+                RedactedUrl::new(&format.url)
+            );
+        }
+        Some(_) => {}
+        None => {
+            debug!(
+                "no extractor-reported size for {}; the server's {actual} bytes is the sole \
+                 authority",
+                RedactedUrl::new(&format.url)
+            );
+        }
     }
 }
 
@@ -596,6 +649,65 @@ mod tests {
             DownloadProtocol::HttpDashSegments,
             true
         )));
+    }
+
+    /// Build a `DownloadStats` carrying only the byte count the mismatch
+    /// check reads; the other fields are irrelevant to it.
+    fn stats_with_bytes(bytes: u64) -> DownloadStats {
+        DownloadStats::new(bytes, std::time::Duration::from_secs(1), 0)
+    }
+
+    /// #674: a known `filesize` that matches the actual bytes delivered is
+    /// silently accepted — no assertion beyond "does not panic" is available
+    /// without a log-capturing harness in this crate, so the log line this
+    /// exercises is documented instead: at `expected == actual` neither the
+    /// `warn!` nor the `debug!` branch in `report_expected_size_mismatch`
+    /// fires.
+    #[test]
+    fn size_mismatch_report_accepts_a_matching_filesize() {
+        let mut format = Format::new(
+            "id",
+            "https://cdn.example.com/v.mp4",
+            "mp4",
+            DownloadProtocol::Https,
+        );
+        format.filesize = Some(2048);
+        report_expected_size_mismatch(&format, &stats_with_bytes(2048));
+    }
+
+    /// #674: a `filesize` that DISAGREES with the delivered byte count must
+    /// still complete without failing or touching any file — this function
+    /// takes no path and does no I/O, so "no failure" is the whole contract.
+    /// Expected log line: `warn!("extractor reported 2048 bytes for
+    /// https://cdn.example.com/v.mp4; server delivered 4096")`.
+    #[test]
+    fn size_mismatch_report_does_not_fail_on_a_mismatched_filesize() {
+        let mut format = Format::new(
+            "id",
+            "https://cdn.example.com/v.mp4",
+            "mp4",
+            DownloadProtocol::Https,
+        );
+        format.filesize = Some(2048);
+        // The call itself is the assertion: a panic or an `Err` return would
+        // fail the test. There is nothing else to observe from outside.
+        report_expected_size_mismatch(&format, &stats_with_bytes(4096));
+    }
+
+    /// #674: no extractor-reported size (`filesize: None`) takes the `debug!`
+    /// branch and must not be treated as a mismatch. Expected log line:
+    /// `debug!("no extractor-reported size for https://cdn.example.com/v.mp4;
+    /// the server's 4096 bytes is the sole authority")`.
+    #[test]
+    fn size_mismatch_report_handles_no_reported_size() {
+        let format = Format::new(
+            "id",
+            "https://cdn.example.com/v.mp4",
+            "mp4",
+            DownloadProtocol::Https,
+        );
+        assert_eq!(format.filesize, None);
+        report_expected_size_mismatch(&format, &stats_with_bytes(4096));
     }
 
     /// Positive path: all-public-URL fragments validate successfully.

@@ -17,7 +17,7 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio_util::sync::CancellationToken;
 
 use super::config::PROGRESS_UPDATE_INTERVAL;
-use super::{ContentRange, HTTP_PARTIAL_CONTENT, HttpDownloader};
+use super::{ExpectedSpan, ExpectedTransfer, HTTP_PARTIAL_CONTENT, HttpDownloader};
 use crate::progress::SpeedMeter;
 use crate::retry::{RetryPolicy, with_retry};
 
@@ -383,7 +383,7 @@ impl HttpDownloader {
             let url_string: Arc<str> = Arc::from(url);
             let hdrs = self.headers();
 
-            let response = with_retry(
+            let (response, range) = with_retry(
                 RetryPolicy::new(&self.config.retry_config, &"HTTP GET (resume)"),
                 || {
                 let client = client.clone();
@@ -412,44 +412,50 @@ impl HttpDownloader {
                     }
 
                     // A 206 alone does not prove the body starts where the
-                    // partial file ends. The resumed bytes are appended at EOF,
-                    // so a response enclosing a different span splices foreign
-                    // data into the file at the resume point — the #526
-                    // corruption shape on this path. RFC 9110 §15.3.7 requires
-                    // the client to inspect Content-Range; do so before any
-                    // byte is appended.
-                    match ContentRange::from_headers(response.headers()) {
-                        Some(range) if range.first_pos == resume_from => {}
-                        Some(range) => {
-                            return Err(RdlpError::Download {
-                                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
-                                message: format!(
-                                    "Resume response starts at byte {} but the partial file ends \
-                                     at {resume_from}; appending it would corrupt the file. \
-                                     Please delete the partial file and restart the download.",
-                                    range.first_pos
-                                ),
-                            });
-                        }
-                        None => {
-                            return Err(RdlpError::Download {
-                                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
-                                message: format!(
-                                    "Resume response has a missing, malformed, or invalid \
-                                     Content-Range header, so the span it encloses cannot be \
-                                     verified against the partial file's {resume_from} bytes. \
-                                     Please delete the partial file and restart the download."
-                                ),
-                            });
-                        }
-                    }
+                    // partial file ends, nor that it reaches the resource's
+                    // actual end. The resumed bytes are appended at EOF, so a
+                    // response enclosing a different or short span splices
+                    // foreign data into the file or silently truncates it at
+                    // the resume point — the #526 corruption shape (wrong
+                    // offset) and the #674 shape (short tail), both on this
+                    // path. RFC 9110 §15.3.7 requires the client to inspect
+                    // Content-Range; do so before any byte is appended. Shared
+                    // with the chunk/fragment closed-span check via
+                    // `ExpectedSpan::OpenEnded` — same validator, same error
+                    // family, because both defend the identical invariant.
+                    // The validated range is carried out alongside the
+                    // response so the caller doesn't re-parse the same header
+                    // a second time to learn the total.
+                    //
+                    // The validator's error propagates UNREWRAPPED: a wrong
+                    // span is `RdlpError::Network` (per-response anomaly,
+                    // retried by this closure's `with_retry` exactly like the
+                    // chunk path retries it), while a bad status or missing
+                    // header is `RdlpError::Download` (a capability the
+                    // server lacks, not retried). Rewrapping both into
+                    // `Download` here — as this path used to — silently
+                    // disabled the retry the chunk path already had. The
+                    // "delete the partial file and restart" operator
+                    // guidance lives in `validate_range_response`'s
+                    // open-ended error messages instead of being reattached
+                    // here.
+                    let range = super::validate_range_response(
+                        &response,
+                        ExpectedSpan::OpenEnded { start: resume_from },
+                        url.as_ref(),
+                    )?;
 
-                    Ok(response)
+                    Ok((response, range))
                 }
             })
             .await?;
 
-            let total_size = crate::http::parse_content_range_total(response.headers())
+            // `range.complete_length` is the validated total from this same
+            // response's `Content-Range`; falling back to `Content-Length` +
+            // `resume_from` only covers the case the header declared `*`
+            // (total genuinely unknown — see `ExpectedSpan::OpenEnded`'s doc).
+            let total_size = range
+                .complete_length
                 .or_else(|| response.content_length().map(|size| size + resume_from));
 
             // Check for parallel resume
@@ -498,6 +504,17 @@ impl HttpDownloader {
                 );
             }
 
+            // #674: when the response discloses the resource's total length,
+            // hold the appended tail to it exactly — `downloaded` already
+            // starts at `resume_from`, so the whole-file total is the
+            // expected length for both the mid-stream and end-of-stream
+            // checks, mirroring the chunk path's pair of guards.
+            let resume_context = "resumed download";
+            let transfer = total_size.map(|expected_len| ExpectedTransfer {
+                expected_len,
+                context: resume_context,
+            });
+
             let file = tokio::fs::OpenOptions::new()
                 .append(true)
                 .open(path)
@@ -538,6 +555,10 @@ impl HttpDownloader {
                 let chunk = chunk_result
                     .map_err(|e| RdlpError::Network { message: format!("Failed to read resume response body from {}: {e}", rdlp_redact::RedactedUrl::new(url_string.as_ref())), url: Some(rdlp_redact::RedactedUrlBuf::from(url_string.as_ref())) })?;
 
+                if let Some(ref transfer) = transfer {
+                    transfer.reject_overlong(downloaded, chunk.len() as u64, url_string.as_ref())?;
+                }
+
                 writer.write_all(&chunk).await.map_err(|e| RdlpError::Io(
                     std::io::Error::new(e.kind(), format!("failed to write to resumed file '{}': {e}", path.display()))
                 ))?;
@@ -563,6 +584,13 @@ impl HttpDownloader {
             writer.flush().await.map_err(|e| RdlpError::Io(
                 std::io::Error::new(e.kind(), format!("failed to flush resumed file '{}': {e}", path.display()))
             ))?;
+
+            if let Some(ref transfer) = transfer {
+                transfer.confirm_exact(downloaded, url_string.as_ref())?;
+            }
+            if let Some(total) = total_size {
+                super::parallel::verify_output_size(path, total, url_string.as_ref()).await?;
+            }
 
             let duration = start_time.elapsed();
             let stats = DownloadStats::new(downloaded, duration, 0);
