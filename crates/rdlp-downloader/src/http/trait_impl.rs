@@ -553,9 +553,11 @@ impl HttpDownloader {
     /// Discard the partial and go through the fresh path, saying why.
     ///
     /// Every "this partial cannot be continued" outcome of a resume — no
-    /// sidecar, an untrustworthy validator, a shorter representation, an
-    /// unconfirmed 416 — ends here, so the warn/discard/restart sequence
-    /// exists once and the four reasons read as one log shape.
+    /// sidecar; a matching validator whose complete-length changed; a 206
+    /// naming another representation (`Mismatched`); a 416 reporting a
+    /// shorter representation; a 416 the `If-Range` probe does not confirm —
+    /// ends here, so the warn/discard/restart sequence exists once and the
+    /// five reasons read as one log shape.
     async fn restart(&self, io: ResumeIo<'_>, reason: &str) -> Result<DownloadStats> {
         warn!(
             "{reason}; discarding the {}-byte partial at '{}' and restarting the download",
