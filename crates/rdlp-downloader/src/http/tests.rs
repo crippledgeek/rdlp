@@ -427,6 +427,14 @@ async fn test_chunk_retry_non_retryable_fails_immediately() {
     mock.assert_async().await;
 }
 
+/// Pins that a successful retry's body wins the final file content over a
+/// pre-existing partial — NOT that the partial is removed *between* the two
+/// attempts. `File::create` on the successful attempt truncates the chunk
+/// file regardless of whether anything removed it first, so this test passes
+/// identically whether or not `download_chunk_with_retry`'s error-path
+/// cleanup runs at all. See
+/// `test_chunk_retry_removes_partial_before_next_attempt` for the test that
+/// actually observes the file's state at retry time.
 #[tokio::test]
 async fn test_chunk_retry_cleans_partial_file() {
     use mockito::Server;
@@ -499,6 +507,108 @@ async fn test_chunk_retry_cleans_partial_file() {
     // single-request run would satisfy the assertions above.
     mock_fail.assert_async().await;
     mock_ok.assert_async().await;
+}
+
+/// Observes, at the moment the retry request lands, whether the chunk file
+/// still holds the failed attempt's bytes — the assertion
+/// `test_chunk_retry_cleans_partial_file` cannot make, because a 5xx is
+/// retried *inside* `download_range_with_progress`'s own `with_retry` and so
+/// never reaches `download_chunk_with_retry`'s outer error-path cleanup at
+/// all. A wrong-span 206 is rejected by `validate_range_response` AFTER that
+/// inner retry has already returned `Ok`, so it is the outer loop — and only
+/// the outer loop's cleanup — that can be responsible for the file's absence
+/// here (see `chunk_retry_recovers_from_wrong_span_response`, which proves
+/// the same shape retries and recovers).
+#[tokio::test]
+async fn test_chunk_retry_removes_partial_before_next_attempt() {
+    use mockito::Server;
+    use std::sync::atomic::AtomicBool;
+    use tempfile::TempDir;
+
+    let mut server = Server::new_async().await;
+    let temp_dir = TempDir::new().unwrap();
+    let chunk_path = temp_dir.path().join("chunk_0");
+
+    // A leftover from some earlier attempt, still on disk when this call
+    // starts. The wrong-span attempt below never touches the chunk file —
+    // validation rejects it before `File::create` runs — so this file can
+    // only disappear via `download_chunk_with_retry`'s own cleanup.
+    tokio::fs::write(&chunk_path, b"partial data")
+        .await
+        .unwrap();
+    assert!(chunk_path.exists());
+
+    // Right length, WRONG span — the #526 signature. Rejected after the
+    // inner retry returns `Ok(response)`, so only the outer chunk-retry loop
+    // ever sees this as a failed attempt.
+    let mock_wrong_span = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(206)
+        .with_header("content-range", "bytes 1048576-1049599/2097152")
+        .with_body(vec![0x99u8; 1024])
+        .expect(1)
+        .create_async()
+        .await;
+
+    let partial_present_at_retry = Arc::new(AtomicBool::new(true));
+    let observed = Arc::clone(&partial_present_at_retry);
+    let retry_chunk_path = chunk_path.clone();
+    let mock_ok = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(206)
+        .with_header("content-range", "bytes 0-1023/1048576")
+        // Runs on mockito's server thread as the retry request arrives —
+        // before the client has validated or written anything — so this is
+        // the earliest point at which the prior attempt's cleanup can be
+        // observed.
+        .with_body_from_request(move |_req| {
+            observed.store(
+                retry_chunk_path.exists(),
+                std::sync::atomic::Ordering::SeqCst,
+            );
+            vec![0x11u8; 1024]
+        })
+        .expect(1)
+        .create_async()
+        .await;
+
+    let downloader = chunk_test_downloader(3);
+    let url = format!("{}/video.mp4", server.url());
+
+    let result = download_chunk_with_retry(
+        &downloader,
+        ChunkRequestSpec {
+            url: &url,
+            start: 0,
+            end: 1023,
+            chunk_path: &chunk_path,
+            chunk_id: 0,
+        },
+        Some(Arc::new(AtomicU64::new(0))),
+        None,
+    )
+    .await;
+
+    assert_eq!(
+        result.expect("the chunk must recover on retry after a wrong-span response"),
+        1024
+    );
+
+    let contents = tokio::fs::read(&chunk_path).await.unwrap();
+    assert_eq!(contents.len(), 1024, "chunk must hold exactly one attempt");
+    assert!(contents.iter().all(|&b| b == 0x11));
+
+    // Every mock must have been consumed: without this an accidental
+    // single-request run would satisfy the assertions above.
+    mock_wrong_span.assert_async().await;
+    mock_ok.assert_async().await;
+
+    assert!(
+        !partial_present_at_retry.load(std::sync::atomic::Ordering::SeqCst),
+        "partial from the failed attempt must be gone before the retry request is issued"
+    );
 }
 
 #[tokio::test]
