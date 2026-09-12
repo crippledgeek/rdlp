@@ -1610,6 +1610,44 @@ async fn ranged_fragment_200_full_body_is_rejected() {
 }
 
 #[tokio::test]
+async fn ranged_fragment_with_content_encoding_is_rejected_before_write() {
+    // Same setup as `ranged_fragment_200_full_body_is_rejected`'s sibling
+    // (correct span+status), but the response carries a non-identity
+    // `Content-Encoding` — offsets are only comparable over the identity form
+    // (RFC 9110 §14.1.2), so this must be rejected before any byte reaches
+    // the output file, not merely before the fragment loop returns.
+    let mut server = mockito::Server::new_async().await;
+    let _seg = server
+        .mock("GET", "/seg.m4s")
+        .with_status(206)
+        .with_header("Content-Range", "bytes 1024-2047/8192")
+        .with_header("content-encoding", "gzip")
+        .with_body(vec![0xAA; 1024])
+        .create_async()
+        .await;
+
+    let url = format!("{}/seg.m4s", server.url());
+    let frags = vec![ranged_frag(url, 1024, 2048)];
+
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let res =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, tmp.path(), None, None)
+            .await;
+    let err = res
+        .expect_err("a content-coded ranged response must be rejected before any byte is written");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("content-coded"),
+        "must fail on the content-encoding check specifically, got: {msg}"
+    );
+    assert!(
+        !tmp.path().exists() || tokio::fs::metadata(tmp.path()).await.unwrap().len() == 0,
+        "the rejected body must never reach the output file"
+    );
+}
+
+#[tokio::test]
 async fn ranged_fragment_content_range_wrong_span_is_rejected() {
     // 206 + Content-Range present, but it encloses a DIFFERENT span than the
     // one requested (bytes=1024-2047 requested; server claims bytes=0-1023).

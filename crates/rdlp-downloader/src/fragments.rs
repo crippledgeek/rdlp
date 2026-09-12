@@ -25,7 +25,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, ControllerMode};
 use crate::atomic::{SIDECAR_SAVE_FAILURE_THRESHOLD, SaveFailureTracker};
-use crate::http::{HttpDownloader, RequestedSpan, validate_range_response};
+use crate::http::{HttpDownloader, RangeVerdict, RangedRequestMeta, range_verdict};
 use crate::progress::SpeedMeter;
 use crate::retry::{LazyLabel, RetryPolicy, with_retry_cancellable};
 use rdlp_security;
@@ -582,81 +582,88 @@ async fn fetch_with_optional_range(
     byte_range: Option<(u64, u64)>,
     format_origin: Option<&url::Origin>,
 ) -> Result<Vec<u8>> {
-    use wreq::header::HeaderValue;
+    use rdlp_http::{RangeSpec, RangedRequest};
 
     let safe_url = rdlp_security::sanitize_for_logging(url);
 
     // Same-origin gate (#273): operator headers reach only a target on the
     // format's own origin. Shared with the DASH segment path.
-    //
+    let same_origin = crate::http::same_origin_headers(format_origin, url, &http.headers());
+
     // Timeouts: this path carried none at all before #570, so a CDN that
     // accepted the connection and then went silent produced no error for the
     // new retry to act on. See `with_transfer_timeouts` for which timer bounds
     // which failure — they are not interchangeable.
-    let mut req =
-        crate::http::with_transfer_timeouts(http.client().get(url), http.config.read_timeout)
-            .headers(crate::http::same_origin_headers(
-                format_origin,
-                url,
-                &http.headers(),
-            ));
-
-    // `byte_range` is `(start, end_exclusive)`; RFC 9110's `Range` header and
-    // `RequestedSpan` are both inclusive, so `end_exclusive` is converted once
-    // here and the same `end_inclusive` is reused below to build the span that
-    // validates the response — never recomputed a second way.
-    let requested_span = match byte_range {
-        Some((start, end_exclusive)) => {
-            let end_inclusive = end_exclusive.saturating_sub(1);
-            let value = format!("bytes={start}-{end_inclusive}");
-            req = req.header(
-                "Range",
-                HeaderValue::from_str(&value).map_err(|e| rdlp_core::RdlpError::Download {
-                    message: format!("fetch {safe_url}: {e}"),
-                    url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
-                })?,
-            );
-            Some(RequestedSpan::new(start, end_inclusive).ok_or_else(|| {
-                rdlp_core::RdlpError::Download {
-                    url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
-                    message: format!(
-                        "internal error: fragment requested an inverted byte range \
-                         {start}-{end_inclusive}"
-                    ),
-                }
-            })?)
-        }
-        None => None,
-    };
-
-    let resp = req
-        .send()
-        .await
-        .map_err(|e| rdlp_core::RdlpError::Network {
-            message: format!("fetch {safe_url}: {e}"),
-            url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
+    let (resp, expected_len) = if let Some((start, end_exclusive)) = byte_range {
+        // Ranged fetch (HLS #EXT-X-BYTERANGE / DASH mediaRange): the identity
+        // pin from `download_request` keeps byte offsets comparable
+        // (RFC 9110 §14.1.2), and `range_verdict` is the one decision point
+        // this shares with the parallel-chunk path (#526, #564).
+        let end_inclusive = end_exclusive.saturating_sub(1);
+        let span = RangeSpec::span(start, end_inclusive).ok_or_else(|| {
+            rdlp_core::RdlpError::Download {
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
+                message: format!(
+                    "internal error: fragment requested an inverted byte range \
+                     {start}-{end_inclusive}"
+                ),
+            }
         })?;
 
-    // Unranged fetches keep the plain success-status gate — a 200 is exactly
-    // right there and must not be held to a 206 standard.
-    //
-    // Ranged fetches (HLS #EXT-X-BYTERANGE / DASH mediaRange) reuse the same
-    // validator #526 added for the parallel-chunk path: RFC 9110 §14.2
-    // permits a server to ignore Range entirely and reply 200 with the WHOLE
-    // resource, and §15.3.7.1 requires a single-part 206 to carry
-    // Content-Range. Skipping this check is exactly what let a whole-file
-    // body land in a slot sized for one fragment.
-    let expected_len = if let Some(span) = requested_span {
-        validate_range_response(&resp, span, url)?;
-        Some(span.len())
+        let req = crate::http::with_transfer_timeouts(
+            rdlp_http::download_request(http.client(), url, Some(&same_origin)),
+            http.config.read_timeout,
+        )
+        .ranged(span, None);
+
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| rdlp_core::RdlpError::Network {
+                message: format!("fetch {safe_url}: {e}"),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
+            })?;
+
+        let meta = RangedRequestMeta {
+            range: span,
+            sent_validator: None,
+        };
+        let RangeVerdict::Partial { .. } = range_verdict(&resp, &meta, url)? else {
+            return Err(rdlp_core::RdlpError::Download {
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
+                message: format!(
+                    "fragment fetch {safe_url} got a non-partial answer after passing the \
+                     earlier status check; cannot place it in the merged output."
+                ),
+            });
+        };
+        // `RangeSpec::span` above already rejected `end_inclusive < start`, so
+        // this subtraction cannot underflow.
+        (resp, Some(end_inclusive - start + 1))
     } else {
+        // Unranged fetch (whole-segment): plain GET, no identity pin — a
+        // whole-segment body has no offsets to protect against a coded
+        // response, so the plain success-status gate is exactly right here
+        // and must not be held to a 206 standard.
+        let req =
+            crate::http::with_transfer_timeouts(http.client().get(url), http.config.read_timeout)
+                .headers(same_origin);
+
+        let resp = req
+            .send()
+            .await
+            .map_err(|e| rdlp_core::RdlpError::Network {
+                message: format!("fetch {safe_url}: {e}"),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
+            })?;
+
         if !resp.status().is_success() {
             return Err(rdlp_core::RdlpError::Http {
                 status: resp.status().as_u16(),
                 reason: format!("fragment HTTP {}", resp.status()),
             });
         }
-        None
+        (resp, None)
     };
 
     let body =

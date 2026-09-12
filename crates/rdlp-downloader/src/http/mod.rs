@@ -8,12 +8,14 @@ pub(crate) mod chunk_name;
 mod config;
 mod parallel;
 mod trait_impl;
+mod verdict;
 
 #[cfg(test)]
 mod tests;
 
 #[cfg(test)]
 pub(crate) use parallel::{ChunkRequestSpec, download_chunk_with_retry, verify_merged_size};
+pub(crate) use verdict::{HTTP_PARTIAL_CONTENT, RangeVerdict, RangedRequestMeta, range_verdict};
 
 use rdlp_core::{
     DownloadProgress, DownloadStats, ProgressCallback, RdlpError, Result, RetryConfig,
@@ -31,6 +33,7 @@ use crate::chunking::ChunkSizeStrategy;
 use crate::progress::SpeedMeter;
 use crate::retry::{RetryPolicy, with_retry};
 use config::{DownloaderConfig, PROGRESS_UPDATE_INTERVAL};
+use rdlp_http::RangedRequest;
 use rdlp_ratelimit::RateLimiter;
 
 /// Convert optional `HashMap` headers to wreq `HeaderMap`
@@ -130,15 +133,6 @@ pub(crate) fn same_origin_headers(
     }
 }
 
-/// HTTP status a single-part ranged response must carry (RFC 9110 §15.3.7).
-///
-/// A `200` means the server ignored `Range` — permitted by §14.2 — and the
-/// content is the WHOLE representation, not the requested span. Writing such a
-/// body at a position computed for one span is the corruption in #526 (parallel
-/// chunk path) and #564 (HLS/DASH fragment path), so every ranged fetch accepts
-/// this status and no other.
-const HTTP_PARTIAL_CONTENT: u16 = 206;
-
 /// A parsed, validated single-part `Content-Range` response header.
 ///
 /// Grammar (RFC 9110 §14.4):
@@ -219,6 +213,34 @@ impl ContentRange {
             .and_then(|v| v.to_str().ok())
             .and_then(Self::parse)
     }
+
+    /// First byte position of the enclosed span (inclusive).
+    pub(crate) const fn first_pos(self) -> u64 {
+        self.first_pos
+    }
+
+    /// Last byte position of the enclosed span (inclusive).
+    pub(crate) const fn last_pos(self) -> u64 {
+        self.last_pos
+    }
+
+    /// `bytes */complete-length` (§14.4 `unsatisfied-range`), as sent with a 416.
+    pub(crate) fn parse_unsatisfied(value: &str) -> Option<u64> {
+        let (unit, rest) = value.trim().split_once(' ')?;
+        if !unit.eq_ignore_ascii_case("bytes") {
+            return None;
+        }
+        rest.trim().strip_prefix("*/")?.trim().parse().ok()
+    }
+
+    /// Read the header map and parse the `Content-Range` field's
+    /// `unsatisfied-range` form if present (only sent with a 416).
+    pub(crate) fn unsatisfied_from_headers(headers: &wreq::header::HeaderMap) -> Option<u64> {
+        headers
+            .get("content-range")
+            .and_then(|v| v.to_str().ok())
+            .and_then(Self::parse_unsatisfied)
+    }
 }
 
 /// Parse the `Content-Range` header's total-bytes field.
@@ -233,124 +255,6 @@ impl ContentRange {
 /// header, or any value [`ContentRange::parse`] rejects.
 pub(crate) fn parse_content_range_total(headers: &wreq::header::HeaderMap) -> Option<u64> {
     ContentRange::from_headers(headers).and_then(|range| range.complete_length)
-}
-
-/// The inclusive byte span a ranged fetch asked the server for.
-///
-/// Both bounds are inclusive, matching the `Range: bytes=start-end` request
-/// form and RFC 9110 §14.4's `incl-range`, so the span covers
-/// `end - start + 1` bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RequestedSpan {
-    /// First byte position requested (inclusive).
-    start: u64,
-    /// Last byte position requested (inclusive).
-    end: u64,
-}
-
-impl RequestedSpan {
-    /// Build a span, rejecting an inverted range.
-    ///
-    /// The invariant `start <= end` is what makes [`Self::len`]'s subtraction
-    /// total; enforcing it here rather than at the call site means no caller
-    /// can construct a span whose length underflows.
-    pub(crate) const fn new(start: u64, end: u64) -> Option<Self> {
-        if end < start {
-            return None;
-        }
-        Some(Self { start, end })
-    }
-
-    /// Number of bytes the span covers.
-    ///
-    /// Cannot underflow: [`Self::new`] rejects `end < start`.
-    pub(crate) const fn len(self) -> u64 {
-        self.end - self.start + 1
-    }
-}
-
-/// Confirm a ranged response actually carries the requested span before any of
-/// its bytes are written into the output.
-///
-/// Two callers, both writing a ranged body at a position they computed in
-/// advance:
-/// - the parallel chunk downloader ([`download_chunk_with_retry`]), which
-///   concatenates each chunk at a fixed offset in the merged output;
-/// - the HLS/DASH fragment fetcher (`fragments::fetch_with_optional_range`),
-///   which appends `#EXT-X-BYTERANGE` / `mediaRange` bodies sequentially (#564).
-///
-/// In both cases a response enclosing a different span silently relocates every
-/// byte after it — the ~517 MB interior displacement in #526. RFC 9110 §15.3.7
-/// places this duty on the client: "A client MUST inspect a 206 response's
-/// Content-Type and Content-Range field(s) to determine what parts are enclosed
-/// and whether additional requests are needed."
-///
-/// Only `Content-Range` is inspected here. The Content-Type half of that
-/// sentence exists to distinguish a single-part response from a
-/// `multipart/byteranges` one (§14.6), which arises only for a multi-range
-/// request; this client always asks for exactly one range. A multipart body
-/// would carry no top-level `Content-Range` anyway, so it is rejected by the
-/// missing-header branch below rather than silently accepted.
-///
-/// Returns `Err` (never a silent acceptance) when the status is not 206, the
-/// `Content-Range` is absent/malformed/invalid, or the enclosed span is not
-/// exactly the one requested.
-pub(crate) fn validate_range_response(
-    response: &wreq::Response,
-    span: RequestedSpan,
-    url: &str,
-) -> Result<()> {
-    let redacted = || Some(rdlp_redact::RedactedUrlBuf::from(url));
-
-    // §14.2 permits a server to ignore Range; the reply is then a 200 carrying
-    // the WHOLE representation. Accepting it here is what wrote whole-file
-    // content into a slot sized for one span.
-    let status = response.status().as_u16();
-    if status != HTTP_PARTIAL_CONTENT {
-        return Err(RdlpError::Download {
-            url: redacted(),
-            message: format!(
-                "ranged request for bytes {}-{} got HTTP {status}, expected \
-                 {HTTP_PARTIAL_CONTENT} (Partial Content). The server ignored the Range \
-                 header, so the body is the whole resource rather than the requested span \
-                 and cannot be placed at this position in the output.",
-                span.start, span.end
-            ),
-        });
-    }
-
-    // §15.3.7.1: a single-part 206 MUST carry Content-Range. Without it there
-    // is no way to confirm which span arrived.
-    let Some(range) = ContentRange::from_headers(response.headers()) else {
-        return Err(RdlpError::Download {
-            url: redacted(),
-            message: format!(
-                "ranged request for bytes {}-{} got a {HTTP_PARTIAL_CONTENT} response \
-                 with a missing, malformed, or invalid Content-Range header; the enclosed \
-                 span cannot be verified.",
-                span.start, span.end
-            ),
-        });
-    };
-
-    // A wrong span is a per-response anomaly rather than a statement about
-    // what the server supports — a retry against another CDN node plausibly
-    // gets the right bytes. Reported as `Network` so `is_retryable_error`
-    // accepts it and `download_chunk_with_retry` re-fetches, instead of
-    // failing a multi-gigabyte download over one bad response.
-    if range.first_pos != span.start || range.last_pos != span.end {
-        return Err(RdlpError::Network {
-            url: redacted(),
-            message: format!(
-                "ranged request for bytes {}-{} got Content-Range bytes {}-{}; the \
-                 response encloses a different span than requested and would corrupt the \
-                 output at this position.",
-                span.start, span.end, range.first_pos, range.last_pos
-            ),
-        });
-    }
-
-    Ok(())
 }
 
 /// HTTP/HTTPS downloader
@@ -600,6 +504,18 @@ impl HttpDownloader {
         let url = url.to_string();
         let hdrs = self.headers();
 
+        // Built once, before the retry loop: an inverted range is a caller
+        // bug, not a transient condition, so it fails fast rather than
+        // spending a retry budget on it.
+        let Some(span) = rdlp_http::RangeSpec::span(start, end) else {
+            return Err(RdlpError::Download {
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
+                message: format!(
+                    "internal error: chunk requested an inverted byte range {start}-{end}"
+                ),
+            });
+        };
+
         // NOTE: plain `with_retry`, not the cancellable form — this loop's
         // backoff sleeps are not themselves raced against `cancel`. That is
         // safe only because the sole production caller
@@ -614,10 +530,8 @@ impl HttpDownloader {
                 let url = url.clone();
                 let hdrs = hdrs.clone();
                 async move {
-                    let response = client
-                        .get(&url)
-                        .headers(hdrs)
-                        .header("Range", format!("bytes={start}-{end}"))
+                    let response = rdlp_http::download_request(&client, &url, Some(&hdrs))
+                        .ranged(span, None)
                         .send()
                         .await
                         .map_err(|e| RdlpError::Network {
@@ -632,18 +546,26 @@ impl HttpDownloader {
         )
         .await?;
 
-        // Confirm the response encloses exactly the requested span BEFORE any
-        // of its bytes reach the chunk file (#526).
-        let Some(span) = RequestedSpan::new(start, end) else {
+        // Confirm the response encloses exactly the requested span, is not
+        // content-coded, and (if this ever gains a validator) still names the
+        // same representation — BEFORE any of its bytes reach the chunk file
+        // (#526).
+        let meta = RangedRequestMeta {
+            range: span,
+            sent_validator: None,
+        };
+        let RangeVerdict::Partial { .. } = range_verdict(&response, &meta, &url)? else {
             return Err(RdlpError::Download {
                 url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
                 message: format!(
-                    "internal error: chunk requested an inverted byte range {start}-{end}"
+                    "chunk request for bytes {start}-{end} got a non-partial answer after \
+                     passing the earlier status check; cannot place it in the merged output."
                 ),
             });
         };
-        validate_range_response(&response, span, &url)?;
-        let expected_len = span.len();
+        // `RangeSpec::span` above already rejected `end < start`, so this
+        // subtraction cannot underflow.
+        let expected_len = end - start + 1;
 
         let file = File::create(chunk_path).await.map_err(|e| {
             RdlpError::Io(std::io::Error::new(
@@ -1007,6 +929,17 @@ mod content_range_tests {
         assert_eq!(range.first_pos, 0);
         assert_eq!(range.last_pos, 1023);
         assert_eq!(range.complete_length, Some(2048));
+    }
+
+    /// The `pub(crate)` accessors are what `verdict::range_verdict` reads a
+    /// `Partial` verdict's `ContentRange` through — pinned directly so a
+    /// field rename cannot silently desync them from the private fields this
+    /// module already covers by name above.
+    #[test]
+    fn accessors_read_the_same_fields_as_direct_access() {
+        let range = ContentRange::parse("bytes 0-1023/2048").expect("valid range must parse");
+        assert_eq!(range.first_pos(), range.first_pos);
+        assert_eq!(range.last_pos(), range.last_pos);
     }
 
     /// `*` for complete-length is explicitly legal — "An asterisk character
