@@ -505,20 +505,23 @@ impl DownloadPhase {
 
                 // Run post-processing. On a user cancel, clean the
                 // orchestrator-owned sidecars (thumbnail + session state; the
-                // source is already reclaimed by FileTracker::Drop) BEFORE
-                // re-returning UserCancelled so the client's terminal_event()
-                // still surfaces it as Event::Cancelled (PR #399). (#404)
+                // source is already reclaimed, because `Pipeline::run` joins
+                // every stage task before returning `Cancelled` — #560)
+                // BEFORE re-returning UserCancelled so the client's
+                // terminal_event() still surfaces it as Event::Cancelled
+                // (PR #399). (#404)
                 let final_files = match orchestrator
-                    .run_postprocessing(&info, download_files.clone(), is_hls, false)
+                    .run_postprocessing(&info, download_files, is_hls, false)
                     .await
                 {
                     Ok(files) => files,
                     Err(e @ OrchestratorError::UserCancelled) => {
                         super::cleanup::cleanup_cancelled_artifacts(
-                            &orchestrator.config.output_directory,
-                            orchestrator.config.output_to_stdout,
-                            &info.title,
-                            &download_files,
+                            &super::cleanup::CancelledJob {
+                                output_dir: &orchestrator.config.output_directory,
+                                output_to_stdout: orchestrator.config.output_to_stdout,
+                                title: &info.title,
+                            },
                             thumbnail_path,
                         )
                         .await;

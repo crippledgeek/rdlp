@@ -527,6 +527,141 @@ async fn pipeline_run_cancels_mid_pipeline() {
     );
 }
 
+/// A stage that does not observe cancellation cooperatively — like a
+/// stream-copy fast path (remux, audio-extract copy — #340) — and whose
+/// timing is driven entirely by two [`tokio::sync::Notify`] handshakes
+/// instead of sleeps, so the race #560 fixes is exercised deterministically:
+/// `entered` fires the instant `process()` starts (proving the tracker is
+/// held), and `process()` does not return until `release` fires, so the test
+/// controls exactly when this stage may finish relative to cancelling.
+struct GatedStage {
+    entered: Arc<tokio::sync::Notify>,
+    release: Arc<tokio::sync::Notify>,
+}
+#[async_trait]
+impl PipelineStage for GatedStage {
+    fn name(&self) -> &str {
+        "gated"
+    }
+    fn should_run(&self, _msg: &PipelineMessage) -> bool {
+        true
+    }
+    fn is_fatal(&self) -> bool {
+        false
+    }
+    async fn process(&self, msg: PipelineMessage) -> anyhow::Result<PipelineMessage> {
+        self.entered.notify_one();
+        self.release.notified().await;
+        Ok(msg)
+    }
+}
+
+/// #560: `run` must join every stage task before returning `Cancelled`, so
+/// the tracker `GatedStage` is still holding when the cancel fires has
+/// ALREADY been dropped — reclaiming the OWNED source — by the time this
+/// function returns. Deterministic: waits for `entered` (the stage is
+/// genuinely inside `process()`, holding the tracker) before cancelling,
+/// then releases the stage and joins `run()` — no sleeps, no timing margin.
+#[tokio::test]
+async fn cancel_mid_slow_stage_reclaims_owned_source_before_run_returns() {
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("video.mp4");
+    std::fs::write(&video, b"vid").unwrap();
+
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let pipeline = make_pipeline(vec![
+        Arc::new(GatedStage {
+            entered: Arc::clone(&entered),
+            release: Arc::clone(&release),
+        }),
+        Arc::new(PassthroughStage),
+    ]);
+    let (info, files, config, stem, mut opts, cb, _) = run_args(vec![video.clone()]);
+    opts.keep_inputs = false; // owned — the pipeline may delete it
+
+    let token = CancellationToken::new();
+    let run_token = token.clone();
+    let run_handle = tokio::spawn(async move {
+        pipeline
+            .run(info, files, opts, config, stem, cb, Some(run_token))
+            .await
+    });
+
+    // Wait for proof the stage is inside `process()` — not a guessed delay.
+    entered.notified().await;
+    token.cancel();
+    // Let the (deliberately uncancellable) stage finish now that the cancel
+    // has already been observed by the rest of the pipeline.
+    release.notify_one();
+
+    let result = run_handle.await.unwrap();
+
+    assert!(
+        matches!(
+            result.unwrap_err().downcast_ref::<PipelineError>(),
+            Some(PipelineError::Cancelled)
+        ),
+        "mid-slow-stage cancel must surface as Cancelled"
+    );
+    assert!(
+        !video.exists(),
+        "an OWNED source must already be reclaimed by the time run() returns Cancelled (#560)"
+    );
+}
+
+/// The borrowed twin: with `keep_inputs = true`, the same race must leave
+/// the user's file untouched — `FileTracker::new_borrowing` (#414) excludes
+/// it from deletion regardless of when the tracker is dropped.
+#[tokio::test]
+async fn cancel_mid_slow_stage_preserves_borrowed_source() {
+    use tempfile::TempDir;
+
+    let dir = TempDir::new().unwrap();
+    let video = dir.path().join("users-own.mp4");
+    std::fs::write(&video, b"vid").unwrap();
+
+    let entered = Arc::new(tokio::sync::Notify::new());
+    let release = Arc::new(tokio::sync::Notify::new());
+    let pipeline = make_pipeline(vec![
+        Arc::new(GatedStage {
+            entered: Arc::clone(&entered),
+            release: Arc::clone(&release),
+        }),
+        Arc::new(PassthroughStage),
+    ]);
+    let (info, files, config, stem, mut opts, cb, _) = run_args(vec![video.clone()]);
+    opts.keep_inputs = true; // borrowed — must never be deleted
+
+    let token = CancellationToken::new();
+    let run_token = token.clone();
+    let run_handle = tokio::spawn(async move {
+        pipeline
+            .run(info, files, opts, config, stem, cb, Some(run_token))
+            .await
+    });
+
+    entered.notified().await;
+    token.cancel();
+    release.notify_one();
+
+    let result = run_handle.await.unwrap();
+
+    assert!(
+        matches!(
+            result.unwrap_err().downcast_ref::<PipelineError>(),
+            Some(PipelineError::Cancelled)
+        ),
+        "mid-slow-stage cancel must surface as Cancelled"
+    );
+    assert!(
+        video.exists(),
+        "a BORROWED source must survive a mid-slow-stage cancel (#414/#560)"
+    );
+}
+
 #[tokio::test]
 async fn pipeline_run_with_none_cancel_runs_to_completion() {
     let pipeline = make_pipeline(vec![Arc::new(PassthroughStage)]);

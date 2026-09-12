@@ -349,19 +349,22 @@ impl Orchestrator {
 
         // Run post-processing if configured (or automatic for HLS). On a user
         // cancel, delete the orchestrator-owned sidecars (thumbnail + session
-        // state; the source is reclaimed by FileTracker::Drop) before returning
-        // UserCancelled so the caller surfaces Event::Cancelled (#404 / #411).
+        // state; the source is already reclaimed, because `Pipeline::run`
+        // joins every stage task before returning `Cancelled` — #560) before
+        // returning UserCancelled so the caller surfaces Event::Cancelled
+        // (#404 / #411).
         let final_files = match self
-            .run_postprocessing(final_info, download_files.clone(), is_hls, false)
+            .run_postprocessing(final_info, download_files, is_hls, false)
             .await
         {
             Ok(files) => files,
             Err(e @ OrchestratorError::UserCancelled) => {
                 super::super::cleanup::cleanup_cancelled_artifacts(
-                    output_dir,
-                    self.config.output_to_stdout,
-                    &final_info.title,
-                    &download_files,
+                    &super::super::cleanup::CancelledJob {
+                        output_dir,
+                        output_to_stdout: self.config.output_to_stdout,
+                        title: &final_info.title,
+                    },
                     thumbnail_path,
                 )
                 .await;

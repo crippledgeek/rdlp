@@ -32,6 +32,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use thiserror::Error;
 use tokio::sync::{Semaphore, mpsc};
+use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 use rdlp_core::PostProcessCallbackFactory;
@@ -197,6 +198,13 @@ impl Pipeline {
     /// Non-fatal stages (subtitle, metadata, thumbnail, fixup) log warnings
     /// and continue; one that returns `Err` anyway loses the message and so
     /// ends the run, surfacing its own cause.
+    ///
+    /// **Single ownership on cancel (#560):** every spawned stage task is
+    /// joined before [`PipelineError::Cancelled`] is returned, so by the time
+    /// a caller observes it, every [`FileTracker`] this call created has
+    /// already been dropped (reclaiming owned files, preserving borrowed
+    /// ones per #414). Callers may rely on "returned `Cancelled`" as proof
+    /// the pipeline is done touching the filesystem.
     #[allow(clippy::too_many_arguments)]
     pub async fn run(
         &self,
@@ -254,7 +262,7 @@ impl Pipeline {
 
         // Build channel chain: one mpsc(1) between consecutive stages.
         // first_tx → stage_0 → stage_1 → ... → stage_N → final_rx
-        let mut final_rx = self.spawn_chain(msg, &token, error_tx);
+        let (mut final_rx, stage_handles) = self.spawn_chain(msg, &token, error_tx);
 
         // Await the final message.
         let Some(final_msg) = final_rx.recv().await else {
@@ -262,6 +270,44 @@ impl Pipeline {
             // distinct from "pipeline terminated with no output" (which is a bug
             // scenario — every stage cascaded None without error).
             if token.is_cancelled() {
+                // Single ownership (#560) is only real if EVERY `FileTracker`
+                // this run created has been dropped by the time `Cancelled` is
+                // returned. It is not, yet: `final_rx` closes as soon as the
+                // LAST stage's sender drops, and a stage between here and the
+                // one still doing the actual work observes the cancel via the
+                // `select!` in `spawn_chain` and returns (dropping its own
+                // sender) WITHOUT ever holding the message — so the cascade to
+                // `None` can complete while an upstream stage still owns the
+                // tracker inside `stage.process(msg)`. Joining every spawned
+                // stage task here waits for that task to actually finish and
+                // drop (or forward, then have the forward fail and drop) its
+                // message before this function returns, making "run returned
+                // Cancelled ⇒ every tracker has been dropped" true by
+                // construction rather than by timing.
+                //
+                // This cannot hang: fatal FFmpeg stages (merge, audio-extract
+                // transcode, both loudnorm passes, video recode) poll
+                // `check_cancelled` per packet, so a busy stage returns within
+                // about one packet's latency of the cancel firing. The
+                // stream-copy fast paths (audio-extract copy, normalize's
+                // internal merge, remux) are NOT yet cancel-aware (#340) — a
+                // stage cancelled mid-copy runs its copy to its own natural
+                // completion (bounded by the file already in flight, not
+                // unbounded) rather than aborting early. Either way every
+                // stage task terminates on its own; there is nothing left for
+                // this join to wait on indefinitely.
+                for handle in stage_handles {
+                    // A stage task's only failure mode is a panic (it never
+                    // returns Err itself — every fallible branch is handled
+                    // inside the async block). A panic already unwinds and
+                    // drops the task's locals, including any tracker it held,
+                    // so the ownership guarantee holds regardless of the
+                    // `JoinError` — but a panicked stage is still a defect
+                    // worth surfacing, so log it rather than discard it.
+                    if let Err(e) = handle.await {
+                        log::warn!("Pipeline: stage task panicked during cancel join: {e}");
+                    }
+                }
                 return Err(PipelineError::Cancelled.into());
             }
             // Pipeline was interrupted — recover the fatal stage's error.
@@ -367,18 +413,21 @@ impl Pipeline {
     /// leave that handle alive in `run`'s frame and make the no-error path
     /// block indefinitely. Consuming it makes that structural rather than
     /// resting on a `drop(error_tx)` line a later edit could delete.
+    /// Spawns one task per stage and returns the final-output receiver
+    /// alongside every stage task's [`JoinHandle`], so `run` can join them
+    /// on the cancel path (#560) before declaring every tracker reclaimed.
     #[allow(clippy::needless_pass_by_value)]
     fn spawn_chain(
         &self,
         initial_msg: PipelineMessage,
         token: &CancellationToken,
         error_tx: mpsc::Sender<anyhow::Error>,
-    ) -> mpsc::Receiver<PipelineMessage> {
+    ) -> (mpsc::Receiver<PipelineMessage>, Vec<JoinHandle<()>>) {
         if self.stages.is_empty() {
             // No stages — connect directly.
             let (tx, rx) = mpsc::channel::<PipelineMessage>(1);
             let _ = tx.try_send(initial_msg);
-            return rx;
+            return (rx, Vec::new());
         }
 
         // Build channels: one per inter-stage boundary.
@@ -402,6 +451,7 @@ impl Pipeline {
         // rxs[0] is stage 0's input, rxs[1] is stage 1's input, ..., rxs[n] is the final output.
         // txs[i+1] is stage i's output.
         let mut rxs_iter = rxs.into_iter();
+        let mut handles = Vec::with_capacity(n);
 
         for (i, stage) in self.stages.iter().enumerate() {
             let stage = Arc::clone(stage);
@@ -413,7 +463,7 @@ impl Pipeline {
             let stage_token = token.clone();
             let stage_error_tx = error_tx.clone();
 
-            tokio::spawn(async move {
+            let handle = tokio::spawn(async move {
                 let mut in_rx = in_rx_i;
                 // Cancellation granularity: this select! fires BETWEEN stages.
                 // A stage already executing inside `process()` (e.g. FFmpeg
@@ -485,12 +535,14 @@ impl Pipeline {
                     }
                 }
             });
+            handles.push(handle);
         }
 
         // The last rx in the iterator is the pipeline output.
-        rxs_iter
+        let final_rx = rxs_iter
             .next()
-            .expect("pipeline: rxs has stages+1 elements; loop consumed stages; one must remain")
+            .expect("pipeline: rxs has stages+1 elements; loop consumed stages; one must remain");
+        (final_rx, handles)
     }
 }
 
