@@ -1,6 +1,18 @@
 //! Shared sidecar-save utilities: an atomic JSON writer, a monotonic-ish
-//! wall-clock helper, and a consecutive-save-failure tracker. Used by both the
-//! HLS (`fragments`) and DASH (`dash`) resume-state modules.
+//! wall-clock helper, and a consecutive-save-failure tracker. Used by all
+//! three resume-state sidecars, each written through [`atomic_write_json`]:
+//!
+//! - `fragments::state::HlsResumeState` (`<output>.hls_state.json`) —
+//!   matches on schema version plus a path-only FNV-1a-64 fingerprint over
+//!   the ordered fragment list, folded with the fragment count.
+//! - `dash::state::DashDownloadState` (`<output>.dash_state.json`) —
+//!   matches on schema version plus the MPD URL's path and the chosen
+//!   video/audio representation ids.
+//! - `http::state::HttpResumeState` (`<output>.http_state.json`) — matches
+//!   on schema version only; the sidecar *carries* the strong validator
+//!   rather than matching against one, and the caller checks it against the
+//!   server's response (`If-Range`, RFC 9110 §13.1.5) instead of the sidecar
+//!   checking it against the request.
 
 use std::path::Path;
 use std::time::SystemTime;

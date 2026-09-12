@@ -1,7 +1,8 @@
 //! HTTP/HTTPS downloader implementation
 //!
-//! Provides HTTP downloading with parallel chunk support, resume capability,
-//! and automatic retry logic using the backon crate.
+//! Provides HTTP downloading with parallel chunk support, validator-checked
+//! resume (`If-Range`, RFC 9110 §13.1.5 — see the `state` submodule), and
+//! automatic retry logic using the backon crate.
 
 mod chunk_ledger;
 pub(crate) mod chunk_name;
