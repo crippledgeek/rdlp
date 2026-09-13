@@ -3,9 +3,10 @@
 //!
 //! Resume model: per-segment temp files under `<output>.<suffix>.parts/`,
 //! with init markers and completed-index tracking persisted to
-//! `<output>.dash_state.json`. State is path-only-URL-keyed (CDN-tolerant),
-//! saved every 16 successful segment fetches, and deleted on full mux
-//! success.
+//! `<output>.dash_state.json`. State matches on MPD path, representation
+//! ids, and a manifest-content fingerprint (`dash::state::manifest_fingerprint`,
+//! #746) — URL matching stays path-only for CDN-token tolerance — saved
+//! every 16 successful segment fetches, and deleted on full mux success.
 
 #![allow(clippy::doc_markdown)]
 
@@ -333,8 +334,8 @@ pub async fn run(
 
 /// The URL a resume anchor is checked/recorded against: the init segment
 /// when one exists, otherwise the first media segment. `seg_urls` must be
-/// non-empty — both callers' "no video segments resolved" gate guarantees
-/// this before either reaches here, so `Option::unwrap_or` never falls back
+/// non-empty — `run`'s "no video segments resolved" gate guarantees this
+/// before its call reaches here, so `Option::unwrap_or` never falls back
 /// to a value it could not prove exists (no dead branch: unlike an
 /// if/else that repeats the presence check and then re-guards against a
 /// case that check already excluded, `unwrap_or` embodies the rule in one
@@ -568,8 +569,8 @@ async fn download_representation(
             // Whether a fresh video init segment offers a strong validator
             // tells an operator up front whether a later resume of this
             // representation can revalidate the origin's content, or will
-            // have to fall back to the manifest's path-only fingerprint
-            // (#746).
+            // have to fall back to the manifest content fingerprint alone
+            // (URLs within it are still matched path-only, #746).
             if is_video {
                 debug!(
                     "DASH video init segment offers a strong validator: {}; resume revalidation {}",

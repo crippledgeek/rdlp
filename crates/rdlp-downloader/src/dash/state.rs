@@ -1,7 +1,11 @@
 //! Resume state for DASH downloads.
 //!
-//! State is persisted to `<output>.dash_state.json` and loaded on retry.
-//! URL match is path-only — CDN host swaps don't break resume.
+//! State is persisted to `<output>.dash_state.json` and loaded on retry,
+//! matched on schema version, MPD path, representation ids, and a
+//! manifest-content fingerprint (`manifest_fingerprint`, #746); the anchor
+//! validator is revalidated separately (`crate::revalidate`). URL matching
+//! within the fingerprint stays path-only so a CDN host swap doesn't break
+//! resume.
 //!
 //! Load/save are async (`tokio::fs`) because the workspace clippy config
 //! bans blocking `std::fs` in async contexts. The load is bounded by
