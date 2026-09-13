@@ -70,6 +70,8 @@ fn type_subtype(content_type: &str) -> &str {
 ///
 /// Also the gate for the OpenGraph `og:video:type` / `og:audio:type` hint, which
 /// distinguishes a real stream from an embed/player page (issue #493).
+/// Admission here does not promise an extension: see `content_type_to_ext`
+/// for the naming half of the contract (#579).
 pub(crate) fn is_media_content_type(content_type: &str) -> bool {
     let ct = type_subtype(content_type);
     starts_with_ignore_ascii_case(ct, "video/")
