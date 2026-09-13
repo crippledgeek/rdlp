@@ -4,19 +4,17 @@
 //! sidecars below, each written through [`atomic_write_json`], and by the
 //! chunk-completion manifest (`http::chunk_manifest::ChunkManifest`, #675),
 //! which shares the writer and the reader but keys on `download_id` +
-//! `ChunkKind` rather than on a resume identity:
+//! `ChunkKind` rather than on a resume identity.
 //!
-//! - `fragments::state::HlsResumeState` (`<output>.hls_state.json`) —
-//!   matches on schema version plus a path-only FNV-1a-64 fingerprint over
-//!   the ordered fragment list, folded with the fragment count.
-//! - `dash::state::DashDownloadState` (`<output>.dash_state.json`) —
-//!   matches on schema version plus the MPD URL's path and the chosen
-//!   video/audio representation ids.
-//! - `http::state::HttpResumeState` (`<output>.http_state.json`) — matches
-//!   on schema version only; the sidecar *carries* the strong validator
-//!   rather than matching against one, and the caller checks it against the
-//!   server's response (`If-Range`, RFC 9110 §13.1.5) instead of the sidecar
-//!   checking it against the request.
+//! | Sidecar | Identifies the representation by | Proves the partial by | On mismatch |
+//! |---|---|---|---|
+//! | `fragments::state::HlsResumeState` `<output>.hls_state.json` | schema version; content fingerprint over the resolved fragment list (URL paths, byte ranges, init path/range, durations, count — `fragment_fingerprint`); anchor validator of fragment 0 revalidated with `If-Range` (`crate::revalidate`, #746) | running CRC-32 of `[0..byte_len)` (#676) | fresh start; nothing deleted, the output is truncated and rewritten |
+//! | `dash::state::DashDownloadState` `<output>.dash_state.json` | schema version; MPD path; video/audio representation ids; manifest fingerprint over the segment plan (+ `publishTime`) (`manifest_fingerprint`); anchor validator of the video init (or first) segment, revalidated with `If-Range` (#746) | per-part recorded byte length (`intact_len`, #677) | fresh state; parts on disk are re-fetched in place, not deleted |
+//! | `http::state::HttpResumeState` `<output>.http_state.json` | schema version; the sidecar *carries* the strong validator and the resume request sends it as `If-Range` (#565) | `Content-Range` on every 206 (#526) | discard partial and restart (`trait_impl::restart`) |
+//!
+//! An unanswered `If-Range` probe (transport failure, or a non-answer status
+//! after retries) is an error on every path, never a mismatch: a passing
+//! outage must not discard a partial.
 //!
 //! # Durability position (#676): no `fsync` on any resume path
 //!
@@ -24,9 +22,11 @@
 //! without syncing:
 //!
 //! - **DASH** writes one file per segment; a torn (short) segment costs one
-//!   re-fetch. Parts are length-checked (`intact_len`), not content-checked,
-//!   so a size-durable/data-zeroed part on ext4/XFS is not caught here — DASH
-//!   per-segment integrity is #677/#746's scope, not #676's.
+//!   re-fetch. Parts are length-checked (`intact_len`), not content-checked:
+//!   #677 added the length check and #746 added the manifest/anchor
+//!   identity, but the content of a part whose length is intact is still
+//!   not hashed, so a size-durable/data-zeroed part on ext4/XFS is not
+//!   caught here.
 //! - **HTTP** carries the strong validator in `<output>.http_state.json` and
 //!   checks it with `If-Range` on every resume (#565); each ranged chunk is
 //!   re-validated against the origin's `Content-Range` (#526). Nothing

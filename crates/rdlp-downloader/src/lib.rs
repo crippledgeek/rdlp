@@ -284,6 +284,8 @@ pub(crate) mod atomic;
 pub mod chunking;
 /// DASH (Dynamic Adaptive Streaming over HTTP) downloader for static VoD MPDs
 pub mod dash;
+/// The one FNV-1a-64 the resume sidecars fingerprint manifests with (#746)
+pub(crate) mod fingerprint;
 /// Shared fragment-list downloader for pre-resolved segment URLs (DASH + HLS)
 pub mod fragments;
 /// HLS (HTTP Live Streaming) downloader with parallel segment downloads
@@ -292,6 +294,8 @@ pub mod hls;
 pub mod http;
 /// Shared progress reporting infrastructure
 pub mod progress;
+/// Anchor-validator revalidation shared by the HLS and DASH resume paths (#746)
+pub(crate) mod revalidate;
 
 /// The one retry mechanism shared by the HTTP, chunk, fragment, and DASH
 /// download paths.

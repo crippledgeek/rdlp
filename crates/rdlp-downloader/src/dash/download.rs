@@ -3,9 +3,10 @@
 //!
 //! Resume model: per-segment temp files under `<output>.<suffix>.parts/`,
 //! with init markers and completed-index tracking persisted to
-//! `<output>.dash_state.json`. State is path-only-URL-keyed (CDN-tolerant),
-//! saved every 16 successful segment fetches, and deleted on full mux
-//! success.
+//! `<output>.dash_state.json`. State matches on MPD path, representation
+//! ids, and a manifest-content fingerprint (`dash::state::manifest_fingerprint`,
+//! #746) — URL matching stays path-only for CDN-token tolerance — saved
+//! every 16 successful segment fetches, and deleted on full mux success.
 
 #![allow(clippy::doc_markdown)]
 
@@ -29,10 +30,11 @@ use crate::atomic::{SIDECAR_SAVE_FAILURE_THRESHOLD, SaveFailureTracker, intact_l
 use crate::dash::errors::DashError;
 use crate::dash::manifest;
 use crate::dash::segments::SegmentPlan;
-use crate::dash::state::{ByteLen, DashDownloadState};
-use crate::fragments::fetch_with_optional_range;
+use crate::dash::state::{self, ByteLen, DashDownloadState, DashIdentity};
+use crate::fragments::{FetchedBody, fetch_with_optional_range};
 use crate::http::HttpDownloader;
 use crate::retry::{RetryPolicy, Tallies, retries_taken, with_retry_cancellable};
+use crate::revalidate::{AnchorProbe, AnchorVerdict, revalidate_anchor};
 
 /// The length a DASH part can be counted for: the record made when its write
 /// finished, and only when the file on disk still has exactly that length.
@@ -134,37 +136,75 @@ pub async fn run(
 
     let video_repr_id = parsed.video.id.clone();
     let audio_repr_id = parsed.audio.as_ref().map(|a| a.id.clone());
+    let manifest_fingerprint = state::manifest_fingerprint(&parsed);
+    let identity = DashIdentity {
+        mpd_url: &mpd_url_parsed,
+        video_repr_id: &video_repr_id,
+        audio_repr_id: audio_repr_id.as_deref(),
+        manifest_fingerprint,
+    };
 
-    // Load matching state, or start fresh.
-    let loaded_state = DashDownloadState::load_matching(
-        &state_file,
-        &mpd_url_parsed,
-        &video_repr_id,
-        audio_repr_id.as_deref(),
-    )
-    .await;
-    let initial_state = loaded_state.unwrap_or_else(|| {
-        DashDownloadState::new(
-            &mpd_url_parsed,
-            video_repr_id.clone(),
-            audio_repr_id.clone(),
-        )
-    });
-    let state_arc = Arc::new(Mutex::new(initial_state));
-
-    // Video (always present after parse).
+    // Video (always present after parse). Resolved before the state load so
+    // the anchor URL below is known — a v2-style load-before-resolve order
+    // could not name it (#746).
     let video_ts = period_duration_ts(parsed.period_duration, &parsed.video.plan);
     let video_init = parsed.video.plan.init_url(&parsed.video.base_urls);
     let video_seg_urls = parsed
         .video
         .plan
         .segment_urls(&parsed.video.base_urls, video_ts);
+    // Single error site: an empty plan fails here unconditionally, and the
+    // anchor-URL selection below reuses `video_seg_urls` already knowing it
+    // is non-empty, rather than re-deriving the same error.
     if video_seg_urls.is_empty() {
         return Err(RdlpError::Download {
             message: "DASH: no video segments resolved".into(),
             url: Some(rdlp_redact::RedactedUrlBuf::from(mpd_url)),
         });
     }
+
+    // Load matching state, or start fresh. When a matching sidecar recorded
+    // an anchor validator, revalidate it against the CURRENT video anchor
+    // URL (fresh CDN token) before trusting the sidecar — a regenerated MPD
+    // that reused the same segment names but serves different content fails
+    // this even though the manifest fingerprint above could not see it
+    // (#746). Mirrors the HLS resume block in `crate::fragments`.
+    let mut loaded_state = DashDownloadState::load_matching(&state_file, &identity).await;
+    if let Some(anchor) = loaded_state
+        .as_ref()
+        .and_then(|s| s.anchor_validator.clone())
+    {
+        let anchor_str = anchor_url(video_init.as_ref(), &video_seg_urls).to_string();
+        let headers = crate::http::same_origin_headers(
+            Some(&mpd_origin),
+            &anchor_str,
+            &http_downloader.headers(),
+        );
+        match revalidate_anchor(
+            http_downloader,
+            AnchorProbe {
+                url: &anchor_str,
+                headers,
+                validator: &anchor,
+            },
+            tallies.retries.as_ref(),
+        )
+        .await?
+        {
+            AnchorVerdict::Confirmed => {}
+            AnchorVerdict::Changed(why) => {
+                warn!(
+                    "DASH resume anchor {} no longer matches ({why}); the representation changed \
+                     under the same MPD — starting fresh (parts on disk are re-fetched, not deleted)",
+                    rdlp_redact::RedactedUrl::new(&anchor_str)
+                );
+                loaded_state = None;
+            }
+        }
+    }
+    let initial_state = loaded_state.unwrap_or_else(|| DashDownloadState::new(&identity));
+    let state_arc = Arc::new(Mutex::new(initial_state));
+
     let segment_ctx = RepresentationRunCtx {
         http: http_downloader.clone(),
         retry: Arc::clone(&retry_config),
@@ -290,6 +330,28 @@ pub async fn run(
     }
 
     Ok(stats)
+}
+
+/// The URL a resume anchor is checked/recorded against: the init segment
+/// when one exists, otherwise the first media segment. `seg_urls` must be
+/// non-empty — `run`'s "no video segments resolved" gate guarantees this
+/// before its call reaches here, so `Option::unwrap_or` never falls back
+/// to a value it could not prove exists (no dead branch: unlike an
+/// if/else that repeats the presence check and then re-guards against a
+/// case that check already excluded, `unwrap_or` embodies the rule in one
+/// expression).
+fn anchor_url<'a>(init_url: Option<&'a Url>, seg_urls: &'a [Url]) -> &'a Url {
+    init_url.unwrap_or(&seg_urls[0])
+}
+
+/// Whether the anchor is the init segment (`true`) or the first media
+/// segment (`false` — the plan has no init) — the same rule as
+/// [`anchor_url`], expressed as a boolean for `download_representation`'s
+/// per-segment record gate, which needs the fact rather than the URL
+/// itself. Both derive from nothing but `Option::is_some`/`unwrap_or` on
+/// the same `init_url`, so they cannot diverge (#746).
+const fn anchor_is_init(init_url: Option<&Url>) -> bool {
+    init_url.is_some()
 }
 
 fn period_duration_ts(period_duration: Duration, plan: &SegmentPlan) -> u64 {
@@ -445,6 +507,12 @@ async fn download_representation(
 
     let mut total: u64 = 0;
     let mut save_tracker = SaveFailureTracker::new(SIDECAR_SAVE_FAILURE_THRESHOLD);
+    // Which segment is this representation's resume anchor (#746): the init
+    // segment when one exists, else the first media segment — computed
+    // before `init_url` is consumed below by the `if let Some(u) = init_url`
+    // match. `anchor_is_init` is the single place that rule is spelled out;
+    // `run`'s probe-target selection uses the same function.
+    let init_url_absent = !anchor_is_init(init_url.as_ref());
 
     // ----- Init segment -----
     let init_part_path = parts_dir.join("init.m4s");
@@ -470,15 +538,25 @@ async fn download_representation(
                      recorded {recorded_len:?}) — re-fetching"
                 );
             }
-            let bytes = ctx.fetch(&u).await?;
+            let fetched = ctx.fetch(&u).await?;
+            let bytes = fetched.bytes;
             let len = bytes.len() as u64;
             fs::write(&init_part_path, &bytes).await?;
             bytes_counter.fetch_add(len, Ordering::Relaxed);
             total += len;
+            // Captured before `fetched.validator` is moved into the state
+            // below — the debug line further down reads this flag, not the
+            // (by-then-moved) field.
+            let offers_strong_validator = fetched.validator.is_some();
             {
                 let mut s = state_arc.lock().await;
                 if is_video {
                     s.init_video_len = Some(len);
+                    // The video init segment is this representation's resume
+                    // anchor (#746) — recorded under the same lock as
+                    // `init_video_len`; `record_anchor` keeps an already
+                    // recorded anchor when this is a re-fetch of a torn part.
+                    s.record_anchor(fetched.validator);
                 } else {
                     s.init_audio_len = Some(len);
                 }
@@ -489,6 +567,22 @@ async fn download_representation(
                 );
             }
             debug!("DASH repr {repr_id}: init {len} bytes");
+            // Whether a fresh video init segment offers a strong validator
+            // tells an operator up front whether a later resume of this
+            // representation can revalidate the origin's content, or will
+            // have to fall back to the manifest content fingerprint alone
+            // (URLs within it are still matched path-only, #746).
+            if is_video {
+                debug!(
+                    "DASH video init segment offers a strong validator: {}; resume revalidation {}",
+                    if offers_strong_validator { "yes" } else { "no" },
+                    if offers_strong_validator {
+                        "possible"
+                    } else {
+                        "falls back to the manifest fingerprint"
+                    }
+                );
+            }
         }
     }
 
@@ -571,19 +665,25 @@ async fn download_representation(
             })?;
 
             let fetch_start = Instant::now();
-            let bytes = ctx.fetch(&u).await?;
-            let len = bytes.len() as u64;
+            let fetched = ctx.fetch(&u).await?;
+            let len = fetched.bytes.len() as u64;
             let elapsed = fetch_start.elapsed();
 
             let part_path = parts_dir.join(segment_filename(i));
-            fs::write(&part_path, &bytes).await.map_err(RdlpError::Io)?;
+            fs::write(&part_path, &fetched.bytes)
+                .await
+                .map_err(RdlpError::Io)?;
 
             // Report to the adaptive controller so AIMD can tune connection
             // count based on observed throughput.  Permit is still held here;
             // it drops at the end of this async block.
             controller.report_segment_complete(len, elapsed, None);
 
-            Ok::<(usize, u64), RdlpError>((i, len))
+            Ok::<(usize, u64, Option<rdlp_http::StrongValidator>), RdlpError>((
+                i,
+                len,
+                fetched.validator,
+            ))
         }
     }))
     .buffer_unordered(concurrent * 2);
@@ -592,10 +692,17 @@ async fn download_representation(
     let mut stream_err: Option<RdlpError> = None;
     while let Some(item) = stream.next().await {
         match item {
-            Ok((i, len)) => {
+            Ok((i, len, validator)) => {
                 bytes_counter.fetch_add(len, Ordering::Relaxed);
                 total += len;
                 let mut s = state_arc.lock().await;
+                // No init segment: the plan's first video segment is the
+                // resume anchor instead (#746) — the counterpart of the
+                // init-branch record above, gated by `init_url_absent` so
+                // the two sites can never both fire for one representation.
+                if is_video && init_url_absent && i == 0 {
+                    s.record_anchor(validator);
+                }
                 s.record_segment(&repr_id, i as u64, len);
                 completed_since_save += 1;
                 if completed_since_save >= STATE_SAVE_BATCH {
@@ -782,7 +889,7 @@ impl RepresentationRunCtx {
     /// path uses, so a DASH segment and an HLS fragment go through one fetch
     /// implementation rather than two (this superseded a hand-rolled closure
     /// that duplicated it).
-    async fn fetch(&self, url: &Url) -> Result<Vec<u8>> {
+    async fn fetch(&self, url: &Url) -> Result<FetchedBody> {
         let url_str = url.to_string();
         let policy = RetryPolicy::new(self.retry.as_ref(), &"DASH segment fetch")
             .counting_into(self.tallies.retries.as_ref());
@@ -864,11 +971,14 @@ mod cancel_tests {
 
         let http = HttpDownloader::with_client(wreq::Client::new());
         let retry = fast_retry();
-        let state = Arc::new(Mutex::new(DashDownloadState::new(
-            &url::Url::parse(&mpd_url).unwrap(),
-            "v0".to_string(),
-            None,
-        )));
+        let mpd_url_owned = url::Url::parse(&mpd_url).unwrap();
+        let identity = DashIdentity {
+            mpd_url: &mpd_url_owned,
+            video_repr_id: "v0",
+            audio_repr_id: None,
+            manifest_fingerprint: 0,
+        };
+        let state = Arc::new(Mutex::new(DashDownloadState::new(&identity)));
         let tmp = std::env::temp_dir().join(format!("rdlp_dash_cancel_{}", std::process::id()));
         tokio::fs::create_dir_all(&tmp).await.unwrap();
         let final_path = tmp.join("out.video.m4s");
@@ -995,13 +1105,6 @@ mod same_origin_gate_tests {
     //! from the MPD URL's origin, operator-set `Format.http_headers` are
     //! stripped to prevent header exfiltration to a redirected CDN.
     use super::*;
-    use std::collections::HashMap;
-
-    fn make_downloader_with_header(name: &str, value: &str) -> HttpDownloader {
-        let mut headers = HashMap::new();
-        headers.insert(name.to_string(), value.to_string());
-        HttpDownloader::with_client(wreq::Client::new()).with_extra_headers(Some(&headers))
-    }
 
     /// Positive: same-origin segment URL DOES receive `Format.http_headers`.
     /// Companion to the negative tests below; prevents a defensive
@@ -1019,7 +1122,7 @@ mod same_origin_gate_tests {
             .create_async()
             .await;
 
-        let http = make_downloader_with_header("Referer", referer);
+        let http = HttpDownloader::with_test_header("Referer", referer);
         let retry = fast_retry();
         let mpd_url = format!("{}/manifest.mpd", server.url());
         let mpd_origin = url::Url::parse(&mpd_url).unwrap().origin();
@@ -1028,7 +1131,8 @@ mod same_origin_gate_tests {
         let bytes = test_ctx(&http, &retry, &mpd_origin, None)
             .fetch(&seg_url)
             .await
-            .expect("same-origin segment fetch must succeed");
+            .expect("same-origin segment fetch must succeed")
+            .bytes;
         assert_eq!(&bytes[..], b"abcd");
     }
 
@@ -1059,7 +1163,7 @@ mod same_origin_gate_tests {
             .create_async()
             .await;
 
-        let http = make_downloader_with_header("Referer", referer);
+        let http = HttpDownloader::with_test_header("Referer", referer);
         let retry = fast_retry();
         let mpd_url = format!("{}/manifest.mpd", mpd_server.url());
         let mpd_origin = url::Url::parse(&mpd_url).unwrap().origin();
@@ -1068,7 +1172,8 @@ mod same_origin_gate_tests {
         let bytes = test_ctx(&http, &retry, &mpd_origin, None)
             .fetch(&seg_url)
             .await
-            .expect("cross-origin segment fetch must succeed without leaking headers");
+            .expect("cross-origin segment fetch must succeed without leaking headers")
+            .bytes;
         assert_eq!(&bytes[..], b"abcd");
     }
 
@@ -1096,7 +1201,7 @@ mod same_origin_gate_tests {
             .create_async()
             .await;
 
-        let http = make_downloader_with_header("Referer", referer);
+        let http = HttpDownloader::with_test_header("Referer", referer);
         let retry = fast_retry();
         // `data:` is an opaque-origin scheme per RFC 6454; any `Origin::Opaque`
         // compares not-equal to every Tuple origin including itself.
@@ -1110,7 +1215,8 @@ mod same_origin_gate_tests {
         let bytes = test_ctx(&http, &retry, &opaque_origin, None)
             .fetch(&seg_url)
             .await
-            .expect("opaque mpd_origin must fail closed: headers stripped, fetch still succeeds");
+            .expect("opaque mpd_origin must fail closed: headers stripped, fetch still succeeds")
+            .bytes;
         assert_eq!(&bytes[..], b"abcd");
     }
 }
@@ -1198,7 +1304,8 @@ mod fragment_body_cap_tests {
         let bytes = test_ctx(&http, &retry, &mpd_origin, None)
             .fetch(&seg_url)
             .await
-            .expect("a 50-byte segment must pass a 100-byte cap");
+            .expect("a 50-byte segment must pass a 100-byte cap")
+            .bytes;
         assert_eq!(bytes.len(), 50);
     }
 }

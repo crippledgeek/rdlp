@@ -1,8 +1,8 @@
 //! Resume state for native-HLS pre-resolved-fragment downloads.
 //!
 //! Mirrors `dash::state::DashDownloadState`: persisted to
-//! `<output>.hls_state.json`, matched on schema version + a path-only
-//! fingerprint so CDN host/token rotation does not break resume. Load/save
+//! `<output>.hls_state.json`, matched on schema version + a content
+//! fingerprint + anchor validator, see `fragment_fingerprint`. Load/save
 //! are async (`tokio::fs`) because the workspace bans blocking `std::fs` in
 //! async contexts; the load is bounded by `atomic::MAX_SIDECAR_BYTES`.
 //!
@@ -18,18 +18,22 @@ use rdlp_types::Fragment;
 use serde::{Deserialize, Serialize};
 
 use crate::atomic::{now_secs, read_json_sidecar};
+use crate::fingerprint::Fnv1a64;
 
 /// Current schema version. Bump on incompatible field changes.
-/// v2 (#676) added `stream_crc32`; v1 sidecars are rejected ⇒ fresh start.
-pub const STATE_VERSION: u32 = 2;
+/// v2 (#676) added `stream_crc32`; v3 (#746) widened the fingerprint to
+/// manifest content and added `anchor_validator`. Older sidecars are
+/// rejected ⇒ fresh start.
+pub const STATE_VERSION: u32 = 3;
 
 /// Persisted state of an in-progress native-HLS fragment download.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HlsResumeState {
     /// Schema version. Mismatches force a fresh start.
     pub state_version: u32,
-    /// FNV-1a-64 of the ordered, path-only fragment URLs (+ count). CDN-tolerant:
-    /// host and query are ignored so token/host rotation does not break resume.
+    /// FNV-1a-64 over the fragment list's content-bearing fields; see
+    /// `fragment_fingerprint`. CDN-tolerant: host and query are ignored so
+    /// token/host rotation does not break resume.
     pub fingerprint: u64,
     /// Total fragments in the resolved list.
     pub total_fragments: u64,
@@ -41,32 +45,44 @@ pub struct HlsResumeState {
     /// Re-computed on resume; a mismatch means the partial's content is not what was written (a
     /// non-durable tail after a crash) and the download starts fresh.
     pub stream_crc32: u32,
+    /// The strong validator (RFC 9110 §8.8) fragment 0's response offered
+    /// when this download started, `None` when the origin offered none. On
+    /// resume it is sent back as `If-Range` against the *current* list's
+    /// fragment-0 URL (`crate::revalidate`): a 206/200 that still names it
+    /// proves the representation is the one the partial was written from.
+    pub anchor_validator: Option<rdlp_http::StrongValidator>,
     /// Unix epoch seconds — for stale-state diagnosis.
     pub updated_at: u64,
 }
 
-/// Ordered, path-only FNV-1a-64 over the fragment list. Stable across runs;
-/// ignores host/query so CDN token/host rotation does not break resume. The
-/// fragment count is folded in first so two lists with the same paths but
-/// different lengths never collide.
+/// Ordered FNV-1a-64 over what the extractor resolved from the media
+/// playlist: the fragment count, then per fragment its URL *path*, byte
+/// range (`#EXT-X-BYTERANGE`), init-segment path and range (`#EXT-X-MAP`),
+/// and duration bits (`#EXTINF`). Host and query are ignored so CDN token /
+/// host rotation does not break resume.
+///
+/// Which signals, and why (#746). The downloader never sees the playlist
+/// text — only `Fragment`s — so the fingerprint uses every content-bearing
+/// field `Fragment` carries. Durations and byte ranges move on a re-encode
+/// or an ad-insertion variant; init path changes on a repackage.
+/// Rejected: `#EXT-X-MEDIA-SEQUENCE` and `#EXT-X-DISCONTINUITY-SEQUENCE`
+/// are not in `Fragment` and are meaningless for a `VoD` playlist that starts
+/// at 0; `filesize` is "rarely populated" (`rdlp_types::Fragment`) and
+/// would make the fingerprint depend on whether an extractor happened to
+/// fill it. A same-durations, same-ranges re-encode is undetectable from
+/// the manifest and is what `HlsResumeState::anchor_validator` is for.
 #[must_use]
 pub fn fragment_fingerprint(fragments: &[Fragment]) -> u64 {
-    const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-    const PRIME: u64 = 0x0000_0100_0000_01b3;
-    let mut h = OFFSET;
-    let mut feed = |bytes: &[u8]| {
-        for &b in bytes {
-            h ^= u64::from(b);
-            h = h.wrapping_mul(PRIME);
-        }
-    };
-    feed(&(fragments.len() as u64).to_le_bytes());
+    let mut h = Fnv1a64::new();
+    h.feed_u64(fragments.len() as u64);
     for f in fragments {
-        let path = url::Url::parse(&f.url).map_or_else(|_| f.url.clone(), |u| u.path().to_string());
-        feed(path.as_bytes());
-        feed(b"\n");
+        h.feed_url_path(&f.url);
+        h.feed_opt_range(f.byte_range);
+        h.feed_opt_url_path(f.init_url.as_deref());
+        h.feed_opt_range(f.init_byte_range);
+        h.feed_opt_f64_bits(f.duration);
     }
-    h
+    h.finish()
 }
 
 impl HlsResumeState {
@@ -80,6 +96,7 @@ impl HlsResumeState {
             fragments_done: 0,
             byte_len: 0,
             stream_crc32: 0,
+            anchor_validator: None,
             updated_at: now_secs(),
         }
     }
@@ -245,8 +262,8 @@ mod tests {
         // resume can't seek to 0 and skip real fragments (silent corruption).
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("out.hls_state.json");
-        // Otherwise-valid v2 shape so the inconsistency gate is what rejects it.
-        let bogus = r#"{"state_version":2,"fingerprint":111,"total_fragments":10,"fragments_done":4,"byte_len":0,"stream_crc32":0,"updated_at":0}"#.to_string();
+        // Otherwise-valid v3 shape so the inconsistency gate is what rejects it.
+        let bogus = r#"{"state_version":3,"fingerprint":111,"total_fragments":10,"fragments_done":4,"byte_len":0,"stream_crc32":0,"anchor_validator":null,"updated_at":0}"#.to_string();
         tokio::fs::write(&path, bogus).await.expect("write bogus");
         assert!(
             HlsResumeState::load_matching(&path, 111, 10)
@@ -303,5 +320,77 @@ mod tests {
             .await
             .expect("must load");
         assert_eq!(loaded.stream_crc32, 0xCBF4_3926);
+    }
+
+    #[test]
+    fn fingerprint_changes_when_durations_change_but_paths_do_not() {
+        let mut a = vec![frag("https://x/seg-0.ts"), frag("https://x/seg-1.ts")];
+        let mut b = a.clone();
+        a[0].duration = Some(4.0);
+        a[1].duration = Some(4.0);
+        b[0].duration = Some(4.0);
+        b[1].duration = Some(6.006);
+        assert_ne!(
+            fragment_fingerprint(&a),
+            fragment_fingerprint(&b),
+            "#EXTINF is a content signal (#746)"
+        );
+    }
+
+    #[test]
+    fn fingerprint_changes_when_byte_ranges_move() {
+        let mut a = vec![frag("https://x/all.ts"), frag("https://x/all.ts")];
+        let mut b = a.clone();
+        a[0].byte_range = Some((0, 100));
+        a[1].byte_range = Some((100, 250));
+        b[0].byte_range = Some((0, 100));
+        b[1].byte_range = Some((100, 260));
+        assert_ne!(
+            fragment_fingerprint(&a),
+            fragment_fingerprint(&b),
+            "#EXT-X-BYTERANGE moves on a re-encode"
+        );
+    }
+
+    #[test]
+    fn fingerprint_changes_when_init_segment_path_changes_but_is_host_tolerant() {
+        let mut a = vec![frag("https://x/seg-0.m4s")];
+        let mut b = a.clone();
+        let mut c = a.clone();
+        a[0].init_url = Some("https://cdn1/v/init.mp4?t=1".into());
+        b[0].init_url = Some("https://cdn2/v/init.mp4?t=2".into());
+        c[0].init_url = Some("https://cdn1/v/init-v2.mp4".into());
+        assert_eq!(fragment_fingerprint(&a), fragment_fingerprint(&b));
+        assert_ne!(fragment_fingerprint(&a), fragment_fingerprint(&c));
+    }
+
+    #[tokio::test]
+    async fn load_matching_rejects_v2_sidecar_without_anchor_field() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("out.hls_state.json");
+        let v2 = r#"{"state_version":2,"fingerprint":111,"total_fragments":10,"fragments_done":4,"byte_len":4096,"stream_crc32":0,"updated_at":0}"#;
+        tokio::fs::write(&path, v2).await.expect("write v2");
+        assert!(
+            HlsResumeState::load_matching(&path, 111, 10)
+                .await
+                .is_none(),
+            "a v2 sidecar has no anchor and a narrower fingerprint — fresh start"
+        );
+    }
+
+    #[tokio::test]
+    async fn anchor_validator_roundtrips_through_save_and_load() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("out.hls_state.json");
+        let mut s = HlsResumeState::new(7, 3);
+        s.fragments_done = 1;
+        s.byte_len = 9;
+        s.anchor_validator =
+            Some(rdlp_http::StrongValidator::try_from("etag:\"e1\"".to_string()).expect("strong"));
+        s.save(&path).await.expect("save");
+        let loaded = HlsResumeState::load_matching(&path, 7, 3)
+            .await
+            .expect("load");
+        assert_eq!(loaded.anchor_validator, s.anchor_validator);
     }
 }

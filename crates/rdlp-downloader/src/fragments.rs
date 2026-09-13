@@ -8,7 +8,7 @@
 //! separate `Format` entry.
 
 // `Duration::from_mins` (lint's suggested replacement) needs Rust 1.95;
-// workspace MSRV is 1.85.
+// workspace MSRV is 1.88.
 #![allow(clippy::duration_suboptimal_units)]
 
 use std::io::SeekFrom;
@@ -28,6 +28,7 @@ use crate::atomic::{SIDECAR_SAVE_FAILURE_THRESHOLD, SaveFailureTracker};
 use crate::http::{HttpDownloader, RangeVerdict, RangedRequestMeta, bounded_len, range_verdict};
 use crate::progress::SpeedMeter;
 use crate::retry::{LazyLabel, RetryPolicy, with_retry_cancellable};
+use crate::revalidate::{AnchorProbe, AnchorVerdict, revalidate_anchor};
 use rdlp_security;
 
 /// Extrapolate the total download size for a fragmented stream.
@@ -89,18 +90,33 @@ fn extrapolate_total(
 /// # Resume
 ///
 /// Fragment-level resume is self-managed via a `<output>.hls_state.json`
-/// sidecar (see `HlsResumeState`). On entry the helper matches the
-/// sidecar against a path-only fingerprint of `fragments` + the fragment
-/// count; on a match (and when the existing partial is at least as long as the
-/// last confirmed byte boundary and the download is incomplete) it truncates
-/// any torn tail to that boundary, re-hashes the remaining prefix and compares
-/// it with the sidecar's `stream_crc32`, then seeks and skips the
-/// already-completed fragments. A CRC mismatch (a crash left the size durable
-/// but not the data, #676) or any other miss starts fresh. The sidecar is
-/// rewritten atomically after each fragment — carrying the running CRC of
-/// everything written — and removed on successful completion; it is left in
-/// place on cancel or error so a later run can resume. Nothing is fsynced;
-/// see `crate::atomic` for the per-protocol durability position.
+/// sidecar (see `HlsResumeState`). On entry the helper matches the sidecar
+/// against a content fingerprint of `fragments` — the URL path, byte range,
+/// init segment and duration of every entry, plus the fragment count (see
+/// `state::fragment_fingerprint`) — so a re-encode or ad-insertion variant
+/// under the *same* paths is caught even though the manifest never reaches
+/// this helper as text. On a fingerprint match, and when the sidecar
+/// recorded a strong validator from fragment 0's response (#746), the
+/// current list's fragment-0 URL is revalidated with a one-byte `If-Range`
+/// probe (`crate::revalidate::revalidate_anchor`) before anything on disk is
+/// trusted: the fingerprint says the manifest matches, the anchor says the
+/// *origin* still serves that representation. A probe that answers with a
+/// different (or absent) validator starts fresh; a probe that fails to
+/// answer at all (a transport or non-retryable HTTP error) is propagated —
+/// an outage must never be read as "content changed" and discard a good
+/// partial. Only then — fingerprint matched, anchor confirmed or absent —
+/// does resume proceed: the existing partial (when at least as long as the
+/// last confirmed byte boundary and the download is incomplete) truncates
+/// any torn tail to that boundary, re-hashes the remaining prefix and
+/// compares it with the sidecar's `stream_crc32`, then seeks and skips the
+/// already-completed fragments. A CRC mismatch (a crash left the size
+/// durable but not the data, #676) or any other miss starts fresh. The
+/// sidecar is rewritten atomically after each fragment — carrying the
+/// running CRC of everything written and, once fragment 0 of a fresh start
+/// has answered, its anchor validator — and removed on successful
+/// completion; it is left in place on cancel or error so a later run can
+/// resume. Nothing is fsynced; see `crate::atomic` for the per-protocol
+/// durability position.
 ///
 /// # Retry
 ///
@@ -170,6 +186,49 @@ pub async fn download_pre_resolved_fragments(
     let mut hls_state = loaded
         .filter(|_| resume)
         .unwrap_or_else(|| state::HlsResumeState::new(fingerprint, total));
+
+    // Retries actually taken, shared across every task so the finished
+    // `DownloadStats` can report them (issue #672). Created here — earlier
+    // than the parallel-fetch setup below — because the anchor revalidation
+    // immediately following also spends from this one counter; there is no
+    // second counter for the resume-time probe.
+    let retries = Arc::new(AtomicU64::new(0));
+
+    // Anchor revalidation (#746): the fingerprint says the manifest we were
+    // handed matches the one the sidecar was written under; the anchor says
+    // the ORIGIN still serves that representation. Only when the sidecar
+    // recorded one — an origin without strong validators gets the
+    // fingerprint alone, as before.
+    if resume
+        && let Some(anchor) = hls_state.anchor_validator.clone()
+        && let Some(first) = fragments.first()
+    {
+        let anchor_url = resolve_fragment_url(&first.url, base_url)?;
+        let headers =
+            crate::http::same_origin_headers(format_origin.as_ref(), &anchor_url, &http.headers());
+        match revalidate_anchor(
+            http,
+            AnchorProbe {
+                url: &anchor_url,
+                headers,
+                validator: &anchor,
+            },
+            &retries,
+        )
+        .await?
+        {
+            AnchorVerdict::Confirmed => {}
+            AnchorVerdict::Changed(why) => {
+                log::warn!(
+                    "HLS resume anchor {} no longer matches ({why}); the representation changed \
+                     under the same paths — starting fresh",
+                    rdlp_redact::RedactedUrl::new(&anchor_url)
+                );
+                resume = false;
+                hls_state = state::HlsResumeState::new(fingerprint, total);
+            }
+        }
+    }
 
     let mut out_file = tokio::fs::OpenOptions::new()
         .write(true)
@@ -309,7 +368,6 @@ pub async fn download_pre_resolved_fragments(
         http.config.fragment_retry_config.max_retries,
         fragments.len(),
     ));
-    let retries = Arc::new(AtomicU64::new(0));
 
     // Determine per-fragment init-fetch needs in a single linear pass over the
     // source list (cheap clone of Option<String>). Only the first fragment of
@@ -386,21 +444,27 @@ pub async fn download_pre_resolved_fragments(
             // Init bytes (if this fragment introduces a new init group).
             if needs_init && let Some(init_url) = &frag.init_url {
                 let resolved_init = resolve_fragment_url(init_url, base.as_deref())?;
-                let init_bytes = ctx.fetch(&resolved_init, frag.init_byte_range).await?;
+                let init_bytes = ctx.fetch(&resolved_init, frag.init_byte_range).await?.bytes;
                 out.extend_from_slice(&init_bytes);
             }
 
-            // Fragment bytes.
+            // Fragment bytes. The validator is threaded out to the loop below,
+            // which logs whether fragment 0 of a fresh start offered one
+            // (Task 3 records it into the resume sidecar).
             let resolved_url = resolve_fragment_url(&frag.url, base.as_deref())?;
-            let bytes = ctx.fetch(&resolved_url, frag.byte_range).await?;
-            out.extend_from_slice(&bytes);
+            let fetched = ctx.fetch(&resolved_url, frag.byte_range).await?;
+            out.extend_from_slice(&fetched.bytes);
 
             let fetch_elapsed = fetch_start.elapsed();
-            Ok::<(Vec<u8>, std::time::Duration, Option<f64>), rdlp_core::RdlpError>((
-                out,
-                fetch_elapsed,
-                frag.duration,
-            ))
+            Ok::<
+                (
+                    Vec<u8>,
+                    std::time::Duration,
+                    Option<f64>,
+                    Option<rdlp_http::StrongValidator>,
+                ),
+                rdlp_core::RdlpError,
+            >((out, fetch_elapsed, frag.duration, fetched.validator))
         }
     }))
     .buffered(concurrency);
@@ -417,13 +481,32 @@ pub async fn download_pre_resolved_fragments(
         // cancellation path already flushes before its own return.
         // See tokio::fs module docs ("calls to write will return before the
         // write has finished; flush will wait for the write to finish").
-        let (bytes, fetch_elapsed, seg_dur) = match item {
+        let (bytes, fetch_elapsed, seg_dur, validator) = match item {
             Ok(v) => v,
             Err(e) => {
                 out_file.flush().await.ok();
                 return Err(e);
             }
         };
+
+        // Fragment 0 of a fresh start (never on resume: `frags_done` then
+        // starts above 0; `buffered` yields in source order, so the first
+        // item really is fragment `skip`) is the anchor a later resume of
+        // this download revalidates against, or falls back to the
+        // manifest's content fingerprint alone when the origin offers no
+        // strong validator (#746).
+        if frags_done == 0 {
+            log::debug!(
+                "HLS fragment 0 offers a strong validator: {}; resume revalidation {}",
+                if validator.is_some() { "yes" } else { "no" },
+                if validator.is_some() {
+                    "possible"
+                } else {
+                    "falls back to the manifest fingerprint"
+                }
+            );
+            hls_state.anchor_validator = validator;
+        }
 
         if let Err(e) = out_file.write_all(&bytes).await {
             out_file.flush().await.ok();
@@ -588,7 +671,7 @@ impl FragmentFetchCtx<'_> {
     ///
     /// Cancellation, including a cancel arriving during a backoff sleep, is
     /// handled by the shared runner.
-    async fn fetch(&self, url: &str, byte_range: Option<(u64, u64)>) -> Result<Vec<u8>> {
+    async fn fetch(&self, url: &str, byte_range: Option<(u64, u64)>) -> Result<FetchedBody> {
         // Borrowed by the gate closure below rather than moved, so the same
         // budget is shared by every fragment task.
         let budget = &self.budget;
@@ -611,6 +694,16 @@ impl FragmentFetchCtx<'_> {
     }
 }
 
+/// A fetched fragment body together with the strong validator its response
+/// offered (RFC 9110 §8.8), if any. The validator is what a resume sidecar
+/// records for its anchor (#746); callers that only need the bytes take
+/// `.bytes` and drop the rest.
+#[derive(Debug)]
+pub(crate) struct FetchedBody {
+    pub bytes: Vec<u8>,
+    pub validator: Option<rdlp_http::StrongValidator>,
+}
+
 /// Fetch `url`, optionally as an HTTP byte range.
 ///
 /// The `byte_range` tuple is `(start, end_exclusive)` and is converted to RFC 9110
@@ -625,7 +718,7 @@ pub(crate) async fn fetch_with_optional_range(
     url: &str,
     byte_range: Option<(u64, u64)>,
     format_origin: Option<&url::Origin>,
-) -> Result<Vec<u8>> {
+) -> Result<FetchedBody> {
     use rdlp_http::{RangeSpec, RangedRequest};
 
     let safe_url = rdlp_security::sanitize_for_logging(url);
@@ -705,6 +798,10 @@ pub(crate) async fn fetch_with_optional_range(
         None
     };
 
+    // Captured before the read below consumes `resp` — the response is what
+    // carries the validator (#746's resume-content-fingerprint anchor).
+    let validator = rdlp_http::StrongValidator::from_headers(resp.headers());
+
     let body = rdlp_http::read_body_capped(resp, http.config.max_fragment_bytes)
         .await
         .map_err(|e| crate::http::body_cap_error(e, url, "fragment"))?;
@@ -729,7 +826,10 @@ pub(crate) async fn fetch_with_optional_range(
         });
     }
 
-    Ok(body)
+    Ok(FetchedBody {
+        bytes: body,
+        validator,
+    })
 }
 
 pub(crate) mod budget;

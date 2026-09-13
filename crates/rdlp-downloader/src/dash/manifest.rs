@@ -38,6 +38,9 @@ pub struct ParsedManifest {
     pub mpd_base_urls: Vec<Url>,
     /// Total number of `<Period>` elements in the source MPD (>=1).
     pub period_count: usize,
+    /// `MPD@publishTime` as RFC 3339, when the MPD declares one — a
+    /// manifest-level change signal for the resume sidecar (#746).
+    pub publish_time: Option<String>,
 }
 
 /// Resolved metadata for a single Representation chosen from an AdaptationSet.
@@ -132,6 +135,7 @@ pub fn parse_mpd(body: &str, base_url: &Url) -> Result<ParsedManifest, DashError
         audio,
         mpd_base_urls,
         period_count,
+        publish_time: mpd.publishTime.map(|t| t.to_rfc3339()),
     })
 }
 

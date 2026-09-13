@@ -898,6 +898,42 @@ async fn probe_404_is_not_retried_falls_back_to_none() {
     mock.assert_async().await;
 }
 
+/// `probe_answered_at` sends exactly the headers and window its `ProbeTarget`
+/// carries — not `self.headers()` (issue #746: callers that must gate
+/// operator headers by origin need to hand the probe already-gated headers).
+#[tokio::test]
+async fn probe_answered_at_sends_only_the_supplied_headers_and_window() {
+    let mut server = mockito::Server::new_async().await;
+    let m = server
+        .mock("GET", "/f.bin")
+        .match_header("range", "bytes=0-0")
+        .match_header("x-op", mockito::Matcher::Missing)
+        .with_status(206)
+        .with_header("content-range", "bytes 0-0/10")
+        .with_header("etag", "\"e1\"")
+        .with_body(b"Z")
+        .create_async()
+        .await;
+    // Downloader configured WITH an operator header; the gated call must not forward it.
+    let downloader = HttpDownloader::with_test_header("x-op", "secret");
+    let url = format!("{}/f.bin", server.url());
+    let empty = wreq::header::HeaderMap::new();
+    let result = downloader
+        .probe_answered_at(
+            ProbeTarget {
+                url: &url,
+                headers: &empty,
+                validator: None,
+                window_bytes: 1,
+            },
+            &AtomicU64::new(0),
+        )
+        .await
+        .expect("probe ok");
+    assert_eq!(result.complete_length, Some(10));
+    m.assert_async().await;
+}
+
 /// A 503 that never recovers exhausts the configured retries and falls
 /// back to `size: None` — every attempt is consumed
 /// (`chunk_test_downloader(N)` caps at N retries, i.e. N+1 total attempts).
@@ -1026,7 +1062,7 @@ async fn download_sequential_cancel_mid_stream_returns_cancelled() {
             let _ = stream.flush();
             // Hold the connection open so wreq waits for the next chunk.
             // `Duration::from_mins` (clippy suggestion) needs Rust 1.95;
-            // workspace MSRV is 1.85.
+            // workspace MSRV is 1.88.
             #[allow(clippy::duration_suboptimal_units)]
             std::thread::sleep(Duration::from_secs(60));
         }
@@ -1092,7 +1128,7 @@ async fn download_format_propagates_cancel_to_sequential() {
         let _ = listener.accept();
         // Hold connection open without sending any response — the probe
         // will block waiting for a response, and the cancel fires first.
-        // `Duration::from_mins` needs Rust 1.95; workspace MSRV is 1.85.
+        // `Duration::from_mins` needs Rust 1.95; workspace MSRV is 1.88.
         #[allow(clippy::duration_suboptimal_units)]
         std::thread::sleep(Duration::from_secs(60));
     });
@@ -1148,7 +1184,7 @@ async fn download_with_resume_with_cancel_aborts_on_cancel() {
             );
             let _ = stream.flush();
             // Hold the connection open so wreq waits for body data.
-            #[allow(clippy::duration_suboptimal_units)] // from_mins needs Rust 1.95; MSRV 1.85
+            #[allow(clippy::duration_suboptimal_units)] // from_mins needs Rust 1.95; MSRV 1.88
             std::thread::sleep(Duration::from_secs(60));
         }
     });
