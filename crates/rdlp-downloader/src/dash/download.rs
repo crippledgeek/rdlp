@@ -30,7 +30,7 @@ use crate::dash::errors::DashError;
 use crate::dash::manifest;
 use crate::dash::segments::SegmentPlan;
 use crate::dash::state::{ByteLen, DashDownloadState};
-use crate::fragments::fetch_with_optional_range;
+use crate::fragments::{FetchedBody, fetch_with_optional_range};
 use crate::http::HttpDownloader;
 use crate::retry::{RetryPolicy, Tallies, retries_taken, with_retry_cancellable};
 
@@ -470,7 +470,7 @@ async fn download_representation(
                      recorded {recorded_len:?}) — re-fetching"
                 );
             }
-            let bytes = ctx.fetch(&u).await?;
+            let bytes = ctx.fetch(&u).await?.bytes;
             let len = bytes.len() as u64;
             fs::write(&init_part_path, &bytes).await?;
             bytes_counter.fetch_add(len, Ordering::Relaxed);
@@ -571,7 +571,7 @@ async fn download_representation(
             })?;
 
             let fetch_start = Instant::now();
-            let bytes = ctx.fetch(&u).await?;
+            let bytes = ctx.fetch(&u).await?.bytes;
             let len = bytes.len() as u64;
             let elapsed = fetch_start.elapsed();
 
@@ -782,7 +782,7 @@ impl RepresentationRunCtx {
     /// path uses, so a DASH segment and an HLS fragment go through one fetch
     /// implementation rather than two (this superseded a hand-rolled closure
     /// that duplicated it).
-    async fn fetch(&self, url: &Url) -> Result<Vec<u8>> {
+    async fn fetch(&self, url: &Url) -> Result<FetchedBody> {
         let url_str = url.to_string();
         let policy = RetryPolicy::new(self.retry.as_ref(), &"DASH segment fetch")
             .counting_into(self.tallies.retries.as_ref());
@@ -1028,7 +1028,8 @@ mod same_origin_gate_tests {
         let bytes = test_ctx(&http, &retry, &mpd_origin, None)
             .fetch(&seg_url)
             .await
-            .expect("same-origin segment fetch must succeed");
+            .expect("same-origin segment fetch must succeed")
+            .bytes;
         assert_eq!(&bytes[..], b"abcd");
     }
 
@@ -1068,7 +1069,8 @@ mod same_origin_gate_tests {
         let bytes = test_ctx(&http, &retry, &mpd_origin, None)
             .fetch(&seg_url)
             .await
-            .expect("cross-origin segment fetch must succeed without leaking headers");
+            .expect("cross-origin segment fetch must succeed without leaking headers")
+            .bytes;
         assert_eq!(&bytes[..], b"abcd");
     }
 
@@ -1110,7 +1112,8 @@ mod same_origin_gate_tests {
         let bytes = test_ctx(&http, &retry, &opaque_origin, None)
             .fetch(&seg_url)
             .await
-            .expect("opaque mpd_origin must fail closed: headers stripped, fetch still succeeds");
+            .expect("opaque mpd_origin must fail closed: headers stripped, fetch still succeeds")
+            .bytes;
         assert_eq!(&bytes[..], b"abcd");
     }
 }
@@ -1198,7 +1201,8 @@ mod fragment_body_cap_tests {
         let bytes = test_ctx(&http, &retry, &mpd_origin, None)
             .fetch(&seg_url)
             .await
-            .expect("a 50-byte segment must pass a 100-byte cap");
+            .expect("a 50-byte segment must pass a 100-byte cap")
+            .bytes;
         assert_eq!(bytes.len(), 50);
     }
 }

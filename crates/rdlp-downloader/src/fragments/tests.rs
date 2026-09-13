@@ -2569,3 +2569,44 @@ async fn ranged_fragment_under_cap_still_validates_content_range() {
             .expect("a 50-byte ranged fragment must pass a 100-byte cap");
     assert_eq!(stats.bytes_downloaded, 50);
 }
+
+// --- fetch_with_optional_range: strong-validator capture (issue #746) ---
+
+#[tokio::test]
+async fn fetch_captures_strong_etag_as_validator() {
+    let mut server = mockito::Server::new_async().await;
+    let _m = server
+        .mock("GET", "/seg-0.ts")
+        .with_header("etag", "\"abc123\"")
+        .with_body(b"X")
+        .create_async()
+        .await;
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    let url = format!("{}/seg-0.ts", server.url());
+    let fetched = fetch_with_optional_range(&http, &url, None, None)
+        .await
+        .expect("fetch ok");
+    assert_eq!(fetched.bytes, b"X");
+    let v = fetched.validator.expect("strong ETag captured");
+    assert_eq!(v.if_range_value().as_bytes(), b"\"abc123\"");
+}
+
+#[tokio::test]
+async fn fetch_ignores_weak_etag_and_yields_no_validator() {
+    let mut server = mockito::Server::new_async().await;
+    let _m = server
+        .mock("GET", "/seg-0.ts")
+        .with_header("etag", "W/\"abc123\"")
+        .with_body(b"X")
+        .create_async()
+        .await;
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    let url = format!("{}/seg-0.ts", server.url());
+    let fetched = fetch_with_optional_range(&http, &url, None, None)
+        .await
+        .expect("ok");
+    assert!(
+        fetched.validator.is_none(),
+        "a weak tag is never a strong validator (§8.8.3.2)"
+    );
+}

@@ -898,6 +898,53 @@ async fn probe_404_is_not_retried_falls_back_to_none() {
     mock.assert_async().await;
 }
 
+/// Build an `HttpDownloader` with a single extra header baked in.
+///
+/// Mirrors `fragments::tests::make_downloader_with_header` (issue #273's
+/// same-origin header gate tests) — same pattern, this module's own copy so
+/// `probe_answered_at`'s header-gating test doesn't reach across modules.
+fn make_downloader_with_header(name: &str, value: &str) -> HttpDownloader {
+    let mut headers = HashMap::new();
+    headers.insert(name.to_string(), value.to_string());
+    HttpDownloader::with_client(wreq::Client::new()).with_extra_headers(Some(&headers))
+}
+
+/// `probe_answered_at` sends exactly the headers and window its `ProbeTarget`
+/// carries — not `self.headers()` (issue #746: callers that must gate
+/// operator headers by origin need to hand the probe already-gated headers).
+#[tokio::test]
+async fn probe_answered_at_sends_only_the_supplied_headers_and_window() {
+    let mut server = mockito::Server::new_async().await;
+    let m = server
+        .mock("GET", "/f.bin")
+        .match_header("range", "bytes=0-0")
+        .match_header("x-op", mockito::Matcher::Missing)
+        .with_status(206)
+        .with_header("content-range", "bytes 0-0/10")
+        .with_header("etag", "\"e1\"")
+        .with_body(b"Z")
+        .create_async()
+        .await;
+    // Downloader configured WITH an operator header; the gated call must not forward it.
+    let downloader = make_downloader_with_header("x-op", "secret");
+    let url = format!("{}/f.bin", server.url());
+    let empty = wreq::header::HeaderMap::new();
+    let result = downloader
+        .probe_answered_at(
+            ProbeTarget {
+                url: &url,
+                headers: &empty,
+                validator: None,
+                window_bytes: 1,
+            },
+            &AtomicU64::new(0),
+        )
+        .await
+        .expect("probe ok");
+    assert_eq!(result.complete_length, Some(10));
+    m.assert_async().await;
+}
+
 /// A 503 that never recovers exhausts the configured retries and falls
 /// back to `size: None` — every attempt is consumed
 /// (`chunk_test_downloader(N)` caps at N retries, i.e. N+1 total attempts).

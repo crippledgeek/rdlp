@@ -98,6 +98,17 @@ pub(crate) use rdlp_http::ProbeResult;
 /// The one `Content-Range` grammar (RFC 9110 §14.4), shared with the probe.
 pub(crate) use rdlp_http::ContentRange;
 
+/// One probe's destination, so a caller that must gate operator headers by
+/// origin (#273) — the fragment and DASH paths — can send exactly the
+/// headers it decided on, and size the window to what it needs (a
+/// revalidation reads no body, so it asks for one byte).
+pub(crate) struct ProbeTarget<'a> {
+    pub url: &'a str,
+    pub headers: &'a HeaderMap,
+    pub validator: Option<&'a StrongValidator>,
+    pub window_bytes: u64,
+}
+
 /// The representation's total length implied by a body of `remaining` bytes
 /// arriving at `offset`: `None` when the length is unknown, or when the sum
 /// would not fit — a server-supplied `Content-Length` is untrusted input, and
@@ -492,25 +503,49 @@ impl HttpDownloader {
         validator: Option<&StrongValidator>,
         retries: &std::sync::atomic::AtomicU64,
     ) -> Result<ProbeResult> {
-        // The request half is `rdlp_http::probe_request` (the F3 shape,
-        // closes #306) and the parse half `ProbeResult::from_response`; the
-        // send between them rides the one retry seam. The gate is the ranged
-        // one: 200/206/416 are the probe's answers and come back as data,
-        // every other status is a typed `Http` error the retry layer judges
-        // (5xx/429 retried, the rest not — #735).
         let hdrs = self.headers();
+        self.probe_answered_at(
+            ProbeTarget {
+                url,
+                headers: &hdrs,
+                validator,
+                window_bytes: config::PROBE_WINDOW_BYTES,
+            },
+            retries,
+        )
+        .await
+    }
+
+    /// The request half is `rdlp_http::probe_request` (the F3 shape,
+    /// closes #306) and the parse half `ProbeResult::from_response`; the
+    /// send between them rides the one retry seam. The gate is the ranged
+    /// one: 200/206/416 are the probe's answers and come back as data,
+    /// every other status is a typed `Http` error the retry layer judges
+    /// (5xx/429 retried, the rest not — #735).
+    ///
+    /// `target` carries the headers and window verbatim — no same-origin
+    /// gating here (#746: callers that must gate operator headers by origin
+    /// send an already-gated `HeaderMap` rather than `self.headers()`).
+    ///
+    /// # Errors
+    /// The transport or `Http` error that outlived the retries.
+    pub(crate) async fn probe_answered_at(
+        &self,
+        target: ProbeTarget<'_>,
+        retries: &std::sync::atomic::AtomicU64,
+    ) -> Result<ProbeResult> {
         let spec = rdlp_http::ProbeSpec {
-            url,
-            headers: Some(&hdrs),
-            window_bytes: config::PROBE_WINDOW_BYTES,
+            url: target.url,
+            headers: Some(target.headers),
+            window_bytes: target.window_bytes,
             timeout: self.config.read_timeout,
-            validator,
+            validator: target.validator,
         };
         let response = self
             .send_with_retry(
                 SendSpec {
                     label: "HTTP probe (F3)",
-                    url,
+                    url: target.url,
                     gate: &admit_for_verdict,
                     retries,
                 },

@@ -386,13 +386,14 @@ pub async fn download_pre_resolved_fragments(
             // Init bytes (if this fragment introduces a new init group).
             if needs_init && let Some(init_url) = &frag.init_url {
                 let resolved_init = resolve_fragment_url(init_url, base.as_deref())?;
-                let init_bytes = ctx.fetch(&resolved_init, frag.init_byte_range).await?;
+                let init_bytes = ctx.fetch(&resolved_init, frag.init_byte_range).await?.bytes;
                 out.extend_from_slice(&init_bytes);
             }
 
-            // Fragment bytes.
+            // Fragment bytes. The validator is dropped here for now (Task 2
+            // threads it into the resume sidecar) — behaviour is unchanged.
             let resolved_url = resolve_fragment_url(&frag.url, base.as_deref())?;
-            let bytes = ctx.fetch(&resolved_url, frag.byte_range).await?;
+            let bytes = ctx.fetch(&resolved_url, frag.byte_range).await?.bytes;
             out.extend_from_slice(&bytes);
 
             let fetch_elapsed = fetch_start.elapsed();
@@ -588,7 +589,7 @@ impl FragmentFetchCtx<'_> {
     ///
     /// Cancellation, including a cancel arriving during a backoff sleep, is
     /// handled by the shared runner.
-    async fn fetch(&self, url: &str, byte_range: Option<(u64, u64)>) -> Result<Vec<u8>> {
+    async fn fetch(&self, url: &str, byte_range: Option<(u64, u64)>) -> Result<FetchedBody> {
         // Borrowed by the gate closure below rather than moved, so the same
         // budget is shared by every fragment task.
         let budget = &self.budget;
@@ -611,6 +612,20 @@ impl FragmentFetchCtx<'_> {
     }
 }
 
+/// A fetched fragment body together with the strong validator its response
+/// offered (RFC 9110 §8.8), if any. The validator is what a resume sidecar
+/// records for its anchor (#746); callers that only need the bytes take
+/// `.bytes` and drop the rest.
+#[derive(Debug)]
+pub(crate) struct FetchedBody {
+    pub bytes: Vec<u8>,
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "first production caller: #746 Task 2")
+    )]
+    pub validator: Option<rdlp_http::StrongValidator>,
+}
+
 /// Fetch `url`, optionally as an HTTP byte range.
 ///
 /// The `byte_range` tuple is `(start, end_exclusive)` and is converted to RFC 9110
@@ -625,7 +640,7 @@ pub(crate) async fn fetch_with_optional_range(
     url: &str,
     byte_range: Option<(u64, u64)>,
     format_origin: Option<&url::Origin>,
-) -> Result<Vec<u8>> {
+) -> Result<FetchedBody> {
     use rdlp_http::{RangeSpec, RangedRequest};
 
     let safe_url = rdlp_security::sanitize_for_logging(url);
@@ -705,6 +720,10 @@ pub(crate) async fn fetch_with_optional_range(
         None
     };
 
+    // Captured before the read below consumes `resp` — the response is what
+    // carries the validator (#746's resume-content-fingerprint anchor).
+    let validator = rdlp_http::StrongValidator::from_headers(resp.headers());
+
     let body = rdlp_http::read_body_capped(resp, http.config.max_fragment_bytes)
         .await
         .map_err(|e| crate::http::body_cap_error(e, url, "fragment"))?;
@@ -729,7 +748,10 @@ pub(crate) async fn fetch_with_optional_range(
         });
     }
 
-    Ok(body)
+    Ok(FetchedBody {
+        bytes: body,
+        validator,
+    })
 }
 
 pub(crate) mod budget;
