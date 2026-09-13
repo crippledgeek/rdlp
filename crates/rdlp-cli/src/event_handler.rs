@@ -15,7 +15,11 @@ use tracing::{debug, info, warn};
 pub struct CliEventHandler {
     multi_progress: Arc<MultiProgress>,
     progress_bar: Option<ProgressBar>,
+    /// Suppresses the informational log lines.
     quiet: bool,
+    /// Draws download / post-processing bars. Resolved by
+    /// `Config::show_progress`; independent of `quiet` since #587.
+    show_progress: bool,
 }
 
 impl CliEventHandler {
@@ -23,13 +27,15 @@ impl CliEventHandler {
     ///
     /// # Arguments
     /// * `multi_progress` - Shared `MultiProgress` for managing bars
-    /// * `quiet` - Suppress non-essential output
+    /// * `quiet` - Suppress non-essential log output
+    /// * `show_progress` - Draw progress bars (`Config::show_progress`)
     #[must_use]
-    pub const fn new(multi_progress: Arc<MultiProgress>, quiet: bool) -> Self {
+    pub const fn new(multi_progress: Arc<MultiProgress>, quiet: bool, show_progress: bool) -> Self {
         Self {
             multi_progress,
             progress_bar: None,
             quiet,
+            show_progress,
         }
     }
 
@@ -68,19 +74,7 @@ impl CliEventHandler {
             }
             Event::PostProcessing { stage, .. } => {
                 self.finish_progress();
-                if !self.quiet {
-                    let pb = self.multi_progress.add(ProgressBar::new(1000));
-                    pb.set_style(
-                        #[allow(clippy::expect_used)] // static template string — infallible
-                        ProgressStyle::with_template(
-                            "{wide_bar:.yellow/blue} {percent}% | Post-processing: {msg}",
-                        )
-                        .expect("valid progress template"),
-                    );
-                    pb.set_message(stage.clone());
-                    pb.set_position(0);
-                    self.progress_bar = Some(pb);
-                }
+                self.start_postprocess_bar(stage, 0);
             }
             Event::PostProcessProgress {
                 stage, progress, ..
@@ -91,18 +85,8 @@ impl CliEventHandler {
                 if let Some(ref pb) = self.progress_bar {
                     pb.set_position(position);
                     pb.set_message(stage.clone());
-                } else if !self.quiet {
-                    let pb = self.multi_progress.add(ProgressBar::new(1000));
-                    pb.set_style(
-                        #[allow(clippy::expect_used)] // static template string — infallible
-                        ProgressStyle::with_template(
-                            "{wide_bar:.yellow/blue} {percent}% | Post-processing: {msg}",
-                        )
-                        .expect("valid progress template"),
-                    );
-                    pb.set_message(stage.clone());
-                    pb.set_position(position);
-                    self.progress_bar = Some(pb);
+                } else {
+                    self.start_postprocess_bar(stage, position);
                 }
             }
             Event::SubtitlesFound { langs, .. } => {
@@ -149,8 +133,31 @@ impl CliEventHandler {
         }
     }
 
+    /// Start the post-processing bar shared by `PostProcessing` and
+    /// `PostProcessProgress` — the two events built an identical bar
+    /// independently before #587 introduced a second gate to keep in sync.
+    fn start_postprocess_bar(&mut self, stage: &str, position: u64) {
+        if !self.show_progress {
+            return;
+        }
+        let pb = self.multi_progress.add(ProgressBar::new(1000));
+        pb.set_style(
+            #[allow(clippy::expect_used)] // static template string — infallible
+            ProgressStyle::with_template(
+                "{wide_bar:.yellow/blue} {percent}% | Post-processing: {msg}",
+            )
+            .expect("valid progress template"),
+        );
+        pb.set_message(stage.to_string());
+        pb.set_position(position);
+        self.progress_bar = Some(pb);
+    }
+
     /// Create or update the progress bar from download progress data.
     fn update_progress(&mut self, progress: &DownloadProgress) {
+        if !self.show_progress {
+            return;
+        }
         let pb = if let Some(ref pb) = self.progress_bar {
             pb
         } else {
@@ -238,5 +245,57 @@ impl CliEventHandler {
         if let Some(pb) = self.progress_bar.take() {
             pb.finish_and_clear();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn handler(show_progress: bool) -> CliEventHandler {
+        CliEventHandler::new(Arc::new(MultiProgress::new()), false, show_progress)
+    }
+
+    fn some_progress() -> DownloadProgress {
+        DownloadProgress::new(10, Some(100), 0.0)
+    }
+
+    #[test]
+    fn no_progress_creates_no_download_bar() {
+        let mut h = handler(false);
+        h.update_progress(&some_progress());
+        assert!(
+            h.progress_bar.is_none(),
+            "show_progress=false must not draw a bar"
+        );
+    }
+
+    #[test]
+    fn progress_enabled_creates_download_bar() {
+        let mut h = handler(true);
+        h.update_progress(&some_progress());
+        assert!(h.progress_bar.is_some());
+    }
+
+    #[test]
+    fn no_progress_creates_no_postprocess_bar() {
+        let mut h = handler(false);
+        h.start_postprocess_bar("remux", 0);
+        assert!(h.progress_bar.is_none());
+    }
+
+    #[test]
+    fn progress_enabled_creates_postprocess_bar() {
+        let mut h = handler(true);
+        h.start_postprocess_bar("remux", 0);
+        assert!(h.progress_bar.is_some());
+    }
+
+    #[test]
+    fn quiet_alone_no_longer_decides_the_bar() {
+        // quiet=true, show_progress=true: an explicit `--progress` over `--quiet`.
+        let mut h = CliEventHandler::new(Arc::new(MultiProgress::new()), true, true);
+        h.update_progress(&some_progress());
+        assert!(h.progress_bar.is_some());
     }
 }

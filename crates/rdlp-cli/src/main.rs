@@ -220,6 +220,7 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
     let interactive = args.interactive;
     let verbose = args.verbose;
     let quiet = config.quiet;
+    let show_progress = config.show_progress();
 
     // Create a shared TempRegistry for this process lifetime.
     // cleanup_all() is called at the end of async_main() to remove any temp
@@ -456,7 +457,8 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
         // abrupt kill.
         spawn_signal_task(handle.interrupt_handle(), Arc::clone(&exit_signal));
 
-        let mut event_handler = CliEventHandler::new(Arc::clone(&multi_progress), quiet);
+        let mut event_handler =
+            CliEventHandler::new(Arc::clone(&multi_progress), quiet, show_progress);
 
         while let Some(event) = handle.events().recv().await {
             event_handler.handle_event(&event);
@@ -494,7 +496,7 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
     // keep the resumable partial; second SIGINT → force-exit).
     spawn_signal_task(handle.interrupt_handle(), Arc::clone(&exit_signal));
 
-    let mut event_handler = CliEventHandler::new(Arc::clone(&multi_progress), quiet);
+    let mut event_handler = CliEventHandler::new(Arc::clone(&multi_progress), quiet, show_progress);
 
     // Drain all events (progress, status, etc.)
     while let Some(event) = handle.events().recv().await {
