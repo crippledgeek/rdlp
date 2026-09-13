@@ -88,7 +88,9 @@ pub use pipeline::stages::{
     AudioExtractStage, FinalizeMetadataStage, FixupStage, MergeStage, MetadataStage,
     NormalizeStage, RecodeStage, RemuxStage, SubtitleStage, ThumbnailStage,
 };
-pub use pipeline::{BatchInput, Pipeline, PipelineError, PipelineRunOptions, TempRegistry};
+pub use pipeline::{
+    BatchInput, Pipeline, PipelineError, PipelineRunOptions, RegistryError, TempRegistry,
+};
 
 // Re-export FFmpegRunner so callers don't need a direct rdlp-ffmpeg dependency
 pub use rdlp_ffmpeg::FFmpegRunner;

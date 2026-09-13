@@ -222,3 +222,91 @@ async fn foreign_part_files_survive_an_episode_download() {
     );
     assert!(unrelated.exists(), "an unrelated file must survive");
 }
+
+// ---------------------------------------------------------------------------
+// #572 review finding 1: the playlist-episode path must claim the output
+// path exactly like the Single-video state-machine path does.
+// ---------------------------------------------------------------------------
+
+/// A second rdlp process (separate `TempRegistry` instance, per
+/// `state::tests::part_lock_tests`'s convention) already holding the claim
+/// on an episode's `.rdlp-part` path must make `download_from_info_to_dir`
+/// fail with `OutputBusy` — not silently detect-resume and attempt the
+/// download anyway.
+///
+/// Uses a mockito loopback URL (same fixture shape as
+/// `foreign_part_files_survive_an_episode_download` above) so that even the
+/// UNPATCHED code fails FAST: without the fix, `resolve_resume` runs
+/// unguarded and the function proceeds to the real download attempt, which
+/// the SSRF gate rejects synchronously (`DownloadFailed`) rather than
+/// hanging on a real network call — deterministic either way.
+///
+/// RED against the unpatched `episode.rs` (no `PartLock::claim` at all):
+/// panics with "got: Err(DownloadFailed(..))" instead of `OutputBusy`.
+// The `mockito::Server` must stay alive for the whole body — same rationale
+// as `foreign_part_files_survive_an_episode_download` above.
+#[allow(clippy::significant_drop_tightening)]
+#[tokio::test]
+async fn playlist_episode_collision_reports_output_busy() {
+    use crate::events::Event;
+    use crate::handle::DownloadId;
+    use crate::orchestrator::Orchestrator;
+    use crate::orchestrator::part_lock::PartLock;
+    use std::sync::Arc;
+    use tempfile::TempDir;
+    use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
+
+    let mut server = mockito::Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/video.mp4")
+        .with_status(200)
+        .create_async()
+        .await;
+
+    let dir = TempDir::new().unwrap();
+    let title = "My Show S01E01";
+
+    let fmt = rdlp_types::Format::new(
+        "http-1",
+        format!("{}/video.mp4", server.url()),
+        "mp4",
+        rdlp_types::DownloadProtocol::Https,
+    );
+    let mut info =
+        rdlp_types::InfoDict::new("id-572", title, "test", format!("{}/watch", server.url()));
+    info.formats = vec![fmt.clone()];
+
+    let (tx, _rx) = mpsc::channel::<Event>(64);
+    let orch = Orchestrator::new(
+        Arc::new(rdlp_types::Config::default()),
+        tx,
+        DownloadId::next(),
+        CancellationToken::new(),
+        None,
+    );
+
+    // Simulate another process already downloading this exact episode:
+    // reconstruct the SAME `.rdlp-part` path episode.rs will compute, and
+    // claim it via a SEPARATE registry instance before the real call.
+    let file_ext = orch.determine_file_extension(&fmt);
+    let sanitized_title = Orchestrator::sanitize_filename(title);
+    let clean_path = dir.path().join(format!("{sanitized_title}.{file_ext}"));
+    let part = crate::orchestrator::naming::part_path(&clean_path);
+    let other_process_registry = Arc::new(rdlp_postprocess::TempRegistry::new());
+    let _held_elsewhere = PartLock::claim(other_process_registry, part.clone())
+        .expect("simulated other-process claim must succeed");
+
+    let result = orch
+        .download_from_info_to_dir(&info, false, dir.path(), &[], None, None)
+        .await;
+
+    assert!(
+        matches!(
+            result,
+            Err(crate::orchestrator::errors::OrchestratorError::OutputBusy { ref path }) if *path == part
+        ),
+        "playlist episode download must be refused as OutputBusy when another \
+         process already claims its .rdlp-part path, got: {result:?}"
+    );
+}

@@ -349,7 +349,15 @@ impl FileTracker {
         let id = Uuid::new_v4().simple().to_string();
         let filename = format!("{stem}{TEMP_MARKER}{id}.{ext}");
         let path = dir.join(filename);
-        self.temp_registry.register(&path);
+        // The UUID makes a real collision astronomically unlikely; a warn
+        // (not a hard failure) is the honest response if it ever happens —
+        // this path has no caller ready to act on a refused claim.
+        if let Err(e) = self.temp_registry.register(&path) {
+            log::warn!(
+                "TempRegistry: unexpected lock collision for freshly generated temp {}: {e}",
+                path.display()
+            );
+        }
         // Record the issued path so an uncommitted Drop deletes it (#335).
         self.issued.push(path.clone());
         path

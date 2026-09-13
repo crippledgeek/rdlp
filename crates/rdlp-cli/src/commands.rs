@@ -102,6 +102,8 @@ pub const fn exit_code_for(e: &RdlpApiError) -> i32 {
         RdlpApiError::IoError { .. }
         | RdlpApiError::FfmpegError { .. }
         | RdlpApiError::UnsupportedPlatform { .. }
+        | RdlpApiError::OutputBusy { .. }
+        | RdlpApiError::OutputUnclaimable { .. }
         | RdlpApiError::Soft { .. } => 1,
     }
 }
@@ -190,5 +192,25 @@ mod tests {
             assert_eq!(errs, 1, "exactly one terminal record at ERROR");
             assert_eq!(debugs, 1, "exactly one detail record at DEBUG");
         });
+    }
+
+    /// Code-quality review finding 3: `exit_code_for` has no catch-all arm
+    /// (compiler-enforced exhaustiveness), but pin the actual value anyway —
+    /// exhaustiveness only proves an arm exists, not that it stayed in the
+    /// right bucket if a later edit moves `OutputBusy` between match arms.
+    #[test]
+    fn exit_code_for_output_busy_is_general_error() {
+        let err = rdlp_api::RdlpApiError::OutputBusy {
+            message: "another rdlp process is downloading to Title.rdlp-part.mp4".to_owned(),
+        };
+        assert_eq!(super::exit_code_for(&err), 1);
+    }
+
+    #[test]
+    fn exit_code_for_output_unclaimable_is_general_error() {
+        let err = rdlp_api::RdlpApiError::OutputUnclaimable {
+            message: "cannot verify exclusive ownership of Title.rdlp-part.mp4".to_owned(),
+        };
+        assert_eq!(super::exit_code_for(&err), 1);
     }
 }

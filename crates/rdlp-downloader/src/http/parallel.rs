@@ -231,7 +231,12 @@ impl Attempt {
     }
 }
 
-/// Global atomic counter for generating unique download IDs
+/// Global atomic counter for generating unique download IDs.
+///
+/// Per-process is sufficient: the output path itself is claimed exclusively
+/// at the orchestrator layer before a download starts (`PartLock`, rdlp#572),
+/// so two rdlp processes can never both be chunking the same target — this
+/// counter only needs to keep chunk names unique within ONE owner.
 static DOWNLOAD_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// A fresh (non-resume) HTTP download's fixed target: the resource, its

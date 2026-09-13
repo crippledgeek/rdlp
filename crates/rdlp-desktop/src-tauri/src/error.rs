@@ -84,6 +84,23 @@ pub enum AppError {
         #[serde(serialize_with = "rdlp_redact::serialize_redacted")]
         message: String,
     },
+    /// The requested output path is already claimed by another running
+    /// download (rdlp#572) — distinct from `Internal` so the frontend can
+    /// render a "busy, try again or pick another path" state rather than a
+    /// generic error.
+    OutputBusy {
+        /// Human-readable error message naming the busy path.
+        #[serde(serialize_with = "rdlp_redact::serialize_redacted")]
+        message: String,
+    },
+    /// The output path's exclusive ownership claim could not even be
+    /// checked (rdlp#572, security review MEDIUM) — an I/O condition on the
+    /// advisory-lock sidecar, not a conflict with another download.
+    OutputUnclaimable {
+        /// Human-readable error message naming the path and the cause.
+        #[serde(serialize_with = "rdlp_redact::serialize_redacted")]
+        message: String,
+    },
 }
 
 /// Map an API error to its frontend shape, without recording anything.
@@ -120,6 +137,12 @@ fn map_api(err: &RdlpApiError) -> AppError {
         RdlpApiError::NetworkError { .. } => AppError::NetworkError {
             message: err.user_message().into_owned(),
             retryable: err.is_retryable(),
+        },
+        RdlpApiError::OutputBusy { .. } => AppError::OutputBusy {
+            message: err.user_message().into_owned(),
+        },
+        RdlpApiError::OutputUnclaimable { .. } => AppError::OutputUnclaimable {
+            message: err.user_message().into_owned(),
         },
         _ => AppError::Internal {
             message: err.user_message().into_owned(),
@@ -338,6 +361,14 @@ impl fmt::Debug for AppError {
                 .debug_struct("Internal")
                 .field("message", &redact(message))
                 .finish(),
+            Self::OutputBusy { message } => f
+                .debug_struct("OutputBusy")
+                .field("message", &redact(message))
+                .finish(),
+            Self::OutputUnclaimable { message } => f
+                .debug_struct("OutputUnclaimable")
+                .field("message", &redact(message))
+                .finish(),
         }
     }
 }
@@ -369,6 +400,12 @@ impl fmt::Display for AppError {
             Self::Internal { message } => {
                 write!(f, "Internal error: {}", redact(message))
             }
+            Self::OutputBusy { message } => {
+                write!(f, "Output busy: {}", redact(message))
+            }
+            Self::OutputUnclaimable { message } => {
+                write!(f, "Output unclaimable: {}", redact(message))
+            }
         }
     }
 }
@@ -390,6 +427,38 @@ mod tests {
                 assert_eq!(retry_after_ms, Some(5000));
             }
             other => panic!("Expected RateLimited, got: {other:?}"),
+        }
+    }
+
+    /// Code-quality review finding 3: `map_api`'s catch-all (`_ =>
+    /// AppError::Internal`) means deleting the `OutputBusy` arm compiles and
+    /// silently regresses to `Internal` — pin the distinct mapping directly.
+    #[test]
+    fn test_from_output_busy() {
+        let api_err = RdlpApiError::OutputBusy {
+            message: "another rdlp process is downloading to Title.rdlp-part.mp4".into(),
+        };
+        let app_err = AppError::from_api(Action::new("test"), &api_err);
+        match app_err {
+            AppError::OutputBusy { message } => {
+                assert!(message.contains("Title.rdlp-part.mp4"), "got: {message}");
+            }
+            other => panic!("Expected OutputBusy, got: {other:?}"),
+        }
+    }
+
+    /// Same backstop as `test_from_output_busy`, for the fail-closed variant.
+    #[test]
+    fn test_from_output_unclaimable() {
+        let api_err = RdlpApiError::OutputUnclaimable {
+            message: "cannot verify exclusive ownership of Title.rdlp-part.mp4".into(),
+        };
+        let app_err = AppError::from_api(Action::new("test"), &api_err);
+        match app_err {
+            AppError::OutputUnclaimable { message } => {
+                assert!(message.contains("Title.rdlp-part.mp4"), "got: {message}");
+            }
+            other => panic!("Expected OutputUnclaimable, got: {other:?}"),
         }
     }
 

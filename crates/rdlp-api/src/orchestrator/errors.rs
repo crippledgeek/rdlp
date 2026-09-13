@@ -85,6 +85,43 @@ pub enum OrchestratorError {
         path: PathBuf,
     },
 
+    /// Another rdlp process already holds the output path's advisory lock.
+    ///
+    /// Two processes downloading the same target to the same path is a
+    /// conflict worth reporting, not one worth silently making safe
+    /// (rdlp#572) — surfaced instead of letting a second writer share the
+    /// same `.rdlp-part` chunk files.
+    #[error(
+        "another rdlp process is downloading to {path}; wait for it to finish or choose a different output"
+    )]
+    OutputBusy {
+        /// The output path already claimed by another process.
+        path: PathBuf,
+    },
+
+    /// The output path's exclusive ownership claim could not even be
+    /// ATTEMPTED — the `.lock` sidecar couldn't be created or locked (a
+    /// pre-existing directory at the sidecar path, permissions, a
+    /// read-only/full filesystem). Distinct from [`Self::OutputBusy`]: that
+    /// means "someone else owns it, checked and confirmed"; this means "the
+    /// check itself couldn't run", so treating it as success would hand out
+    /// an unverified claim (rdlp#572, security review MEDIUM).
+    // `redact(&source.to_string())` rather than a bare `{source}`: the
+    // check-error-attr-redaction gate's typed-source exemption only covers
+    // TUPLE-variant positional placeholders (`{0}` paired with `#[source]`);
+    // a named struct field has no such carve-out, so this mirrors `Other`'s
+    // `redact(&_0.to_string())` pattern below rather than fighting the gate.
+    #[error("cannot verify exclusive ownership of {path}: {}", redact(&source.to_string()))]
+    OutputUnclaimable {
+        /// The output path the claim was for.
+        path: PathBuf,
+        /// The underlying I/O failure. OS-generated text, not
+        /// caller-assembled — routed through `redact` anyway for uniformity
+        /// with every other interpolated error text in this enum.
+        #[source]
+        source: std::io::Error,
+    },
+
     /// Chunk merge failed
     #[error("Failed to merge chunk files: {0}")]
     ChunkMergeFailed(#[source] std::io::Error),
@@ -141,6 +178,12 @@ impl std::fmt::Debug for OrchestratorError {
             Self::MissingChunk { path } => {
                 f.debug_struct("MissingChunk").field("path", path).finish()
             }
+            Self::OutputBusy { path } => f.debug_struct("OutputBusy").field("path", path).finish(),
+            Self::OutputUnclaimable { path, source } => f
+                .debug_struct("OutputUnclaimable")
+                .field("path", path)
+                .field("source", source)
+                .finish(),
             Self::ExtractionFailed(e) => f.debug_tuple("ExtractionFailed").field(e).finish(),
             Self::DownloadFailed(e) => f.debug_tuple("DownloadFailed").field(e).finish(),
             Self::ChunkMergeFailed(e) => f.debug_tuple("ChunkMergeFailed").field(e).finish(),

@@ -96,6 +96,28 @@ pub enum RdlpApiError {
         /// What's wrong with the builder configuration.
         message: String,
     },
+
+    /// The requested output path is already claimed by another running
+    /// download — this process's own queue, or another rdlp process
+    /// (rdlp#572). Kept distinct from [`Self::IoError`] so a frontend can
+    /// tell "the target is busy, try later or pick another path" apart from
+    /// a generic filesystem failure.
+    #[error("Output busy: {}", redact(message))]
+    OutputBusy {
+        /// Human-readable message naming the busy path.
+        message: String,
+    },
+
+    /// The output path's exclusive ownership claim could not even be
+    /// checked (rdlp#572, security review MEDIUM) — an I/O condition on the
+    /// advisory-lock sidecar itself, not a conflict with another download.
+    /// Kept distinct from [`Self::OutputBusy`]: that variant means "checked,
+    /// and it's someone else's"; this one means "the check couldn't run".
+    #[error("Output unclaimable: {}", redact(message))]
+    OutputUnclaimable {
+        /// Human-readable message naming the path and the underlying cause.
+        message: String,
+    },
 }
 
 /// Redact free text on its way to an operator. See
@@ -127,6 +149,8 @@ impl std::fmt::Debug for RdlpApiError {
             Self::FfmpegError { message } => msg_only!("FfmpegError", message),
             Self::Soft { message } => msg_only!("Soft", message),
             Self::BuilderError { message } => msg_only!("BuilderError", message),
+            Self::OutputBusy { message } => msg_only!("OutputBusy", message),
+            Self::OutputUnclaimable { message } => msg_only!("OutputUnclaimable", message),
             Self::UnsupportedUrl { url } => {
                 f.debug_struct("UnsupportedUrl").field("url", url).finish()
             }
@@ -198,7 +222,9 @@ impl RdlpApiError {
                 Cow::Owned(format!("{feature} is not available on this platform"))
             }
             Self::UserCancelled => Cow::Borrowed("Download cancelled"),
-            Self::Soft { message } => Cow::Owned(message.clone()),
+            Self::Soft { message }
+            | Self::OutputBusy { message }
+            | Self::OutputUnclaimable { message } => Cow::Owned(message.clone()),
             Self::BuilderError { message } => Cow::Owned(format!("Configuration error: {message}")),
         }
     }
@@ -323,6 +349,12 @@ impl From<OrchestratorError> for RdlpApiError {
             | OrchestratorError::IoError(msg) => Self::IoError { message: msg },
             OrchestratorError::MissingChunk { path } => Self::IoError {
                 message: format!("Missing chunk file: {}", path.display()),
+            },
+            OrchestratorError::OutputBusy { .. } => Self::OutputBusy {
+                message: err.to_string(),
+            },
+            OrchestratorError::OutputUnclaimable { .. } => Self::OutputUnclaimable {
+                message: err.to_string(),
             },
             OrchestratorError::ChunkMergeFailed(io_err) => Self::IoError {
                 message: format!("Chunk merge failed: {io_err}"),
@@ -846,5 +878,37 @@ mod tests {
         assert!(!msg.contains("hunter2"), "password leaked to the UI: {msg}");
         assert!(!msg.contains("admin"), "username leaked to the UI: {msg}");
         assert!(msg.contains("cdn.example.com"), "over-redacted: {msg}");
+    }
+
+    /// Code-quality review finding 3: the `OrchestratorError::OutputBusy` →
+    /// `RdlpApiError::OutputBusy` mapping has no compiler backstop (no
+    /// catch-all in `From<OrchestratorError>`'s match protects it, but
+    /// nothing pins WHICH `RdlpApiError` variant it lands on) — pin it
+    /// directly so a future edit that reroutes it back to `IoError`/`Internal`
+    /// is caught here instead of silently at the desktop boundary.
+    #[test]
+    fn test_from_output_busy() {
+        let err = OrchestratorError::OutputBusy {
+            path: std::path::PathBuf::from("/videos/Title.rdlp-part.mp4"),
+        };
+        let converted: RdlpApiError = err.into();
+        assert!(
+            matches!(converted, RdlpApiError::OutputBusy { .. }),
+            "OutputBusy must map to RdlpApiError::OutputBusy, got: {converted:?}"
+        );
+    }
+
+    /// Same backstop as `test_from_output_busy`, for the fail-closed variant.
+    #[test]
+    fn test_from_output_unclaimable() {
+        let err = OrchestratorError::OutputUnclaimable {
+            path: std::path::PathBuf::from("/videos/Title.rdlp-part.mp4"),
+            source: std::io::Error::other("is a directory"),
+        };
+        let converted: RdlpApiError = err.into();
+        assert!(
+            matches!(converted, RdlpApiError::OutputUnclaimable { .. }),
+            "OutputUnclaimable must map to RdlpApiError::OutputUnclaimable, got: {converted:?}"
+        );
     }
 }
