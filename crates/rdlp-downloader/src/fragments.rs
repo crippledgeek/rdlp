@@ -390,18 +390,23 @@ pub async fn download_pre_resolved_fragments(
                 out.extend_from_slice(&init_bytes);
             }
 
-            // Fragment bytes. The validator is dropped here for now (Task 2
-            // threads it into the resume sidecar) — behaviour is unchanged.
+            // Fragment bytes. The validator is threaded out to the loop below,
+            // which logs whether fragment 0 of a fresh start offered one
+            // (Task 3 records it into the resume sidecar).
             let resolved_url = resolve_fragment_url(&frag.url, base.as_deref())?;
-            let bytes = ctx.fetch(&resolved_url, frag.byte_range).await?.bytes;
-            out.extend_from_slice(&bytes);
+            let fetched = ctx.fetch(&resolved_url, frag.byte_range).await?;
+            out.extend_from_slice(&fetched.bytes);
 
             let fetch_elapsed = fetch_start.elapsed();
-            Ok::<(Vec<u8>, std::time::Duration, Option<f64>), rdlp_core::RdlpError>((
-                out,
-                fetch_elapsed,
-                frag.duration,
-            ))
+            Ok::<
+                (
+                    Vec<u8>,
+                    std::time::Duration,
+                    Option<f64>,
+                    Option<rdlp_http::StrongValidator>,
+                ),
+                rdlp_core::RdlpError,
+            >((out, fetch_elapsed, frag.duration, fetched.validator))
         }
     }))
     .buffered(concurrency);
@@ -418,13 +423,29 @@ pub async fn download_pre_resolved_fragments(
         // cancellation path already flushes before its own return.
         // See tokio::fs module docs ("calls to write will return before the
         // write has finished; flush will wait for the write to finish").
-        let (bytes, fetch_elapsed, seg_dur) = match item {
+        let (bytes, fetch_elapsed, seg_dur, validator) = match item {
             Ok(v) => v,
             Err(e) => {
                 out_file.flush().await.ok();
                 return Err(e);
             }
         };
+
+        // Fragment 0 of a fresh start (never on resume: frags_done then
+        // starts above 0) tells an operator up front whether a later resume
+        // of this download can revalidate the origin's content, or will have
+        // to fall back to the manifest's path-only fingerprint (#746).
+        if frags_done == 0 {
+            log::debug!(
+                "HLS fragment 0 offers a strong validator: {}; resume revalidation {}",
+                if validator.is_some() { "yes" } else { "no" },
+                if validator.is_some() {
+                    "possible"
+                } else {
+                    "falls back to the manifest fingerprint"
+                }
+            );
+        }
 
         if let Err(e) = out_file.write_all(&bytes).await {
             out_file.flush().await.ok();
@@ -619,10 +640,6 @@ impl FragmentFetchCtx<'_> {
 #[derive(Debug)]
 pub(crate) struct FetchedBody {
     pub bytes: Vec<u8>,
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "first production caller: #746 Task 2")
-    )]
     pub validator: Option<rdlp_http::StrongValidator>,
 }
 

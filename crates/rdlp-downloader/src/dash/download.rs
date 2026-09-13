@@ -470,7 +470,8 @@ async fn download_representation(
                      recorded {recorded_len:?}) — re-fetching"
                 );
             }
-            let bytes = ctx.fetch(&u).await?.bytes;
+            let fetched = ctx.fetch(&u).await?;
+            let bytes = fetched.bytes;
             let len = bytes.len() as u64;
             fs::write(&init_part_path, &bytes).await?;
             bytes_counter.fetch_add(len, Ordering::Relaxed);
@@ -489,6 +490,26 @@ async fn download_representation(
                 );
             }
             debug!("DASH repr {repr_id}: init {len} bytes");
+            // Whether a fresh video init segment offers a strong validator
+            // tells an operator up front whether a later resume of this
+            // representation can revalidate the origin's content, or will
+            // have to fall back to the manifest's path-only fingerprint
+            // (#746). Task 3 records the value into the resume sidecar.
+            if is_video {
+                debug!(
+                    "DASH video init segment offers a strong validator: {}; resume revalidation {}",
+                    if fetched.validator.is_some() {
+                        "yes"
+                    } else {
+                        "no"
+                    },
+                    if fetched.validator.is_some() {
+                        "possible"
+                    } else {
+                        "falls back to the manifest fingerprint"
+                    }
+                );
+            }
         }
     }
 
