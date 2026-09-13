@@ -586,8 +586,13 @@ async fn resume_starts_fresh_when_segment_timeline_changed_under_same_paths() {
         .expect_at_least(1)
         .create_async()
         .await;
+    // An etag on the phase-1 init response gives this sidecar an
+    // `anchor_validator` too — the fingerprint mismatch below must reject it
+    // BEFORE that validator is ever read, not merely because there happens
+    // to be nothing to revalidate.
     let vi_first = server
         .mock("GET", "/vinit.mp4")
+        .with_header("etag", "\"i1\"")
         .with_body(b"VINIT")
         .expect_at_least(1)
         .create_async()
@@ -631,7 +636,12 @@ async fn resume_starts_fresh_when_segment_timeline_changed_under_same_paths() {
         .await;
     // A fingerprint mismatch must reject the sidecar BEFORE any anchor
     // probe is attempted — this ranged/If-Range-shaped request must never
-    // be sent.
+    // be sent. `vi_replay` below is scoped to `Range: Missing` so it cannot
+    // silently absorb a probe request that DOES carry the header: mockito
+    // serves whichever mock still has unmet hits, else the LAST matching
+    // one, so an unscoped `vi_replay` would satisfy both the plain re-fetch
+    // AND a stray probe, leaving `vi_no_probe.expect(0)` unable to ever fire
+    // (round-1 review finding 2).
     let vi_no_probe = server
         .mock("GET", "/vinit.mp4")
         .match_header("range", "bytes=0-0")
@@ -640,6 +650,7 @@ async fn resume_starts_fresh_when_segment_timeline_changed_under_same_paths() {
         .await;
     let vi_replay = server
         .mock("GET", "/vinit.mp4")
+        .match_header("range", mockito::Matcher::Missing)
         .with_body(b"VINIT")
         .expect_at_least(1)
         .create_async()

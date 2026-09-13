@@ -20,10 +20,13 @@ use crate::fingerprint::Fnv1a64;
 
 /// Current schema version.
 ///
-/// v3 (#746) adds `manifest_fingerprint` and `anchor_validator`; a v2
-/// sidecar matched on MPD path + representation ids only, so a regenerated
-/// MPD with the same segment names resumed onto different content.
-/// Rejected ⇒ fresh start.
+/// v2 (#677) added per-part expected byte lengths (`init_video_len` /
+/// `init_audio_len` / the lengths in `completed_segments`), so a resumed
+/// part is trusted only when its on-disk length matches exactly. v3 (#746)
+/// adds `manifest_fingerprint` and `anchor_validator`; a v2 sidecar matched
+/// on MPD path + representation ids only, so a regenerated MPD with the
+/// same segment names resumed onto different content. Rejected ⇒ fresh
+/// start.
 pub const STATE_VERSION: u32 = 3;
 
 /// Zero-based index of a media segment within one representation.
@@ -79,9 +82,9 @@ fn feed_plan(h: &mut Fnv1a64, plan: &SegmentPlan) {
     match plan {
         SegmentPlan::Template(t) => {
             h.feed(&[1]);
-            h.feed_opt_str(t.init.as_deref());
+            h.feed_opt_url_path(t.init.as_deref());
             h.feed_opt_range(t.init_byte_range);
-            h.feed_opt_str(Some(&t.media));
+            h.feed_url_path(&t.media);
             h.feed_u64(t.start_number);
             h.feed_u64(t.timescale);
             h.feed_u64(t.segment_duration_ts);
@@ -89,9 +92,9 @@ fn feed_plan(h: &mut Fnv1a64, plan: &SegmentPlan) {
         }
         SegmentPlan::Timeline(t) => {
             h.feed(&[2]);
-            h.feed_opt_str(t.init.as_deref());
+            h.feed_opt_url_path(t.init.as_deref());
             h.feed_opt_range(t.init_byte_range);
-            h.feed_opt_str(Some(&t.media));
+            h.feed_url_path(&t.media);
             h.feed_u64(t.start_number);
             h.feed_u64(t.timescale);
             h.feed_u64(t.entries.len() as u64);
@@ -103,7 +106,7 @@ fn feed_plan(h: &mut Fnv1a64, plan: &SegmentPlan) {
         }
         SegmentPlan::List(l) => {
             h.feed(&[3]);
-            h.feed_opt_str(l.init.as_deref());
+            h.feed_opt_url_path(l.init.as_deref());
             h.feed_opt_range(l.init_byte_range);
             h.feed_u64(l.urls.len() as u64);
             for u in &l.urls {
@@ -270,6 +273,27 @@ mod tests {
         );
     }
 
+    #[test]
+    fn manifest_fingerprint_is_stable_across_absolute_template_urls_on_different_hosts() {
+        // `SegmentTemplate@initialization`/`@media` MAY themselves be
+        // absolute URLs (not just relative templates resolved against
+        // BaseURL) — a CDN host swap there must not perturb the fingerprint
+        // either, same as the BaseURL case above (#746 round-1 finding 4).
+        let a = MPD_A.replace(
+            r#"initialization="vinit.mp4" media="vseg-$Number$.m4s""#,
+            r#"initialization="https://cdn1.example/vinit.mp4" media="https://cdn1.example/vseg-$Number$.m4s""#,
+        );
+        let b = MPD_A.replace(
+            r#"initialization="vinit.mp4" media="vseg-$Number$.m4s""#,
+            r#"initialization="https://cdn2.other/vinit.mp4" media="https://cdn2.other/vseg-$Number$.m4s""#,
+        );
+        assert_eq!(
+            manifest_fingerprint(&parsed(&a)),
+            manifest_fingerprint(&parsed(&b)),
+            "absolute init/media URLs differing only by host must hash equally"
+        );
+    }
+
     #[tokio::test]
     async fn load_matching_rejects_fingerprint_mismatch_and_v2_sidecar() {
         let dir = tempfile::tempdir().unwrap();
@@ -388,8 +412,15 @@ mod tests {
 
     #[tokio::test]
     async fn v2_shaped_sidecar_with_old_version_number_is_rejected() {
-        // Pins the version gate itself: the body parses as v2, so only the
-        // `state_version` comparison in `load_matching` can reject it.
+        // Pins the version gate ONLY: a body that parses cleanly into the
+        // CURRENT struct shape (built via `new`, so every other field
+        // matches `identity`) but claims an older `state_version` must
+        // still be rejected. Built through `new`/`save` (not raw JSON) so
+        // only the `state_version` comparison in `load_matching` can be
+        // what rejects it — raw v2-shaped JSON (missing `manifest_fingerprint`
+        // entirely) is covered by
+        // `load_matching_rejects_fingerprint_mismatch_and_v2_sidecar` and
+        // would be rejected by serde before this clause ever ran.
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("v.dash_state.json");
         let url = Url::parse("https://cdn.example.com/path/manifest.mpd").expect("url");
@@ -399,17 +430,16 @@ mod tests {
             audio_repr_id: None,
             manifest_fingerprint: 0,
         };
-        let v2 = format!(
-            r#"{{"state_version":2,"mpd_path":"{}","video_repr_id":"v1","audio_repr_id":null,"init_video_len":null,"init_audio_len":null,"completed_segments":{{"v1":{{"0":2}}}},"updated_at":0}}"#,
-            url.path()
-        );
-        tokio::fs::write(&path, v2).await.expect("write");
+        let mut state = DashDownloadState::new(&identity);
+        state.record_segment("v1", 0, 2);
+        state.state_version = STATE_VERSION - 1;
+        state.save(&path).await.expect("save");
 
         assert!(
             DashDownloadState::load_matching(&path, &identity)
                 .await
                 .is_none(),
-            "an older state_version must be rejected even when the body parses"
+            "an older state_version must be rejected even when every other field matches"
         );
     }
 }

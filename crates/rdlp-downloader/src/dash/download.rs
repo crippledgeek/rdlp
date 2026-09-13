@@ -173,13 +173,7 @@ pub async fn run(
         .as_ref()
         .and_then(|s| s.anchor_validator.clone())
     {
-        let anchor_url = if anchor_is_init(video_init.as_ref()) {
-            video_init.clone()
-        } else {
-            video_seg_urls.first().cloned()
-        }
-        .unwrap_or_else(|| video_seg_urls[0].clone());
-        let anchor_str = anchor_url.to_string();
+        let anchor_str = anchor_url(video_init.as_ref(), &video_seg_urls).to_string();
         let headers = crate::http::same_origin_headers(
             Some(&mpd_origin),
             &anchor_str,
@@ -337,12 +331,24 @@ pub async fn run(
     Ok(stats)
 }
 
-/// Whether the anchor a resume revalidates against is the init segment
-/// (`true`) or the first media segment (`false` — the plan has no init).
-/// One function so `run`'s probe target and `download_representation`'s
-/// record site agree on which URL is "the anchor" for a representation
-/// (#746) — duplicating this one-line rule at each site risked them
-/// silently diverging.
+/// The URL a resume anchor is checked/recorded against: the init segment
+/// when one exists, otherwise the first media segment. `seg_urls` must be
+/// non-empty — both callers' "no video segments resolved" gate guarantees
+/// this before either reaches here, so `Option::unwrap_or` never falls back
+/// to a value it could not prove exists (no dead branch: unlike an
+/// if/else that repeats the presence check and then re-guards against a
+/// case that check already excluded, `unwrap_or` embodies the rule in one
+/// expression).
+fn anchor_url<'a>(init_url: Option<&'a Url>, seg_urls: &'a [Url]) -> &'a Url {
+    init_url.unwrap_or(&seg_urls[0])
+}
+
+/// Whether the anchor is the init segment (`true`) or the first media
+/// segment (`false` — the plan has no init) — the same rule as
+/// [`anchor_url`], expressed as a boolean for `download_representation`'s
+/// per-segment record gate, which needs the fact rather than the URL
+/// itself. Both derive from nothing but `Option::is_some`/`unwrap_or` on
+/// the same `init_url`, so they cannot diverge (#746).
 const fn anchor_is_init(init_url: Option<&Url>) -> bool {
     init_url.is_some()
 }
