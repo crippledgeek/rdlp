@@ -1827,7 +1827,7 @@ async fn range_fetch_accepts_conformant_206() {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
-async fn verify_merged_size_accepts_exact_total() {
+async fn verify_output_size_accepts_exact_total() {
     use tempfile::TempDir;
 
     let dir = TempDir::new().unwrap();
@@ -1835,7 +1835,7 @@ async fn verify_merged_size_accepts_exact_total() {
     tokio::fs::write(&path, vec![0u8; 4096]).await.unwrap();
 
     assert!(
-        verify_merged_size(&path, 4096, "https://example.com/video.mp4")
+        verify_output_size(&path, 4096, "https://example.com/video.mp4")
             .await
             .is_ok(),
         "an output matching the advertised total must be accepted"
@@ -1844,7 +1844,7 @@ async fn verify_merged_size_accepts_exact_total() {
 
 /// A short assembly is the shape a dropped or truncated chunk produces.
 #[tokio::test]
-async fn verify_merged_size_rejects_short_output() {
+async fn verify_output_size_rejects_short_output() {
     use tempfile::TempDir;
 
     let dir = TempDir::new().unwrap();
@@ -1852,7 +1852,7 @@ async fn verify_merged_size_rejects_short_output() {
     tokio::fs::write(&path, vec![0u8; 4095]).await.unwrap();
 
     assert!(
-        verify_merged_size(&path, 4096, "https://example.com/video.mp4")
+        verify_output_size(&path, 4096, "https://example.com/video.mp4")
             .await
             .is_err(),
         "an output shorter than the advertised total must be refused"
@@ -1861,7 +1861,7 @@ async fn verify_merged_size_rejects_short_output() {
 
 /// A long assembly is the shape a duplicated or overlapping chunk produces.
 #[tokio::test]
-async fn verify_merged_size_rejects_long_output() {
+async fn verify_output_size_rejects_long_output() {
     use tempfile::TempDir;
 
     let dir = TempDir::new().unwrap();
@@ -1869,7 +1869,7 @@ async fn verify_merged_size_rejects_long_output() {
     tokio::fs::write(&path, vec![0u8; 4097]).await.unwrap();
 
     assert!(
-        verify_merged_size(&path, 4096, "https://example.com/video.mp4")
+        verify_output_size(&path, 4096, "https://example.com/video.mp4")
             .await
             .is_err(),
         "an output longer than the advertised total must be refused"
@@ -1877,14 +1877,14 @@ async fn verify_merged_size_rejects_long_output() {
 }
 
 #[tokio::test]
-async fn verify_merged_size_rejects_missing_output() {
+async fn verify_output_size_rejects_missing_output() {
     use tempfile::TempDir;
 
     let dir = TempDir::new().unwrap();
     let path = dir.path().join("never-created.mp4");
 
     assert!(
-        verify_merged_size(&path, 4096, "https://example.com/video.mp4")
+        verify_output_size(&path, 4096, "https://example.com/video.mp4")
             .await
             .is_err(),
         "a missing output file must be refused, not treated as verified"
@@ -3172,5 +3172,393 @@ async fn download_to_file_sums_probe_and_download_retries() {
     assert_eq!(
         stats.retries, 2,
         "the probe's retry AND the download's retry must both be reflected in DownloadStats.retries"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #674 — sequential and resume paths gain the span / byte-count / final-size
+// checks the parallel chunk path already had.
+// ---------------------------------------------------------------------------
+
+/// Downloader for the #674 tests: no retries, so a rejected response surfaces
+/// immediately as the test's result rather than being retried away.
+fn resume_gap_test_downloader() -> HttpDownloader {
+    HttpDownloader::new().with_retry_config(crate::retry::test_retry_config(0))
+}
+
+/// (a) A resume response whose Content-Range span does NOT reach the
+/// server-declared total — the server's tail is short of the file's actual
+/// end — must be refused. Only `first_pos` was checked before #674; a
+/// response like this would have been accepted and appended, silently
+/// truncating the file at `last_pos + 1` instead of completing it.
+///
+/// Pinned at the tight boundary (`last_pos = total - 2`), one short of the
+/// positive counterpart `resume_accepts_a_span_reaching_the_declared_total`'s
+/// `last_pos = total - 1`: a `last_pos == total` off-by-one in the check
+/// cannot pass both tests, whereas a value far from the boundary could.
+#[tokio::test]
+async fn resume_rejects_a_span_shorter_than_the_declared_total() {
+    use mockito::Server;
+    use tempfile::NamedTempFile;
+
+    let mut server = Server::new_async().await;
+    let mock = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", "bytes=1000-")
+        .with_status(206)
+        // Starts where the file ends (1000); total is 2000 (so the correct
+        // end is 1999) and the span reaches only 1998 — one byte short.
+        .with_header("content-range", "bytes 1000-1998/2000")
+        .with_body(vec![0x11u8; 999])
+        .create_async()
+        .await;
+
+    let downloader = resume_gap_test_downloader();
+    let temp_file = NamedTempFile::new().unwrap();
+    let path = temp_file.path();
+    tokio::fs::write(path, vec![0xAAu8; 1000]).await.unwrap();
+
+    let result = downloader
+        .download_with_resume(
+            &format!("{}/video.mp4", server.url()),
+            path,
+            1000,
+            None,
+            None,
+        )
+        .await;
+
+    assert!(
+        result.is_err(),
+        "a resume span short of the declared total must be refused, got {result:?}"
+    );
+    let contents = tokio::fs::read(path).await.unwrap();
+    assert_eq!(
+        contents,
+        vec![0xAAu8; 1000],
+        "a rejected resume must not append a truncating short tail"
+    );
+    mock.assert_async().await;
+}
+
+/// A resume span reaching EXACTLY the declared total (the boundary this check
+/// pins) must be accepted — the positive counterpart to (a).
+#[tokio::test]
+async fn resume_accepts_a_span_reaching_the_declared_total() {
+    use mockito::Server;
+    use tempfile::NamedTempFile;
+
+    let mut server = Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", "bytes=1000-")
+        .with_status(206)
+        .with_header("content-range", "bytes 1000-1999/2000")
+        .with_body(vec![0x11u8; 1000])
+        .create_async()
+        .await;
+
+    let downloader = resume_gap_test_downloader();
+    let temp_file = NamedTempFile::new().unwrap();
+    let path = temp_file.path();
+    tokio::fs::write(path, vec![0xAAu8; 1000]).await.unwrap();
+
+    let result = downloader
+        .download_with_resume(
+            &format!("{}/video.mp4", server.url()),
+            path,
+            1000,
+            None,
+            None,
+        )
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "a resume span reaching the declared total must be accepted, got {result:?}"
+    );
+    let contents = tokio::fs::read(path).await.unwrap();
+    assert_eq!(
+        contents.len(),
+        2000,
+        "the file must be completed to the full 2000 bytes"
+    );
+}
+
+/// (b) A resume response whose span is correct but whose BODY is shorter than
+/// the span promises must be refused — the byte-count check the chunk path
+/// has always had, extended to the resume append loop.
+#[tokio::test]
+async fn resume_rejects_a_body_shorter_than_the_promised_tail() {
+    use mockito::Server;
+    use tempfile::NamedTempFile;
+
+    let mut server = Server::new_async().await;
+    let mock = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", "bytes=1000-")
+        .with_status(206)
+        .with_header("content-range", "bytes 1000-1999/2000")
+        // Promises 1000 bytes (1000-1999) but only sends 999.
+        .with_body(vec![0x22u8; 999])
+        .create_async()
+        .await;
+
+    let downloader = resume_gap_test_downloader();
+    let temp_file = NamedTempFile::new().unwrap();
+    let path = temp_file.path();
+    tokio::fs::write(path, vec![0xAAu8; 1000]).await.unwrap();
+
+    let result = downloader
+        .download_with_resume(
+            &format!("{}/video.mp4", server.url()),
+            path,
+            1000,
+            None,
+            None,
+        )
+        .await;
+
+    assert!(
+        result.is_err(),
+        "a resume body shorter than its promised tail must be refused, got {result:?}"
+    );
+    mock.assert_async().await;
+}
+
+/// (c) A resume response whose span is correct but whose BODY is longer than
+/// the span promises must be refused before the overrunning byte reaches
+/// disk.
+#[tokio::test]
+async fn resume_rejects_a_body_longer_than_the_promised_tail() {
+    use mockito::Server;
+    use tempfile::NamedTempFile;
+
+    let mut server = Server::new_async().await;
+    let mock = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", "bytes=1000-")
+        .with_status(206)
+        .with_header("content-range", "bytes 1000-1999/2000")
+        // Promises 1000 bytes (1000-1999) but sends 1001.
+        .with_body(vec![0x33u8; 1001])
+        .create_async()
+        .await;
+
+    let downloader = resume_gap_test_downloader();
+    let temp_file = NamedTempFile::new().unwrap();
+    let path = temp_file.path();
+    tokio::fs::write(path, vec![0xAAu8; 1000]).await.unwrap();
+
+    let result = downloader
+        .download_with_resume(
+            &format!("{}/video.mp4", server.url()),
+            path,
+            1000,
+            None,
+            None,
+        )
+        .await;
+
+    assert!(
+        result.is_err(),
+        "a resume body longer than its promised tail must be refused, got {result:?}"
+    );
+    mock.assert_async().await;
+}
+
+/// Classifying the wrong-span error as `Network` (retryable) is not the same
+/// as proving the resume request is actually retried and recovers — mirrors
+/// `chunk_retry_recovers_from_wrong_span_response`'s shape for the resume
+/// path: first attempt gets a wrong span, second gets the correct one, and
+/// the finished file must hold the resumed prefix plus the RETRY's tail.
+#[tokio::test]
+async fn resume_recovers_from_wrong_span_response_on_retry() {
+    use mockito::Server;
+    use tempfile::NamedTempFile;
+
+    let mut server = Server::new_async().await;
+
+    // Right length (1000 bytes), WRONG span — the #526 signature, on the
+    // resume path this time. Created first so it answers first (mockito
+    // matches in creation order and retires a mock once `expect(n)` is met).
+    let mock_wrong_span = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", "bytes=1000-")
+        .with_status(206)
+        .with_header("content-range", "bytes 5000-5999/10000")
+        .with_body(vec![0x99u8; 1000])
+        .expect(1)
+        .create_async()
+        .await;
+
+    let mock_ok = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", "bytes=1000-")
+        .with_status(206)
+        .with_header("content-range", "bytes 1000-1999/2000")
+        .with_body(vec![0x11u8; 1000])
+        .expect(1)
+        .create_async()
+        .await;
+
+    let downloader = chunk_test_downloader(3);
+    let temp_file = NamedTempFile::new().unwrap();
+    let path = temp_file.path();
+    tokio::fs::write(path, vec![0xAAu8; 1000]).await.unwrap();
+
+    let result = downloader
+        .download_with_resume(
+            &format!("{}/video.mp4", server.url()),
+            path,
+            1000,
+            None,
+            None,
+        )
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "the resume must recover on retry after a wrong-span response, got {result:?}"
+    );
+
+    let contents = tokio::fs::read(path).await.unwrap();
+    assert_eq!(
+        contents.len(),
+        2000,
+        "file must hold the resumed prefix plus the full tail"
+    );
+    assert!(
+        contents[..1000].iter().all(|&b| b == 0xAA),
+        "the pre-existing resumed prefix must be untouched"
+    );
+    assert!(
+        contents[1000..].iter().all(|&b| b == 0x11),
+        "the tail must be the RETRY's bytes, not the rejected wrong-span response"
+    );
+
+    // Every mock must have been consumed: without this an accidental
+    // single-request run (or a rewrap that turns the retry off) would
+    // satisfy the assertions above by coincidence.
+    mock_wrong_span.assert_async().await;
+    mock_ok.assert_async().await;
+}
+
+// `download_sequential`'s byte-count guard (d) cannot be driven RED through
+// mockito/hyper, and the two `sequential_rejects_*` mockito variants that
+// tried this (forging a `content-length` disagreeing with the real body)
+// passed identically with the #674 checks reverted — but not because hyper's
+// decoder rejected them. mockito's own `respond_with_mock`
+// (mockito-1.7.2 src/server.rs:~587) always overwrites the response's
+// `content-length` with the real `bytes.len()` whenever the *inbound
+// request* lacks that header — true for every GET here — so an explicit
+// `.with_header("content-length", "1024")` mismatched against a shorter or
+// longer body never reaches the wire as written; the header mockito actually
+// sends matches the real body every time. The disagreement this guard exists
+// to catch cannot be produced through mockito at all, so these are not valid
+// regression tests per `bug-fix-requires-failing-test.md` (a test that never
+// failed proves nothing).
+//
+// Were a real disagreement to reach the wire, hyper's own Content-Length
+// decoder would already refuse it before this guard ever ran — inferred from
+// hyper 1.8.1's source, not observed: `Decoder::decode`'s `Length` branch
+// (`hyper-1.8.1/src/proto/h1/decode.rs:144-167`) requests at most `remaining`
+// bytes per read (so it structurally cannot deliver past the declared
+// length) and raises `io::Error(UnexpectedEof, IncompleteBody)` the moment a
+// read yields zero bytes while `remaining > 0` (an early-closed, short
+// body). This guard is defense-in-depth against a decoder that *doesn't*
+// behave that way (the documented hyperium/hyper#3253 class of bug: a short
+// read silently swallowed instead of erroring) — a scenario neither mockito
+// nor a conformant hyper can be made to exhibit. It is pinned directly
+// against the new `ExpectedTransfer` type instead — these tests use the type
+// introduced by this change, so they did not exist, let alone pass, before
+// it. The wiring test below (an accepted download whose on-disk size is
+// asserted) is the mockito-level confirmation that `download_sequential`
+// actually calls this type rather than skipping it.
+
+/// `reject_overlong` must refuse a frame that would push the transfer past
+/// its known length, and must accept one that lands exactly on it.
+#[test]
+fn expected_transfer_reject_overlong_pins_the_boundary() {
+    let transfer = ExpectedTransfer {
+        expected_len: 1024,
+        context: "test transfer",
+    };
+    assert!(
+        transfer
+            .reject_overlong(1023, 1, "https://example.com")
+            .is_ok(),
+        "a frame landing exactly on the expected length must be accepted"
+    );
+    assert!(
+        transfer
+            .reject_overlong(1023, 2, "https://example.com")
+            .is_err(),
+        "a frame that overruns the expected length by one byte must be refused"
+    );
+}
+
+/// `confirm_exact` must refuse a transfer short of or over its expected
+/// length, and accept one landing exactly on it.
+#[test]
+fn expected_transfer_confirm_exact_pins_the_boundary() {
+    let transfer = ExpectedTransfer {
+        expected_len: 1024,
+        context: "test transfer",
+    };
+    assert!(
+        transfer.confirm_exact(1023, "https://example.com").is_err(),
+        "one byte short of the expected length must be refused"
+    );
+    assert!(
+        transfer.confirm_exact(1024, "https://example.com").is_ok(),
+        "exactly the expected length must be accepted"
+    );
+    assert!(
+        transfer.confirm_exact(1025, "https://example.com").is_err(),
+        "one byte over the expected length must be refused"
+    );
+}
+
+/// (d) positive: a body matching `Content-Length` exactly must be accepted —
+/// the mockito-level confirmation that `download_sequential` actually wires
+/// its bytes through `ExpectedTransfer` and `verify_output_size`.
+#[tokio::test]
+async fn sequential_accepts_a_body_matching_content_length_exactly() {
+    use mockito::Server;
+    use tempfile::TempDir;
+
+    let mut server = Server::new_async().await;
+    let _mock = server
+        .mock("GET", "/plain.bin")
+        .with_status(200)
+        .with_header("content-length", "1024")
+        .with_body(vec![0x55u8; 1024])
+        .create_async()
+        .await;
+
+    let downloader = resume_gap_test_downloader();
+    let dir = TempDir::new().unwrap();
+    let out = dir.path().join("out.bin");
+
+    let result = downloader
+        .download_sequential(
+            &format!("{}/plain.bin", server.url()),
+            &out,
+            None,
+            None,
+            &AtomicU64::new(0),
+        )
+        .await;
+
+    assert!(
+        result.is_ok(),
+        "a body matching Content-Length exactly must be accepted, got {result:?}"
+    );
+    let meta = tokio::fs::metadata(&out).await.unwrap();
+    assert_eq!(
+        meta.len(),
+        1024,
+        "output file must be exactly Content-Length bytes"
     );
 }

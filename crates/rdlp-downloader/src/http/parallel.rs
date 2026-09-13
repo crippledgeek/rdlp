@@ -236,7 +236,7 @@ static DOWNLOAD_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// A fresh (non-resume) HTTP download's fixed target: the resource, its
 /// destination file, and the server-advertised total size the assembled
-/// output must match (`verify_merged_size`'s backstop). The three are
+/// output must match (`verify_output_size`'s backstop). The three are
 /// meaningless apart — a URL with no destination, a destination with no
 /// expected size to verify against, or a size with nothing to check it
 /// against are each an incomplete description of the same download.
@@ -336,7 +336,7 @@ impl HttpDownloader {
 
         // Backstop (#526): the assembly must match the advertised length before
         // this file is handed back as a completed download.
-        verify_merged_size(path, total_size, url).await?;
+        verify_output_size(path, total_size, url).await?;
 
         // The merge above succeeded, so the manifest's job for this attempt
         // is done — leaving it behind would let a future scan trust stale
@@ -457,7 +457,7 @@ impl HttpDownloader {
         // that disagreed with the file's real length: the appended bytes land
         // at EOF regardless of the offset the ranges were requested from, so a
         // mismatch shows up here as a wrong final size.
-        verify_merged_size(path, total_size, url).await?;
+        verify_output_size(path, total_size, url).await?;
 
         tracking.manifest.delete().await;
 
@@ -1004,26 +1004,32 @@ impl StaticChunkPlan {
     }
 }
 
-/// Confirm the assembled output is exactly the size the server advertised.
+/// Confirm the finished output is exactly the size the server advertised.
 ///
 /// Last-resort integrity gate for #526, deliberately independent of the
-/// per-chunk validation in `download_range_with_progress`: that layer checks
-/// each response against what was requested, while this one checks the
-/// finished artifact against the resource's advertised length. A defect in
-/// chunk bookkeeping — a dropped, duplicated, or misordered chunk — leaves the
-/// per-chunk checks satisfied but the assembly wrong, and only shows up here.
+/// per-chunk/per-byte validation upstream of it (`download_range_with_progress`'s
+/// `Content-Range` checks, `ExpectedTransfer`'s byte-count checks, #674):
+/// those layers check each response or frame against what was requested,
+/// while this one checks the finished output file against the resource's
+/// advertised total length. A defect in the bookkeeping that assembles or
+/// writes that output — a dropped, duplicated, or misordered parallel chunk;
+/// a write that silently short-completes — leaves the upstream checks
+/// satisfied but the output wrong, and only shows up here. Called from three
+/// sites: the parallel chunk merge, the sequential-resume append, and the
+/// sequential fresh download — "output" is deliberately the general term,
+/// not "merged" or "assembled", since two of the three never merge anything.
 ///
 /// A size match is not a proof of correctness (#526 produced a full-length file
-/// with displaced interior bytes), so this complements the per-chunk checks
+/// with displaced interior bytes), so this complements the upstream checks
 /// rather than replacing them.
-pub(crate) async fn verify_merged_size(path: &Path, expected_total: u64, url: &str) -> Result<()> {
+pub(crate) async fn verify_output_size(path: &Path, expected_total: u64, url: &str) -> Result<()> {
     let actual = tokio::fs::metadata(path)
         .await
         .map_err(|e| {
             RdlpError::Io(std::io::Error::new(
                 e.kind(),
                 format!(
-                    "failed to stat merged output '{}' for size verification: {e}",
+                    "failed to stat output '{}' for size verification: {e}",
                     path.display()
                 ),
             ))
@@ -1034,8 +1040,8 @@ pub(crate) async fn verify_merged_size(path: &Path, expected_total: u64, url: &s
         return Err(RdlpError::Download {
             url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
             message: format!(
-                "assembled output '{}' is {actual} bytes but the server advertised \
-                 {expected_total}; the download is incomplete or misassembled.",
+                "output '{}' is {actual} bytes but the server advertised \
+                 {expected_total}; the download is incomplete or corrupted.",
                 path.display()
             ),
         });
@@ -1345,7 +1351,7 @@ mod tests {
     //
     // Both tests call `download_parallel_static`/`_adaptive` DIRECTLY rather
     // than through the public `download_to_file` — the public path deletes
-    // the manifest on success (via the caller, after `verify_merged_size`),
+    // the manifest on success (via the caller, after `verify_output_size`),
     // which would make the manifest unreadable by the time a black-box test
     // could inspect it. Calling the private methods directly leaves the
     // manifest on disk for these tests to load back and assert on, exactly

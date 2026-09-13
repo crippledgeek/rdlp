@@ -25,7 +25,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, ControllerMode};
 use crate::atomic::{SIDECAR_SAVE_FAILURE_THRESHOLD, SaveFailureTracker};
-use crate::http::{HttpDownloader, RequestedSpan, validate_range_response};
+use crate::http::{ExpectedSpan, HttpDownloader, RequestedSpan, validate_range_response};
 use crate::progress::SpeedMeter;
 use crate::retry::{LazyLabel, RetryPolicy, with_retry_cancellable};
 use rdlp_security;
@@ -647,7 +647,7 @@ pub(crate) async fn fetch_with_optional_range(
     // Content-Range. Skipping this check is exactly what let a whole-file
     // body land in a slot sized for one fragment.
     let expected_len = if let Some(span) = requested_span {
-        validate_range_response(&resp, span, url)?;
+        validate_range_response(&resp, ExpectedSpan::Closed(span), url)?;
         Some(span.len())
     } else {
         if !resp.status().is_success() {

@@ -423,7 +423,7 @@ pub async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo) -> an
 
         // #675: the length a chunk was verified at during detection must
         // still hold at merge time — closes the (narrow) race between the
-        // scan and this copy, the same way `verify_merged_size` closes it
+        // scan and this copy, the same way `verify_output_size` closes it
         // for the assembled whole.
         let expected = *chunk_info
             .chunk_lengths
