@@ -28,10 +28,13 @@
 # all identified in the #558 security review:
 #
 #   1. EXISTENCE-PROBE LOOPS. `for i in 0..N { if p.exists() { remove_file(p) } }`
-#      never calls read_dir, so it is invisible here -- and that shape is already
-#      precedented in this codebase (resume.rs cleanup_old_chunks,
-#      parallel.rs cleanup_chunk_files). A #558-style bug rewritten that way
-#      would NOT be flagged. This is the most likely real-world evasion.
+#      never calls read_dir, so it is invisible here -- and that shape WAS
+#      precedented in this codebase (resume.rs `cleanup_old_chunks`, replaced
+#      by the log-only `scan_chunk_set` per #573; the downloader's
+#      `cleanup_chunk_files`, removed in #568 in favour of `ChunkLedger::cleanup`
+#      in rdlp-downloader/src/http/chunk_ledger.rs, which deletes only paths
+#      its own writer registered). A #558-style bug rewritten that way would NOT
+#      be flagged. This is the most likely real-world evasion.
 #   2. CROSS-FILE SPLIT. A helper in module A enumerates; module B deletes what
 #      it returns. Neither file trips the co-occurrence test.
 #   3. Enumeration via an aliased or re-exported read_dir.

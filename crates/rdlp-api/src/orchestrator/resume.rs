@@ -13,8 +13,9 @@ use tracing::instrument;
 /// recently-abandoned download is well within this window.
 const MAX_DOWNLOAD_ID_SCAN: u64 = 100;
 
-/// Ceiling on how many sequential chunk ids [`cleanup_old_chunks`] and
-/// [`log_orphaned_resume_chunks`] probe within one chunk set before
+/// Ceiling on how many sequential chunk ids [`scan_chunk_set`] (the
+/// discovery pass shared by [`log_legacy_chunks`] and
+/// [`log_orphaned_resume_chunks`]) probes within one chunk set before
 /// concluding the set is exhausted.
 ///
 /// This is a sanity ceiling against a pathological or corrupted directory,
@@ -24,19 +25,28 @@ const MAX_DOWNLOAD_ID_SCAN: u64 = 100;
 /// grammar's historical `concurrent_fragments` cap of 10 was never itself
 /// enforced as a scan/cleanup bound. A hardcoded `0..10` cleanup bound would
 /// silently strand any legacy chunk set that ever did exceed 10 (see
-/// `test_cleanup_legacy_chunks_beyond_old_ten_chunk_bound`); using the same
+/// `test_legacy_chunks_beyond_old_ten_chunk_bound_survive`); using the same
 /// generous ceiling everywhere removes that trap.
 ///
-/// Both of those functions probe the FILESYSTEM directly (one `stat`/
-/// `remove_file` per candidate id) rather than trusting a manifest, so a
-/// fixed ceiling is safe there: real chunk sets never come close to it, and
-/// an attacker can at most make the probe run to completion (no I/O is
-/// skipped, it always terminates). [`collect_contiguous_chunks`] does NOT
-/// use this — an id-span ceiling on a manifest's own (attacker-writable)
-/// keys rejected legitimate large-file manifests from the adaptive
-/// download path (its chunk size floors at 256 KiB indefinitely rather
-/// than shrinking further), so that scan is bounded by the manifest's
-/// entry COUNT instead (see that function's doc).
+/// That scan probes the FILESYSTEM directly (one `stat` per candidate id,
+/// never a delete — both callers are log-only, #573) rather than trusting
+/// a manifest, so a fixed ceiling is safe there: real chunk sets never come
+/// close to it, and an attacker can at most make the probe run to
+/// completion (no I/O is skipped, it always terminates).
+/// [`collect_contiguous_chunks`] does NOT use this — an id-span ceiling on
+/// a manifest's own (attacker-writable) keys rejected legitimate
+/// large-file manifests from the adaptive download path (its chunk size
+/// floors at 256 KiB indefinitely rather than shrinking further), so that
+/// scan is bounded by the manifest's entry COUNT instead (see that
+/// function's doc).
+///
+/// Only [`collect_contiguous_chunks`] stops early: it walks the manifest's
+/// recorded ids in order and breaks at the first gap or unverifiable chunk,
+/// because contiguity is a real correctness requirement there — you cannot
+/// merge across a hole. [`scan_chunk_set`] never breaks on a missing id: an
+/// interrupted adaptive/resume download completes chunks out of order, so a
+/// holed set (e.g. `resume0`, `resume2`, `resume4`) is the normal case, and
+/// breaking on the first hole would leave the remainder unreported (#568 C1).
 const CHUNK_SCAN_CEILING: u64 = 10_000;
 
 /// The first chunk id that broke a manifest-verified prefix, and both
@@ -196,10 +206,10 @@ struct UnverifiableClaim {
     reason: &'static str,
 }
 
-/// Probe `set` for an unverifiable claim: chunk 0's presence (mirrors the
-/// sentinel [`cleanup_old_chunks`] and [`log_orphaned_resume_chunks`]
-/// already use) so the overwhelmingly common "nothing here" case costs one
-/// metadata call, not a claim per unused `download_id`.
+/// Probe `set` for an unverifiable claim: chunk 0's presence (the same
+/// sentinel [`scan_chunk_set`] gates on) so the overwhelmingly common
+/// "nothing here" case costs one metadata call, not a claim per unused
+/// `download_id`.
 async fn probe_unverifiable_claim(
     set: &ChunkSet,
     parent_dir: &Path,
@@ -216,13 +226,14 @@ async fn probe_unverifiable_claim(
 /// worded according to whether anything ELSE from this same scan is going
 /// to be merged.
 ///
-/// Code-quality review finding: the previous fixed wording ("this download
+/// Code-quality review finding (#675): a fixed wording ("this download
 /// will start fresh. The files are left in place.") was emitted for every
-/// unverifiable set unconditionally — including a legacy set sitting
-/// alongside a verified new-style set that DOES merge (nothing here starts
-/// fresh), and including a legacy set whose files `cleanup_old_chunks`
-/// unconditionally deletes moments later (not "left in place"). The
-/// severity and wording are only correct once the scan knows whether
+/// unverifiable set unconditionally — including one sitting alongside a
+/// verified new-style set that DOES merge, where nothing starts fresh. The
+/// "left in place" half is true for every claim — nothing in this module
+/// deletes a probed set (#573: [`log_legacy_chunks`] and
+/// [`log_orphaned_resume_chunks`] only log) — but the severity and the
+/// fresh-start wording are only correct once the scan knows whether
 /// `all_chunks` ended up empty.
 fn unverifiable_claim_message(claim: &UnverifiableClaim, anything_merged: bool) -> String {
     if anything_merged {
@@ -380,7 +391,30 @@ pub async fn detect_chunk_files(output_path: &Path) -> Option<ChunkInfo> {
 
 /// Merge chunk files into the output file
 ///
-/// Supports both old-style and new-style chunk patterns
+/// Accepts a `ChunkInfo` of either grammar (`download_id: None` for a legacy
+/// `{filename}.part{i}` set, `Some` for new-style), but in production only
+/// new-style sets arrive here: [`detect_chunk_files`] never yields a legacy
+/// set because it has no manifest to verify against (#675). Legacy sets are
+/// discovered and logged by [`log_legacy_chunks`] and are never merged.
+///
+/// # Ownership (#573)
+///
+/// This is the one place in this module that deletes on a probed path, and
+/// it is safe to: it deletes only the chunks it has itself just copied into
+/// `output_path`, from the set [`detect_chunk_files`] selected for this exact
+/// merge — a selection verified against the run's own manifest
+/// (`download_id` + `kind` + per-chunk length, #675), which is the ownership
+/// proof [`log_legacy_chunks`] and [`log_orphaned_resume_chunks`] cannot
+/// obtain for an orphaned set found lying around. On success it also deletes
+/// that manifest (see the end of the function for the `first_bad` condition
+/// under which it must instead survive).
+///
+/// Deletes what it copied, after the merged output is flushed, so a failed
+/// merge leaves every chunk in place (#573 follow-up): copying a chunk and
+/// deleting it immediately, before `flush()`, meant a failure on chunk N
+/// (open/copy, or the flush itself) had already unlinked chunks `0..N` while
+/// their bytes existed only in a truncated, unflushed output — data loss on
+/// the very path meant to be recoverable.
 pub async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo) -> anyhow::Result<u64> {
     use tokio::fs::File;
     use tokio::io::{AsyncWriteExt, BufWriter};
@@ -406,8 +440,10 @@ pub async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo) -> an
     let mut writer = BufWriter::with_capacity(2 * 1024 * 1024, file); // 2 MB buffer
 
     let mut total_size = 0u64;
+    let mut copied_paths = Vec::with_capacity(chunk_count);
 
-    // Merge each chunk in order
+    // Merge each chunk in order — no deletion here; a chunk is only ever
+    // removed once every chunk has been copied AND the output is flushed.
     for (idx, chunk_path) in chunk_info.chunk_paths.iter().enumerate() {
         if !chunk_path.exists() {
             anyhow::bail!("missing chunk file: {}", chunk_path.display());
@@ -436,16 +472,12 @@ pub async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo) -> an
         );
 
         total_size += bytes_copied;
+        copied_paths.push(chunk_path.clone());
 
         // Progress update every 100 chunks
         if (idx + 1) % 100 == 0 || idx == chunk_count - 1 {
             debug!(merged = idx + 1, total = chunk_count; "   Merge progress");
         }
-
-        // Delete chunk file after successful merge
-        tokio::fs::remove_file(chunk_path)
-            .await
-            .with_context(|| format!("failed to remove chunk file {}", chunk_path.display()))?;
     }
 
     anyhow::ensure!(
@@ -459,7 +491,27 @@ pub async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo) -> an
         .await
         .context("failed to flush merged output file")?;
 
-    debug!(chunk_count; "Cleaned up chunk files");
+    // The merge has succeeded and the output is durable on disk from this
+    // process's point of view — now, and only now, remove the chunks it
+    // consumed. A delete failure here does not undo a successful merge, so
+    // it is logged rather than propagated as an error.
+    let mut left_behind = 0usize;
+    for chunk_path in &copied_paths {
+        if let Err(e) = tokio::fs::remove_file(chunk_path).await {
+            left_behind += 1;
+            warn!(
+                "Failed to remove merged chunk file {} (the merged output is complete; \
+                 remove it by hand): {e}",
+                chunk_path.display()
+            );
+        }
+    }
+
+    if left_behind == 0 {
+        debug!(chunk_count; "Cleaned up chunk files");
+    } else {
+        debug!(chunk_count, left_behind; "Merged chunk files; some could not be removed");
+    }
 
     // The manifest is deleted HERE, not from a probed path elsewhere (the
     // #573 pattern this rule exists to avoid: never delete a path this
@@ -486,70 +538,98 @@ pub async fn merge_chunk_files(output_path: &Path, chunk_info: &ChunkInfo) -> an
     Ok(total_size)
 }
 
-/// Clean up legacy-grammar chunks (`{filename}.part{i}`) when they are no
-/// longer going to be used for resume (a complete/oversized/simple-partial
-/// file was found, or new-style chunks were used instead).
+/// Probe `set` for the chunk ids present under `parent_dir`: a chunk-0
+/// sentinel check first, and — only if chunk 0 exists — a hole-tolerant scan
+/// up to [`CHUNK_SCAN_CEILING`] that never breaks on a missing id (an
+/// interrupted download completes chunks out of order, so a holed set is the
+/// normal case — see [`CHUNK_SCAN_CEILING`]'s docs). Read-only.
 ///
-/// Deletes only exact paths computed via [`ChunkSet::path_in`] — never a
-/// directory sweep (`scripts/check-no-dir-sweep-delete.sh`, #558).
+/// Shared by [`log_legacy_chunks`] and [`log_orphaned_resume_chunks`]
+/// (#573): both grammars need the identical sentinel-gated, hole-tolerant
+/// discovery — the two callers differ only in what they log about what they
+/// found (a legacy set has no `download_id` to report; a resume set does),
+/// which is why the logging stays with each caller rather than moving here.
+async fn scan_chunk_set(set: &ChunkSet, parent_dir: &Path) -> Vec<PathBuf> {
+    let sentinel = set.path_in(parent_dir, 0);
+    if tokio::fs::metadata(&sentinel).await.is_err() {
+        return Vec::new();
+    }
+
+    let mut found = vec![sentinel];
+    for chunk_id in 1..CHUNK_SCAN_CEILING {
+        let chunk_path = set.path_in(parent_dir, chunk_id);
+        if tokio::fs::metadata(&chunk_path).await.is_ok() {
+            found.push(chunk_path);
+        }
+    }
+    found
+}
+
+/// Discover legacy-grammar chunks (`{filename}.part{i}`) left behind when
+/// they are no longer going to be used for resume (a complete/oversized/
+/// simple-partial file was found, or new-style chunks were used instead),
+/// and log them for the operator to remove manually. **Never deletes**
+/// (#573).
 ///
-/// # Sentinel gate
+/// # Why this only logs, and never deletes
 ///
-/// This runs on essentially every `detect_resume_point` call (up to 3x per
-/// call — see the branches below), so its cost has to be bounded for the
-/// overwhelmingly common case where there is no legacy chunk set at all.
-/// Chunk id 0 is checked first: a legacy download always writes id 0 first,
-/// so its absence means there is nothing here to clean up, and the rest of
-/// [`CHUNK_SCAN_CEILING`] is skipped entirely rather than attempting up to
-/// 10,000 `remove_file` calls that all resolve to `NotFound`. This mirrors
-/// the sentinel [`log_orphaned_resume_chunks`] already uses for the same
-/// reason.
+/// The legacy grammar carries no `download_id` — it predates power-of-two
+/// chunking, back when only one download could be in flight against a given
+/// output path at a time. That assumption no longer holds: a same-named
+/// `.partN` file next to today's output path may belong to a second,
+/// concurrently-running rdlp process (the same reasoning
+/// [`log_orphaned_resume_chunks`] applies to the resume grammar, and the
+/// same defect class #558 was about, one crate over). A probed path proves
+/// only that a file exists there, never who is writing it. Separately, no
+/// shipping writer produces this grammar any more (see the module docs), so
+/// at most this is an old build's leftover — worth surfacing to the
+/// operator, not worth risking a live peer's file to reclaim.
 ///
-/// When chunk 0 IS present, the full ceiling is scanned without breaking on
-/// a hole: an interrupted adaptive/resume download completes chunks out of
-/// order, so a holed set (e.g. `part0`, `part2`, `part5`) is the normal case,
-/// and breaking on the first gap would leak the remainder (#568 C1).
+/// Deletion of a chunk set stays legitimate exactly where ownership can be
+/// proven: [`merge_chunk_files`] deletes only the chunks it has just
+/// consumed into the output it created.
+///
+/// # Sentinel gate and hole tolerance
+///
+/// Delegates the scan to [`scan_chunk_set`] (see its docs for the sentinel
+/// short-circuit and hole-tolerance rationale, shared verbatim with
+/// [`log_orphaned_resume_chunks`]). This runs on essentially every
+/// `detect_resume_point` call (up to 3x per call — see the branches below),
+/// so bounding the common "nothing here" case to a single syscall matters.
 ///
 /// Narrow limitation, shared with `log_orphaned_resume_chunks`: a set that
 /// has lost chunk 0 specifically (to some other partial cleanup) is not
-/// cleaned by this pass. That trade is acceptable — it bounds the cost of
-/// the common "nothing here" case to a single syscall, and a legacy chunk
-/// set missing its first chunk is itself an unusual, already-degraded state.
-async fn cleanup_old_chunks(output_path: &Path) {
+/// discovered by this pass.
+///
+/// Returns every discovered chunk path, so callers/tests can assert on
+/// discovery independently of the (absent) deletion side effect.
+pub async fn log_legacy_chunks(output_path: &Path) -> Vec<PathBuf> {
     let Ok(set) = ChunkSet::legacy(output_path) else {
-        return;
+        return Vec::new();
     };
     let parent_dir = output_path.parent().unwrap_or_else(|| Path::new("."));
+    let found = scan_chunk_set(&set, parent_dir).await;
 
-    let mut deleted = 0;
-    let sentinel = set.path_in(parent_dir, 0);
-    match tokio::fs::remove_file(&sentinel).await {
-        Ok(()) => deleted += 1,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return,
-        Err(e) => debug!("Failed to remove legacy chunk {}: {e}", sentinel.display()),
-    }
-
-    for chunk_id in 1..CHUNK_SCAN_CEILING {
-        let chunk_path = set.path_in(parent_dir, chunk_id);
-        // Attempt the delete directly instead of probing with a synchronous
-        // `exists()` first: `NotFound` tells us exactly what the probe
-        // would have, in one syscall instead of two, without blocking the
-        // async executor thread (#568 C4). Never break on a miss: a legacy
-        // set can be holed same as any other grammar, and the scan bound is
-        // [`CHUNK_SCAN_CEILING`], not "first gap".
-        match tokio::fs::remove_file(&chunk_path).await {
-            Ok(()) => deleted += 1,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => debug!(
-                "Failed to remove legacy chunk {}: {e}",
-                chunk_path.display()
-            ),
+    if !found.is_empty() {
+        warn!(
+            chunk_count = found.len();
+            "Found {} legacy-style chunk file(s) next to {}: not deleting \
+             automatically — the legacy grammar carries no download_id, so a \
+             same-named file may belong to another rdlp process, and no \
+             shipping writer produces this grammar any more, so at most \
+             this is an old build's leftover. Remove '{}.part*' manually \
+             once you've confirmed no other rdlp process is using this \
+             output path.",
+            found.len(),
+            output_path.display(),
+            output_path.display(),
+        );
+        for path in &found {
+            debug!("  Found legacy chunk: {}", path.display());
         }
     }
 
-    if deleted > 0 {
-        debug!(deleted; "Cleaned up legacy-style chunk files");
-    }
+    found
 }
 
 /// Discover orphaned resume-kind chunk sets (`{filename}.{download_id}.resume{i}`)
@@ -611,17 +691,9 @@ pub async fn log_orphaned_resume_chunks(output_path: &Path) -> Vec<PathBuf> {
             break;
         };
 
-        let sentinel = set.path_in(parent_dir, 0);
-        if tokio::fs::metadata(&sentinel).await.is_err() {
+        let found_for_id = scan_chunk_set(&set, parent_dir).await;
+        if found_for_id.is_empty() {
             continue;
-        }
-
-        let mut found_for_id = vec![sentinel];
-        for chunk_id in 1..CHUNK_SCAN_CEILING {
-            let chunk_path = set.path_in(parent_dir, chunk_id);
-            if tokio::fs::metadata(&chunk_path).await.is_ok() {
-                found_for_id.push(chunk_path);
-            }
         }
 
         warn!(
@@ -648,11 +720,17 @@ impl Orchestrator {
     /// Checks for:
     /// 1. Existing complete or partial download file
     /// 2. Interrupted parallel download chunks:
-    ///    - New-style (Phase 2.5+): `{filename}.{downloadid}.part{i}`
-    ///    - Old-style (Phase 2): `{filename}.part{i}`
+    ///    - New-style (Phase 2.5+): `{filename}.{downloadid}.part{i}`,
+    ///      merged only when a matching chunk manifest verifies them (#675)
+    ///    - Old-style (Phase 2): `{filename}.part{i}`, discovered and
+    ///      logged only — the legacy grammar has no manifest and is never
+    ///      merged (#675)
     ///
-    /// Prioritizes new-style chunks (highest download ID) over old-style.
-    /// Automatically merges and cleans up chunk files.
+    /// Of the verified new-style sets, the highest download ID wins.
+    /// Automatically merges the chosen chunk set (deleting only the chunks
+    /// it consumed) and logs — but never deletes — any other chunk set
+    /// found alongside it; a probed path proves existence, never ownership
+    /// (#573).
     ///
     /// Returns the byte offset to resume from (0 for fresh download)
     #[instrument(skip(self), fields(path = %output_path.display()))]
@@ -663,8 +741,8 @@ impl Orchestrator {
     ) -> Result<u64> {
         // 0. Discover (and log-only) any orphaned resume-kind chunk sets.
         // Unconditional and first, so every branch below sees it run — not
-        // just the branches that also happen to run legacy cleanup (#568 C3:
-        // the old call was nested inside `cleanup_old_chunks`/one `else`
+        // just the branches that also happen to run legacy discovery (#568
+        // C3: the old call was nested inside `cleanup_old_chunks`/one `else`
         // arm, so the legacy-chunk-present branch never reached it).
         log_orphaned_resume_chunks(output_path).await;
 
@@ -680,8 +758,8 @@ impl Orchestrator {
                         #[allow(clippy::cast_precision_loss)] // display-only MB value
                         let mb = size as f64 / (1024.0 * 1024.0);
                         debug!("File already downloaded ({mb:.1} MB), skipping...");
-                        // Clean up any orphaned chunks
-                        cleanup_old_chunks(output_path).await;
+                        // Discover (log-only) any orphaned legacy chunks
+                        log_legacy_chunks(output_path).await;
                         return Ok(size);
                     } else if size > expected {
                         #[allow(clippy::cast_precision_loss)] // display-only MB values
@@ -693,15 +771,15 @@ impl Orchestrator {
                             "Partial file is larger than expected ({size_mb:.1} MB > {exp_mb:.1} MB), starting fresh..."
                         );
                         tokio::fs::remove_file(output_path).await.ok();
-                        cleanup_old_chunks(output_path).await;
+                        log_legacy_chunks(output_path).await;
                         return Ok(0);
                     }
                 }
                 #[allow(clippy::cast_precision_loss)] // display-only MB value
                 let size_mb = size as f64 / (1024.0 * 1024.0);
                 debug!("Found partial download ({size_mb:.1} MB), resuming...");
-                // Clean up any orphaned chunks from failed parallel attempts
-                cleanup_old_chunks(output_path).await;
+                // Discover (log-only) any orphaned chunks from failed parallel attempts
+                log_legacy_chunks(output_path).await;
                 return Ok(size);
             }
         }
@@ -724,9 +802,10 @@ impl Orchestrator {
                 chunk_info.stranded_beyond_gap,
             );
 
-            // If using new-style chunks, clean up any old-style chunks first
+            // If using new-style chunks, discover (log-only) any old-style
+            // chunks left alongside them
             if chunk_info.download_id.is_some() {
-                cleanup_old_chunks(output_path).await;
+                log_legacy_chunks(output_path).await;
             }
 
             // Merge chunks into the main file. `merge_chunk_files` deletes
@@ -745,10 +824,48 @@ impl Orchestrator {
                     Ok(size)
                 }
                 Err(e) => {
-                    warn!("Failed to merge chunks: {e}. Starting fresh.");
-                    // Clean up partial chunks
+                    // #573: a chunk this pass had not yet consumed carries no
+                    // stronger ownership proof than having just been probed
+                    // once — a set that failed to merge fails the same way
+                    // on retry, so deleting it buys nothing and risks a
+                    // concurrent writer's file. Log, never delete.
+                    //
+                    // `merge_chunk_files` only deletes a chunk after the
+                    // merged output is flushed, so on failure every chunk it
+                    // was given should still be on disk — but stat each
+                    // rather than trusting the full `chunk_paths` list, since
+                    // that's a probe, not a guarantee (e.g. a concurrent
+                    // process racing the same paths). Whether `output_path`
+                    // itself was left behind partially written depends on
+                    // *where* the merge failed (nothing was written if
+                    // `File::create` itself failed), so check rather than
+                    // assert it.
+                    let mut remaining = Vec::new();
                     for chunk_path in &chunk_info.chunk_paths {
-                        let _ = tokio::fs::remove_file(chunk_path).await;
+                        match tokio::fs::metadata(chunk_path).await {
+                            Ok(_) => remaining.push(chunk_path.clone()),
+                            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+                            Err(err) => {
+                                debug!("Failed to stat chunk {}: {err}", chunk_path.display());
+                            }
+                        }
+                    }
+                    let output_note = if output_path.exists() {
+                        format!(
+                            "any partially written {} was left in place; ",
+                            output_path.display()
+                        )
+                    } else {
+                        String::new()
+                    };
+                    warn!(
+                        chunk_count = remaining.len();
+                        "Failed to merge chunks: {e}. Starting fresh; {output_note}not \
+                         deleting the {} remaining chunk file(s).",
+                        remaining.len(),
+                    );
+                    for chunk_path in &remaining {
+                        debug!("  Leaving chunk file in place: {}", chunk_path.display());
                     }
                     Ok(0)
                 }
