@@ -164,16 +164,16 @@ impl Orchestrator {
 
                     // Detect resume point against the part name (recalculate on
                     // retry for partial HLS).
-                    let resume_offset = self.detect_resume_point(&part, format.filesize).await?;
-
-                    // Check if file is already complete: commit .rdlp-part -> clean.
-                    if let Some(expected_size) = format.filesize
-                        && resume_offset == expected_size
-                    {
-                        debug!("File already complete, skipping");
-                        crate::orchestrator::naming::finalize_part(&part, path).await?;
-                        return Ok(Some(path.clone()));
-                    }
+                    let resume_offset = match self.resolve_resume(&part, format.filesize).await? {
+                        crate::orchestrator::resume::ResumeOutcome::Complete { .. } => {
+                            // Already complete: commit .rdlp-part -> clean.
+                            debug!("File already complete, skipping");
+                            crate::orchestrator::naming::finalize_part(&part, path).await?;
+                            return Ok(Some(path.clone()));
+                        }
+                        crate::orchestrator::resume::ResumeOutcome::Resume(offset) => offset,
+                        crate::orchestrator::resume::ResumeOutcome::Fresh => 0,
+                    };
 
                     // Download with CDN fallback
                     match self

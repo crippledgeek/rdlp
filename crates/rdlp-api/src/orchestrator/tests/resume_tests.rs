@@ -10,7 +10,7 @@ use rdlp_downloader::{ChunkKind, ChunkManifest, ChunkSet};
 
 /// Write a chunk-completion manifest (#675) for a new-style Fresh chunk set,
 /// standing in for what the real parallel downloader records as each chunk
-/// completes. Every test that expects `detect_resume_point` to merge a
+/// completes. Every test that expects `resolve_resume` to merge a
 /// new-style chunk set now needs one — without it the set is unverifiable
 /// and is left in place rather than merged (#675's policy change).
 ///
@@ -253,9 +253,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, None)
+            .resolve_resume(&output_path, None)
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         assert_eq!(resume_offset, 0, "unverifiable legacy chunks start fresh");
         assert!(!output_path.exists());
@@ -299,9 +300,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, None)
+            .resolve_resume(&output_path, None)
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         // Should have merged the 5 chunks
         assert_eq!(resume_offset, 1280);
@@ -362,9 +364,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, None)
+            .resolve_resume(&output_path, None)
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         // Should have merged the new-style chunks (1280 bytes), not old-style
         assert_eq!(resume_offset, 1280);
@@ -423,9 +426,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, Some(4096))
+            .resolve_resume(&output_path, Some(4096))
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         assert_eq!(resume_offset, 4096);
         for i in 0..12 {
@@ -471,9 +475,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, Some(4096))
+            .resolve_resume(&output_path, Some(4096))
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         assert_eq!(resume_offset, 4096);
         assert!(
@@ -546,9 +551,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, Some(1024))
+            .resolve_resume(&output_path, Some(1024))
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         assert_eq!(resume_offset, 1024);
         assert!(
@@ -584,9 +590,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, None)
+            .resolve_resume(&output_path, None)
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         assert_eq!(resume_offset, 1000);
         // Never deleted: a live concurrent process could own this download_id.
@@ -608,28 +615,29 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, None)
+            .resolve_resume(&output_path, None)
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         assert_eq!(resume_offset, 0);
         assert!(temp_dir.path().join("video.mp4.5.resume0").exists());
     }
 
-    /// #568 C3: when `detect_chunk_files` resolves to the LEGACY set
-    /// (`download_id: None`), the old code's `if
-    /// chunk_info.download_id.is_some()` guard skipped the resume-chunk pass
-    /// entirely (it was nested inside `cleanup_old_chunks`, only called from
-    /// that one `if` arm). Orphaned resume chunks alongside a legacy chunk
-    /// set must survive (not be silently unreachable) exactly as they do on
-    /// every other branch, and the legacy merge must still proceed normally.
+    /// #568 C3: orphaned resume chunks alongside a legacy chunk set must
+    /// survive exactly as they do on every other arm. Before #568 the
+    /// resume-chunk pass was nested inside a legacy-cleanup helper that ran
+    /// from only one `if` arm, so this layout never reached it. Under #675
+    /// the legacy set has no manifest, so it is never merged: `resolve_resume`
+    /// resolves to `Fresh` and both the legacy chunks and the orphaned resume
+    /// chunk are left in place.
     #[tokio::test]
     async fn test_orphaned_resume_chunks_survive_legacy_chunk_branch() {
         let temp_dir = tempfile::tempdir().unwrap();
         let output_path = temp_dir.path().join("video.mp4");
 
-        // Legacy (old-style) fresh chunks -- no main file, so this is the
-        // `detect_chunk_files` branch with `download_id: None`.
+        // Legacy (old-style) chunks and no main file: `detect_chunk_files`
+        // records them as an unverifiable claim, never a mergeable set.
         tokio::fs::write(temp_dir.path().join("video.mp4.part0"), &[1u8; 512])
             .await
             .unwrap();
@@ -644,9 +652,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, None)
+            .resolve_resume(&output_path, None)
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         // #675: the legacy set can never have a manifest, so it is
         // unverifiable and is never merged — left in place, not "merged
@@ -753,9 +762,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, None)
+            .resolve_resume(&output_path, None)
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         // Should have merged the download ID 2 chunks (3 x 512 = 1536 bytes)
         assert_eq!(resume_offset, 1536);
@@ -804,9 +814,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, Some(2048))
+            .resolve_resume(&output_path, Some(2048))
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         // Should detect file is complete
         assert_eq!(resume_offset, 2048);
@@ -817,7 +828,7 @@ mod resume_compatibility_tests {
     }
 
     /// #573 acceptance (a): a concurrent writer's legacy chunk file must
-    /// survive `detect_resume_point` on every branch that could otherwise
+    /// survive `resolve_resume` on every arm that could otherwise
     /// have deleted it. This covers the PARTIAL-FILE branch specifically —
     /// the complete-file and new-style-chunks-present branches are covered
     /// by the tests above and by `test_prioritize_new_style_over_old_style`.
@@ -838,9 +849,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, None)
+            .resolve_resume(&output_path, None)
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         assert_eq!(resume_offset, 500);
         assert!(
@@ -850,7 +862,7 @@ mod resume_compatibility_tests {
     }
 
     /// #573 acceptance (b): when `merge_chunk_files` fails partway through
-    /// `detect_resume_point`'s fallback arm, the chunks it had not yet
+    /// `resolve_resume`'s `MergeChunks` arm, the chunks it had not yet
     /// consumed carry no stronger ownership proof than having just been read
     /// once — a set that fails to merge will fail the same way on retry, so
     /// deleting them buys nothing and risks a concurrent writer's file. This
@@ -860,8 +872,8 @@ mod resume_compatibility_tests {
     /// `write_chunk_manifest`) so `detect_chunk_files` actually selects it
     /// for merging. A legacy `video.mp4.part{i}` set would never reach
     /// `merge_chunk_files` at all under #675 — it becomes an
-    /// `UnverifiableClaim` and `detect_resume_point` returns `Ok(0)` from
-    /// its `else` arm with nothing touched, which made an earlier version of
+    /// `UnverifiableClaim` and `resolve_resume` returns `Fresh` from
+    /// its `Fresh` arm with nothing touched, which made an earlier version of
     /// this test pass without exercising the failure path (merge review of
     /// PR #744, finding F1). The `detect_chunk_files` assertion below is the
     /// guard against that regression: it fails if the set is ever not
@@ -899,7 +911,7 @@ mod resume_compatibility_tests {
 
         // Anti-vacuity guard: the set must be selected for merging (a
         // `stat` needs no read permission, so chunk1 still verifies here);
-        // otherwise the `Ok(0)` below would come from the "nothing to
+        // otherwise the `Fresh` below would come from the "nothing to
         // merge" arm and prove nothing about the failure path.
         let detected = resume::detect_chunk_files(&output_path).await;
         let restore = || {
@@ -918,16 +930,17 @@ mod resume_compatibility_tests {
         }
 
         let orchestrator = create_test_orchestrator();
-        let result = orchestrator.detect_resume_point(&output_path, None).await;
+        let result = orchestrator.resolve_resume(&output_path, None).await;
 
         // Restore permissions before any assertion can panic and skip
         // cleanup of the temp dir. Ignore the error: against a deleting
         // (mutated) merge, chunk1 may no longer exist at this point.
         restore();
 
-        let resume_offset = result.unwrap();
+        let outcome = result.unwrap();
         assert_eq!(
-            resume_offset, 0,
+            outcome,
+            resume::ResumeOutcome::Fresh,
             "a failed merge resets to a fresh download"
         );
         assert!(
@@ -947,6 +960,58 @@ mod resume_compatibility_tests {
             manifest_path.exists(),
             "the manifest is only deleted on a successful merge, so the failed \
              attempt can be re-scanned (#675)"
+        );
+    }
+
+    /// A failed merge must not leave `merge_chunk_files`'s partially written
+    /// `output_path` behind: the next run's `plan_resume` would see a
+    /// non-empty main file and take the `Resume(size)` arm, stranding the
+    /// still-valid chunks and their manifest forever. The file is provably
+    /// this arm's own — the chunk arm is only reached when no non-empty main
+    /// file existed, and `merge_chunk_files` `File::create`d it — so removing
+    /// it is the one deletion here with an ownership proof (#573 keeps every
+    /// chunk and the manifest in place, as asserted by
+    /// `test_merge_failure_leaves_chunks_in_place`).
+    ///
+    /// Same fixture as that test: manifest-backed set, chunk 1 unreadable.
+    /// RED by mutation: dropping the `remove_file` of `output_path` in the
+    /// `Err` arm makes the second `plan_resume` return `Resume(64)`.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_merge_failure_removes_partial_output_so_chunks_are_rediscovered() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+
+        let set = ChunkSet::for_attempt("video.mp4", 0, ChunkKind::Fresh).unwrap();
+        let chunk0 = set.path_in(temp_dir.path(), 0);
+        let chunk1 = set.path_in(temp_dir.path(), 1);
+        tokio::fs::write(&chunk0, &[1u8; 64]).await.unwrap();
+        tokio::fs::write(&chunk1, &[2u8; 64]).await.unwrap();
+        write_chunk_manifest(&set, temp_dir.path(), &[64, 64]).await;
+
+        std::fs::set_permissions(&chunk1, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let orchestrator = create_test_orchestrator();
+        let first = orchestrator.resolve_resume(&output_path, None).await;
+        let second = orchestrator.plan_resume(&output_path, None).await;
+
+        // Restore before any assertion can panic and skip temp-dir cleanup.
+        let _ = std::fs::set_permissions(&chunk1, std::fs::Permissions::from_mode(0o644));
+
+        assert_eq!(first.unwrap(), resume::ResumeOutcome::Fresh);
+        assert!(
+            !output_path.exists(),
+            "the partially written output of a failed merge must be removed"
+        );
+        assert!(
+            matches!(second, resume::ResumePlan::MergeChunks(_)),
+            "the next run must re-discover the manifest-backed chunk set, got {second:?}"
+        );
+        assert!(
+            chunk0.exists() && chunk1.exists(),
+            "chunks stay in place (#573)"
         );
     }
 
@@ -973,9 +1038,10 @@ mod resume_compatibility_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, None)
+            .resolve_resume(&output_path, None)
             .await
-            .unwrap();
+            .unwrap()
+            .size();
 
         // Should have merged all 100 chunks (100 x 128 = 12800 bytes)
         assert_eq!(resume_offset, 12800);
@@ -1053,9 +1119,10 @@ mod issue_675_chunk_integrity_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, None)
+            .resolve_resume(&output_path, None)
             .await
-            .unwrap();
+            .unwrap()
+            .size();
         assert_eq!(resume_offset, 256, "only chunk 0 was merged");
         assert!(
             temp_dir.path().join("video.mp4.0.part1").exists(),
@@ -1115,9 +1182,10 @@ mod issue_675_chunk_integrity_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, None)
+            .resolve_resume(&output_path, None)
             .await
-            .unwrap();
+            .unwrap()
+            .size();
         assert_eq!(resume_offset, 192, "merge stops at the verified prefix");
         assert!(temp_dir.path().join("video.mp4.0.part4").exists());
         assert!(temp_dir.path().join("video.mp4.0.part5").exists());
@@ -1167,7 +1235,7 @@ mod issue_675_chunk_integrity_tests {
     /// file. Exercises `merge_chunk_files` directly with a hand-built
     /// `ChunkInfo`: `detect_chunk_files` always derives `total_size` from
     /// the very lengths it verified, so this disagreement cannot be staged
-    /// through `detect_resume_point` — its fallback to `Ok(0)` on a merge
+    /// through `resolve_resume` — its fallback to `Fresh` on a merge
     /// failure is covered by `test_merge_failure_leaves_chunks_in_place`.
     #[tokio::test]
     async fn merge_total_mismatch_against_recorded_sum_fails_the_merge() {
@@ -1226,9 +1294,10 @@ mod issue_675_chunk_integrity_tests {
 
         let orchestrator = create_test_orchestrator();
         let resume_offset = orchestrator
-            .detect_resume_point(&output_path, None)
+            .resolve_resume(&output_path, None)
             .await
-            .unwrap();
+            .unwrap()
+            .size();
         assert_eq!(resume_offset, 0);
         assert!(temp_dir.path().join("video.mp4.0.part0").exists());
         assert!(temp_dir.path().join("video.mp4.0.part1").exists());
@@ -1398,5 +1467,246 @@ mod issue_675_chunk_integrity_tests {
             })
         );
         assert_eq!(scanned.stranded_beyond_gap, 1);
+    }
+}
+
+/// #561: `plan_resume`/`resolve_resume` CQS split. `plan_resume` must be a
+/// pure query and `resolve_resume` must never silently delete data it can't
+/// verify against an (unverified, #674) extractor-reported size.
+///
+/// The explicit `#[cfg(test)]` below is redundant (this whole file is only
+/// ever compiled under `#[cfg(test)] mod tests;` in `orchestrator/mod.rs`),
+/// but `scripts/check-no-dir-sweep-delete.sh` textually treats everything
+/// before a file's first literal `#[cfg(test)]` as production code; without
+/// this marker, this module itself trips the gate: it contains both a
+/// `read_dir` call (the survivor assertion in
+/// `resolve_resume_never_deletes_an_oversized_file`) and a `remove_file`
+/// call (the read-only-dir write probe in
+/// `resolve_resume_propagates_a_failed_set_aside`), and the gate cannot tell
+/// that neither deletes what the other enumerated.
+#[cfg(test)]
+mod cqs_resume_split_tests {
+    use super::*;
+    use crate::orchestrator::resume::ResumeOutcome;
+
+    /// Negative (the issue's own repro): a COMPLETE file whose reported
+    /// `expected_size` under-counts it (4096 bytes on disk, 2048 reported)
+    /// must survive `resolve_resume` — RED against the pre-#561 code, which
+    /// deleted it via `remove_file(..).ok()`.
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // std::fs helpers in test fixtures — per clippy.toml policy (c)
+    async fn resolve_resume_never_deletes_an_oversized_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+        tokio::fs::write(&output_path, vec![9u8; 4096])
+            .await
+            .unwrap();
+
+        let orchestrator = create_test_orchestrator();
+        let outcome = orchestrator
+            .resolve_resume(&output_path, Some(2048))
+            .await
+            .unwrap();
+
+        assert_eq!(outcome, ResumeOutcome::Fresh);
+
+        // The bytes must still exist SOMEWHERE under the directory — set
+        // aside, not deleted.
+        let mut entries: Vec<_> = std::fs::read_dir(temp_dir.path())
+            .unwrap()
+            .filter_map(std::result::Result::ok)
+            .map(|e| e.path())
+            .collect();
+        assert_eq!(
+            entries.len(),
+            1,
+            "exactly one file must remain: {entries:?}"
+        );
+        let survivor = entries.remove(0);
+        assert_ne!(
+            survivor, output_path,
+            "the survivor must have been renamed off the original name"
+        );
+        assert_eq!(
+            tokio::fs::read(&survivor).await.unwrap().len(),
+            4096,
+            "the set-aside file must retain the original bytes"
+        );
+
+        // Pin the naming invariant, not just "some file survived": the
+        // set-aside must use the `.rdlp-bak-` marker specifically (invisible
+        // to `TempRegistry::cleanup_stale`), never `.rdlp-tmp-` (which that
+        // sweep marker-scans and would delete on the next stale-cleanup
+        // pass — see `naming::bak_sidecar_path`).
+        let survivor_name = survivor.file_name().unwrap().to_str().unwrap();
+        assert!(
+            survivor_name.contains(crate::orchestrator::naming::BAK_MARKER),
+            "survivor must carry the .rdlp-bak- marker, got: {survivor_name}"
+        );
+        assert!(
+            !survivor_name.contains(".rdlp-tmp-"),
+            "survivor must NOT carry the .rdlp-tmp- marker \
+             (TempRegistry::cleanup_stale would delete it), got: {survivor_name}"
+        );
+    }
+
+    /// `plan_resume` performs no mutation: legacy chunks + an oversized main
+    /// file must all still be present on disk after the call. RED against
+    /// the pre-#561 `detect_resume_point`, which deleted the oversized file
+    /// and the legacy chunks as part of computing the answer.
+    #[tokio::test]
+    async fn plan_resume_never_mutates_the_filesystem() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+        tokio::fs::write(&output_path, vec![9u8; 4096])
+            .await
+            .unwrap();
+        tokio::fs::write(temp_dir.path().join("video.mp4.part0"), &[1u8; 64])
+            .await
+            .unwrap();
+
+        let orchestrator = create_test_orchestrator();
+        let _plan = orchestrator.plan_resume(&output_path, Some(2048)).await;
+
+        assert!(
+            output_path.exists(),
+            "plan_resume must not delete the main file"
+        );
+        assert!(
+            temp_dir.path().join("video.mp4.part0").exists(),
+            "plan_resume must not delete legacy chunks"
+        );
+    }
+
+    /// A failed set-aside must surface as `Err`, never silently fall back to
+    /// `Fresh` — RED against the pre-#561 `.ok()`. Making the containing
+    /// directory read-only forces the rename underlying
+    /// `set_aside_oversized` to fail with a permission error.
+    ///
+    /// Unix-only: mode-bit permissions are a POSIX concept, and
+    /// `PermissionsExt::set_mode` doesn't exist on Windows.
+    #[cfg(unix)]
+    #[tokio::test]
+    #[allow(clippy::disallowed_methods)] // std::fs helpers in test fixtures — per clippy.toml policy (c)
+    async fn resolve_resume_propagates_a_failed_set_aside() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+        std::fs::write(&output_path, vec![9u8; 4096]).unwrap();
+
+        let mut perms = std::fs::metadata(temp_dir.path()).unwrap().permissions();
+        perms.set_mode(0o555); // read + execute only: rename needs write on the dir
+        std::fs::set_permissions(temp_dir.path(), perms.clone()).unwrap();
+
+        // Mode bits are advisory to a privileged process: CAP_DAC_OVERRIDE
+        // (i.e. running as root) bypasses the read-only dir above, which
+        // would make the assertion below vacuous. Rather than trust an env
+        // var or add a uid syscall dependency, probe directly — attempt a
+        // write to the dir we just locked down; if it succeeds, permissions
+        // aren't actually being enforced here and the test can't say anything.
+        let probe = temp_dir.path().join(".write-probe");
+        let permissions_enforced = std::fs::write(&probe, b"x").is_err();
+        let _ = std::fs::remove_file(&probe);
+
+        if !permissions_enforced {
+            perms.set_mode(0o755);
+            std::fs::set_permissions(temp_dir.path(), perms).unwrap();
+            eprintln!(
+                "skipping resolve_resume_propagates_a_failed_set_aside: \
+                 write succeeded through a read-only dir (running as root?) — \
+                 the permission-denial this test relies on isn't being enforced"
+            );
+            return;
+        }
+
+        let orchestrator = create_test_orchestrator();
+        let result = orchestrator.resolve_resume(&output_path, Some(2048)).await;
+
+        // Restore write permission before the TempDir's Drop tries to clean up.
+        perms.set_mode(0o755);
+        std::fs::set_permissions(temp_dir.path(), perms).unwrap();
+
+        assert!(
+            result.is_err(),
+            "a failed set-aside rename must propagate as Err, not silently become Fresh"
+        );
+    }
+
+    /// The `state/mod.rs` / `playlist/episode.rs` mapping (Complete / Resume
+    /// / Fresh) now lives once, inside `resolve_resume` itself.
+    #[tokio::test]
+    async fn resolve_resume_maps_complete_resume_and_fresh() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let orchestrator = create_test_orchestrator();
+
+        let complete_path = temp_dir.path().join("complete.mp4");
+        tokio::fs::write(&complete_path, vec![1u8; 100])
+            .await
+            .unwrap();
+        assert_eq!(
+            orchestrator
+                .resolve_resume(&complete_path, Some(100))
+                .await
+                .unwrap(),
+            ResumeOutcome::Complete { size: 100 }
+        );
+
+        let partial_path = temp_dir.path().join("partial.mp4");
+        tokio::fs::write(&partial_path, vec![1u8; 50])
+            .await
+            .unwrap();
+        assert_eq!(
+            orchestrator
+                .resolve_resume(&partial_path, Some(100))
+                .await
+                .unwrap(),
+            ResumeOutcome::Resume(50)
+        );
+
+        let fresh_path = temp_dir.path().join("fresh.mp4");
+        assert_eq!(
+            orchestrator
+                .resolve_resume(&fresh_path, Some(100))
+                .await
+                .unwrap(),
+            ResumeOutcome::Fresh
+        );
+    }
+
+    /// #561 spec-review MEDIUM: a chunk set whose merged total equals
+    /// `expected_size` must finalize as `Complete`, not `Resume(expected)`
+    /// (which would ask the downloader to resume from EOF and never call
+    /// `finalize_part`).
+    ///
+    /// The set is manifest-backed new-style (`video.mp4.0.part{0,1}` plus
+    /// `write_chunk_manifest`) so `detect_chunk_files` actually selects it:
+    /// a legacy `video.mp4.part{i}` set is never merged under #675 and would
+    /// resolve to `Fresh` without exercising the post-merge mapping at all.
+    #[tokio::test]
+    async fn resolve_resume_completes_when_merged_total_matches_expected() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let output_path = temp_dir.path().join("video.mp4");
+
+        let set = ChunkSet::for_attempt("video.mp4", 0, ChunkKind::Fresh).unwrap();
+        tokio::fs::write(set.path_in(temp_dir.path(), 0), &[1u8; 1024])
+            .await
+            .unwrap();
+        tokio::fs::write(set.path_in(temp_dir.path(), 1), &[2u8; 1024])
+            .await
+            .unwrap();
+        write_chunk_manifest(&set, temp_dir.path(), &[1024, 1024]).await;
+
+        let orchestrator = create_test_orchestrator();
+        let outcome = orchestrator
+            .resolve_resume(&output_path, Some(2048))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            outcome,
+            ResumeOutcome::Complete { size: 2048 },
+            "a merged total equal to expected_size must be Complete, not Resume(expected)"
+        );
     }
 }
