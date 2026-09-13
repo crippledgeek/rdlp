@@ -265,7 +265,6 @@ fn search_json_no_match_returns_none() {
 
 #[tokio::test]
 async fn extract_m3u8_returns_formats_via_fixture() {
-    use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
     use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
     use std::sync::Arc;
 
@@ -370,7 +369,6 @@ fn empty_fetch() -> crate::bindings::rdlp::plugin::host_extract_helpers::FetchOp
 /// EXPECTED TO FAIL against the Task-4 stub (returns empty formats vec).
 #[tokio::test]
 async fn extract_mpd_returns_formats_via_fixture() {
-    use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
     use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
     use std::sync::Arc;
 
@@ -453,8 +451,6 @@ async fn extract_mpd_returns_formats_via_fixture() {
 /// implementation to check for a missing `FetchCtx` and swallow the error.
 #[tokio::test]
 async fn extract_mpd_non_fatal_swallows_fetch_failure() {
-    use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
-
     let mut c = ctx();
     c.fetch = None;
     let r = c
@@ -475,8 +471,6 @@ async fn extract_mpd_non_fatal_swallows_fetch_failure() {
 /// EXPECTED TO FAIL against the Task-4 stub (stub returns Ok, not Err).
 #[tokio::test]
 async fn extract_mpd_fatal_propagates_fetch_failure() {
-    use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
-
     let mut c = ctx();
     c.fetch = None;
     let err = c
@@ -500,7 +494,6 @@ async fn extract_mpd_fatal_propagates_fetch_failure() {
 /// EXPECTED TO FAIL against the Task-4 stub (stub returns Ok, not Err).
 #[tokio::test]
 async fn extract_mpd_dynamic_mpd_returns_fetch_error() {
-    use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
     use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
     use std::sync::Arc;
 
@@ -537,7 +530,6 @@ async fn extract_mpd_dynamic_mpd_returns_fetch_error() {
 /// has no `ContentProtection`. The extraction must drop the video and return only the audio.
 #[tokio::test]
 async fn extract_mpd_drm_protected_reps_are_dropped() {
-    use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
     use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
     use std::sync::Arc;
 
@@ -574,7 +566,6 @@ async fn extract_mpd_drm_protected_reps_are_dropped() {
 /// no `ok_bytes` variant is needed.
 #[tokio::test]
 async fn extract_mpd_invalid_utf8_returns_fetch_error() {
-    use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
     use crate::bindings::rdlp::plugin::host_fetch::FetchError;
     use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
     use std::sync::Arc;
@@ -609,7 +600,6 @@ async fn extract_mpd_invalid_utf8_returns_fetch_error() {
 /// EXPECTED TO FAIL against the Task-4 stub (stub returns Ok, not Err).
 #[tokio::test]
 async fn extract_mpd_unparseable_xml_returns_fetch_error() {
-    use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
     use crate::bindings::rdlp::plugin::host_fetch::FetchError;
     use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
     use std::sync::Arc;
@@ -996,7 +986,7 @@ const WITH_TEXT_TRACKS_MPD: &str =
 
 #[tokio::test]
 async fn extract_mpd_returns_subtitles_via_fixture() {
-    use crate::bindings::rdlp::plugin::host_extract_helpers::{ExtractHelpersSubtitle, Host as _};
+    use crate::bindings::rdlp::plugin::host_extract_helpers::ExtractHelpersSubtitle;
     use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
     use std::sync::Arc;
 
