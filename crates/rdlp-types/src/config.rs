@@ -312,6 +312,16 @@ pub struct Config {
     /// Quiet mode (minimal output)
     pub quiet: bool,
 
+    /// Whether to draw the download/post-processing progress bar.
+    ///
+    /// `None` (the default, and an absent `progress` key) derives the answer
+    /// from `quiet`; `Some` is an explicit operator choice that wins over
+    /// `quiet` in both directions. Read it through [`Config::show_progress`]
+    /// — this field exists so a config key and `--no-progress` can disable
+    /// the bar while ordinary log output continues (#587); the earlier
+    /// write-only `progress: bool` was removed in #583 for never being read.
+    pub progress: Option<bool>,
+
     /// Verbose mode (detailed output)
     pub verbose: bool,
 
@@ -476,6 +486,7 @@ impl Default for Config {
 
             // Verbosity
             quiet: false,
+            progress: None,
             verbose: false,
 
             // Simulation
@@ -522,6 +533,14 @@ impl Default for Config {
 }
 
 impl Config {
+    /// The resolved progress-bar decision: an explicit `progress` wins;
+    /// otherwise the bar follows `!quiet`. The CLI's `-o -` exception stores
+    /// `Some(false)` so stdout streaming is never drawn over.
+    #[must_use]
+    pub fn show_progress(&self) -> bool {
+        self.progress.unwrap_or(!self.quiet)
+    }
+
     /// Validate configuration and return errors if invalid.
     ///
     /// # Errors

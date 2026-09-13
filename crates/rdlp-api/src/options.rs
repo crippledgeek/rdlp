@@ -26,7 +26,7 @@ pub struct OptionEntry {
     pub gui: Gui,
 }
 
-/// The registry. One entry per `Config`/`PostProcess` leaf field (97 total).
+/// The registry. One entry per `Config`/`PostProcess` leaf field (98 total).
 pub const OPTION_REGISTRY: &[OptionEntry] = &[
     OptionEntry {
         field: "output_to_stdout",
@@ -179,6 +179,10 @@ pub const OPTION_REGISTRY: &[OptionEntry] = &[
     OptionEntry {
         field: "quiet",
         gui: Gui::NotApplicable("per-invocation log-suppression; GUI manages its own logging"),
+    },
+    OptionEntry {
+        field: "progress",
+        gui: Gui::NotApplicable("terminal progress bar; the GUI renders its own progress"),
     },
     OptionEntry {
         field: "verbose",
@@ -473,6 +477,7 @@ mod tests {
             verify_sub_urls: _,
             retry_subs: _,
             quiet: _,
+            progress: _,
             verbose: _,
             simulate: _,
             skip_download: _,
@@ -578,6 +583,7 @@ mod tests {
             "verify_sub_urls",
             "retry_subs",
             "quiet",
+            "progress",
             "verbose",
             "simulate",
             "skip_download",
@@ -648,11 +654,11 @@ mod tests {
         );
         assert_eq!(
             OPTION_REGISTRY.len(),
-            97,
-            "registry must have exactly 97 entries"
+            98,
+            "registry must have exactly 98 entries"
         );
         let expected: HashSet<&str> = EXPECTED.iter().copied().collect();
-        assert_eq!(expected.len(), 97, "EXPECTED drifted from 97");
+        assert_eq!(expected.len(), 98, "EXPECTED drifted from 98");
         assert_eq!(
             registry, expected,
             "OPTION_REGISTRY fields must exactly match Config+PostProcess"
@@ -670,7 +676,7 @@ mod tests {
             }
         }
         assert_eq!(control, 40, "Control count drifted");
-        assert_eq!(na, 5, "NotApplicable count drifted");
+        assert_eq!(na, 6, "NotApplicable count drifted");
         assert_eq!(missing, 52, "Missing count drifted");
     }
 

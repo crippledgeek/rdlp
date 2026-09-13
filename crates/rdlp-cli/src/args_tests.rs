@@ -22,6 +22,8 @@ const EXPECTED: &[(&str, &str)] = &[
     ("format", HELP_HEADING_GENERAL),
     ("audio_multistreams", HELP_HEADING_GENERAL),
     ("quiet", HELP_HEADING_GENERAL),
+    ("progress", HELP_HEADING_GENERAL),
+    ("no_progress", HELP_HEADING_GENERAL),
     ("verbose", HELP_HEADING_GENERAL),
     ("interactive", HELP_HEADING_GENERAL),
     // Simulation & Info
@@ -114,8 +116,8 @@ fn every_option_is_classified_into_a_help_group() {
     assert_eq!(expected.len(), EXPECTED.len(), "duplicate id in EXPECTED");
     assert_eq!(
         EXPECTED.len(),
-        77,
-        "group map should cover all 77 option fields"
+        79,
+        "group map should cover all 79 option fields"
     );
 
     let cmd = Args::command();
@@ -300,6 +302,7 @@ const HELP_SHORT_COMMON: &[&str] = &[
     "output_dir",
     "format",
     "quiet",
+    "no_progress",
     "verbose",
     "interactive",
     // Simulation & Info
@@ -398,7 +401,7 @@ const HELP_SHORT_EXPERT: &[&str] = &[
 fn every_option_is_tiered_common_or_expert() {
     use std::collections::HashSet;
 
-    assert_eq!(HELP_SHORT_COMMON.len(), 29, "common set drifted");
+    assert_eq!(HELP_SHORT_COMMON.len(), 30, "common set drifted");
     assert_eq!(HELP_SHORT_EXPERT.len(), 44, "expert set drifted");
     let common: HashSet<&str> = HELP_SHORT_COMMON.iter().copied().collect();
     let expert: HashSet<&str> = HELP_SHORT_EXPERT.iter().copied().collect();

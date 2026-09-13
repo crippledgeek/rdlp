@@ -94,6 +94,10 @@ fn resolve_interactive_values(args: &Args) -> Result<ResolvedInteractiveValues> 
 ///   `config.postprocess`: `if let Some(v) = flag(args.FIELD, args.NEG) {
 ///   config.postprocess.FIELD = v; }`. `FIELD` is the positive flag+config
 ///   field; `NEG` is the `--no-*` arg. Absent pair leaves the config value.
+/// - `tribool: FIELD <- NEG` — same as `tribool_pp:` but for a top-level
+///   `Option<bool>` config field rather than a `config.postprocess` bool:
+///   `if let Some(v) = flag(args.FIELD, args.NEG) { config.FIELD = Some(v); }`.
+///   Absent pair leaves the config value (`None` or a config-file value).
 ///
 /// Only `opt:` and `set:` support an optional/required `<- arg_name` arrow for
 /// when the CLI arg name differs from the config field name (e.g.
@@ -140,6 +144,11 @@ macro_rules! merge_fields {
     (@arm $config:expr, $args:expr, tribool_pp, $field:ident <- $neg:ident) => {
         if let Some(value) = flag($args.$field, $args.$neg) {
             $config.postprocess.$field = value;
+        }
+    };
+    (@arm $config:expr, $args:expr, tribool, $field:ident <- $neg:ident) => {
+        if let Some(value) = flag($args.$field, $args.$neg) {
+            $config.$field = Some(value);
         }
     };
 }
@@ -206,6 +215,7 @@ pub fn merge_config(
         opt: format,
         bool: audio_multistreams,
         bool: quiet,
+        tribool: progress <- no_progress,
         bool: verbose,
         bool: simulate,
         bool_pp: extract_audio,
@@ -247,15 +257,18 @@ pub fn merge_config(
     //
     // Every field touched here must also appear in the canary
     // (`every_config_field_is_classified`) — the canary is what proves the
-    // declared set and this set together cover all 98 fields.
+    // declared set and this set together cover all 99 fields.
 
     // Output: -o - means stdout streaming
     if args.output.as_deref() == Some("-") {
         config.output_to_stdout = true;
         // Force quiet mode — progress/log output would corrupt the byte stream.
-        // `quiet` is what actually suppresses the progress bar: the CLI event
-        // handler is constructed from it directly (see `main.rs`).
+        // `progress` is what the event handler reads for the bar
+        // (`Config::show_progress`); `quiet` still gates the log lines.
         config.quiet = true;
+        // A bar is drawn to the terminal the stream may share; off regardless
+        // of `progress = true` or `--progress`.
+        config.progress = Some(false);
         // Disable embed_thumbnail before validation: the default is `true`, and
         // Config::validate() would reject stdout + embed-thumbnail.
         if config.postprocess.embed_thumbnail {
