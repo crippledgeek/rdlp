@@ -15,7 +15,7 @@ post-processes with FFmpeg library bindings. Inspired by
 - yt-dlp-compatible format selection and output templates
 - Browser cookie extraction (Chrome, Firefox) and Netscape cookie files
 - Browser TLS fingerprint impersonation for sites that block other downloaders
-- Keyword search across supported sites with filters (16 search-capable extractors)
+- Keyword search across supported sites with filters (17 search-capable extractors)
 - Signed WASM plugin system for adding new sites without recompiling
 - Rate limiting, download archive, JSON metadata export
 - Interactive format and container selection

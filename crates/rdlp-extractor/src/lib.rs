@@ -198,6 +198,9 @@ impl ExtractorRegistry {
         registry
             .search_extractors
             .push(Arc::new(PornoxoExtractor::new()));
+        registry
+            .search_extractors
+            .push(Arc::new(PornoneExtractor::new()));
 
         registry
     }

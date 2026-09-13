@@ -9,33 +9,46 @@
 
 mod media;
 mod patterns;
+mod search;
+mod search_patterns;
 
 use async_trait::async_trait;
 use lazy_regex::Regex;
 use log::debug;
-use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result};
-use rdlp_types::{DownloadProtocol, Format, InfoDict};
+use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result, SearchExtractor};
+use rdlp_types::{
+    DownloadProtocol, Format, InfoDict, SearchFilter, SearchFilterDescriptor, SearchPageResponse,
+    SearchQuery, SearchResultPreview,
+};
 use scraper::Html;
 
-use crate::base::common::BaseExtractor;
 use crate::base::common::json_ld::{
     extract_json_ld, extract_tags, extract_view_count, get_thumbnail_url,
 };
+use crate::base::common::{BaseExtractor, PagedSearch, SearchOrigin, SearchPage};
 
-/// pornone.com — server-rendered, individually-signed progressive MP4 renditions.
-///
-/// A unit struct here, not yet a `SearchOrigin`-carrying one: no video
-/// extraction path needs a listing origin, and Task 4 (`search.rs`) is what
-/// introduces the field, its constructor plumbing, and the `#[cfg(test)]
-/// with_origin` seam together with their first real callers — adding them a
-/// task early would leave both dead until then.
-pub struct PornoneExtractor;
+/// pornone.com — server-rendered, individually-signed progressive MP4
+/// renditions; cookie-free search with fixed-grid filler detection.
+pub struct PornoneExtractor {
+    /// Origin the listing/search URLs are built against. Production literal
+    /// by default; test-injected to a mockito origin via `with_origin`,
+    /// mirroring the PornoXO seam.
+    origin: SearchOrigin,
+}
 
 impl PornoneExtractor {
     /// Create a new PornOne extractor.
     #[must_use]
     pub fn new() -> Self {
-        Self
+        Self {
+            origin: search::default_origin(),
+        }
+    }
+
+    /// Test-only: point the listing builders at a mockito origin.
+    #[cfg(test)]
+    pub(crate) fn with_origin(origin: SearchOrigin) -> Self {
+        Self { origin }
     }
 }
 
@@ -131,6 +144,72 @@ impl InfoExtractor for PornoneExtractor {
     }
 }
 
+impl PagedSearch for PornoneExtractor {
+    fn search_log_tag(&self) -> &'static str {
+        "[PornOne]"
+    }
+
+    fn validate_search_filters(&self, filters: &[SearchFilter]) -> Result<()> {
+        search_patterns::validate(filters)
+    }
+
+    /// `?page=0` and negative pages are not a thing on this site; floor at 1
+    /// (PornoXO precedent).
+    fn clamp_page(&self, page: u32) -> u32 {
+        page.max(1)
+    }
+
+    async fn fetch_page(
+        &self,
+        query: &SearchQuery,
+        page: u32,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPage> {
+        let url = search::build_search_url(&self.origin, query, page);
+        debug!(
+            "[PornOne] Fetching search page {page}: {}",
+            rdlp_redact::RedactedUrl::new(&url)
+        );
+        let body = BaseExtractor::fetch_webpage(&url, ctx).await?;
+        let listing = search::parse_search_page(&self.origin, &body);
+        // A filler page is the end of the listing — the site pads no-match,
+        // past-the-end and out-of-range pages with the same 200 grid, so
+        // "has more" is exactly "this page was real".
+        Ok(SearchPage {
+            results: listing.results,
+            has_more: !listing.is_filler,
+            total_estimate: None,
+        })
+    }
+}
+
+#[async_trait]
+impl SearchExtractor for PornoneExtractor {
+    fn name(&self) -> &str {
+        "PornOne"
+    }
+
+    fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
+        search_patterns::supported_filters()
+    }
+
+    async fn search(
+        &self,
+        query: &SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<Vec<SearchResultPreview>> {
+        self.search_all_pages(query, ctx).await
+    }
+
+    async fn search_page(
+        &self,
+        query: &SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> Result<SearchPageResponse> {
+        self.search_page_response(query, ctx).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,5 +280,109 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("no signed <source>"), "{err}");
+    }
+}
+
+/// End-to-end search: `fetch_page` → `SearchExtractor::search`, driven
+/// against a mockito origin (the seam established for PornHub in #457).
+#[cfg(test)]
+mod paged_search_tests {
+    use super::*;
+    use crate::hls::test_support::test_ctx;
+
+    const SEARCH_PAGE: &str = include_str!("tests/pornone_search_page.html");
+    const FILLER_PAGE: &str = include_str!("tests/pornone_search_filler.html");
+
+    fn query(q: &str) -> SearchQuery {
+        SearchQuery {
+            query: q.to_owned(),
+            filters: Vec::new(),
+            max_results: None,
+            page: None,
+        }
+    }
+
+    /// Page 1 real, page 2 filler: `search()` must aggregate only the real
+    /// page's results and stop, not keep paging into the fixed filler grid.
+    #[tokio::test]
+    async fn search_stops_at_the_first_filler_page() {
+        let mut server = mockito::Server::new_async().await;
+        let _p1 = server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r"^/search/\?q=milf&page=1$".into()),
+            )
+            .with_body(SEARCH_PAGE)
+            .create_async()
+            .await;
+        let _p2 = server
+            .mock(
+                "GET",
+                mockito::Matcher::Regex(r"^/search/\?q=milf&page=2$".into()),
+            )
+            .with_body(FILLER_PAGE)
+            .create_async()
+            .await;
+
+        let origin = SearchOrigin::new(&server.url()).expect("mockito origin is well formed");
+        let results = SearchExtractor::search(
+            &PornoneExtractor::with_origin(origin),
+            &query("milf"),
+            &test_ctx(),
+        )
+        .await
+        .expect("a healthy search must succeed");
+
+        let page1 = search::parse_search_page(
+            &SearchOrigin::new(&server.url()).expect("mockito origin is well formed"),
+            SEARCH_PAGE,
+        );
+        assert_eq!(results.len(), page1.results.len());
+    }
+
+    /// A page-1 filler (no-match query) must report zero results, not the
+    /// fixed popular-videos grid.
+    #[tokio::test]
+    async fn a_filler_first_page_reports_zero_results() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", mockito::Matcher::Any)
+            .with_body(FILLER_PAGE)
+            .create_async()
+            .await;
+
+        let origin = SearchOrigin::new(&server.url()).expect("mockito origin is well formed");
+        let results = SearchExtractor::search(
+            &PornoneExtractor::with_origin(origin),
+            &query("zqxjvkwplm"),
+            &test_ctx(),
+        )
+        .await
+        .expect("a filler page is zero results, not an error");
+        assert!(results.is_empty(), "{}", results.len());
+    }
+
+    #[tokio::test]
+    async fn an_unknown_filter_is_refused_before_fetching() {
+        let mut server = mockito::Server::new_async().await;
+        let never = server
+            .mock("GET", mockito::Matcher::Any)
+            .with_body(SEARCH_PAGE)
+            .expect(0)
+            .create_async()
+            .await;
+
+        let origin = SearchOrigin::new(&server.url()).expect("mockito origin is well formed");
+        let mut q = query("milf");
+        q.filters.push(SearchFilter {
+            key: "ordering".to_owned(),
+            value: "newest".to_owned(),
+        });
+        let err = PornoneExtractor::with_origin(origin)
+            .search_all_pages(&q, &test_ctx())
+            .await
+            .expect_err("PornOne accepts no filters");
+        assert!(err.to_string().contains("ordering"), "{err}");
+        never.assert_async().await;
     }
 }
