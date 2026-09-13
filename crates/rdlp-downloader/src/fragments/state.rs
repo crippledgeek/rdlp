@@ -10,9 +10,8 @@ use std::path::Path;
 
 use rdlp_types::Fragment;
 use serde::{Deserialize, Serialize};
-use tokio::fs;
 
-use crate::atomic::now_secs;
+use crate::atomic::{now_secs, read_json_sidecar};
 
 /// Current schema version. Bump on incompatible field changes.
 pub const STATE_VERSION: u32 = 1;
@@ -88,8 +87,7 @@ impl HlsResumeState {
         fingerprint: u64,
         total_fragments: u64,
     ) -> Option<Self> {
-        let body = fs::read_to_string(path).await.ok()?;
-        let s: Self = serde_json::from_str(&body).ok()?;
+        let s: Self = read_json_sidecar(path).await?;
         (s.state_version == STATE_VERSION
             && s.fingerprint == fingerprint
             && s.total_fragments == total_fragments

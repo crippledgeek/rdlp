@@ -7,6 +7,7 @@ use std::time::SystemTime;
 
 use log::warn;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 /// Atomically write `value` as JSON to `path` (write-temp-in-same-dir + rename).
 /// A kill mid-write leaves the previous file intact — never a torn file.
@@ -44,6 +45,62 @@ pub async fn atomic_write_json<T: Serialize + Send + 'static>(
     })
     .await
     .map_err(std::io::Error::other)?
+}
+
+/// Maximum size, in bytes, of any JSON sidecar [`read_json_sidecar`] will
+/// read. A bound on the RESOURCE the read touches (memory for
+/// `read_to_string`, parse time), not on any semantic property of the
+/// content — deliberately not tied to a chunk count or id value (see the
+/// history in `rdlp-api`'s `collect_contiguous_chunks` for why an id-shaped
+/// bound was wrong). The largest legitimate sidecar in this codebase is the
+/// chunk-completion manifest (#675), whose `completed` map serializes at
+/// roughly 25-30 bytes per entry (`"<digits>":<digits>,`); even an extreme
+/// but entirely legitimate ~24 GiB adaptive download (100,000 chunks at the
+/// 256 KiB AIMD floor) produces a manifest of a few MB. This cap leaves
+/// several times that as headroom before refusing to
+/// read a sidecar at all.
+pub(crate) const MAX_SIDECAR_BYTES: u64 = 16 * 1024 * 1024; // 16 MiB
+
+/// Read and parse a JSON sidecar at `path`, or `None` for any reason it
+/// can't be trusted at the byte level: missing file, unreadable, or
+/// malformed JSON. Returns the raw deserialized value with NO identity or
+/// version check — every sidecar (HLS `HlsResumeState`, DASH
+/// `DashDownloadState`, and the chunk-completion `ChunkManifest`, #675) has
+/// its own notion of "matches what the caller expects" (a fingerprint, an
+/// MPD path + representation ids, a `download_id` + `ChunkKind`), so that
+/// gate stays in each type's own `load`/`load_matching`, which calls this
+/// for the read-and-parse mechanics they'd otherwise all duplicate.
+pub(crate) async fn read_json_sidecar<T: DeserializeOwned>(path: &Path) -> Option<T> {
+    let len = tokio::fs::metadata(path).await.ok()?.len();
+    if len > MAX_SIDECAR_BYTES {
+        warn!(
+            len,
+            max = MAX_SIDECAR_BYTES;
+            "Refusing to read oversized sidecar {}: {len} bytes exceeds the {MAX_SIDECAR_BYTES} \
+             byte cap",
+            path.display()
+        );
+        return None;
+    }
+    let body = tokio::fs::read_to_string(path).await.ok()?;
+    serde_json::from_str(&body).ok()
+}
+
+/// Whether an on-disk artifact whose length was recorded at write time is
+/// still intact: an exact-match gate against silent truncation (#675, #677).
+///
+/// A chunk or segment file cut short by an interrupted write is still
+/// non-empty, so "the file exists and has bytes" is not evidence it is
+/// complete — only a length match against a value recorded when the write
+/// actually finished is. Returns the recorded length (not `on_disk_len`) so
+/// that a caller accumulating a verified total can only ever add up lengths
+/// it actually checked: both inputs are plain `u64`s captured before this
+/// call, so there is no stat/truncate race here to close — the point is
+/// simply that the return value traces back to the trusted record, not to
+/// whatever happened to be on disk at the moment it was measured.
+#[must_use]
+pub fn intact_len(on_disk_len: u64, recorded_len: u64) -> Option<u64> {
+    (on_disk_len == recorded_len).then_some(recorded_len)
 }
 
 /// Current Unix epoch seconds, or 0 if the system clock predates the epoch.
@@ -137,6 +194,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn read_json_sidecar_accepts_a_file_exactly_at_the_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("state.json");
+        // Pad the JSON body with whitespace (valid, ignored by serde) up to
+        // exactly `MAX_SIDECAR_BYTES` so the boundary is pinned precisely,
+        // not merely "some file under the cap".
+        let value = serde_json::to_vec(&Sample {
+            a: 1,
+            b: String::new(),
+        })
+        .unwrap();
+        let padding = usize::try_from(MAX_SIDECAR_BYTES).unwrap() - value.len();
+        let mut body = vec![b' '; padding];
+        body.extend_from_slice(&value);
+        tokio::fs::write(&path, &body).await.expect("write");
+        assert_eq!(
+            tokio::fs::metadata(&path).await.unwrap().len(),
+            MAX_SIDECAR_BYTES
+        );
+
+        let loaded: Option<Sample> = read_json_sidecar(&path).await;
+        assert!(loaded.is_some(), "a file exactly at the cap must be read");
+    }
+
+    #[tokio::test]
+    async fn read_json_sidecar_rejects_a_file_one_byte_over_the_cap() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("state.json");
+        let value = serde_json::to_vec(&Sample {
+            a: 1,
+            b: String::new(),
+        })
+        .unwrap();
+        let padding = usize::try_from(MAX_SIDECAR_BYTES).unwrap() - value.len() + 1;
+        let mut body = vec![b' '; padding];
+        body.extend_from_slice(&value);
+        tokio::fs::write(&path, &body).await.expect("write");
+        assert_eq!(
+            tokio::fs::metadata(&path).await.unwrap().len(),
+            MAX_SIDECAR_BYTES + 1
+        );
+
+        let loaded: Option<Sample> = read_json_sidecar(&path).await;
+        assert!(loaded.is_none(), "one byte over the cap must be refused");
+    }
+
+    #[tokio::test]
     async fn writes_roundtrippable_json() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("state.json");
@@ -176,6 +280,26 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 1, "exactly one file (the destination) must remain");
+    }
+
+    #[test]
+    fn intact_len_accepts_exact_match_at_boundary() {
+        assert_eq!(intact_len(512, 512), Some(512));
+    }
+
+    #[test]
+    fn intact_len_rejects_one_byte_short() {
+        assert_eq!(intact_len(511, 512), None, "truncated by one byte");
+    }
+
+    #[test]
+    fn intact_len_rejects_one_byte_over() {
+        assert_eq!(intact_len(513, 512), None, "grew past the recorded length");
+    }
+
+    #[test]
+    fn intact_len_rejects_zero_on_disk_against_nonzero_recorded() {
+        assert_eq!(intact_len(0, 512), None);
     }
 
     #[cfg_attr(miri, ignore)]

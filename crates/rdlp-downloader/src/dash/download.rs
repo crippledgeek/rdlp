@@ -25,14 +25,28 @@ use tokio_util::sync::CancellationToken;
 use url::Url;
 
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, ControllerMode};
-use crate::atomic::{SIDECAR_SAVE_FAILURE_THRESHOLD, SaveFailureTracker};
+use crate::atomic::{SIDECAR_SAVE_FAILURE_THRESHOLD, SaveFailureTracker, intact_len};
 use crate::dash::errors::DashError;
 use crate::dash::manifest;
 use crate::dash::segments::SegmentPlan;
-use crate::dash::state::{self, DashDownloadState};
+use crate::dash::state::{ByteLen, DashDownloadState};
 use crate::fragments::fetch_with_optional_range;
 use crate::http::HttpDownloader;
 use crate::retry::{RetryPolicy, Tallies, retries_taken, with_retry_cancellable};
+
+/// The length a DASH part can be counted for: the record made when its write
+/// finished, and only when the file on disk still has exactly that length.
+///
+/// A missing file or a part that was never recorded has nothing to compare,
+/// so it re-fetches (#677); the exact-length rule itself is the one shared
+/// with the HTTP chunk manifest (`atomic::intact_len`, #675) — one gate for
+/// every "is this file still what we wrote" question in the crate.
+#[must_use]
+fn recorded_part_len(on_disk: Option<ByteLen>, recorded: Option<ByteLen>) -> Option<ByteLen> {
+    on_disk
+        .zip(recorded)
+        .and_then(|(on_disk, recorded)| intact_len(on_disk, recorded))
+}
 
 /// Number of successful segment fetches between state-save flushes.
 const STATE_SAVE_BATCH: usize = 16;
@@ -444,7 +458,7 @@ async fn download_representation(
             }
         };
         let on_disk_len = fs::metadata(&init_part_path).await.ok().map(|m| m.len());
-        if let Some(len) = state::intact_len(on_disk_len, recorded_len) {
+        if let Some(len) = recorded_part_len(on_disk_len, recorded_len) {
             // Resume — count existing bytes toward total.
             bytes_counter.fetch_add(len, Ordering::Relaxed);
             total += len;
@@ -490,7 +504,7 @@ async fn download_representation(
             let part_path = parts_dir.join(segment_filename(i));
             let recorded_len = s.recorded_len(&repr_id, i as u64);
             let on_disk_len = fs::metadata(&part_path).await.ok().map(|m| m.len());
-            if let Some(len) = state::intact_len(on_disk_len, recorded_len) {
+            if let Some(len) = recorded_part_len(on_disk_len, recorded_len) {
                 bytes_counter.fetch_add(len, Ordering::Relaxed);
                 total += len;
             } else {
@@ -1098,6 +1112,30 @@ mod same_origin_gate_tests {
             .await
             .expect("opaque mpd_origin must fail closed: headers stripped, fetch still succeeds");
         assert_eq!(&bytes[..], b"abcd");
+    }
+}
+
+#[cfg(test)]
+mod recorded_part_len_tests {
+    //! The Option adapter over `atomic::intact_len`: only the "nothing to
+    //! compare" shapes are pinned here — the exact-length boundary (N, N±1)
+    //! is `atomic::tests::intact_len_*`, tested once for every caller.
+    use super::recorded_part_len;
+
+    #[test]
+    fn missing_or_unrecorded_part_is_refetched() {
+        assert_eq!(recorded_part_len(Some(100), Some(100)), Some(100));
+        assert_eq!(
+            recorded_part_len(None, Some(100)),
+            None,
+            "missing file re-fetches"
+        );
+        assert_eq!(
+            recorded_part_len(Some(100), None),
+            None,
+            "unrecorded re-fetches"
+        );
+        assert_eq!(recorded_part_len(None, None), None);
     }
 }
 

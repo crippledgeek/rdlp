@@ -23,6 +23,7 @@ use rdlp_core::is_retryable_error;
 fn chunk_test_downloader(max_retries: usize) -> HttpDownloader {
     HttpDownloader::new().with_retry_config(crate::retry::test_retry_config(max_retries))
 }
+use crate::retry::Tallies;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 
@@ -311,8 +312,6 @@ async fn test_chunk_retry_succeeds_on_second_attempt() {
     let downloader = chunk_test_downloader(3);
 
     let url = format!("{}/video.mp4", server.url());
-    let progress = Arc::new(AtomicU64::new(0));
-
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
@@ -321,9 +320,8 @@ async fn test_chunk_retry_succeeds_on_second_attempt() {
             end: 1023,
             chunk_path: &chunk_path,
             chunk_id: 0,
-            retries: Arc::new(AtomicU64::new(0)),
+            tallies: Tallies::new(),
         },
-        Some(progress),
         None,
     )
     .await;
@@ -359,8 +357,6 @@ async fn test_chunk_retry_exhausted_returns_error() {
     let downloader = chunk_test_downloader(3);
 
     let url = format!("{}/video.mp4", server.url());
-    let progress = Arc::new(AtomicU64::new(0));
-
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
@@ -369,9 +365,8 @@ async fn test_chunk_retry_exhausted_returns_error() {
             end: 1023,
             chunk_path: &chunk_path,
             chunk_id: 0,
-            retries: Arc::new(AtomicU64::new(0)),
+            tallies: Tallies::new(),
         },
-        Some(progress),
         None,
     )
     .await;
@@ -405,8 +400,6 @@ async fn test_chunk_retry_non_retryable_fails_immediately() {
     let downloader = chunk_test_downloader(3);
 
     let url = format!("{}/video.mp4", server.url());
-    let progress = Arc::new(AtomicU64::new(0));
-
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
@@ -415,9 +408,8 @@ async fn test_chunk_retry_non_retryable_fails_immediately() {
             end: 1023,
             chunk_path: &chunk_path,
             chunk_id: 0,
-            retries: Arc::new(AtomicU64::new(0)),
+            tallies: Tallies::new(),
         },
-        Some(progress),
         None,
     )
     .await;
@@ -484,8 +476,6 @@ async fn test_chunk_retry_cleans_partial_file() {
     let downloader = chunk_test_downloader(3);
 
     let url = format!("{}/video.mp4", server.url());
-    let progress = Arc::new(AtomicU64::new(0));
-
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
@@ -494,9 +484,8 @@ async fn test_chunk_retry_cleans_partial_file() {
             end: 511,
             chunk_path: &chunk_path,
             chunk_id: 0,
-            retries: Arc::new(AtomicU64::new(0)),
+            tallies: Tallies::new(),
         },
-        Some(progress),
         None,
     )
     .await;
@@ -589,9 +578,8 @@ async fn test_chunk_retry_removes_partial_before_next_attempt() {
             end: 1023,
             chunk_path: &chunk_path,
             chunk_id: 0,
-            retries: Arc::new(AtomicU64::new(0)),
+            tallies: Tallies::new(),
         },
-        Some(Arc::new(AtomicU64::new(0))),
         None,
     )
     .await;
@@ -1452,7 +1440,7 @@ fn download_chunk_with_retry_passes_cancel_to_range() {
     let body = &after_start[..end];
 
     // The call to download_range_with_progress must pass `cancel` (not `None`).
-    // Use balanced-paren matching so nested calls like `progress.clone()` don't
+    // Use balanced-paren matching so nested calls like `tallies.clone()` don't
     // truncate the call argument span.
     let call_idx = body
         .find("download_range_with_progress(")
@@ -1595,7 +1583,7 @@ fn validation_test_downloader() -> HttpDownloader {
 /// Test fixture only (not used in production code): a one-off
 /// [`ChunkRequestSpec`] for the range-validation tests below, which care
 /// about `url`/`start`/`end`/`chunk_path` only — `chunk_id` is an arbitrary
-/// log label and `retries` a fresh, unread counter. Plain positional
+/// log label and `tallies` a fresh, unread pair of counters. Plain positional
 /// parameters are unambiguous here — `start`/`end` are both `u64` but always
 /// supplied as a literal pair at the call site, matching `ChunkRequestSpec`'s
 /// own field order.
@@ -1611,7 +1599,7 @@ fn range_request<'a>(
         end,
         chunk_path,
         chunk_id: 0,
-        retries: Arc::new(AtomicU64::new(0)),
+        tallies: Tallies::new(),
     }
 }
 
@@ -1638,7 +1626,7 @@ async fn range_fetch_rejects_200_full_body() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None, None)
+        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None)
         .await;
 
     assert!(
@@ -1668,7 +1656,7 @@ async fn range_fetch_rejects_206_without_content_range() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None, None)
+        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None)
         .await;
 
     assert!(
@@ -1701,7 +1689,7 @@ async fn range_fetch_rejects_mismatched_content_range() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None, None)
+        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None)
         .await;
 
     assert!(
@@ -1743,7 +1731,7 @@ async fn range_fetch_rejects_short_body() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None, None)
+        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None)
         .await;
 
     assert!(
@@ -1778,7 +1766,7 @@ async fn range_fetch_rejects_overlong_body() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None, None)
+        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None)
         .await;
 
     assert!(
@@ -1820,7 +1808,7 @@ async fn range_fetch_accepts_conformant_206() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(range_request(&url, 4096, 5119, &chunk_path), None, None)
+        .download_range_with_progress(range_request(&url, 4096, 5119, &chunk_path), None)
         .await;
 
     assert_eq!(
@@ -1960,9 +1948,8 @@ async fn chunk_retry_recovers_from_wrong_span_response() {
             end: 1023,
             chunk_path: &chunk_path,
             chunk_id: 0,
-            retries: Arc::new(AtomicU64::new(0)),
+            tallies: Tallies::new(),
         },
-        Some(Arc::new(AtomicU64::new(0))),
         None,
     )
     .await;
@@ -2029,9 +2016,8 @@ async fn chunk_retry_recovers_from_short_body() {
             end: 1023,
             chunk_path: &chunk_path,
             chunk_id: 0,
-            retries: Arc::new(AtomicU64::new(0)),
+            tallies: Tallies::new(),
         },
-        Some(Arc::new(AtomicU64::new(0))),
         None,
     )
     .await;
@@ -2087,9 +2073,8 @@ async fn chunk_retry_does_not_retry_range_ignoring_server() {
             end: 1023,
             chunk_path: &chunk_path,
             chunk_id: 0,
-            retries: Arc::new(AtomicU64::new(0)),
+            tallies: Tallies::new(),
         },
-        Some(Arc::new(AtomicU64::new(0))),
         None,
     )
     .await;
@@ -2130,7 +2115,7 @@ async fn range_fetch_rejects_body_one_byte_short() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None, None)
+        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None)
         .await;
 
     assert!(
@@ -2160,7 +2145,7 @@ async fn range_fetch_rejects_body_one_byte_over() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None, None)
+        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None)
         .await;
 
     assert!(

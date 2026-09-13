@@ -297,10 +297,12 @@ pub mod progress;
 /// download paths.
 pub(crate) mod retry;
 
+pub use atomic::intact_len;
 pub use chunking::{ChunkSizeStrategy, calculate_chunks, chunk_size_for_file};
 pub use dash::DashDownloader;
 pub use hls::HlsDownloader;
 pub use http::HttpDownloader;
+pub use http::chunk_manifest::ChunkManifest;
 pub use http::chunk_name::{ChunkKind, ChunkSet};
 pub use progress::{
     ProgressGuard, ProgressMetrics, ProgressReporterConfig, spawn_progress_reporter,

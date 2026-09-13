@@ -4,6 +4,7 @@
 //! and automatic retry logic using the backon crate.
 
 mod chunk_ledger;
+pub(crate) mod chunk_manifest;
 pub(crate) mod chunk_name;
 mod config;
 mod parallel;
@@ -33,15 +34,14 @@ use crate::retry::{RetryPolicy, with_retry};
 use config::{DownloaderConfig, PROGRESS_UPDATE_INTERVAL};
 use rdlp_ratelimit::RateLimiter;
 
-/// Map a `rdlp_http::BodyCapError` into the `RdlpError` shape shared by every
-/// fragment/segment body read (#569): the pre-resolved-fragments path
-/// (`fragments.rs`) and the DASH static-VoD segment fetcher
-/// (`dash/download.rs`) previously each hand-wrote an identical match with
-/// the same two error branches and near-identical prose; this is the one
-/// place that mapping is written.
+/// Map a `rdlp_http::BodyCapError` into the `RdlpError` shape for a capped
+/// fragment/segment body read (#569). Its one caller is
+/// `fragments::fetch_with_optional_range`, which every HLS fragment AND every
+/// DASH segment now goes through (#672 routed DASH onto it), so the mapping
+/// — and the noun in the message — is written once.
 ///
-/// `what` names the caller's noun for its own error message (e.g.
-/// `"fragment"`, `"DASH segment"`); `url` is the raw (unredacted) URL — this
+/// `what` names the caller's noun for its own error message (`"fragment"`
+/// today); `url` is the raw (unredacted) URL — this
 /// function is what redacts it into the returned error's `url` field.
 pub(crate) fn body_cap_error(e: rdlp_http::BodyCapError, url: &str, what: &str) -> RdlpError {
     match e {
@@ -637,8 +637,9 @@ impl HttpDownloader {
     /// buffered reach disk.
     ///
     /// Takes the whole [`crate::http::parallel::ChunkRequestSpec`] (rather
-    /// than its four scalar fields as separate parameters) so the retry
-    /// counter it carries reaches this function's own "HTTP GET (range)"
+    /// than its four scalar fields as separate parameters) so the tallies it
+    /// carries reach this function: `bytes` is advanced as the body streams
+    /// in, and `retries` reaches this function's own "HTTP GET (range)"
     /// retry loop — see the comment in `download_chunk_with_retry` for why
     /// that inner loop needed its own `.counting_into` (issue #672
     /// follow-up): a plain 500/429 on a chunk GET is absorbed HERE, before
@@ -647,7 +648,6 @@ impl HttpDownloader {
     pub(crate) async fn download_range_with_progress(
         &self,
         request: crate::http::parallel::ChunkRequestSpec<'_>,
-        progress_counter: Option<Arc<std::sync::atomic::AtomicU64>>,
         cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<u64> {
         let crate::http::parallel::ChunkRequestSpec {
@@ -656,7 +656,7 @@ impl HttpDownloader {
             end,
             chunk_path,
             chunk_id: _,
-            retries,
+            tallies,
         } = request;
 
         // Pre-cancel guard: bail before any network I/O if already cancelled.
@@ -679,7 +679,7 @@ impl HttpDownloader {
         // would not get one.
         let response = with_retry(
             RetryPolicy::new(&self.config.retry_config, &"HTTP GET (range)")
-                .counting_into(retries.as_ref()),
+                .counting_into(tallies.retries.as_ref()),
             || {
                 let client = client.clone();
                 let url = url.clone();
@@ -764,9 +764,9 @@ impl HttpDownloader {
                     })?;
                     downloaded += chunk_len;
 
-                    if let Some(ref counter) = progress_counter {
-                        counter.fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
-                    }
+                    tallies
+                        .bytes
+                        .fetch_add(chunk.len() as u64, std::sync::atomic::Ordering::Relaxed);
 
                     if let Some(ref limiter) = self.rate_limiter {
                         limiter.acquire(chunk.len()).await;

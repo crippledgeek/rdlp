@@ -10,10 +10,9 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
-use tokio::fs;
 use url::Url;
 
-use crate::atomic::now_secs;
+use crate::atomic::{now_secs, read_json_sidecar};
 
 /// Current schema version.
 ///
@@ -84,8 +83,7 @@ impl DashDownloadState {
         video_repr_id: &str,
         audio_repr_id: Option<&str>,
     ) -> Option<Self> {
-        let body = fs::read_to_string(path).await.ok()?;
-        let s: Self = serde_json::from_str(&body).ok()?;
+        let s: Self = read_json_sidecar(path).await?;
         if s.state_version != STATE_VERSION
             || s.mpd_path != mpd_url.path()
             || s.video_repr_id != video_repr_id
@@ -129,23 +127,6 @@ impl DashDownloadState {
         if let Some(v) = self.completed_segments.get_mut(repr_id) {
             v.remove(&idx);
         }
-    }
-}
-
-/// The byte length an on-disk part can be trusted for, given its actual
-/// length and the length recorded for it at write time — `None` when it
-/// must be re-fetched.
-///
-/// A part resumes only on an exact match — missing (`on_disk: None`),
-/// unrecorded (`recorded: None`), short, or even longer than recorded all
-/// re-fetch, since DASH segments are always written whole (#677). Returning
-/// the length (rather than a `bool`) means a caller cannot count a part
-/// without having passed this check.
-#[must_use]
-pub const fn intact_len(on_disk: Option<ByteLen>, recorded: Option<ByteLen>) -> Option<ByteLen> {
-    match (on_disk, recorded) {
-        (Some(a), Some(b)) if a == b => Some(a),
-        _ => None,
     }
 }
 
@@ -227,30 +208,5 @@ mod tests {
                 .is_none(),
             "an older state_version must be rejected even when the body parses"
         );
-    }
-
-    #[test]
-    fn intact_len_matches_exact_length_only() {
-        // Boundary pair per bug-fix-requires-failing-test.md: N accepted,
-        // N-1 and N+1 both re-fetched, and the two "nothing to compare"
-        // shapes (missing on disk / never recorded) also re-fetch.
-        assert_eq!(
-            intact_len(Some(100), Some(100)),
-            Some(100),
-            "exact match resumes"
-        );
-        assert_eq!(
-            intact_len(Some(99), Some(100)),
-            None,
-            "short-by-one must re-fetch"
-        );
-        assert_eq!(
-            intact_len(Some(101), Some(100)),
-            None,
-            "long-by-one must re-fetch"
-        );
-        assert_eq!(intact_len(None, Some(100)), None, "missing file re-fetches");
-        assert_eq!(intact_len(Some(100), None), None, "unrecorded re-fetches");
-        assert_eq!(intact_len(None, None), None, "neither present re-fetches");
     }
 }
