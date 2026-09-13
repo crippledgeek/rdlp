@@ -553,9 +553,10 @@ async fn download_representation(
                 if is_video {
                     s.init_video_len = Some(len);
                     // The video init segment is this representation's resume
-                    // anchor (#746) — recorded here, once, under the same
-                    // lock as `init_video_len`.
-                    s.anchor_validator = fetched.validator;
+                    // anchor (#746) — recorded under the same lock as
+                    // `init_video_len`; `record_anchor` keeps an already
+                    // recorded anchor when this is a re-fetch of a torn part.
+                    s.record_anchor(fetched.validator);
                 } else {
                     s.init_audio_len = Some(len);
                 }
@@ -700,7 +701,7 @@ async fn download_representation(
                 // init-branch record above, gated by `init_url_absent` so
                 // the two sites can never both fire for one representation.
                 if is_video && init_url_absent && i == 0 {
-                    s.anchor_validator = validator;
+                    s.record_anchor(validator);
                 }
                 s.record_segment(&repr_id, i as u64, len);
                 completed_since_save += 1;
@@ -1104,13 +1105,6 @@ mod same_origin_gate_tests {
     //! from the MPD URL's origin, operator-set `Format.http_headers` are
     //! stripped to prevent header exfiltration to a redirected CDN.
     use super::*;
-    use std::collections::HashMap;
-
-    fn make_downloader_with_header(name: &str, value: &str) -> HttpDownloader {
-        let mut headers = HashMap::new();
-        headers.insert(name.to_string(), value.to_string());
-        HttpDownloader::with_client(wreq::Client::new()).with_extra_headers(Some(&headers))
-    }
 
     /// Positive: same-origin segment URL DOES receive `Format.http_headers`.
     /// Companion to the negative tests below; prevents a defensive
@@ -1128,7 +1122,7 @@ mod same_origin_gate_tests {
             .create_async()
             .await;
 
-        let http = make_downloader_with_header("Referer", referer);
+        let http = HttpDownloader::with_test_header("Referer", referer);
         let retry = fast_retry();
         let mpd_url = format!("{}/manifest.mpd", server.url());
         let mpd_origin = url::Url::parse(&mpd_url).unwrap().origin();
@@ -1169,7 +1163,7 @@ mod same_origin_gate_tests {
             .create_async()
             .await;
 
-        let http = make_downloader_with_header("Referer", referer);
+        let http = HttpDownloader::with_test_header("Referer", referer);
         let retry = fast_retry();
         let mpd_url = format!("{}/manifest.mpd", mpd_server.url());
         let mpd_origin = url::Url::parse(&mpd_url).unwrap().origin();
@@ -1207,7 +1201,7 @@ mod same_origin_gate_tests {
             .create_async()
             .await;
 
-        let http = make_downloader_with_header("Referer", referer);
+        let http = HttpDownloader::with_test_header("Referer", referer);
         let retry = fast_retry();
         // `data:` is an opaque-origin scheme per RFC 6454; any `Origin::Opaque`
         // compares not-equal to every Tuple origin including itself.

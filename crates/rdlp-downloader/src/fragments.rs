@@ -8,7 +8,7 @@
 //! separate `Format` entry.
 
 // `Duration::from_mins` (lint's suggested replacement) needs Rust 1.95;
-// workspace MSRV is 1.85.
+// workspace MSRV is 1.88.
 #![allow(clippy::duration_suboptimal_units)]
 
 use std::io::SeekFrom;

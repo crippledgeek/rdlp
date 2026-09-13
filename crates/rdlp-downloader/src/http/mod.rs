@@ -435,6 +435,17 @@ impl HttpDownloader {
         self.extra_headers.clone()
     }
 
+    /// Test fixture: a plain-client downloader with one operator header baked
+    /// in, the way the HLS/DASH production paths load `Format.http_headers`
+    /// via [`Self::with_extra_headers`]. The one definition every
+    /// same-origin header-gate test (HTTP probe, fragments, DASH) uses.
+    #[cfg(test)]
+    pub(crate) fn with_test_header(name: &str, value: &str) -> Self {
+        let mut headers = HashMap::new();
+        headers.insert(name.to_string(), value.to_string());
+        Self::with_client(wreq::Client::new()).with_extra_headers(Some(&headers))
+    }
+
     /// F3 single-GET probe: replaces the HEAD×2 + Range:bytes=0-0 sequence.
     /// Sends `GET Range: bytes=0-{PROBE_WINDOW_BYTES-1}`, parses headers only,
     /// discards body. Returns `ProbeResult` for the downstream parallel-vs-sequential

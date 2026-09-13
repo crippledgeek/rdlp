@@ -8,6 +8,7 @@
 use std::ops::RangeInclusive;
 
 use chrono::{DateTime, NaiveDateTime, Utc};
+use rdlp_redact::text::sanitize_for_terminal;
 use serde::{Deserialize, Serialize};
 use wreq::header::{HeaderMap, HeaderValue};
 
@@ -186,10 +187,19 @@ impl TryFrom<String> for StrongValidator {
     }
 }
 
-/// Why a 206's headers do not agree with the validator that was sent.
+/// Why a response's headers do not agree with the validator that was sent
+/// (see [`StrongValidator::verify_partial`] and [`StrongValidator::verify_full`]).
+///
+/// The `String` payloads are display-only: they are lossy-decoded from
+/// header bytes that need not be UTF-8 (§8.8.3.1 `obs-text`) and are never
+/// compared. `Display` sanitizes them for a terminal, because a server
+/// controls those bytes — `C2 9B` in an `ETag` decodes to U+009B (CSI) and
+/// would otherwise reach stderr as a live control sequence (CWE-150).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ValidatorMismatch {
-    /// The response carried no `ETag` although §15.3.7 requires one on a 206.
+    /// The response carried no header of the kind that was sent: no `ETag`
+    /// on a 206 (§15.3.7 requires one), or — for a full 200 response, which
+    /// has no such leniency — no header of the anchor's kind at all.
     Missing,
     /// The response's `ETag` is weak (§8.8.3.2: never a strong match) or is
     /// not an entity-tag at all — either way, not a strong validator.
@@ -198,7 +208,7 @@ pub enum ValidatorMismatch {
     Different {
         /// The validator that was sent in `If-Range`.
         expected: String,
-        /// The validator the 206 response actually carried.
+        /// The validator the response actually carried.
         got: String,
     },
 }
@@ -206,17 +216,21 @@ pub enum ValidatorMismatch {
 impl std::fmt::Display for ValidatorMismatch {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Missing => {
-                f.write_str("206 response carries no ETag (RFC 9110 §15.3.7 requires it)")
-            }
+            Self::Missing => f.write_str(
+                "response carries no validator of the kind sent in If-Range \
+                 (RFC 9110 §15.3.7 requires ETag on a 206)",
+            ),
             Self::NotStrong(got) => write!(
                 f,
-                "206 response carries a weak or malformed entity tag {got}; strong comparison fails"
+                "response carries a weak or malformed entity tag {}; strong comparison fails",
+                sanitize_for_terminal(got)
             ),
             Self::Different { expected, got } => {
                 write!(
                     f,
-                    "validator changed: sent {expected}, response carries {got}"
+                    "validator changed: sent {}, response carries {}",
+                    sanitize_for_terminal(expected),
+                    sanitize_for_terminal(got)
                 )
             }
         }
@@ -231,13 +245,13 @@ impl StrongValidator {
     /// when "the client has no entity tag", and a weak tag is still one.
     #[must_use]
     pub fn from_headers(headers: &HeaderMap) -> Option<Self> {
-        if let Some(etag) = headers.get("etag") {
+        if let Some(etag) = headers.get(ETAG) {
             return StrongEntityTag::parse_bytes(etag.as_bytes()).map(Self::ETag);
         }
         // An HTTP-date is pure ASCII by grammar (§5.6.7), so `to_str` — which
         // rejects only bytes >= 0x80 — never rejects a well-formed one; a
         // malformed non-ASCII `Last-Modified`/`Date` is correctly `None` here.
-        let last_modified = headers.get("last-modified")?.to_str().ok()?;
+        let last_modified = headers.get(LAST_MODIFIED)?.to_str().ok()?;
         // §6.6.1: only the server's own Date can adjudicate strength; the
         // receipt time is not the server's clock.
         let date = parse_http_date(headers.get("date")?.to_str().ok()?)?;
@@ -264,7 +278,8 @@ impl StrongValidator {
     ///
     /// `ETag` is in §15.3.7's MUST-repeat list, so its absence is a
     /// mismatch; `Last-Modified` is not, and a 206 to an If-Range request
-    /// SHOULD NOT repeat it, so its absence means "condition true".
+    /// SHOULD NOT repeat it, so its absence means "condition true". That
+    /// leniency is the only difference from [`Self::verify_full`].
     ///
     /// # Errors
     ///
@@ -273,36 +288,76 @@ impl StrongValidator {
     /// `If-Range` was sent against.
     pub fn verify_partial(&self, headers: &HeaderMap) -> Result<(), ValidatorMismatch> {
         match self {
+            Self::LastModified(_) if headers.get(LAST_MODIFIED).is_none() => Ok(()),
+            _ => self.verify_present(headers),
+        }
+    }
+
+    /// Check a full (200) response's headers against the validator that was
+    /// sent — the answer to an `If-Range` whose condition was false, or from
+    /// a server that ignored `Range`.
+    ///
+    /// Only the kind that was sent is compared: a `Last-Modified` anchor is
+    /// confirmed by the same `Last-Modified` even when the response now also
+    /// offers an `ETag`. Unlike [`Self::verify_partial`], an absent header
+    /// is [`ValidatorMismatch::Missing`] for BOTH kinds: §15.3.7's
+    /// "SHOULD NOT repeat" applies to a 206 answering `If-Range`, and a 200
+    /// is a complete representation whose validators are simply whatever
+    /// the server offers — with nothing to compare, the anchor is not
+    /// confirmed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ValidatorMismatch`] when the header of the sent kind is
+    /// absent, weak, or names a different representation.
+    pub fn verify_full(&self, headers: &HeaderMap) -> Result<(), ValidatorMismatch> {
+        self.verify_present(headers)
+    }
+
+    /// The per-kind byte comparison both `verify_*` share (§13.1.5 exact
+    /// match on the field value): the header of `self`'s kind must be
+    /// present and byte-equal.
+    fn verify_present(&self, headers: &HeaderMap) -> Result<(), ValidatorMismatch> {
+        match self {
             Self::ETag(expected) => {
                 let got_bytes = headers
-                    .get("etag")
+                    .get(ETAG)
                     .map(HeaderValue::as_bytes)
                     .ok_or(ValidatorMismatch::Missing)?;
                 match StrongEntityTag::parse_bytes(got_bytes) {
                     Some(tag) if tag.as_bytes() == expected.as_bytes() => Ok(()),
-                    // Display-only: a mismatch report may name a byte
-                    // sequence that isn't valid UTF-8 (§8.8.3.1 `obs-text`),
-                    // so this is never compared, only shown to a human.
-                    Some(tag) => Err(ValidatorMismatch::Different {
-                        expected: String::from_utf8_lossy(expected.as_bytes()).into_owned(),
-                        got: String::from_utf8_lossy(tag.as_bytes()).into_owned(),
-                    }),
+                    Some(tag) => Err(different(expected.as_bytes(), tag.as_bytes())),
                     None => Err(ValidatorMismatch::NotStrong(
                         String::from_utf8_lossy(got_bytes).into_owned(),
                     )),
                 }
             }
             Self::LastModified(expected) => {
-                match headers.get("last-modified").map(HeaderValue::as_bytes) {
-                    None => Ok(()),
-                    Some(got) if got == expected.as_bytes() => Ok(()),
-                    Some(got) => Err(ValidatorMismatch::Different {
-                        expected: String::from_utf8_lossy(expected.as_bytes()).into_owned(),
-                        got: String::from_utf8_lossy(got).into_owned(),
-                    }),
+                let got = headers
+                    .get(LAST_MODIFIED)
+                    .map(HeaderValue::as_bytes)
+                    .ok_or(ValidatorMismatch::Missing)?;
+                if got == expected.as_bytes() {
+                    Ok(())
+                } else {
+                    Err(different(expected.as_bytes(), got))
                 }
             }
         }
+    }
+}
+
+/// Header names the validator kinds are read from (RFC 9110 §8.8.2, §8.8.3).
+const ETAG: &str = "etag";
+const LAST_MODIFIED: &str = "last-modified";
+
+/// Build the display-only report of two validators that differ. Lossy: a
+/// mismatch may name bytes that are not valid UTF-8 (§8.8.3.1 `obs-text`),
+/// and the report is shown to a human, never compared.
+fn different(expected: &[u8], got: &[u8]) -> ValidatorMismatch {
+    ValidatorMismatch::Different {
+        expected: String::from_utf8_lossy(expected).into_owned(),
+        got: String::from_utf8_lossy(got).into_owned(),
     }
 }
 
@@ -656,6 +711,109 @@ mod tests {
         );
         assert_eq!(v.verify_partial(&HeaderMap::new()), Ok(()));
     }
+    // verify_full: a 200 has no §15.3.7 leniency, and only the sent kind counts
+    const IMF_A: &str = "Sun, 06 Nov 1994 08:49:37 GMT";
+    fn last_modified(raw: &str) -> StrongValidator {
+        StrongValidator::LastModified(ImfFixdate::parse(raw).unwrap())
+    }
+    #[test]
+    fn verify_full_etag_present_and_equal_passes() {
+        let v = StrongValidator::ETag(StrongEntityTag::parse("\"a\"").unwrap());
+        assert_eq!(v.verify_full(&headers(&[("etag", "\"a\"")])), Ok(()));
+    }
+    #[test]
+    fn verify_full_etag_different_is_a_mismatch() {
+        let v = StrongValidator::ETag(StrongEntityTag::parse("\"a\"").unwrap());
+        assert!(matches!(
+            v.verify_full(&headers(&[("etag", "\"b\"")])),
+            Err(ValidatorMismatch::Different { .. })
+        ));
+    }
+    #[test]
+    fn verify_full_etag_missing_is_a_mismatch() {
+        let v = StrongValidator::ETag(StrongEntityTag::parse("\"a\"").unwrap());
+        assert_eq!(
+            v.verify_full(&HeaderMap::new()),
+            Err(ValidatorMismatch::Missing)
+        );
+    }
+    #[test]
+    fn verify_full_weak_etag_is_not_strong() {
+        let v = StrongValidator::ETag(StrongEntityTag::parse("\"a\"").unwrap());
+        assert!(matches!(
+            v.verify_full(&headers(&[("etag", "W/\"a\"")])),
+            Err(ValidatorMismatch::NotStrong(_))
+        ));
+    }
+    #[test]
+    fn verify_full_last_modified_present_and_equal_passes() {
+        assert_eq!(
+            last_modified(IMF_A).verify_full(&headers(&[("last-modified", IMF_A)])),
+            Ok(())
+        );
+    }
+    /// A `Last-Modified` anchor is confirmed by the same `Last-Modified` even
+    /// when the 200 now also offers a strong `ETag` — only the kind that was
+    /// sent in `If-Range` is compared.
+    #[test]
+    fn verify_full_last_modified_ignores_a_newly_offered_etag() {
+        let h = headers(&[("etag", "\"new\""), ("last-modified", IMF_A)]);
+        assert_eq!(last_modified(IMF_A).verify_full(&h), Ok(()));
+    }
+    #[test]
+    fn verify_full_last_modified_different_is_a_mismatch() {
+        let h = headers(&[("last-modified", "Mon, 07 Nov 1994 08:49:37 GMT")]);
+        assert!(matches!(
+            last_modified(IMF_A).verify_full(&h),
+            Err(ValidatorMismatch::Different { .. })
+        ));
+    }
+    /// The one place `verify_full` and `verify_partial` disagree: an absent
+    /// `Last-Modified` is `Ok` on a 206 (§15.3.7 SHOULD NOT repeat it) and
+    /// `Missing` on a 200 (nothing to compare against).
+    #[test]
+    fn verify_full_last_modified_missing_is_a_mismatch_where_partial_is_ok() {
+        let v = last_modified(IMF_A);
+        assert_eq!(
+            v.verify_full(&HeaderMap::new()),
+            Err(ValidatorMismatch::Missing)
+        );
+        assert_eq!(v.verify_partial(&HeaderMap::new()), Ok(()));
+    }
+
+    // Display sanitizes server-controlled bytes (CWE-150): `C2 9B` is a legal
+    // `obs-text` etagc pair that lossy-decodes to U+009B (CSI).
+    const CSI_ETAG_BYTES: &[u8] = b"\"\xC2\x9B[2J\"";
+    #[test]
+    fn different_display_contains_no_control_characters() {
+        let v = StrongValidator::ETag(StrongEntityTag::parse("\"a\"").unwrap());
+        let err = v
+            .verify_full(&header_map_with_etag_bytes(CSI_ETAG_BYTES))
+            .unwrap_err();
+        assert!(
+            matches!(err, ValidatorMismatch::Different { .. }),
+            "{err:?}"
+        );
+        let shown = err.to_string();
+        assert!(
+            !shown.chars().any(char::is_control),
+            "rendered mismatch must carry no control character: {shown:?}"
+        );
+        assert!(shown.contains("[2J"), "the printable tail is kept: {shown}");
+    }
+    #[test]
+    fn not_strong_display_contains_no_control_characters() {
+        let v = StrongValidator::ETag(StrongEntityTag::parse("\"a\"").unwrap());
+        let mut h = HeaderMap::new();
+        h.append(
+            "etag",
+            HeaderValue::from_bytes(b"W/\"\xC2\x9B[2J\"").unwrap(),
+        );
+        let err = v.verify_full(&h).unwrap_err();
+        assert!(matches!(err, ValidatorMismatch::NotStrong(_)), "{err:?}");
+        assert!(!err.to_string().chars().any(char::is_control), "{err}");
+    }
+
     #[test]
     fn verify_partial_last_modified_different_is_a_mismatch() {
         let v = StrongValidator::LastModified(

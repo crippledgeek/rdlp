@@ -146,7 +146,7 @@ pub struct DashDownloadState {
     /// Strong validator (RFC 9110 §8.8) of the video init segment — or of
     /// the first video segment when the plan has no init — as offered when
     /// it was first fetched. Revalidated with `If-Range` on resume
-    /// (`crate::revalidate`).
+    /// (`crate::revalidate`). Written only through [`Self::record_anchor`].
     pub anchor_validator: Option<rdlp_http::StrongValidator>,
     /// `repr_id -> (segment index -> expected byte length)` for completed
     /// segments. `BTreeMap` so the serialised sidecar is deterministic.
@@ -200,6 +200,25 @@ impl DashDownloadState {
     pub async fn save(&mut self, path: &Path) -> std::io::Result<()> {
         self.updated_at = now_secs();
         crate::atomic::atomic_write_json(path, self.clone()).await
+    }
+
+    /// Record the validator the anchor part was fetched with — unless one is
+    /// already recorded, in which case `offered` is ignored.
+    ///
+    /// The anchor identifies the representation the parts on disk were
+    /// written from, and only a fresh start (no sidecar) or a resume whose
+    /// probe just `Confirmed` that anchor reaches a fetch of the anchor
+    /// part. A re-fetch (a torn part) from the same representation therefore
+    /// yields the same validator, or none from an edge that omits it:
+    /// replacing a `Some` with `None` would silently strip every later
+    /// resume of its revalidation, and replacing it with a different `Some`
+    /// would hide a representation change that happened between the probe
+    /// and the fetch — keeping the first recorded anchor lets the next
+    /// resume's probe detect that change instead.
+    pub fn record_anchor(&mut self, offered: Option<rdlp_http::StrongValidator>) {
+        if self.anchor_validator.is_none() {
+            self.anchor_validator = offered;
+        }
     }
 
     /// Record segment `idx` of representation `repr_id` as completed with
@@ -395,6 +414,60 @@ mod tests {
                 .is_none(),
             "a v1-shaped sidecar must not load — it carries no lengths"
         );
+    }
+
+    fn identity_v1(url: &Url) -> DashIdentity<'_> {
+        DashIdentity {
+            mpd_url: url,
+            video_repr_id: "v1",
+            audio_repr_id: None,
+            manifest_fingerprint: 0,
+        }
+    }
+    fn etag(s: &str) -> rdlp_http::StrongValidator {
+        rdlp_http::StrongValidator::try_from(format!("etag:{s}")).expect("strong etag")
+    }
+
+    #[test]
+    fn record_anchor_sets_when_none_is_recorded() {
+        let url = Url::parse("https://cdn.example.com/path/manifest.mpd").expect("url");
+        let mut state = DashDownloadState::new(&identity_v1(&url));
+        state.record_anchor(Some(etag("\"a\"")));
+        assert_eq!(state.anchor_validator, Some(etag("\"a\"")));
+    }
+
+    #[test]
+    fn record_anchor_never_downgrades_some_to_none() {
+        let url = Url::parse("https://cdn.example.com/path/manifest.mpd").expect("url");
+        let mut state = DashDownloadState::new(&identity_v1(&url));
+        state.record_anchor(Some(etag("\"a\"")));
+        state.record_anchor(None);
+        assert_eq!(
+            state.anchor_validator,
+            Some(etag("\"a\"")),
+            "an edge that omits the validator must not erase the recorded anchor"
+        );
+    }
+
+    #[test]
+    fn record_anchor_keeps_the_first_recorded_validator() {
+        let url = Url::parse("https://cdn.example.com/path/manifest.mpd").expect("url");
+        let mut state = DashDownloadState::new(&identity_v1(&url));
+        state.record_anchor(Some(etag("\"a\"")));
+        state.record_anchor(Some(etag("\"b\"")));
+        assert_eq!(
+            state.anchor_validator,
+            Some(etag("\"a\"")),
+            "the parts were written from the first anchor; a later one must not mask a change"
+        );
+    }
+
+    #[test]
+    fn record_anchor_none_onto_none_stays_none() {
+        let url = Url::parse("https://cdn.example.com/path/manifest.mpd").expect("url");
+        let mut state = DashDownloadState::new(&identity_v1(&url));
+        state.record_anchor(None);
+        assert_eq!(state.anchor_validator, None);
     }
 
     #[test]

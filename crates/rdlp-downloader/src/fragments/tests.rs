@@ -1013,16 +1013,6 @@ async fn fragment_cancel_does_not_delete_partial_file() {
 
 // ---- Same-origin header gate tests (issue #273) ----
 
-/// Build an `HttpDownloader` with a single extra header baked in.
-///
-/// Mirrors the pattern used in the HLS/DASH production paths where
-/// `Format.http_headers` are loaded via `with_extra_headers`.
-fn make_downloader_with_header(name: &str, value: &str) -> HttpDownloader {
-    let mut headers = std::collections::HashMap::new();
-    headers.insert(name.to_string(), value.to_string());
-    HttpDownloader::with_client(wreq::Client::new()).with_extra_headers(Some(&headers))
-}
-
 /// Negative test: cross-origin init URL must NOT receive `Format.http_headers`.
 ///
 /// Two mockito servers = two origins (same loopback address, different ports).
@@ -1071,7 +1061,7 @@ async fn cross_origin_init_url_does_not_forward_seed_headers() {
         filesize: None,
     }];
 
-    let http = make_downloader_with_header("Referer", "https://operator.example.com/page");
+    let http = HttpDownloader::with_test_header("Referer", "https://operator.example.com/page");
     let tmp = tempfile::NamedTempFile::new().unwrap();
     let format_url = format!("{}/page", format_server.url());
 
@@ -1134,7 +1124,7 @@ async fn same_origin_init_url_forwards_seed_headers() {
         filesize: None,
     }];
 
-    let http = make_downloader_with_header("Referer", "https://operator.example.com/page");
+    let http = HttpDownloader::with_test_header("Referer", "https://operator.example.com/page");
     let tmp = tempfile::NamedTempFile::new().unwrap();
 
     download_pre_resolved_fragments(
@@ -1190,7 +1180,7 @@ async fn cross_origin_fragment_url_does_not_forward_seed_headers() {
         filesize: None,
     }];
 
-    let http = make_downloader_with_header("Referer", "https://operator.example.com/page");
+    let http = HttpDownloader::with_test_header("Referer", "https://operator.example.com/page");
     let tmp = tempfile::NamedTempFile::new().unwrap();
 
     download_pre_resolved_fragments(
@@ -1446,7 +1436,8 @@ async fn resume_is_byte_identical_and_skips_done_fragments() {
     let done = 3usize;
     tokio::fs::write(&output, &reference[..done]).await.unwrap();
 
-    // Resume server: paths identical (so the path-only fingerprint matches),
+    // Resume server: paths identical (so the content fingerprint, whose URLs
+    // are matched path-only, matches),
     // but the already-done fragments are 418 — if resume re-fetches them the
     // download errors, proving they were skipped. Remaining fragments serve
     // their real bodies.

@@ -6,7 +6,8 @@
 //! it rides the shared retry seam and the caller's same-origin header gate.
 //! A 206 is judged with `StrongValidator::verify_partial` (§15.3.7: a 206
 //! must repeat `ETag`); a 200 — `If-Range` false, or a server that ignores
-//! `Range` — is confirmed only if it repeats the same strong validator.
+//! `Range` — with `StrongValidator::verify_full`, which compares only the
+//! kind that was sent and treats an absent header as a mismatch.
 //! "No answer" (transport failure or a non-answer status after retries) is
 //! an error, never `Changed`: discarding a partial on an outage is the
 //! failure #565 fixed for HTTP, and it is not repeated here.
@@ -34,17 +35,14 @@ pub(crate) struct AnchorProbe<'a> {
 
 /// Why [`AnchorVerdict::Changed`] fired — typed rather than a formatted
 /// string so a caller can match on it, and so the wording for a validator
-/// mismatch is the one `StrongValidator::verify_partial` already owns
-/// (`Display` delegates), not a second copy of it.
+/// mismatch is the one `ValidatorMismatch` already owns (`Display`
+/// delegates), not a second copy of it.
 pub(crate) enum ChangedReason {
-    /// The current response's validator does not match the recorded anchor
-    /// (a 206 that failed [`StrongValidator::verify_partial`], or a 200
-    /// whose validator differs — built as [`ValidatorMismatch::Different`]
-    /// the same way `verify_partial` builds it).
+    /// The current response's validator does not match the recorded anchor:
+    /// a 206 that failed [`StrongValidator::verify_partial`], or a 200 that
+    /// failed [`StrongValidator::verify_full`] (a 200 offering no header of
+    /// the anchor's kind is [`ValidatorMismatch::Missing`]).
     Validator(ValidatorMismatch),
-    /// A 200 (or a server that ignored `Range`) offered no strong validator
-    /// at all — nothing to compare the anchor against.
-    NoValidatorOnResponse,
     /// The probe came back 416 (`Content-Range: bytes */N`, RFC 9110
     /// §14.4's `unsatisfied-range`): the representation the anchor named no
     /// longer has a byte 0, so it is gone or replaced.
@@ -55,9 +53,6 @@ impl std::fmt::Display for ChangedReason {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Validator(mismatch) => write!(f, "{mismatch}"),
-            Self::NoValidatorOnResponse => {
-                f.write_str("current response offers no strong validator")
-            }
             Self::RangeUnsatisfiable => {
                 f.write_str("current response reports the range as unsatisfiable (416)")
             }
@@ -69,17 +64,6 @@ pub(crate) enum AnchorVerdict {
     Confirmed,
     /// Why the anchor no longer matches — for the caller's warn line.
     Changed(ChangedReason),
-}
-
-/// The raw bytes `StrongValidator` was built from — the same bytes
-/// `verify_partial` lossy-decodes into a [`ValidatorMismatch::Different`],
-/// used here to report a mismatch found outside a 206 in the identical
-/// wording.
-fn validator_bytes(v: &StrongValidator) -> &[u8] {
-    match v {
-        StrongValidator::ETag(tag) => tag.as_bytes(),
-        StrongValidator::LastModified(date) => date.as_bytes(),
-    }
 }
 
 pub(crate) async fn revalidate_anchor(
@@ -100,27 +84,22 @@ pub(crate) async fn revalidate_anchor(
         .await?;
     // `complete_length` is `Some` only on a 206 (`ProbeResult::from_response`).
     if result.complete_length.is_some() {
-        return Ok(match probe.validator.verify_partial(&result.headers) {
-            Ok(()) => AnchorVerdict::Confirmed,
-            Err(mismatch) => AnchorVerdict::Changed(ChangedReason::Validator(mismatch)),
-        });
+        return Ok(verdict(probe.validator.verify_partial(&result.headers)));
     }
     // A 416's `Content-Range: bytes */N` is otherwise indistinguishable from
     // "no info" in `ProbeResult` (`probe_answered_at`'s doc comment): folding
-    // it into "no strong validator" would misreport the reason.
+    // it into a validator mismatch would misreport the reason.
     if ContentRange::unsatisfied_from_headers(&result.headers).is_some() {
         return Ok(AnchorVerdict::Changed(ChangedReason::RangeUnsatisfiable));
     }
-    Ok(match result.validator.as_ref() {
-        Some(got) if got == probe.validator => AnchorVerdict::Confirmed,
-        Some(got) => {
-            AnchorVerdict::Changed(ChangedReason::Validator(ValidatorMismatch::Different {
-                expected: String::from_utf8_lossy(validator_bytes(probe.validator)).into_owned(),
-                got: String::from_utf8_lossy(validator_bytes(got)).into_owned(),
-            }))
-        }
-        None => AnchorVerdict::Changed(ChangedReason::NoValidatorOnResponse),
-    })
+    Ok(verdict(probe.validator.verify_full(&result.headers)))
+}
+
+fn verdict(checked: std::result::Result<(), ValidatorMismatch>) -> AnchorVerdict {
+    match checked {
+        Ok(()) => AnchorVerdict::Confirmed,
+        Err(mismatch) => AnchorVerdict::Changed(ChangedReason::Validator(mismatch)),
+    }
 }
 
 #[cfg(test)]
@@ -217,6 +196,78 @@ mod tests {
         .await
         .expect("answered");
         assert!(matches!(verdict, AnchorVerdict::Confirmed));
+    }
+
+    /// The recorded anchor is a `Last-Modified` (the origin offered no strong
+    /// `ETag` when the parts were written). A 200 answer that now ALSO carries
+    /// a strong `ETag`, alongside the SAME `Last-Modified`, still names the
+    /// same representation: only the kind that was sent in `If-Range` is
+    /// compared. Comparing whole `StrongValidator`s (whose `from_headers`
+    /// prefers `ETag`) misreported this as `Changed`.
+    #[tokio::test]
+    async fn confirmed_on_200_when_last_modified_anchor_is_repeated_beside_a_new_etag() {
+        const LAST_MODIFIED: &str = "Sun, 06 Nov 1994 08:49:37 GMT";
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/a.ts")
+            .with_status(200)
+            .with_header("etag", "\"brand-new\"")
+            .with_header("last-modified", LAST_MODIFIED)
+            .with_header("date", "Sun, 06 Nov 1994 09:00:00 GMT")
+            .with_body(b"SAME")
+            .create_async()
+            .await;
+        let http = HttpDownloader::with_client(wreq::Client::new());
+        let url = format!("{}/a.ts", server.url());
+        let v = StrongValidator::try_from(format!("last-modified:{LAST_MODIFIED}"))
+            .expect("imf-fixdate");
+        let verdict = revalidate_anchor(
+            &http,
+            AnchorProbe {
+                url: &url,
+                headers: HeaderMap::new(),
+                validator: &v,
+            },
+            &AtomicU64::new(0),
+        )
+        .await
+        .expect("answered");
+        assert!(
+            matches!(verdict, AnchorVerdict::Confirmed),
+            "a repeated Last-Modified confirms the anchor regardless of a newly offered ETag"
+        );
+    }
+
+    /// A 200 that offers no validator of the anchor's kind leaves nothing to
+    /// compare: `verify_full` reports it as `Missing` (no §15.3.7 leniency
+    /// on a full response), and the anchor is not confirmed.
+    #[tokio::test]
+    async fn changed_on_200_that_offers_no_validator() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/a.ts")
+            .with_status(200)
+            .with_body(b"WHO KNOWS")
+            .create_async()
+            .await;
+        let http = HttpDownloader::with_client(wreq::Client::new());
+        let url = format!("{}/a.ts", server.url());
+        let v = etag("\"e1\"");
+        let verdict = revalidate_anchor(
+            &http,
+            AnchorProbe {
+                url: &url,
+                headers: HeaderMap::new(),
+                validator: &v,
+            },
+            &AtomicU64::new(0),
+        )
+        .await
+        .expect("answered");
+        assert!(matches!(
+            verdict,
+            AnchorVerdict::Changed(ChangedReason::Validator(ValidatorMismatch::Missing))
+        ));
     }
 
     #[tokio::test]
