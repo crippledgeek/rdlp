@@ -1,20 +1,18 @@
 use super::*;
-use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
+use crate::bindings::rdlp::plugin::host_extract_helpers::{Host as _, RegexFlags};
 
 fn ctx() -> PluginStoreData {
     PluginStoreData::new("test", tokio_util::sync::CancellationToken::new())
 }
 
-#[tokio::test]
-async fn search_regex_finds_first_match() {
+#[test]
+fn search_regex_finds_first_match() {
     let mut c = ctx();
-    let r = c
-        .search_regex(
-            r"(\d+)".to_string(),
-            "id=42 ts=99".to_string(),
-            crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
-        )
-        .await;
+    let r = c.search_regex(
+        r"(\d+)".to_string(),
+        "id=42 ts=99".to_string(),
+        RegexFlags::empty(),
+    );
     assert_eq!(r, Some("42".to_string()));
 }
 
@@ -27,16 +25,10 @@ async fn search_regex_finds_first_match() {
 /// Pattern `(a)(b)?` against `"a"`:
 ///   - group 1 = "a", group 2 = None (optional, didn't match)
 ///   - expected: "a" (group 1)
-#[tokio::test]
-async fn search_regex_group1_wins_over_group0_regression() {
+#[test]
+fn search_regex_group1_wins_over_group0_regression() {
     let mut c = ctx();
-    let r = c
-        .search_regex(
-            r"(a)(b)?".to_string(),
-            "a".to_string(),
-            crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
-        )
-        .await;
+    let r = c.search_regex(r"(a)(b)?".to_string(), "a".to_string(), RegexFlags::empty());
     assert_eq!(r, Some("a".to_string()), "group 1 must be returned");
 }
 
@@ -49,16 +41,10 @@ async fn search_regex_group1_wins_over_group0_regression() {
 /// Note: in the `regex` crate, a non-participating optional group returns
 /// `None` from `m.get(1)`. Our implementation maps that to `""` to match
 /// yt-dlp's `m.group(1)` returning `""` for a non-participating group in Python's re.
-#[tokio::test]
-async fn search_regex_returns_empty_string_for_non_participating_group1() {
+#[test]
+fn search_regex_returns_empty_string_for_non_participating_group1() {
     let mut c = ctx();
-    let r = c
-        .search_regex(
-            r"(x)?(y)".to_string(),
-            "y".to_string(),
-            crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
-        )
-        .await;
+    let r = c.search_regex(r"(x)?(y)".to_string(), "y".to_string(), RegexFlags::empty());
     // group 1 did not participate → empty string (not "y" from group 2)
     assert_eq!(
         r,
@@ -68,68 +54,58 @@ async fn search_regex_returns_empty_string_for_non_participating_group1() {
 }
 
 /// Sanity check: no capture groups → return the whole match (group 0).
-#[tokio::test]
-async fn search_regex_no_groups_returns_whole_match() {
+#[test]
+fn search_regex_no_groups_returns_whole_match() {
     let mut c = ctx();
-    let r = c
-        .search_regex(
-            r"\d+".to_string(),
-            "abc 42 def".to_string(),
-            crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
-        )
-        .await;
+    let r = c.search_regex(
+        r"\d+".to_string(),
+        "abc 42 def".to_string(),
+        RegexFlags::empty(),
+    );
     assert_eq!(r, Some("42".to_string()));
 }
 
-#[tokio::test]
-async fn search_regex_no_match_returns_none() {
+#[test]
+fn search_regex_no_match_returns_none() {
     let mut c = ctx();
-    let r = c
-        .search_regex(
-            r"NOPE".to_string(),
-            "irrelevant".to_string(),
-            crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
-        )
-        .await;
+    let r = c.search_regex(
+        r"NOPE".to_string(),
+        "irrelevant".to_string(),
+        RegexFlags::empty(),
+    );
     assert_eq!(r, None);
 }
 
-#[tokio::test]
-async fn search_regex_ignore_case_flag() {
+#[test]
+fn search_regex_ignore_case_flag() {
     let mut c = ctx();
-    let r = c
-        .search_regex(
-            r"(foo)".to_string(),
-            "FOO bar".to_string(),
-            crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::IGNORE_CASE,
-        )
-        .await;
+    let r = c.search_regex(
+        r"(foo)".to_string(),
+        "FOO bar".to_string(),
+        RegexFlags::IGNORE_CASE,
+    );
     assert_eq!(r, Some("FOO".to_string()));
 }
 
-#[tokio::test]
-async fn html_search_regex_strips_tags() {
+#[test]
+fn html_search_regex_strips_tags() {
     let mut c = ctx();
-    let r = c
-        .html_search_regex(
-            r"<title>(.+?)</title>".to_string(),
-            "<title>Hello <b>World</b></title>".to_string(),
-            crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
-        )
-        .await;
+    let r = c.html_search_regex(
+        r"<title>(.+?)</title>".to_string(),
+        "<title>Hello <b>World</b></title>".to_string(),
+        RegexFlags::empty(),
+    );
     assert_eq!(r, Some("Hello World".to_string()));
 }
 
-#[tokio::test]
-async fn html_search_regex_returns_entities_verbatim() {
+#[test]
+fn html_search_regex_returns_entities_verbatim() {
     let mut c = ctx();
-    let r = c
-        .html_search_regex(
-            r"<title>(.+?)</title>".to_string(),
-            "<title>Tom &amp; Jerry</title>".to_string(),
-            crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
-        )
-        .await;
+    let r = c.html_search_regex(
+        r"<title>(.+?)</title>".to_string(),
+        "<title>Tom &amp; Jerry</title>".to_string(),
+        RegexFlags::empty(),
+    );
     // Returned VERBATIM. The shim used to unescape here, matching yt-dlp;
     // it no longer does, because `InfoDict::decode_text_fields` decodes
     // whatever a plugin returns and two single-pass decodes compose into the
@@ -137,36 +113,30 @@ async fn html_search_regex_returns_entities_verbatim() {
     assert_eq!(r, Some("Tom &amp; Jerry".to_string()));
 }
 
-#[tokio::test]
-async fn html_search_meta_property_form() {
+#[test]
+fn html_search_meta_property_form() {
     let mut c = ctx();
-    let r = c
-        .html_search_meta(
-            "og:title".to_string(),
-            r#"<meta property="og:title" content="Hello"/>"#.to_string(),
-        )
-        .await;
+    let r = c.html_search_meta(
+        "og:title".to_string(),
+        r#"<meta property="og:title" content="Hello"/>"#.to_string(),
+    );
     assert_eq!(r, Some("Hello".to_string()));
 }
 
-#[tokio::test]
-async fn html_search_meta_name_form() {
+#[test]
+fn html_search_meta_name_form() {
     let mut c = ctx();
-    let r = c
-        .html_search_meta(
-            "description".to_string(),
-            r#"<meta name="description" content="Page text"/>"#.to_string(),
-        )
-        .await;
+    let r = c.html_search_meta(
+        "description".to_string(),
+        r#"<meta name="description" content="Page text"/>"#.to_string(),
+    );
     assert_eq!(r, Some("Page text".to_string()));
 }
 
-#[tokio::test]
-async fn html_search_meta_missing_returns_none() {
+#[test]
+fn html_search_meta_missing_returns_none() {
     let mut c = ctx();
-    let r = c
-        .html_search_meta("nope".to_string(), "<html></html>".to_string())
-        .await;
+    let r = c.html_search_meta("nope".to_string(), "<html></html>".to_string());
     assert_eq!(r, None);
 }
 
@@ -175,16 +145,14 @@ async fn html_search_meta_missing_returns_none() {
 ///
 /// Before the fix `[^"']*` stopped at the first `'` inside `"a'b"`,
 /// returning `"a"` instead of `"a'b"`.
-#[tokio::test]
-async fn html_search_meta_mixed_quote_content_not_truncated_regression() {
+#[test]
+fn html_search_meta_mixed_quote_content_not_truncated_regression() {
     let mut c = ctx();
     // content is double-quoted but contains an apostrophe
-    let r = c
-        .html_search_meta(
-            "x".to_string(),
-            r#"<meta name="x" content="a'b">"#.to_string(),
-        )
-        .await;
+    let r = c.html_search_meta(
+        "x".to_string(),
+        r#"<meta name="x" content="a'b">"#.to_string(),
+    );
     assert_eq!(
         r,
         Some("a'b".to_string()),
@@ -193,132 +161,110 @@ async fn html_search_meta_mixed_quote_content_not_truncated_regression() {
 }
 
 /// Companion: content in single quotes may contain a double-quote.
-#[tokio::test]
-async fn html_search_meta_double_quote_inside_single_quoted_content() {
+#[test]
+fn html_search_meta_double_quote_inside_single_quoted_content() {
     let mut c = ctx();
-    let r = c
-        .html_search_meta(
-            "x".to_string(),
-            r#"<meta name='x' content='say "hello"'>"#.to_string(),
-        )
-        .await;
+    let r = c.html_search_meta(
+        "x".to_string(),
+        r#"<meta name='x' content='say "hello"'>"#.to_string(),
+    );
     assert_eq!(r, Some(r#"say "hello""#.to_string()));
 }
 
-#[tokio::test]
-async fn og_search_property_extracts_title() {
+#[test]
+fn og_search_property_extracts_title() {
     let mut c = ctx();
-    let r = c
-        .og_search_property(
-            "title".to_string(),
-            r#"<meta property="og:title" content="My Video"/>"#.to_string(),
-        )
-        .await;
+    let r = c.og_search_property(
+        "title".to_string(),
+        r#"<meta property="og:title" content="My Video"/>"#.to_string(),
+    );
     assert_eq!(r, Some("My Video".to_string()));
 }
 
-#[tokio::test]
-async fn og_search_property_extracts_image() {
+#[test]
+fn og_search_property_extracts_image() {
     let mut c = ctx();
-    let r = c
-        .og_search_property(
-            "image".to_string(),
-            r#"<meta property="og:image" content="https://x.com/y.jpg"/>"#.to_string(),
-        )
-        .await;
+    let r = c.og_search_property(
+        "image".to_string(),
+        r#"<meta property="og:image" content="https://x.com/y.jpg"/>"#.to_string(),
+    );
     assert_eq!(r, Some("https://x.com/y.jpg".to_string()));
 }
 
-#[tokio::test]
-async fn og_search_property_returns_entities_verbatim() {
+#[test]
+fn og_search_property_returns_entities_verbatim() {
     let mut c = ctx();
-    let r = c
-        .og_search_property(
-            "title".to_string(),
-            r#"<meta property="og:title" content="A &amp; B"/>"#.to_string(),
-        )
-        .await;
+    let r = c.og_search_property(
+        "title".to_string(),
+        r#"<meta property="og:title" content="A &amp; B"/>"#.to_string(),
+    );
     // Verbatim — see `html_search_regex_returns_entities_verbatim` above.
     assert_eq!(r, Some("A &amp; B".to_string()));
 }
 
-#[tokio::test]
-async fn og_search_property_extracts_unquoted_value() {
+#[test]
+fn og_search_property_extracts_unquoted_value() {
     let mut c = ctx();
-    let r = c
-        .og_search_property(
-            "image".to_string(),
-            r#"<meta property="og:image" content=https://x.com/y.jpg />"#.to_string(),
-        )
-        .await;
+    let r = c.og_search_property(
+        "image".to_string(),
+        r#"<meta property="og:image" content=https://x.com/y.jpg />"#.to_string(),
+    );
     assert_eq!(r, Some("https://x.com/y.jpg".to_string()));
 }
 
-#[tokio::test]
-async fn rta_search_official_meta_returns_18() {
+#[test]
+fn rta_search_official_meta_returns_18() {
     let mut c = ctx();
-    let r = c
-        .rta_search(r#"<meta name="rating" content="RTA-5042-1996-1400-1577-RTA">"#.to_string())
-        .await;
+    let r =
+        c.rta_search(r#"<meta name="rating" content="RTA-5042-1996-1400-1577-RTA">"#.to_string());
     assert_eq!(r, Some(18));
 }
 
-#[tokio::test]
-async fn rta_search_2257_marker_returns_18() {
+#[test]
+fn rta_search_2257_marker_returns_18() {
     let mut c = ctx();
-    let r = c
-        .rta_search("footer text > 18 U.S.C. § 2257 statement".to_string())
-        .await;
+    let r = c.rta_search("footer text > 18 U.S.C. § 2257 statement".to_string());
     assert_eq!(r, Some(18));
 }
 
-#[tokio::test]
-async fn rta_search_no_marker_returns_none() {
+#[test]
+fn rta_search_no_marker_returns_none() {
     let mut c = ctx();
-    let r = c
-        .rta_search("<html><body>nothing</body></html>".to_string())
-        .await;
+    let r = c.rta_search("<html><body>nothing</body></html>".to_string());
     assert_eq!(r, None);
 }
 
-#[tokio::test]
-async fn search_json_extracts_simple_object() {
+#[test]
+fn search_json_extracts_simple_object() {
     let mut c = ctx();
-    let r = c
-        .search_json(
-            r"var data\s*=".to_string(),
-            ";".to_string(),
-            r#"var data = {"key": "value"};"#.to_string(),
-        )
-        .await;
+    let r = c.search_json(
+        r"var data\s*=".to_string(),
+        ";".to_string(),
+        r#"var data = {"key": "value"};"#.to_string(),
+    );
     assert_eq!(r, Some(r#"{"key": "value"}"#.to_string()));
 }
 
-#[tokio::test]
-async fn search_json_handles_nested() {
+#[test]
+fn search_json_handles_nested() {
     let mut c = ctx();
-    let r = c
-        .search_json(
-            r"var x\s*=".to_string(),
-            ";".to_string(),
-            r#"var x = {"a": {"b": [1,2,3]}};"#.to_string(),
-        )
-        .await;
+    let r = c.search_json(
+        r"var x\s*=".to_string(),
+        ";".to_string(),
+        r#"var x = {"a": {"b": [1,2,3]}};"#.to_string(),
+    );
     assert_eq!(r, Some(r#"{"a": {"b": [1,2,3]}}"#.to_string()));
 }
 
-#[tokio::test]
-async fn search_json_no_match_returns_none() {
+#[test]
+fn search_json_no_match_returns_none() {
     let mut c = ctx();
-    let r = c
-        .search_json(r"NOPE".to_string(), String::new(), "irrelevant".to_string())
-        .await;
+    let r = c.search_json(r"NOPE".to_string(), String::new(), "irrelevant".to_string());
     assert_eq!(r, None);
 }
 
 #[tokio::test]
 async fn extract_m3u8_returns_formats_via_fixture() {
-    use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
     use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
     use std::sync::Arc;
 
@@ -357,13 +303,13 @@ hi.m3u8\n";
     assert_eq!(fmt.width, Some(1920));
 }
 
-#[tokio::test]
-async fn extract_json_ld_returns_typed_video() {
+#[test]
+fn extract_json_ld_returns_typed_video() {
     let mut c = ctx();
     let html = r#"<script type="application/ld+json">
     {"@type":"VideoObject","name":"Test","description":"d","thumbnailUrl":"https://x/t.jpg","duration":"PT5M","uploadDate":"2024-01-01"}
     </script>"#;
-    let r = c.extract_json_ld(html.to_string()).await.unwrap();
+    let r = c.extract_json_ld(html.to_string()).unwrap();
     assert_eq!(r.title, Some("Test".to_string()));
     assert_eq!(r.duration, Some(300));
 }
@@ -423,7 +369,6 @@ fn empty_fetch() -> crate::bindings::rdlp::plugin::host_extract_helpers::FetchOp
 /// EXPECTED TO FAIL against the Task-4 stub (returns empty formats vec).
 #[tokio::test]
 async fn extract_mpd_returns_formats_via_fixture() {
-    use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
     use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
     use std::sync::Arc;
 
@@ -506,8 +451,6 @@ async fn extract_mpd_returns_formats_via_fixture() {
 /// implementation to check for a missing `FetchCtx` and swallow the error.
 #[tokio::test]
 async fn extract_mpd_non_fatal_swallows_fetch_failure() {
-    use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
-
     let mut c = ctx();
     c.fetch = None;
     let r = c
@@ -528,8 +471,6 @@ async fn extract_mpd_non_fatal_swallows_fetch_failure() {
 /// EXPECTED TO FAIL against the Task-4 stub (stub returns Ok, not Err).
 #[tokio::test]
 async fn extract_mpd_fatal_propagates_fetch_failure() {
-    use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
-
     let mut c = ctx();
     c.fetch = None;
     let err = c
@@ -553,7 +494,6 @@ async fn extract_mpd_fatal_propagates_fetch_failure() {
 /// EXPECTED TO FAIL against the Task-4 stub (stub returns Ok, not Err).
 #[tokio::test]
 async fn extract_mpd_dynamic_mpd_returns_fetch_error() {
-    use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
     use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
     use std::sync::Arc;
 
@@ -590,7 +530,6 @@ async fn extract_mpd_dynamic_mpd_returns_fetch_error() {
 /// has no `ContentProtection`. The extraction must drop the video and return only the audio.
 #[tokio::test]
 async fn extract_mpd_drm_protected_reps_are_dropped() {
-    use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
     use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
     use std::sync::Arc;
 
@@ -627,7 +566,6 @@ async fn extract_mpd_drm_protected_reps_are_dropped() {
 /// no `ok_bytes` variant is needed.
 #[tokio::test]
 async fn extract_mpd_invalid_utf8_returns_fetch_error() {
-    use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
     use crate::bindings::rdlp::plugin::host_fetch::FetchError;
     use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
     use std::sync::Arc;
@@ -662,7 +600,6 @@ async fn extract_mpd_invalid_utf8_returns_fetch_error() {
 /// EXPECTED TO FAIL against the Task-4 stub (stub returns Ok, not Err).
 #[tokio::test]
 async fn extract_mpd_unparseable_xml_returns_fetch_error() {
-    use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
     use crate::bindings::rdlp::plugin::host_fetch::FetchError;
     use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
     use std::sync::Arc;
@@ -1049,7 +986,7 @@ const WITH_TEXT_TRACKS_MPD: &str =
 
 #[tokio::test]
 async fn extract_mpd_returns_subtitles_via_fixture() {
-    use crate::bindings::rdlp::plugin::host_extract_helpers::{ExtractHelpersSubtitle, Host as _};
+    use crate::bindings::rdlp::plugin::host_extract_helpers::ExtractHelpersSubtitle;
     use crate::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
     use std::sync::Arc;
 
@@ -1142,4 +1079,235 @@ fn mpd_fragment_carries_byte_range_fields() {
         Some("https://cdn.example.com/init.m4s")
     );
     assert_eq!(frag.init_byte_range, Some((0, 740)));
+}
+
+// ---- R1: plugin-supplied patterns are bounded (rust-regex-craft) --------
+
+/// Boundary pair, accepted side: a pattern of exactly
+/// `PLUGIN_REGEX_MAX_PATTERN_LEN` bytes compiles and matches.
+#[test]
+fn search_regex_accepts_pattern_at_max_len() {
+    let mut c = ctx();
+    let pat = "a".repeat(PLUGIN_REGEX_MAX_PATTERN_LEN);
+    let r = c.search_regex(pat.clone(), pat, RegexFlags::empty());
+    assert_eq!(r.map(|s| s.len()), Some(PLUGIN_REGEX_MAX_PATTERN_LEN));
+}
+
+/// Boundary pair, rejected side: one byte over the cap is refused before
+/// compiling, even though the pattern itself is trivially cheap.
+#[test]
+fn search_regex_rejects_pattern_one_over_max_len() {
+    let mut c = ctx();
+    let pat = "a".repeat(PLUGIN_REGEX_MAX_PATTERN_LEN + 1);
+    let r = c.search_regex(pat.clone(), pat, RegexFlags::empty());
+    assert_eq!(r, None);
+}
+
+/// A short pattern whose COMPILED form exceeds the cap is refused. The
+/// test proves its own demonstrator: `\w{100}` builds at the crate's
+/// default `size_limit` and fails at `PLUGIN_REGEX_SIZE_LIMIT`, so a
+/// `None` here can only come from the bound being applied.
+#[test]
+fn search_regex_rejects_pattern_compiling_above_size_limit() {
+    let pat = r"\w{100}";
+    assert!(
+        regex::RegexBuilder::new(pat).build().is_ok(),
+        "demonstrator must build at the crate default"
+    );
+    assert!(
+        regex::RegexBuilder::new(pat)
+            .size_limit(PLUGIN_REGEX_SIZE_LIMIT)
+            .build()
+            .is_err(),
+        "demonstrator must exceed PLUGIN_REGEX_SIZE_LIMIT"
+    );
+    let mut c = ctx();
+    let r = c.search_regex(pat.to_string(), "a".repeat(100), RegexFlags::empty());
+    assert_eq!(r, None);
+}
+
+/// `html_search_meta` builds its patterns from the plugin's `name`; an
+/// oversized name must go through the same bound as `search_regex`.
+#[test]
+fn html_search_meta_rejects_oversized_name() {
+    let mut c = ctx();
+    let name = "a".repeat(PLUGIN_REGEX_MAX_PATTERN_LEN + 1);
+    let html = format!(r#"<meta name="{name}" content="x">"#);
+    assert_eq!(c.html_search_meta(name, html), None);
+}
+
+/// `og_search_property` builds its patterns from the plugin's `prop`; same
+/// bound as `search_regex`.
+#[test]
+fn og_search_property_rejects_oversized_property() {
+    let mut c = ctx();
+    let prop = "a".repeat(PLUGIN_REGEX_MAX_PATTERN_LEN + 1);
+    let html = format!(r#"<meta property="og:{prop}" content="x">"#);
+    assert_eq!(c.og_search_property(prop, html), None);
+}
+
+/// `search_json` splices the plugin's start/end patterns in RAW, so it is
+/// the helper most exposed to an expensive pattern: both bounds apply.
+#[test]
+fn search_json_rejects_oversized_start_pattern() {
+    let mut c = ctx();
+    let start = "a".repeat(PLUGIN_REGEX_MAX_PATTERN_LEN + 1);
+    let hay = format!(r#"{start} {{"k":1}};"#);
+    assert_eq!(c.search_json(start, ";".to_string(), hay), None);
+}
+
+#[test]
+fn search_json_rejects_start_pattern_compiling_above_size_limit() {
+    let mut c = ctx();
+    let hay = format!(r#"{} {{"k":1}};"#, "a".repeat(100));
+    assert_eq!(
+        c.search_json(r"\w{100}".to_string(), ";".to_string(), hay),
+        None
+    );
+}
+
+// ---- D1: both manifest fetches share one fetch path ----------------------
+
+/// The shared timeout is read at the call site for BOTH manifest helpers,
+/// not merely declared: the recorded request carries it.
+#[tokio::test]
+async fn manifest_fetches_share_one_timeout() {
+    use crate::host::fetch::FetchCtx;
+    use crate::host::fetch_fixtures::FetchFixtures;
+    use std::sync::Arc;
+
+    for (is_m3u8, url) in [(true, "https://x/p.m3u8"), (false, "https://x/m.mpd")] {
+        let mut c = ctx();
+        let fixtures = Arc::new(FetchFixtures::new());
+        c.fetch = Some(FetchCtx {
+            client: rdlp_http::wreq::Client::builder()
+                .build()
+                .expect("test client"),
+            fixtures: Some(Arc::clone(&fixtures)),
+        });
+        if is_m3u8 {
+            let _ = c
+                .extract_m3u8(
+                    url.to_string(),
+                    "v".to_string(),
+                    m3u8_opts(false),
+                    empty_fetch(),
+                )
+                .await;
+        } else {
+            let _ = c
+                .extract_mpd(
+                    url.to_string(),
+                    "v".to_string(),
+                    mpd_opts(false),
+                    empty_fetch(),
+                )
+                .await;
+        }
+        let recorded = fixtures.last_request().expect("request recorded");
+        assert_eq!(
+            recorded.timeout_ms,
+            Some(MANIFEST_FETCH_TIMEOUT_MS),
+            "manifest fetch for {url} must carry the shared timeout"
+        );
+    }
+}
+
+// ---- refused patterns are observable ---------------------------------------
+
+/// `(target, message)` pairs captured from the `log` facade.
+type LogEntries = std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>;
+
+/// Minimal `log::Log` sink so a test can assert a refusal was reported to
+/// the plugin's own log target. Mirrors the capturing-logger harness in
+/// `rdlp-cookies`; `log::set_logger` accepts one logger per process, so the
+/// buffer is process-global and never cleared — each assertion looks for
+/// its own distinctive message instead.
+struct CapturingLogger {
+    entries: LogEntries,
+}
+
+impl log::Log for CapturingLogger {
+    fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record<'_>) {
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((record.target().to_string(), record.args().to_string()));
+    }
+    fn flush(&self) {}
+}
+
+fn captured_logs() -> LogEntries {
+    static CAPTURED: std::sync::OnceLock<LogEntries> = std::sync::OnceLock::new();
+    std::sync::Arc::clone(CAPTURED.get_or_init(|| {
+        let entries: LogEntries = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let logger: &'static CapturingLogger = Box::leak(Box::new(CapturingLogger {
+            entries: std::sync::Arc::clone(&entries),
+        }));
+        log::set_logger(logger).expect("no other logger in the rdlp-plugin lib test binary");
+        log::set_max_level(log::LevelFilter::Warn);
+        entries
+    }))
+}
+
+/// First captured entry whose message contains `needle`, cloned out so the
+/// lock is released before any assertion panics.
+fn captured_entry_containing(logs: &LogEntries, needle: &str) -> (String, String) {
+    let entries = logs
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    entries
+        .iter()
+        .find(|(_, m)| m.contains(needle))
+        .cloned()
+        .unwrap_or_else(|| panic!("no entry containing {needle:?} among {entries:?}"))
+}
+
+/// A plugin author must be able to tell "pattern refused" from "no match":
+/// the length-bound rejection warns on the plugin's log target with the
+/// length and the limit, and never echoes the pattern.
+#[test]
+fn refused_over_long_pattern_warns_on_plugin_target() {
+    let logs = captured_logs();
+    let mut c = ctx();
+    let pat = "z".repeat(PLUGIN_REGEX_MAX_PATTERN_LEN + 1);
+    assert_eq!(
+        c.search_regex(pat, String::new(), RegexFlags::empty()),
+        None
+    );
+    let (target, msg) =
+        captured_entry_containing(&logs, &format!("{} B", PLUGIN_REGEX_MAX_PATTERN_LEN + 1));
+    assert_eq!(
+        target, "plugin::test",
+        "warn must go to the plugin's log target"
+    );
+    assert!(
+        msg.contains(&PLUGIN_REGEX_MAX_PATTERN_LEN.to_string()),
+        "{msg}"
+    );
+    assert!(
+        !msg.contains("zzzz"),
+        "pattern text must not be logged: {msg}"
+    );
+}
+
+/// Same observability for the compiled-size bound.
+#[test]
+fn refused_oversize_compiled_pattern_warns_on_plugin_target() {
+    let logs = captured_logs();
+    let mut c = ctx();
+    assert_eq!(
+        c.search_regex(r"\w{100}".to_string(), String::new(), RegexFlags::empty()),
+        None
+    );
+    let (target, msg) = captured_entry_containing(&logs, "compiled size");
+    assert_eq!(target, "plugin::test");
+    assert!(msg.contains(&PLUGIN_REGEX_SIZE_LIMIT.to_string()), "{msg}");
+    assert!(
+        !msg.contains(r"\w{100}"),
+        "pattern text must not be logged: {msg}"
+    );
 }

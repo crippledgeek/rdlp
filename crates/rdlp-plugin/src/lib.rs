@@ -126,7 +126,13 @@ pub use error::PluginError;
 /// - `bindings::host_*::Host` traits — one per imported interface, implemented
 ///   by the host on `PluginStoreData` (Task 11+).
 ///
-/// Async support is enabled (matching the engine's `async_support(true)`).
+/// Async support is enabled (matching the engine's `async_support(true)`),
+/// but only for the imports that actually await — the network fetch, the JS
+/// sandbox, the cookie jar, and the two manifest expanders that fetch. Every
+/// other host import (regex/HTML/JSON helpers, KV, log) is pure and is
+/// generated as a plain `fn`: an `async fn` with nothing to await is a future
+/// that is created and polled once for no reason, and clippy 1.98's
+/// `unused_async_trait_impl` names exactly that. Exports stay async.
 #[allow(
     clippy::all,
     clippy::pedantic,
@@ -139,6 +145,15 @@ pub mod bindings {
     wasmtime::component::bindgen!({
         path: "wit",
         world: "extractor-plugin",
-        async: true,
+        async: {
+            only_imports: [
+                "fetch",
+                "eval",
+                "get-cookies",
+                "set-cookie",
+                "extract-m3u8",
+                "extract-mpd",
+            ],
+        },
     });
 }

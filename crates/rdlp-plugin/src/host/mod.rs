@@ -48,8 +48,8 @@ pub fn add_capability_imports(
         fetch::add_to_linker(linker)
             .map_err(|e| PluginError::Internal(format!("link fetch: {e}")))?;
         // host-extract-helpers is granted alongside fetch — extract-m3u8
-        // is the only function that does I/O and it goes through the
-        // same fetch capability under the hood.
+        // and extract-mpd are the only functions that do I/O; both go
+        // through the same fetch capability under the hood.
         extract_helpers::add_to_linker(linker)
             .map_err(|e| PluginError::Internal(format!("link extract-helpers: {e}")))?;
     }

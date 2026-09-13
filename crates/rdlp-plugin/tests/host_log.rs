@@ -59,9 +59,9 @@ fn host_impl_all_levels_do_not_panic() {
     let data = store.data_mut();
 
     // Call the trait method directly for every level to verify all match arms.
-    // The futures are driven to completion synchronously because the Host impl
-    // is synchronous in its side-effects (log macro calls); the async wrapper
-    // is imposed by bindgen.
+    // `host-log` is a synchronous import (nothing to await — see the bindgen
+    // `only_imports` list in lib.rs), so no runtime is needed. No side effect
+    // is visible here: the log crate drops calls when no subscriber is installed.
     for level in [
         Level::Trace,
         Level::Debug,
@@ -69,13 +69,7 @@ fn host_impl_all_levels_do_not_panic() {
         Level::Warn,
         Level::Error,
     ] {
-        let fut = data.log(level, "test message".to_string());
-        // Drive the future — it should complete instantly with no side effects
-        // visible here (the log crate drops calls when no subscriber is installed).
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
-        rt.block_on(fut);
+        data.log(level, "test message".to_string());
     }
 }
 

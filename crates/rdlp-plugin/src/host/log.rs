@@ -20,11 +20,7 @@ pub fn add_to_linker(linker: &mut Linker<PluginStoreData>) -> wasmtime::Result<(
 }
 
 impl crate::bindings::rdlp::plugin::host_log::Host for PluginStoreData {
-    async fn log(
-        &mut self,
-        level: crate::bindings::rdlp::plugin::host_log::Level,
-        message: String,
-    ) {
+    fn log(&mut self, level: crate::bindings::rdlp::plugin::host_log::Level, message: String) {
         use crate::bindings::rdlp::plugin::host_log::Level as L;
         let target = self.log_target.as_str();
         match level {

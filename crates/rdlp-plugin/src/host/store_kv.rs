@@ -89,19 +89,19 @@ pub fn add_to_linker(linker: &mut Linker<PluginStoreData>) -> wasmtime::Result<(
 }
 
 impl crate::bindings::rdlp::plugin::host_store_kv::Host for PluginStoreData {
-    async fn get(&mut self, key: String) -> Option<Vec<u8>> {
+    fn get(&mut self, key: String) -> Option<Vec<u8>> {
         let ctx = self.store_kv.as_ref()?;
         ctx.get_blocking(key.as_bytes())
     }
 
-    async fn set(&mut self, key: String, value: Vec<u8>) -> Result<(), String> {
+    fn set(&mut self, key: String, value: Vec<u8>) -> Result<(), String> {
         let Some(ctx) = self.store_kv.as_ref() else {
             return Err("store-kv capability not granted".into());
         };
         ctx.set_blocking(key.as_bytes(), &value)
     }
 
-    async fn delete(&mut self, key: String) {
+    fn delete(&mut self, key: String) {
         if let Some(ctx) = self.store_kv.as_ref() {
             ctx.delete_blocking(key.as_bytes());
         }
