@@ -21,6 +21,7 @@
 //! - Actresses: `https://hqporner.com/actress/emily-bloom`
 //! - Search: `https://hqporner.com/?q=massage`
 
+mod listing_crawl;
 mod mydaddy;
 mod patterns;
 mod search;
@@ -37,14 +38,12 @@ use scraper::Html;
 use std::sync::LazyLock;
 
 use crate::base::common::{
-    BaseExtractor, MAX_PLAYLIST_SIZE, PagedSearch, SearchPage, SearchPageSpec,
+    BaseExtractor, MAX_PLAYLIST_SIZE, PAGE_RATE_LIMIT_MS, PagedSearch, SearchPage, SearchPageSpec,
 };
 use crate::hls::detect_format_sizes_lazy;
+use listing_crawl::ListingCrawl;
 
 pub use patterns::HQPORNER_VIDEO_PATTERN;
-
-/// Rate limit between listing/search page fetches (milliseconds).
-const PAGE_RATE_LIMIT_MS: u64 = 500;
 
 /// Pattern to extract duration from text like "26m 52s", "1h 6m 39s", or "45s".
 static DURATION_PATTERN: Lazy<Regex> = lazy_regex!(r"(?:(?:(\d+)h\s*)?(?:(\d+)m\s*))?(\d+)s");
@@ -269,6 +268,11 @@ impl InfoExtractor for HQPornerExtractor {
         Ok(info)
     }
 
+    /// No `validate_url_security` on these fetches: the entry URL's authority
+    /// is hqporner's by the anchored `is_suitable` match and every Next href
+    /// is same-origin with its serving page (`next_listing_page_url`), so the
+    /// gate could only pass. The operator-typed entry URL is gated at the
+    /// desktop IPC boundary, not here (#722).
     async fn extract_playlist(&self, url: &str, ctx: &ExtractionContext) -> Result<Vec<InfoDict>> {
         if !patterns::is_category_url(url) && !patterns::is_actress_url(url) {
             return Ok(vec![self.extract(url, ctx).await?]);
@@ -276,6 +280,7 @@ impl InfoExtractor for HQPornerExtractor {
 
         // Extract listing pages
         let mut all_results = Vec::new();
+        let mut crawl = ListingCrawl::starting_at(url);
         let mut page_url = url.to_string();
 
         loop {
@@ -316,17 +321,10 @@ impl InfoExtractor for HQPornerExtractor {
                 break;
             }
 
-            // Check for "Next" pagination link
-            if !search::has_next_page(&webpage) {
-                break;
-            }
-
-            // Build next page URL, resolved against the page that served this
-            // listing so a `www.`/`m.` host paginates against itself. `None` is
-            // both "no Next link" and "the Next link left that origin" — either
-            // way, stop here and return what has been gathered.
-            let Some(next_page_url) = search_patterns::next_listing_page_url(&webpage, &page_url)
-            else {
+            // Next page, or stop: no link, off-origin, already visited, or
+            // the page cap (#665, #722). The `has_next_page` pre-check is
+            // subsumed — `next_page` returns None without a Next link.
+            let Some(next_page_url) = crawl.next_page(&webpage, &page_url) else {
                 break;
             };
             page_url = next_page_url;

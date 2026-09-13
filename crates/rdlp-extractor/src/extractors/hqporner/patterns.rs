@@ -210,10 +210,26 @@ mod tests {
 
     #[test]
     fn patterns_reject_hqporner_url_embedded_in_foreign_authority() {
-        assert!(!HQPORNER_VIDEO_PATTERN.is_match(EMBEDDED[0]), "{}", EMBEDDED[0]);
-        assert!(!HQPORNER_CATEGORY_PATTERN.is_match(EMBEDDED[1]), "{}", EMBEDDED[1]);
-        assert!(!HQPORNER_ACTRESS_PATTERN.is_match(EMBEDDED[2]), "{}", EMBEDDED[2]);
-        assert!(!HQPORNER_SEARCH_PATTERN.is_match(EMBEDDED[3]), "{}", EMBEDDED[3]);
+        assert!(
+            !HQPORNER_VIDEO_PATTERN.is_match(EMBEDDED[0]),
+            "{}",
+            EMBEDDED[0]
+        );
+        assert!(
+            !HQPORNER_CATEGORY_PATTERN.is_match(EMBEDDED[1]),
+            "{}",
+            EMBEDDED[1]
+        );
+        assert!(
+            !HQPORNER_ACTRESS_PATTERN.is_match(EMBEDDED[2]),
+            "{}",
+            EMBEDDED[2]
+        );
+        assert!(
+            !HQPORNER_SEARCH_PATTERN.is_match(EMBEDDED[3]),
+            "{}",
+            EMBEDDED[3]
+        );
     }
 
     #[test]
@@ -232,6 +248,8 @@ mod tests {
     fn patterns_reject_leading_whitespace_and_lookalike_host() {
         assert!(!is_suitable(" https://hqporner.com/category/amateur"));
         assert!(!is_suitable("https://nothqporner.com/category/amateur"));
-        assert!(!is_suitable("https://hqporner.com.evil.test/category/amateur"));
+        assert!(!is_suitable(
+            "https://hqporner.com.evil.test/category/amateur"
+        ));
     }
 }

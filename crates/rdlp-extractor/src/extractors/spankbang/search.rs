@@ -19,7 +19,7 @@ use rdlp_types::{
 use super::SpankBangExtractor;
 use super::{metadata, patterns};
 use crate::base::common::BaseExtractor;
-use crate::base::common::{PagedSearch, SearchPage, SearchPageSpec};
+use crate::base::common::{PAGE_RATE_LIMIT_MS, PagedSearch, SearchPage, SearchPageSpec};
 
 const SPANKBANG_BASE_URL: &str = "https://spankbang.com";
 const SPANKBANG_NAME_STR: &str = "SpankBang";
@@ -30,9 +30,6 @@ const RESULTS_PER_PAGE: u64 = 36;
 
 /// Hard cap on full-search collection.
 const MAX_PLAYLIST_SIZE: usize = 500;
-
-/// Delay between paginated requests (ms).
-const PAGE_RATE_LIMIT_MS: u64 = 500;
 
 /// Build the search URL for the given query and **0-indexed** external page.
 ///
