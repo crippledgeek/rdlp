@@ -3,10 +3,6 @@
 //! Provides configuration for HTTP downloads including buffer sizes,
 //! retry settings, and concurrent download settings.
 
-// `Duration::from_mins` / `from_hours` (lint's suggested replacements) need Rust 1.95;
-// workspace MSRV is 1.88.
-#![allow(clippy::duration_suboptimal_units)]
-
 use crate::chunking::ChunkSizeStrategy;
 use rdlp_core::RetryConfig;
 use std::time::Duration;

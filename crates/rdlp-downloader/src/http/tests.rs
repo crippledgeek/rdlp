@@ -1061,9 +1061,6 @@ async fn download_sequential_cancel_mid_stream_returns_cancelled() {
             );
             let _ = stream.flush();
             // Hold the connection open so wreq waits for the next chunk.
-            // `Duration::from_mins` (clippy suggestion) needs Rust 1.95;
-            // workspace MSRV is 1.88.
-            #[allow(clippy::duration_suboptimal_units)]
             std::thread::sleep(Duration::from_secs(60));
         }
     });
@@ -1128,8 +1125,6 @@ async fn download_format_propagates_cancel_to_sequential() {
         let _ = listener.accept();
         // Hold connection open without sending any response — the probe
         // will block waiting for a response, and the cancel fires first.
-        // `Duration::from_mins` needs Rust 1.95; workspace MSRV is 1.88.
-        #[allow(clippy::duration_suboptimal_units)]
         std::thread::sleep(Duration::from_secs(60));
     });
 
@@ -1184,7 +1179,6 @@ async fn download_with_resume_with_cancel_aborts_on_cancel() {
             );
             let _ = stream.flush();
             // Hold the connection open so wreq waits for body data.
-            #[allow(clippy::duration_suboptimal_units)] // from_mins needs Rust 1.95; MSRV 1.88
             std::thread::sleep(Duration::from_secs(60));
         }
     });
@@ -1372,7 +1366,6 @@ async fn download_to_writer_cancel_mid_stream_returns_cancelled() {
                   \r\n",
             );
             let _ = stream.flush();
-            #[allow(clippy::duration_suboptimal_units)]
             std::thread::sleep(Duration::from_secs(60));
         }
     });

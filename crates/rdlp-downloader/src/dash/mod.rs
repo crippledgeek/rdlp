@@ -3,10 +3,6 @@
 //! Static (VoD) MPDs only; live/DRM/multi-period beyond the first period are
 //! refused at parse time. See `docs/planning/2026-05-02-dash-protocol-support-design.md`.
 
-// `Duration::from_mins` / `from_hours` (lint's suggested replacements) need Rust 1.95;
-// workspace MSRV is 1.88.
-#![allow(clippy::duration_suboptimal_units)]
-
 mod download;
 pub mod errors;
 pub mod manifest;

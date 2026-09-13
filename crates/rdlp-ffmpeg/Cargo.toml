@@ -2,6 +2,7 @@
 name = "rdlp-ffmpeg"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "FFmpeg library bindings wrapper for rdlp (probing, remuxing, transcoding, metadata, thumbnails)"

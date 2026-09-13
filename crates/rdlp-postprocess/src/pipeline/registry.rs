@@ -57,9 +57,7 @@
 
 #![allow(
     clippy::case_sensitive_file_extension_comparisons,
-    clippy::unnecessary_literal_bound,
-    // `Duration::from_hours` (lint's suggested replacement) needs Rust 1.95; MSRV is 1.85.
-    clippy::duration_suboptimal_units
+    clippy::unnecessary_literal_bound
 )]
 
 use std::collections::HashMap;
@@ -460,8 +458,13 @@ impl TempRegistry {
                     Ok(f) => match f.try_lock_exclusive() {
                         Ok(true) => {
                             // We got the lock → orphaned. Unlock before deleting
-                            // so the OS can clean up the lock state.
-                            let _ = f.unlock();
+                            // so the OS can clean up the lock state. Named
+                            // through the fs4 trait, not `f.unlock()`: std grew
+                            // an inherent `File::unlock` in 1.89 that shadows
+                            // the trait method on newer toolchains, so the bare
+                            // call resolves to an API above the 1.88 floor
+                            // (`clippy::incompatible_msrv`).
+                            let _ = FileExt::unlock(&f);
                             false // not held by another process
                         }
                         Ok(false) => true, // held by another live process

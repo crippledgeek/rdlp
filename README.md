@@ -28,7 +28,7 @@ See `rdlp --list-extractors` for the current list.
 
 ## Building
 
-Requires Rust 1.85+ and FFmpeg shared libraries.
+Requires Rust 1.88+ and FFmpeg shared libraries.
 
 ```
 git clone https://github.com/crippledgeek/rdlp.git

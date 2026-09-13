@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- **Rust 1.85+** (2024 edition)
+- **Rust 1.88+** (2024 edition — `rust-version` in the root `Cargo.toml`; Cargo refuses an older toolchain)
 - **C compiler toolchain** (MSVC on Windows, gcc on Linux, clang on macOS)
 - **clang/libclang** — needed by `bindgen` to generate FFmpeg FFI bindings
 - **cmake** + **Perl** + **NASM** — needed by `wreq`'s BoringSSL build script (Phase 2 TLS impersonation) and by `openssl-sys` when building OpenSSL from source on Windows

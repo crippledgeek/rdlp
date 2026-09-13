@@ -34,8 +34,11 @@ pub fn load_archive(path: &Path) -> HashSet<String> {
     // writer (record_in_archive) blocks until we release. If locking
     // fails (rare; e.g. NFS without lock support) fall back to the
     // unlocked read — better than a hard error here, since the archive
-    // is best-effort tracking, not security-critical state.
-    let _lock = file.lock_shared().ok();
+    // is best-effort tracking, not security-critical state. Named through
+    // the fs4 trait because std 1.89 added an inherent `File::lock_shared`
+    // that shadows it on newer toolchains — a bare call would resolve above
+    // the 1.88 floor (`clippy::incompatible_msrv`).
+    let _lock = FileExt::lock_shared(&file).ok();
 
     BufReader::new(&file)
         .lines()

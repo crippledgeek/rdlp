@@ -555,7 +555,9 @@ Before committing, ensure:
 
 `scripts/check-*.sh` enforce invariants the compiler cannot: no external CLI
 spawning, URL redaction in logs, WIT contract drift, TypeScript enum drift, and
-no deletion of files discovered by directory scan (#558). Run them all with:
+no deletion of files discovered by directory scan (#558), and that every
+crate inherits the workspace `rust-version` so clippy's MSRV gating follows the
+declared floor (#728). Run them all with:
 
 ```bash
 bash scripts/check-all.sh
