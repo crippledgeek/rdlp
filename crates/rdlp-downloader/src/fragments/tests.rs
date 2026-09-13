@@ -1219,18 +1219,41 @@ struct Checkpoint {
     byte_len: u64,
 }
 
+/// A seeded sidecar's checkpoint plus the anchor validator to record, when
+/// the test wants one (#746). Grouped so `seed_sidecar_with_anchor` stays at
+/// 3 positional parameters.
+struct SeedSpec {
+    checkpoint: Checkpoint,
+    anchor: Option<rdlp_http::StrongValidator>,
+}
+
 /// Sidecar for a partial already on disk at `output`, with its CRC taken from
 /// the output's current `[0..byte_len)` via the production hashing helper.
 /// Callers that want a *stale* CRC hash first and then corrupt the file.
-async fn seed_sidecar(output: &Path, frags: &[Fragment], cp: Checkpoint) {
+async fn seed_sidecar_with_anchor(output: &Path, frags: &[Fragment], spec: SeedSpec) {
     let sidecar = output.with_extension("ts.hls_state.json");
     let mut st = HlsResumeState::new(fragment_fingerprint(frags), frags.len() as u64);
-    st.fragments_done = cp.done;
-    st.byte_len = cp.byte_len;
-    st.stream_crc32 = crc32_of_prefix(output, cp.byte_len)
+    st.fragments_done = spec.checkpoint.done;
+    st.byte_len = spec.checkpoint.byte_len;
+    st.stream_crc32 = crc32_of_prefix(output, spec.checkpoint.byte_len)
         .await
         .expect("hash prefix");
+    st.anchor_validator = spec.anchor;
     st.save(&sidecar).await.expect("seed sidecar");
+}
+
+/// [`seed_sidecar_with_anchor`] with no anchor recorded — the shape every
+/// pre-#746 resume test uses.
+async fn seed_sidecar(output: &Path, frags: &[Fragment], cp: Checkpoint) {
+    seed_sidecar_with_anchor(
+        output,
+        frags,
+        SeedSpec {
+            checkpoint: cp,
+            anchor: None,
+        },
+    )
+    .await;
 }
 
 /// One mock per fragment on `server`, real bodies (`body[i] = i`), each
@@ -1272,6 +1295,40 @@ async fn seeded_frags(server: &mut mockito::Server, n: usize) -> (Vec<Fragment>,
         expected.push(body[0]);
         server
             .mock("GET", format!("/seg-{i}.ts").as_str())
+            .with_body(body)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        frags.push(frag(format!("{}/seg-{i}.ts", server.url())));
+    }
+    (frags, expected)
+}
+
+/// How many fragments, what `ETag` every mock offers, and how to compute
+/// fragment `i`'s single-byte body — grouped so
+/// [`seeded_frags_with_etag`] stays at 2 positional parameters (#746).
+/// `body_at` lets two servers serve either byte-identical or deliberately
+/// different content under the same paths.
+struct EtagFragsSpec<'a> {
+    n: usize,
+    etag: &'a str,
+    body_at: fn(usize) -> u8,
+}
+
+/// Like `seeded_frags` but every mock also offers an `ETag`, so the download
+/// records an anchor validator (#746).
+async fn seeded_frags_with_etag(
+    server: &mut mockito::Server,
+    spec: EtagFragsSpec<'_>,
+) -> (Vec<Fragment>, Vec<u8>) {
+    let mut expected = Vec::with_capacity(spec.n);
+    let mut frags = Vec::with_capacity(spec.n);
+    for i in 0..spec.n {
+        let body = vec![(spec.body_at)(i)];
+        expected.push(body[0]);
+        server
+            .mock("GET", format!("/seg-{i}.ts").as_str())
+            .with_header("etag", spec.etag)
             .with_body(body)
             .expect_at_least(1)
             .create_async()
@@ -1461,6 +1518,354 @@ async fn fingerprint_mismatch_restarts_from_zero() {
     assert_eq!(
         written, expected,
         "stale partial discarded; fresh full download"
+    );
+    assert!(!sidecar.exists());
+}
+
+// ---- Anchor revalidation tests (#746) ----
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn resume_starts_fresh_when_fragment_zero_etag_changed() {
+    // Run 1 on server A (etag "v1"): fragment 0 lands, fragment 1 hangs on a
+    // blackhole under the SAME path until cancelled — the mechanism
+    // `cancel_writes_sidecar_with_progress` uses to leave a real partial +
+    // sidecar on disk.
+    let mut a = mockito::Server::new_async().await;
+    let (mut frags_a, _) = seeded_frags_with_etag(
+        &mut a,
+        EtagFragsSpec {
+            n: 1,
+            etag: "\"v1\"",
+            body_at: |i| (i % 256) as u8,
+        },
+    )
+    .await;
+    let port = spawn_blackhole().await;
+    frags_a.push(frag(format!("http://127.0.0.1:{port}/seg-1.ts")));
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = dir.path().join("video.ts");
+    let token = tokio_util::sync::CancellationToken::new();
+    let token_clone = token.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        token_clone.cancel();
+    });
+    let http_a = HttpDownloader::with_client(wreq::Client::new()).with_concurrent_fragments(1);
+    let res = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        download_pre_resolved_fragments(
+            &http_a,
+            &frags_a,
+            None,
+            None,
+            None,
+            &output,
+            None,
+            Some(&token),
+        ),
+    )
+    .await
+    .expect("test timeout");
+    assert!(matches!(res, Err(rdlp_core::RdlpError::Cancelled)));
+
+    let sidecar = output.with_extension("ts.hls_state.json");
+    let st = HlsResumeState::load_matching(
+        &sidecar,
+        fragment_fingerprint(&frags_a),
+        frags_a.len() as u64,
+    )
+    .await
+    .expect("sidecar must match run 1's fragment list");
+    assert!(
+        st.anchor_validator.is_some(),
+        "run 1 recorded fragment 0's ETag"
+    );
+
+    // Run 2 on server B: same paths, but fragment 0 answers "v2" ⇒ the
+    // representation changed under the same paths — fresh start, every
+    // fragment fetched, no byte of v1 survives.
+    let mut b = mockito::Server::new_async().await;
+    let (frags_b, expected_b) = seeded_frags_with_etag(
+        &mut b,
+        EtagFragsSpec {
+            n: 2,
+            etag: "\"v2\"",
+            body_at: |_| 0xEE,
+        },
+    )
+    .await;
+    assert_eq!(
+        fragment_fingerprint(&frags_a),
+        fragment_fingerprint(&frags_b),
+        "same paths across hosts must fingerprint identically"
+    );
+
+    let http_b = HttpDownloader::with_client(wreq::Client::new());
+    download_pre_resolved_fragments(&http_b, &frags_b, None, None, None, &output, None, None)
+        .await
+        .expect("fresh start ok");
+    let written = tokio::fs::read(&output).await.unwrap();
+    assert_eq!(
+        written, expected_b,
+        "no bytes from representation v1 survive"
+    );
+}
+
+#[tokio::test]
+async fn resume_continues_when_etag_unchanged_across_host_rotation() {
+    let a = mockito::Server::new_async().await;
+    let frags_a = frags_on(&a, 3);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = dir.path().join("video.ts");
+    // Craft a partial of fragment 0, as a completed fresh start would have
+    // left it, with a sidecar recording fragment 0's anchor.
+    tokio::fs::write(&output, [0xAA]).await.unwrap();
+    seed_sidecar_with_anchor(
+        &output,
+        &frags_a,
+        SeedSpec {
+            checkpoint: Checkpoint {
+                done: 1,
+                byte_len: 1,
+            },
+            anchor: Some(
+                rdlp_http::StrongValidator::try_from("etag:\"v1\"".to_string())
+                    .expect("strong etag"),
+            ),
+        },
+    )
+    .await;
+
+    let mut b = mockito::Server::new_async().await;
+    let frags_b = frags_on(&b, 3);
+    assert_eq!(
+        fragment_fingerprint(&frags_a),
+        fragment_fingerprint(&frags_b),
+        "same paths across hosts must fingerprint identically — proves the host \
+         rotation alone would have resumed"
+    );
+
+    // Fragment 0 must be reached only by the anchor probe, never re-fetched
+    // as part of the resumed download.
+    let frag0 = b
+        .mock("GET", "/seg-0.ts")
+        .match_header("range", Matcher::Regex(r"^bytes=0-0$".to_string()))
+        .with_header("etag", "\"v1\"")
+        .with_body([0xAA])
+        .expect(1)
+        .create_async()
+        .await;
+    let frag1 = b
+        .mock("GET", "/seg-1.ts")
+        .with_body([0xBB])
+        .expect(1)
+        .create_async()
+        .await;
+    let frag2 = b
+        .mock("GET", "/seg-2.ts")
+        .with_body([0xCC])
+        .expect(1)
+        .create_async()
+        .await;
+
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    download_pre_resolved_fragments(&http, &frags_b, None, None, None, &output, None, None)
+        .await
+        .expect("resume must proceed once the anchor confirms");
+
+    let written = tokio::fs::read(&output).await.unwrap();
+    assert_eq!(written, vec![0xAA, 0xBB, 0xCC]);
+    frag0.assert_async().await;
+    frag1.assert_async().await;
+    frag2.assert_async().await;
+}
+
+#[tokio::test]
+async fn resume_errors_out_and_keeps_partial_when_probe_is_unanswered() {
+    let a = mockito::Server::new_async().await;
+    let frags_a = frags_on(&a, 2);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = dir.path().join("video.ts");
+    tokio::fs::write(&output, [0xAA]).await.unwrap();
+    seed_sidecar_with_anchor(
+        &output,
+        &frags_a,
+        SeedSpec {
+            checkpoint: Checkpoint {
+                done: 1,
+                byte_len: 1,
+            },
+            anchor: Some(
+                rdlp_http::StrongValidator::try_from("etag:\"v1\"".to_string())
+                    .expect("strong etag"),
+            ),
+        },
+    )
+    .await;
+
+    let mut b = mockito::Server::new_async().await;
+    let frags_b = frags_on(&b, 2);
+    assert_eq!(
+        fragment_fingerprint(&frags_a),
+        fragment_fingerprint(&frags_b)
+    );
+    let frag0 = b
+        .mock("GET", "/seg-0.ts")
+        .with_status(404)
+        .expect(1)
+        .create_async()
+        .await;
+    // If the unanswered probe were mistaken for "changed", a fresh start
+    // would fetch fragment 1; it must never be reached.
+    let frag1 = b.mock("GET", "/seg-1.ts").expect(0).create_async().await;
+
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    let res =
+        download_pre_resolved_fragments(&http, &frags_b, None, None, None, &output, None, None)
+            .await;
+    assert!(
+        res.is_err(),
+        "an unanswered probe must be an error, not a verdict"
+    );
+
+    let partial_len = tokio::fs::metadata(&output)
+        .await
+        .expect("partial exists")
+        .len();
+    assert_eq!(
+        partial_len, 1,
+        "the partial must survive an unanswered probe"
+    );
+    let sidecar = output.with_extension("ts.hls_state.json");
+    assert!(
+        sidecar.exists(),
+        "the sidecar must survive an unanswered probe"
+    );
+    frag0.assert_async().await;
+    frag1.assert_async().await;
+}
+
+#[tokio::test]
+async fn resume_without_anchor_relies_on_fingerprint_only() {
+    let mut ref_server = mockito::Server::new_async().await;
+    let (ref_frags, expected) = seeded_frags(&mut ref_server, 3).await;
+    let refdir = tempfile::tempdir().expect("tempdir");
+    let refout = refdir.path().join("ref.ts");
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    download_pre_resolved_fragments(&http, &ref_frags, None, None, None, &refout, None, None)
+        .await
+        .expect("reference ok");
+    let reference = tokio::fs::read(&refout).await.unwrap();
+    assert_eq!(reference, expected);
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = dir.path().join("video.ts");
+    let done = 1usize;
+    tokio::fs::write(&output, &reference[..done]).await.unwrap();
+
+    let mut server = mockito::Server::new_async().await;
+    let frags = frags_on(&server, 3);
+    // No anchor recorded ⇒ no probe must be issued: an `expect(0)` mock
+    // matching the probe's own `Range: bytes=0-0` catches a regression that
+    // probes anyway.
+    let probe_guard = server
+        .mock("GET", "/seg-0.ts")
+        .match_header("range", Matcher::Regex(r"^bytes=0-0$".to_string()))
+        .expect(0)
+        .create_async()
+        .await;
+    for i in done..3 {
+        server
+            .mock("GET", format!("/seg-{i}.ts").as_str())
+            .with_body(vec![(i % 256) as u8])
+            .expect(1)
+            .create_async()
+            .await;
+    }
+    seed_sidecar(
+        &output,
+        &frags,
+        Checkpoint {
+            done: done as u64,
+            byte_len: done as u64,
+        },
+    )
+    .await;
+
+    download_pre_resolved_fragments(&http, &frags, None, None, None, &output, None, None)
+        .await
+        .expect("resume without an anchor proceeds on the fingerprint alone");
+    let written = tokio::fs::read(&output).await.unwrap();
+    assert_eq!(written, reference);
+    probe_guard.assert_async().await;
+}
+
+#[tokio::test]
+async fn same_paths_changed_durations_start_fresh() {
+    let mut server = mockito::Server::new_async().await;
+    let n = 3usize;
+    let mut frags_seed = Vec::with_capacity(n);
+    let mut frags_run = Vec::with_capacity(n);
+    let mut expected = Vec::with_capacity(n);
+    for i in 0..n {
+        // A byte distinguishable from the stale placeholder written below.
+        let body = vec![0xA0_u8 + i as u8];
+        expected.push(body[0]);
+        server
+            .mock("GET", format!("/seg-{i}.ts").as_str())
+            .with_body(body)
+            .expect(1)
+            .create_async()
+            .await;
+        let url = format!("{}/seg-{i}.ts", server.url());
+        frags_seed.push(Fragment {
+            url: url.clone(),
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
+            duration: Some(4.0),
+            filesize: None,
+        });
+        frags_run.push(Fragment {
+            url,
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
+            duration: Some(6.0),
+            filesize: None,
+        });
+    }
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = dir.path().join("video.ts");
+    // Seed a stale partial (1 fragment "done") under the OLD durations.
+    tokio::fs::write(&output, [0xFF]).await.unwrap();
+    seed_sidecar(
+        &output,
+        &frags_seed,
+        Checkpoint {
+            done: 1,
+            byte_len: 1,
+        },
+    )
+    .await;
+    let sidecar = output.with_extension("ts.hls_state.json");
+
+    assert_ne!(
+        fragment_fingerprint(&frags_seed),
+        fragment_fingerprint(&frags_run),
+        "durations must move the fingerprint even though every path is unchanged"
+    );
+
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    download_pre_resolved_fragments(&http, &frags_run, None, None, None, &output, None, None)
+        .await
+        .expect("duration mismatch restarts cleanly");
+    let written = tokio::fs::read(&output).await.unwrap();
+    assert_eq!(
+        written, expected,
+        "stale prefix discarded; fresh full download under new durations"
     );
     assert!(!sidecar.exists());
 }
