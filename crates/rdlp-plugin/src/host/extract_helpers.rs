@@ -43,10 +43,15 @@ const MANIFEST_FETCH_TIMEOUT_MS: u32 = 30_000;
 /// Upper bound on a plugin-supplied regex pattern, in bytes, checked before
 /// compiling. Plugin patterns are third-party input, and `rust-regex-craft`
 /// requires untrusted patterns to be bounded on both pattern length and
-/// compiled size. The longest raw pattern literal in yt-dlp's 943 extractor
-/// modules is 338 bytes and rdlp's own longest (`xhamster` `_VALID_URL`) is
-/// 225, so 4 KiB is >10x anything a ported extractor needs. This bound
-/// alone is not sufficient — see [`PLUGIN_REGEX_SIZE_LIMIT`].
+/// compiled size. 4 KiB holds because of WHICH patterns reach this path:
+/// yt-dlp's giant literals — `_VALID_URL` up to ~65 KB (`peertube.py`
+/// `_INSTANCES_RE`) — are compiled guest-side by the compat shim with
+/// stdlib `re` (`info_extractor.py` `_match_valid_url`), and `_EMBED_REGEX`
+/// has no host-side implementation at all. Only the `_search_regex` /
+/// `_html_search_meta` / `_og_search_property` / `_search_json` patterns
+/// are routed here, and those are short by construction (a value locator,
+/// not a site-wide URL matcher). This bound alone is not sufficient — see
+/// [`PLUGIN_REGEX_SIZE_LIMIT`].
 const PLUGIN_REGEX_MAX_PATTERN_LEN: usize = 4096;
 
 /// Cap on the compiled size of a plugin-supplied regex, passed to
@@ -54,7 +59,7 @@ const PLUGIN_REGEX_MAX_PATTERN_LEN: usize = 4096;
 /// regex exceeds size limit". Compiled size is independent of pattern
 /// length: Unicode `\w` spans ~140k codepoints, so the 6-byte `\w{50}`
 /// compiles to ~2.4 MiB and `\w{200}` to ~10 MiB (measured, regex 1.12.3).
-/// 4 MiB admits the largest pattern yt-dlp ships — `googledrive.py`'s
+/// 4 MiB admits the largest we found reaching this path — `googledrive.py`'s
 /// `"(\w{39})"` at ~1.9 MiB — with 2x headroom, and sits 2.5x below the
 /// crate's 10 MiB default, which a plugin must not be able to spend freely.
 const PLUGIN_REGEX_SIZE_LIMIT: usize = 4 << 20;
@@ -85,8 +90,24 @@ fn build_url_with_query(base_url: String, query: &[(String, String)]) -> String 
 /// uniformly. An over-long pattern is reported as a syntax error rather
 /// than compiled and then rejected — the length check exists to skip the
 /// compile.
-fn build_regex(pattern: &str, flags: RegexFlags) -> Result<regex::Regex, regex::Error> {
+///
+/// Every helper turns a failed build into `None`, which the compat shim
+/// surfaces as "Unable to extract …" — indistinguishable from a genuine
+/// no-match. A bound refusal therefore warns on the plugin's own log
+/// target (`log_target`, the same one `host:log` writes to) with the byte
+/// length and the limit; the pattern text is plugin-controlled and may be
+/// huge, so it is never logged.
+fn build_regex(
+    pattern: &str,
+    flags: RegexFlags,
+    log_target: &str,
+) -> Result<regex::Regex, regex::Error> {
     if pattern.len() > PLUGIN_REGEX_MAX_PATTERN_LEN {
+        log::warn!(
+            target: log_target,
+            "refused plugin regex: pattern length {} B exceeds the {PLUGIN_REGEX_MAX_PATTERN_LEN} B limit",
+            pattern.len()
+        );
         return Err(regex::Error::Syntax(format!(
             "plugin pattern is {} bytes; limit is {PLUGIN_REGEX_MAX_PATTERN_LEN}",
             pattern.len()
@@ -98,7 +119,15 @@ fn build_regex(pattern: &str, flags: RegexFlags) -> Result<regex::Regex, regex::
     builder.multi_line(flags.contains(RegexFlags::MULTILINE));
     builder.dot_matches_new_line(flags.contains(RegexFlags::DOTALL));
     builder.ignore_whitespace(flags.contains(RegexFlags::VERBOSE));
-    builder.build()
+    let built = builder.build();
+    if let Err(regex::Error::CompiledTooBig(_)) = &built {
+        log::warn!(
+            target: log_target,
+            "refused plugin regex: compiled size exceeds the {PLUGIN_REGEX_SIZE_LIMIT} B limit (pattern {} B)",
+            pattern.len()
+        );
+    }
+    built
 }
 
 /// A non-fatal extraction failure yields the empty result instead of an
@@ -179,7 +208,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         haystack: String,
         re_flags: RegexFlags,
     ) -> Option<String> {
-        let pat = build_regex(&pattern, re_flags).ok()?;
+        let pat = build_regex(&pattern, re_flags, &self.log_target).ok()?;
         let m = pat.captures(&haystack)?;
         // Mirror yt-dlp's `_search_regex` group semantics:
         // if there are any named/unnamed capture groups (`m.len() > 1`),
@@ -233,7 +262,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
             format!(r#"<meta[^>]+content='([^']*)'[^>]*(?:{attrs})=["']{escaped}["']"#),
         ];
         for pat in patterns {
-            let re = build_regex(pat, RegexFlags::IGNORE_CASE).ok()?;
+            let re = build_regex(pat, RegexFlags::IGNORE_CASE, &self.log_target).ok()?;
             if let Some(m) = re.captures(&html)
                 && let Some(g) = m.get(1)
             {
@@ -263,7 +292,11 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
             format!(r#"<meta[^>]+?{content_re}[^>]+?{property_re}"#),
         ];
         for pat in &templates {
-            let Ok(re) = build_regex(pat, RegexFlags::IGNORE_CASE | RegexFlags::DOTALL) else {
+            let Ok(re) = build_regex(
+                pat,
+                RegexFlags::IGNORE_CASE | RegexFlags::DOTALL,
+                &self.log_target,
+            ) else {
                 continue;
             };
             if let Some(m) = re.captures(&html)
@@ -294,7 +327,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         // Mirrors yt-dlp's `_search_json` brace-balanced extraction.
         // Default contains-pattern is `{(?s:.+)}` — greedy, allows nesting.
         let full = format!(r"(?:{start_pattern})\s*(?P<json>\{{(?s:.+)\}})\s*(?:{end_pattern})");
-        let re = build_regex(&full, RegexFlags::empty()).ok()?;
+        let re = build_regex(&full, RegexFlags::empty(), &self.log_target).ok()?;
         let cap = re.captures(&haystack)?;
         let json = cap.name("json")?.as_str();
         Some(json.to_string())

@@ -1212,3 +1212,102 @@ async fn manifest_fetches_share_one_timeout() {
         );
     }
 }
+
+// ---- refused patterns are observable ---------------------------------------
+
+/// `(target, message)` pairs captured from the `log` facade.
+type LogEntries = std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>;
+
+/// Minimal `log::Log` sink so a test can assert a refusal was reported to
+/// the plugin's own log target. Mirrors the capturing-logger harness in
+/// `rdlp-cookies`; `log::set_logger` accepts one logger per process, so the
+/// buffer is process-global and never cleared — each assertion looks for
+/// its own distinctive message instead.
+struct CapturingLogger {
+    entries: LogEntries,
+}
+
+impl log::Log for CapturingLogger {
+    fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+        true
+    }
+    fn log(&self, record: &log::Record<'_>) {
+        self.entries
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((record.target().to_string(), record.args().to_string()));
+    }
+    fn flush(&self) {}
+}
+
+fn captured_logs() -> LogEntries {
+    static CAPTURED: std::sync::OnceLock<LogEntries> = std::sync::OnceLock::new();
+    std::sync::Arc::clone(CAPTURED.get_or_init(|| {
+        let entries: LogEntries = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let logger: &'static CapturingLogger = Box::leak(Box::new(CapturingLogger {
+            entries: std::sync::Arc::clone(&entries),
+        }));
+        log::set_logger(logger).expect("no other logger in the rdlp-plugin lib test binary");
+        log::set_max_level(log::LevelFilter::Warn);
+        entries
+    }))
+}
+
+/// First captured entry whose message contains `needle`, cloned out so the
+/// lock is released before any assertion panics.
+fn captured_entry_containing(logs: &LogEntries, needle: &str) -> (String, String) {
+    let entries = logs
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    entries
+        .iter()
+        .find(|(_, m)| m.contains(needle))
+        .cloned()
+        .unwrap_or_else(|| panic!("no entry containing {needle:?} among {entries:?}"))
+}
+
+/// A plugin author must be able to tell "pattern refused" from "no match":
+/// the length-bound rejection warns on the plugin's log target with the
+/// length and the limit, and never echoes the pattern.
+#[test]
+fn refused_over_long_pattern_warns_on_plugin_target() {
+    let logs = captured_logs();
+    let mut c = ctx();
+    let pat = "z".repeat(PLUGIN_REGEX_MAX_PATTERN_LEN + 1);
+    assert_eq!(
+        c.search_regex(pat, String::new(), RegexFlags::empty()),
+        None
+    );
+    let (target, msg) =
+        captured_entry_containing(&logs, &format!("{} B", PLUGIN_REGEX_MAX_PATTERN_LEN + 1));
+    assert_eq!(
+        target, "plugin::test",
+        "warn must go to the plugin's log target"
+    );
+    assert!(
+        msg.contains(&PLUGIN_REGEX_MAX_PATTERN_LEN.to_string()),
+        "{msg}"
+    );
+    assert!(
+        !msg.contains("zzzz"),
+        "pattern text must not be logged: {msg}"
+    );
+}
+
+/// Same observability for the compiled-size bound.
+#[test]
+fn refused_oversize_compiled_pattern_warns_on_plugin_target() {
+    let logs = captured_logs();
+    let mut c = ctx();
+    assert_eq!(
+        c.search_regex(r"\w{100}".to_string(), String::new(), RegexFlags::empty()),
+        None
+    );
+    let (target, msg) = captured_entry_containing(&logs, "compiled size");
+    assert_eq!(target, "plugin::test");
+    assert!(msg.contains(&PLUGIN_REGEX_SIZE_LIMIT.to_string()), "{msg}");
+    assert!(
+        !msg.contains(r"\w{100}"),
+        "pattern text must not be logged: {msg}"
+    );
+}
