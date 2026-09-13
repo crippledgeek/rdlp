@@ -74,10 +74,25 @@ impl Fnv1a64 {
     /// Path only — host and query are ignored so CDN host/token rotation does
     /// not break resume. A string that does not parse as an absolute URL
     /// (a relative fragment URI) is fed verbatim.
+    ///
+    /// Already `Option`-framed via `feed_opt_str`'s own tag byte (`Some`
+    /// always precedes it): a caller wrapping an *optional* URL (e.g. an
+    /// init segment that may be absent) uses [`Self::feed_opt_url_path`],
+    /// not a second `feed(&[1])` around this — that would tag the value
+    /// twice for no distinguishing benefit.
     pub(crate) fn feed_url_path(&mut self, url: &str) {
         match url::Url::parse(url) {
             Ok(u) => self.feed_opt_str(Some(u.path())),
             Err(_) => self.feed_opt_str(Some(url)),
+        }
+    }
+
+    /// [`Self::feed_url_path`] for a field that may be absent (`None` ⇒
+    /// `[0]`, matching every other `feed_opt_*` helper's framing).
+    pub(crate) fn feed_opt_url_path(&mut self, url: Option<&str>) {
+        match url {
+            None => self.feed(&[0]),
+            Some(u) => self.feed_url_path(u),
         }
     }
 
@@ -137,6 +152,18 @@ mod tests {
         let mut d = Fnv1a64::new();
         d.feed_url_path("seg-1.ts");
         assert_ne!(c.finish(), d.finish());
+    }
+
+    #[test]
+    fn opt_url_path_frames_none_apart_from_an_empty_path() {
+        // A relative "" URL falls back to `feed_opt_str(Some(""))`, which is
+        // `[1, 0]` (tag, zero length) — `None`'s `[0]` must not collide with
+        // it, and `feed_opt_url_path` must not double-tag `Some`.
+        let mut none = Fnv1a64::new();
+        none.feed_opt_url_path(None);
+        let mut empty = Fnv1a64::new();
+        empty.feed_opt_url_path(Some(""));
+        assert_ne!(none.finish(), empty.finish());
     }
 
     #[test]

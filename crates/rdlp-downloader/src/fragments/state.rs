@@ -78,13 +78,7 @@ pub fn fragment_fingerprint(fragments: &[Fragment]) -> u64 {
     for f in fragments {
         h.feed_url_path(&f.url);
         h.feed_opt_range(f.byte_range);
-        match &f.init_url {
-            Some(u) => {
-                h.feed(&[1]);
-                h.feed_url_path(u);
-            }
-            None => h.feed(&[0]),
-        }
+        h.feed_opt_url_path(f.init_url.as_deref());
         h.feed_opt_range(f.init_byte_range);
         h.feed_opt_f64_bits(f.duration);
     }

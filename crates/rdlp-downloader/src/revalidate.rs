@@ -14,7 +14,7 @@
 use std::sync::atomic::AtomicU64;
 
 use rdlp_core::Result;
-use rdlp_http::StrongValidator;
+use rdlp_http::{ContentRange, StrongValidator, ValidatorMismatch};
 use wreq::header::HeaderMap;
 
 use crate::http::{HttpDownloader, ProbeTarget};
@@ -32,10 +32,54 @@ pub(crate) struct AnchorProbe<'a> {
     pub validator: &'a StrongValidator,
 }
 
+/// Why [`AnchorVerdict::Changed`] fired — typed rather than a formatted
+/// string so a caller can match on it, and so the wording for a validator
+/// mismatch is the one `StrongValidator::verify_partial` already owns
+/// (`Display` delegates), not a second copy of it.
+pub(crate) enum ChangedReason {
+    /// The current response's validator does not match the recorded anchor
+    /// (a 206 that failed [`StrongValidator::verify_partial`], or a 200
+    /// whose validator differs — built as [`ValidatorMismatch::Different`]
+    /// the same way `verify_partial` builds it).
+    Validator(ValidatorMismatch),
+    /// A 200 (or a server that ignored `Range`) offered no strong validator
+    /// at all — nothing to compare the anchor against.
+    NoValidatorOnResponse,
+    /// The probe came back 416 (`Content-Range: bytes */N`, RFC 9110
+    /// §14.4's `unsatisfied-range`): the representation the anchor named no
+    /// longer has a byte 0, so it is gone or replaced.
+    RangeUnsatisfiable,
+}
+
+impl std::fmt::Display for ChangedReason {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Validator(mismatch) => write!(f, "{mismatch}"),
+            Self::NoValidatorOnResponse => {
+                f.write_str("current response offers no strong validator")
+            }
+            Self::RangeUnsatisfiable => {
+                f.write_str("current response reports the range as unsatisfiable (416)")
+            }
+        }
+    }
+}
+
 pub(crate) enum AnchorVerdict {
     Confirmed,
     /// Why the anchor no longer matches — for the caller's warn line.
-    Changed(String),
+    Changed(ChangedReason),
+}
+
+/// The raw bytes `StrongValidator` was built from — the same bytes
+/// `verify_partial` lossy-decodes into a [`ValidatorMismatch::Different`],
+/// used here to report a mismatch found outside a 206 in the identical
+/// wording.
+fn validator_bytes(v: &StrongValidator) -> &[u8] {
+    match v {
+        StrongValidator::ETag(tag) => tag.as_bytes(),
+        StrongValidator::LastModified(date) => date.as_bytes(),
+    }
 }
 
 pub(crate) async fn revalidate_anchor(
@@ -58,17 +102,24 @@ pub(crate) async fn revalidate_anchor(
     if result.complete_length.is_some() {
         return Ok(match probe.validator.verify_partial(&result.headers) {
             Ok(()) => AnchorVerdict::Confirmed,
-            Err(mismatch) => AnchorVerdict::Changed(mismatch.to_string()),
+            Err(mismatch) => AnchorVerdict::Changed(ChangedReason::Validator(mismatch)),
         });
+    }
+    // A 416's `Content-Range: bytes */N` is otherwise indistinguishable from
+    // "no info" in `ProbeResult` (`probe_answered_at`'s doc comment): folding
+    // it into "no strong validator" would misreport the reason.
+    if ContentRange::unsatisfied_from_headers(&result.headers).is_some() {
+        return Ok(AnchorVerdict::Changed(ChangedReason::RangeUnsatisfiable));
     }
     Ok(match result.validator.as_ref() {
         Some(got) if got == probe.validator => AnchorVerdict::Confirmed,
-        Some(got) => AnchorVerdict::Changed(format!(
-            "validator changed: recorded {}, current {}",
-            String::from(probe.validator.clone()),
-            String::from(got.clone())
-        )),
-        None => AnchorVerdict::Changed("current response offers no strong validator".to_string()),
+        Some(got) => {
+            AnchorVerdict::Changed(ChangedReason::Validator(ValidatorMismatch::Different {
+                expected: String::from_utf8_lossy(validator_bytes(probe.validator)).into_owned(),
+                got: String::from_utf8_lossy(validator_bytes(got)).into_owned(),
+            }))
+        }
+        None => AnchorVerdict::Changed(ChangedReason::NoValidatorOnResponse),
     })
 }
 
@@ -195,6 +246,39 @@ mod tests {
         assert!(
             matches!(verdict, AnchorVerdict::Changed(_)),
             "§15.3.7: a 206 must repeat ETag"
+        );
+    }
+
+    #[tokio::test]
+    async fn changed_on_416_range_unsatisfiable() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/a.ts")
+            .with_status(416)
+            .with_header("content-range", "bytes */0")
+            .with_header("etag", "\"e1\"")
+            .create_async()
+            .await;
+        let http = HttpDownloader::with_client(wreq::Client::new());
+        let url = format!("{}/a.ts", server.url());
+        let v = etag("\"e1\"");
+        let verdict = revalidate_anchor(
+            &http,
+            AnchorProbe {
+                url: &url,
+                headers: HeaderMap::new(),
+                validator: &v,
+            },
+            &AtomicU64::new(0),
+        )
+        .await
+        .expect("answered");
+        assert!(
+            matches!(
+                verdict,
+                AnchorVerdict::Changed(ChangedReason::RangeUnsatisfiable)
+            ),
+            "a 416 must report RangeUnsatisfiable, not a validator mismatch"
         );
     }
 
