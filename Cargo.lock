@@ -6444,6 +6444,7 @@ dependencies = [
  "backon",
  "bytes",
  "chrono",
+ "crc32fast",
  "dash-mpd",
  "futures",
  "indicatif",

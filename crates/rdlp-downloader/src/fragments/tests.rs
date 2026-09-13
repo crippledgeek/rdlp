@@ -1210,6 +1210,55 @@ async fn cross_origin_fragment_url_does_not_forward_seed_headers() {
 // ---- HLS resume tests (issue #354) ----
 
 use super::state::{HlsResumeState, fragment_fingerprint};
+use crate::atomic::crc32_of_prefix;
+
+/// The confirmed boundary a seeded sidecar records: `done` fragments
+/// spanning `byte_len` bytes of the output.
+struct Checkpoint {
+    done: u64,
+    byte_len: u64,
+}
+
+/// Sidecar for a partial already on disk at `output`, with its CRC taken from
+/// the output's current `[0..byte_len)` via the production hashing helper.
+/// Callers that want a *stale* CRC hash first and then corrupt the file.
+async fn seed_sidecar(output: &Path, frags: &[Fragment], cp: Checkpoint) {
+    let sidecar = output.with_extension("ts.hls_state.json");
+    let mut st = HlsResumeState::new(fragment_fingerprint(frags), frags.len() as u64);
+    st.fragments_done = cp.done;
+    st.byte_len = cp.byte_len;
+    st.stream_crc32 = crc32_of_prefix(output, cp.byte_len)
+        .await
+        .expect("hash prefix");
+    st.save(&sidecar).await.expect("seed sidecar");
+}
+
+/// One mock per fragment on `server`, real bodies (`body[i] = i`), each
+/// expected exactly `hits` times. Returns the mocks for `assert_async`.
+async fn expect_each_fragment(
+    server: &mut mockito::Server,
+    n: usize,
+    hits: usize,
+) -> Vec<mockito::Mock> {
+    let mut mocks = Vec::with_capacity(n);
+    for i in 0..n {
+        mocks.push(
+            server
+                .mock("GET", format!("/seg-{i}.ts").as_str())
+                .with_body(vec![(i % 256) as u8])
+                .expect(hits)
+                .create_async()
+                .await,
+        );
+    }
+    mocks
+}
+
+fn frags_on(server: &mockito::Server, n: usize) -> Vec<Fragment> {
+    (0..n)
+        .map(|i| frag(format!("{}/seg-{i}.ts", server.url())))
+        .collect()
+}
 
 /// Deterministic N fragments where body[i] = i (mod 256), each served by a
 /// fresh mock on `server`. Returns (frags, expected full concatenation).
@@ -1343,12 +1392,16 @@ async fn resume_is_byte_identical_and_skips_done_fragments() {
     // download errors, proving they were skipped. Remaining fragments serve
     // their real bodies.
     let mut server = mockito::Server::new_async().await;
+    let mut done_mocks = Vec::new();
     for i in 0..done {
-        server
-            .mock("GET", format!("/seg-{i}.ts").as_str())
-            .with_status(418)
-            .create_async()
-            .await;
+        done_mocks.push(
+            server
+                .mock("GET", format!("/seg-{i}.ts").as_str())
+                .with_status(418)
+                .expect(0)
+                .create_async()
+                .await,
+        );
     }
     for i in done..6 {
         server
@@ -1358,15 +1411,20 @@ async fn resume_is_byte_identical_and_skips_done_fragments() {
             .create_async()
             .await;
     }
-    let frags: Vec<Fragment> = (0..6)
-        .map(|i| frag(format!("{}/seg-{i}.ts", server.url())))
-        .collect();
+    let frags = frags_on(&server, 6);
 
+    // Partial is exactly byte_len long: the boundary case where the verify
+    // reads the whole file and must pass.
     let sidecar = output.with_extension("ts.hls_state.json");
-    let mut st = HlsResumeState::new(fragment_fingerprint(&frags), 6);
-    st.fragments_done = done as u64;
-    st.byte_len = done as u64; // 1 byte per fragment
-    st.save(&sidecar).await.expect("seed sidecar");
+    seed_sidecar(
+        &output,
+        &frags,
+        Checkpoint {
+            done: done as u64,
+            byte_len: done as u64, // 1-byte fragment bodies
+        },
+    )
+    .await;
 
     download_pre_resolved_fragments(&http, &frags, None, None, None, &output, None, None)
         .await
@@ -1375,6 +1433,9 @@ async fn resume_is_byte_identical_and_skips_done_fragments() {
     let written = tokio::fs::read(&output).await.unwrap();
     assert_eq!(written, reference, "resumed output must be byte-identical");
     assert!(!sidecar.exists(), "sidecar removed after completion");
+    for m in &done_mocks {
+        m.assert_async().await;
+    }
 }
 
 #[tokio::test]
@@ -1420,17 +1481,17 @@ async fn extra_tail_is_truncated_to_byte_len_on_resume() {
     // Partial = first 2 fragments + a torn extra byte; sidecar says byte_len=2.
     let dir = tempfile::tempdir().expect("tempdir");
     let output = dir.path().join("video.ts");
-    let mut partial = reference[..2].to_vec();
-    partial.push(0xFF); // torn tail beyond the confirmed boundary
-    tokio::fs::write(&output, &partial).await.unwrap();
-
     let mut server = mockito::Server::new_async().await;
+    let mut done_mocks = Vec::new();
     for i in 0..2 {
-        server
-            .mock("GET", format!("/seg-{i}.ts").as_str())
-            .with_status(418)
-            .create_async()
-            .await;
+        done_mocks.push(
+            server
+                .mock("GET", format!("/seg-{i}.ts").as_str())
+                .with_status(418)
+                .expect(0)
+                .create_async()
+                .await,
+        );
     }
     for i in 2..5 {
         server
@@ -1440,14 +1501,22 @@ async fn extra_tail_is_truncated_to_byte_len_on_resume() {
             .create_async()
             .await;
     }
-    let frags: Vec<Fragment> = (0..5)
-        .map(|i| frag(format!("{}/seg-{i}.ts", server.url())))
-        .collect();
-    let sidecar = output.with_extension("ts.hls_state.json");
-    let mut st = HlsResumeState::new(fragment_fingerprint(&frags), 5);
-    st.fragments_done = 2;
-    st.byte_len = 2; // confirmed boundary BEFORE the torn 0xFF byte
-    st.save(&sidecar).await.expect("seed sidecar");
+    let frags = frags_on(&server, 5);
+    // Sidecar CRC covers the intact 2-byte prefix; the torn 0xFF byte is
+    // appended afterwards, past the confirmed boundary.
+    tokio::fs::write(&output, &reference[..2]).await.unwrap();
+    seed_sidecar(
+        &output,
+        &frags,
+        Checkpoint {
+            done: 2,
+            byte_len: 2,
+        },
+    )
+    .await;
+    let mut partial = reference[..2].to_vec();
+    partial.push(0xFF);
+    tokio::fs::write(&output, &partial).await.unwrap();
 
     download_pre_resolved_fragments(&http, &frags, None, None, None, &output, None, None)
         .await
@@ -1457,6 +1526,225 @@ async fn extra_tail_is_truncated_to_byte_len_on_resume() {
         written, reference,
         "torn tail dropped; final byte-identical"
     );
+    for m in &done_mocks {
+        m.assert_async().await;
+    }
+}
+
+#[tokio::test]
+async fn zeroed_tail_with_stale_crc_restarts_fresh() {
+    // The #676 hazard: a crash leaves the output at `byte_len` bytes but the
+    // last fragment's data never reached disk (reads back as zeros) while the
+    // sidecar recorded the CRC of the real bytes. Length-only gating resumes
+    // over the hole; the CRC verify must start fresh instead.
+    let mut ref_server = mockito::Server::new_async().await;
+    let (ref_frags, _expected) = seeded_frags(&mut ref_server, 5).await;
+    let refdir = tempfile::tempdir().expect("tempdir");
+    let refout = refdir.path().join("ref.ts");
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    download_pre_resolved_fragments(&http, &ref_frags, None, None, None, &refout, None, None)
+        .await
+        .expect("reference ok");
+    let reference = tokio::fs::read(&refout).await.unwrap();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = dir.path().join("video.ts");
+    let mut server = mockito::Server::new_async().await;
+    let mocks = expect_each_fragment(&mut server, 5, 1).await;
+    let frags = frags_on(&server, 5);
+
+    // Sidecar hashed over the real 3-byte prefix, then the tail is zeroed.
+    tokio::fs::write(&output, &reference[..3]).await.unwrap();
+    seed_sidecar(
+        &output,
+        &frags,
+        Checkpoint {
+            done: 3,
+            byte_len: 3,
+        },
+    )
+    .await;
+    let mut zeroed = reference[..3].to_vec();
+    zeroed[2] = 0;
+    tokio::fs::write(&output, &zeroed).await.unwrap();
+
+    download_pre_resolved_fragments(&http, &frags, None, None, None, &output, None, None)
+        .await
+        .expect("fresh start completes");
+    let written = tokio::fs::read(&output).await.unwrap();
+    assert_eq!(
+        written, reference,
+        "zeroed tail must be detected and every fragment re-fetched"
+    );
+    for m in &mocks {
+        m.assert_async().await;
+    }
+    assert!(!output.with_extension("ts.hls_state.json").exists());
+}
+
+#[tokio::test]
+async fn zeroed_hole_in_the_middle_restarts_fresh() {
+    // A hole anywhere in [0..byte_len) — not only at the tail — invalidates
+    // the prefix.
+    let mut ref_server = mockito::Server::new_async().await;
+    let (ref_frags, _expected) = seeded_frags(&mut ref_server, 5).await;
+    let refdir = tempfile::tempdir().expect("tempdir");
+    let refout = refdir.path().join("ref.ts");
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    download_pre_resolved_fragments(&http, &ref_frags, None, None, None, &refout, None, None)
+        .await
+        .expect("reference ok");
+    let reference = tokio::fs::read(&refout).await.unwrap();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = dir.path().join("video.ts");
+    let mut server = mockito::Server::new_async().await;
+    let mocks = expect_each_fragment(&mut server, 5, 1).await;
+    let frags = frags_on(&server, 5);
+
+    tokio::fs::write(&output, &reference[..4]).await.unwrap();
+    seed_sidecar(
+        &output,
+        &frags,
+        Checkpoint {
+            done: 4,
+            byte_len: 4,
+        },
+    )
+    .await;
+    let mut holed = reference[..4].to_vec();
+    holed[1] = 0;
+    tokio::fs::write(&output, &holed).await.unwrap();
+
+    download_pre_resolved_fragments(&http, &frags, None, None, None, &output, None, None)
+        .await
+        .expect("fresh start completes");
+    assert_eq!(tokio::fs::read(&output).await.unwrap(), reference);
+    for m in &mocks {
+        m.assert_async().await;
+    }
+}
+
+#[tokio::test]
+async fn v1_sidecar_without_crc_restarts_fresh() {
+    // Upgrade path: a pre-#676 sidecar has no CRC to verify against, so the
+    // partial is untrusted and every fragment is fetched again.
+    let mut server = mockito::Server::new_async().await;
+    let mocks = expect_each_fragment(&mut server, 4, 1).await;
+    let frags = frags_on(&server, 4);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = dir.path().join("video.ts");
+    tokio::fs::write(&output, [0u8, 1]).await.unwrap();
+    let fp = fragment_fingerprint(&frags);
+    let v1 = format!(
+        r#"{{"state_version":1,"fingerprint":{fp},"total_fragments":4,"fragments_done":2,"byte_len":2,"updated_at":0}}"#
+    );
+    let sidecar = output.with_extension("ts.hls_state.json");
+    tokio::fs::write(&sidecar, v1).await.unwrap();
+
+    let http = HttpDownloader::with_client(wreq::Client::new());
+    download_pre_resolved_fragments(&http, &frags, None, None, None, &output, None, None)
+        .await
+        .expect("fresh start completes");
+    assert_eq!(tokio::fs::read(&output).await.unwrap(), [0u8, 1, 2, 3]);
+    for m in &mocks {
+        m.assert_async().await;
+    }
+}
+
+#[tokio::test]
+async fn resumed_hasher_continues_from_the_verified_prefix() {
+    // Resume over a verified 2-fragment prefix, then fail at fragment 4 so the
+    // sidecar left behind was written by the *resumed* hasher. Its CRC must
+    // cover the whole output — RED if the hasher restarts from zero instead
+    // of being seeded with the verified prefix's CRC.
+    let mut ref_server = mockito::Server::new_async().await;
+    let (ref_frags, _expected) = seeded_frags(&mut ref_server, 6).await;
+    let refdir = tempfile::tempdir().expect("tempdir");
+    let refout = refdir.path().join("ref.ts");
+    let http = HttpDownloader::with_client(wreq::Client::new()).with_concurrent_fragments(1);
+    download_pre_resolved_fragments(&http, &ref_frags, None, None, None, &refout, None, None)
+        .await
+        .expect("reference ok");
+    let reference = tokio::fs::read(&refout).await.unwrap();
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let output = dir.path().join("video.ts");
+    let mut server = mockito::Server::new_async().await;
+    for i in 2..4 {
+        server
+            .mock("GET", format!("/seg-{i}.ts").as_str())
+            .with_body(vec![(i % 256) as u8])
+            .create_async()
+            .await;
+    }
+    // 418 is not retryable, so the loop returns after fragments 2 and 3 landed.
+    server
+        .mock("GET", "/seg-4.ts")
+        .with_status(418)
+        .create_async()
+        .await;
+    let frags = frags_on(&server, 6);
+    tokio::fs::write(&output, &reference[..2]).await.unwrap();
+    seed_sidecar(
+        &output,
+        &frags,
+        Checkpoint {
+            done: 2,
+            byte_len: 2,
+        },
+    )
+    .await;
+
+    let res =
+        download_pre_resolved_fragments(&http, &frags, None, None, None, &output, None, None).await;
+    assert!(res.is_err(), "fragment 4 must fail the run");
+
+    let sidecar = output.with_extension("ts.hls_state.json");
+    let st = HlsResumeState::load_matching(&sidecar, fragment_fingerprint(&frags), 6)
+        .await
+        .expect("sidecar from the resumed run");
+    assert_eq!(st.fragments_done, 4);
+    assert_eq!(st.byte_len, 4);
+    assert_eq!(
+        st.stream_crc32,
+        crc32_of_prefix(&output, 4).await.expect("hash"),
+        "sidecar CRC must cover the verified prefix plus the new fragments"
+    );
+    assert_eq!(
+        &tokio::fs::read(&output).await.unwrap()[..],
+        &reference[..4]
+    );
+
+    // And a third run resumes over that sidecar to a byte-identical result.
+    let mut server3 = mockito::Server::new_async().await;
+    let mut done_mocks = Vec::new();
+    for i in 0..4 {
+        done_mocks.push(
+            server3
+                .mock("GET", format!("/seg-{i}.ts").as_str())
+                .with_status(418)
+                .expect(0)
+                .create_async()
+                .await,
+        );
+    }
+    for i in 4..6 {
+        server3
+            .mock("GET", format!("/seg-{i}.ts").as_str())
+            .with_body(vec![(i % 256) as u8])
+            .expect(1)
+            .create_async()
+            .await;
+    }
+    let frags3 = frags_on(&server3, 6);
+    download_pre_resolved_fragments(&http, &frags3, None, None, None, &output, None, None)
+        .await
+        .expect("second resume completes");
+    assert_eq!(tokio::fs::read(&output).await.unwrap(), reference);
+    for m in &done_mocks {
+        m.assert_async().await;
+    }
 }
 
 #[tokio::test]

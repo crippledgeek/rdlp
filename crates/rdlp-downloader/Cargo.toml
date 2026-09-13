@@ -32,6 +32,9 @@ dash-mpd = { workspace = true }
 rdlp-ffmpeg = { path = "../rdlp-ffmpeg" }
 rdlp-redact = { workspace = true }
 tempfile = { workspace = true }
+# Running CRC-32 of the HLS output, verified on resume (#676). Already in the
+# workspace lock transitively (flate2); not declared in [workspace.dependencies].
+crc32fast = "1.5"
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }

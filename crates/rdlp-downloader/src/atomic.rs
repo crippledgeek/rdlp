@@ -17,6 +17,47 @@
 //!   rather than matching against one, and the caller checks it against the
 //!   server's response (`If-Range`, RFC 9110 §13.1.5) instead of the sidecar
 //!   checking it against the request.
+//!
+//! # Durability position (#676): no `fsync` on any resume path
+//!
+//! Each protocol tolerates a crash between a write and its commit to disk
+//! without syncing:
+//!
+//! - **DASH** writes one file per segment; a torn (short) segment costs one
+//!   re-fetch. Parts are length-checked (`intact_len`), not content-checked,
+//!   so a size-durable/data-zeroed part on ext4/XFS is not caught here — DASH
+//!   per-segment integrity is #677/#746's scope, not #676's.
+//! - **HTTP** carries the strong validator in `<output>.http_state.json` and
+//!   checks it with `If-Range` on every resume (#565); each ranged chunk is
+//!   re-validated against the origin's `Content-Range` (#526). Nothing
+//!   depends on on-disk write ordering, so no sync.
+//! - **HLS** appends to one output and records the running CRC-32 of every
+//!   byte written in the sidecar; a resume re-hashes the partial's
+//!   `[0..byte_len)` and starts fresh on a mismatch (`fragments::state`).
+//!
+//! The sidecar itself is not the hazard: it is replaced by `rename(2)`, which
+//! is an atomic name swap, so a reader sees either the old or the new document
+//! (btrfs FAQ; ext4's default-on `auto_da_alloc` flushes the data of a
+//! replace-via-rename before the rename) and a torn or zero-length one fails
+//! JSON parse ⇒ fresh start. The output file is: its size can be durable
+//! while its appended data is not — ext4 `data=ordered` with delayed
+//! allocation (Ts'o, 2009: `auto_da_alloc` "will not solve the problem for
+//! newly created files") and XFS, which journals metadata only, can leave
+//! `byte_len` bytes of which the tail reads back as zeros; btrfs is exempt
+//! ("waits until data extents are on disk before updating metadata"). `fsync(2)`
+//! NOTES documents that flushing is the application's responsibility.
+//!
+//! Syncing instead was measured (btrfs on dm-crypt SSD, 2 MiB × 200
+//! fragments, best of 3): 0.49 ms/fragment unsynced vs 16.2 ms with an
+//! `fsync` of the sidecar, 28.2 ms with `fdatasync` of the output plus the
+//! sidecar `fsync`, 11.6 ms for `fdatasync` of the output alone, and a
+//! barrier every 8th fragment 0.5 ms median but 42 ms p99 (the middle ground
+//! only moves the stall, it does not remove it). A 2 MiB fragment arrives in
+//! ~16 ms on gigabit, so a per-fragment sync halves HLS throughput on a fast
+//! link, and HDDs are worse. Detecting the hole on
+//! resume costs one read of the partial and catches any hole anywhere in the
+//! prefix, on every filesystem, with no ordering assumption. yt-dlp and aria2
+//! write their state files unsynced as well.
 
 use std::path::Path;
 use std::time::SystemTime;
@@ -26,11 +67,16 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::io::AsyncReadExt;
 
+/// Read-buffer size for hashing a partial on resume. 1 MiB keeps the verify
+/// to a handful of syscalls per fragment-sized partial without holding a
+/// whole multi-GiB output in memory.
+const VERIFY_READ_BUF: usize = 1024 * 1024;
+
 /// Atomically write `value` as JSON to `path` (write-temp-in-same-dir + rename).
 /// A kill mid-write leaves the previous file intact — never a torn file.
 ///
-/// Does NOT fsync: acceptable for resume sidecars (worst case on power loss =
-/// re-download one segment). Same-filesystem only — `new_in(dir)` places the
+/// Does NOT fsync (see the module doc for the per-protocol position).
+/// Same-filesystem only — `new_in(dir)` places the
 /// temp next to the destination so `persist` is a same-fs rename, not a copy.
 /// `tempfile` RAII-cleans the temp on any early return.
 ///
@@ -134,8 +180,39 @@ pub fn intact_len(on_disk_len: u64, recorded_len: u64) -> Option<u64> {
     (on_disk_len == recorded_len).then_some(recorded_len)
 }
 
+/// CRC-32/IEEE of the first `len` bytes of the file at `path`, read in
+/// `VERIFY_READ_BUF` chunks. The one prefix-hashing routine: the HLS resume
+/// verify and the tests that seed sidecars both use it, so the stored value
+/// has a single definition. Lives here because this is the module every
+/// sidecar shares, so there is one hashing definition for production and
+/// tests rather than one per protocol.
+///
+/// # Errors
+/// Returns the underlying I/O error, or `UnexpectedEof` if the file is
+/// shorter than `len`.
+pub(crate) async fn crc32_of_prefix(path: &Path, len: u64) -> std::io::Result<u32> {
+    let mut file = tokio::fs::File::open(path).await?;
+    let mut hasher = crc32fast::Hasher::new();
+    let mut buf = vec![0u8; VERIFY_READ_BUF];
+    let mut remaining = len;
+    while remaining > 0 {
+        let want =
+            usize::try_from(remaining.min(VERIFY_READ_BUF as u64)).unwrap_or(VERIFY_READ_BUF);
+        let n = file.read(&mut buf[..want]).await?;
+        if n == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                format!("partial is shorter than the recorded {len} bytes"),
+            ));
+        }
+        hasher.update(&buf[..n]);
+        remaining -= n as u64;
+    }
+    Ok(hasher.finalize())
+}
+
 /// Current Unix epoch seconds, or 0 if the system clock predates the epoch.
-/// Shared by the HLS and DASH resume-state modules for their `updated_at` stamp.
+/// Shared by the HLS, DASH and HTTP resume-state modules for their `updated_at` stamp.
 #[must_use]
 pub(crate) fn now_secs() -> u64 {
     SystemTime::now()
@@ -423,6 +500,89 @@ mod tests {
                 a: 2,
                 b: "second".into()
             }
+        );
+    }
+
+    #[tokio::test]
+    async fn crc32_of_prefix_matches_the_ieee_check_value() {
+        // CRC-32/IEEE check value: crc("123456789") == 0xCBF43926.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("partial");
+        tokio::fs::write(&path, b"123456789").await.expect("write");
+        assert_eq!(crc32_of_prefix(&path, 9).await.expect("hash"), 0xCBF4_3926);
+    }
+
+    #[tokio::test]
+    async fn crc32_of_prefix_ignores_bytes_past_len_and_hashes_empty_as_zero() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("partial");
+        tokio::fs::write(&path, b"123456789TRAILING")
+            .await
+            .expect("write");
+        assert_eq!(
+            crc32_of_prefix(&path, 9).await.expect("hash"),
+            0xCBF4_3926,
+            "bytes beyond len must not contribute"
+        );
+        assert_eq!(crc32_of_prefix(&path, 0).await.expect("hash"), 0);
+    }
+
+    #[tokio::test]
+    async fn crc32_of_prefix_errors_when_file_is_shorter_than_len() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("partial");
+        tokio::fs::write(&path, b"12345").await.expect("write");
+        let err = crc32_of_prefix(&path, 6).await.expect_err("short file");
+        assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+        let missing = dir.path().join("nope");
+        assert!(crc32_of_prefix(&missing, 1).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn crc32_of_prefix_distinguishes_zeroed_tail_from_real_tail() {
+        // The property the HLS resume gate rests on (#676): a prefix whose
+        // tail never reached disk reads back as zeros of the same length, and
+        // CRC-32/IEEE (all-ones init and xorout) does not hash appended zeros
+        // to the same value as the real bytes.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let real = dir.path().join("real");
+        let zeroed = dir.path().join("zeroed");
+        let prefix = b"prefix-bytes-";
+        let tail_len = 4096usize;
+        let mut real_bytes = prefix.to_vec();
+        real_bytes.extend((0..tail_len).map(|i| (i % 253) as u8 + 1));
+        let mut zeroed_bytes = prefix.to_vec();
+        zeroed_bytes.extend(std::iter::repeat_n(0u8, tail_len));
+        tokio::fs::write(&real, &real_bytes).await.expect("write");
+        tokio::fs::write(&zeroed, &zeroed_bytes)
+            .await
+            .expect("write");
+        let len = real_bytes.len() as u64;
+        assert_ne!(
+            crc32_of_prefix(&real, len).await.expect("hash"),
+            crc32_of_prefix(&zeroed, len).await.expect("hash"),
+            "same length, zeroed tail must not collide with the real tail"
+        );
+    }
+
+    #[tokio::test]
+    async fn crc32_of_prefix_spans_read_buffer_boundaries() {
+        // len > VERIFY_READ_BUF forces the chunk loop; the one-shot library
+        // hash over the same bytes is the oracle.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("partial");
+        let len = VERIFY_READ_BUF * 2 + 7;
+        let bytes: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+        tokio::fs::write(&path, &bytes).await.expect("write");
+        assert_eq!(
+            crc32_of_prefix(&path, len as u64).await.expect("hash"),
+            crc32fast::hash(&bytes)
+        );
+        assert_eq!(
+            crc32_of_prefix(&path, VERIFY_READ_BUF as u64 + 1)
+                .await
+                .expect("hash"),
+            crc32fast::hash(&bytes[..=VERIFY_READ_BUF])
         );
     }
 }
