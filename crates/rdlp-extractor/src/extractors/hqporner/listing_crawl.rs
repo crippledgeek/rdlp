@@ -42,19 +42,20 @@ impl ListingCrawl {
     /// return what it has gathered.
     pub(super) fn next_page(&mut self, webpage: &str, page_url: &str) -> Option<String> {
         let next = next_listing_page_url(webpage, page_url)?;
-        if self.visited.len() >= MAX_LISTING_PAGES {
-            log::debug!(
-                "[HQPorner] Listing page cap {MAX_LISTING_PAGES} reached, stopping pagination"
-            );
-            return None;
-        }
-        if !self.visited.insert(next.clone()) {
+        if self.visited.contains(&next) {
             log::debug!(
                 "[HQPorner] Pagination revisits {}, stopping",
                 rdlp_redact::RedactedUrl::new(&next)
             );
             return None;
         }
+        if self.visited.len() >= MAX_LISTING_PAGES {
+            log::debug!(
+                "[HQPorner] Listing page cap {MAX_LISTING_PAGES} reached, stopping pagination"
+            );
+            return None;
+        }
+        self.visited.insert(next.clone());
         Some(next)
     }
 }
