@@ -125,14 +125,15 @@ pub enum RdlpApiError {
 use rdlp_redact::redact_str as redact;
 
 /// The one place the `ExtractError` frame is rendered: with the URL clause
-/// when a URL exists, without it otherwise (#669). `message` is redacted by
-/// the caller (`scripts/check-error-attr-redaction.sh` requires `redact(...)`
-/// to appear textually in the `#[error(...)]` argument list, not merely
-/// somewhere it is eventually reached).
-fn extract_error_frame(source_url: Option<&RedactedUrlBuf>, message: &str) -> String {
+/// when a URL exists, without it otherwise (#669). `redacted_message` MUST
+/// already be the output of `redact(...)` — the `#[error(...)]` attribute
+/// passes `&redact(message)` so `scripts/check-error-attr-redaction.sh` can
+/// see the `redact(` call textually in its argument list; this helper does
+/// not call `redact` itself, so a caller that skips it would leak.
+fn extract_error_frame(source_url: Option<&RedactedUrlBuf>, redacted_message: &str) -> String {
     source_url.map_or_else(
-        || format!("Extraction failed: {message}"),
-        |url| format!("Extraction failed for {url}: {message}"),
+        || format!("Extraction failed: {redacted_message}"),
+        |url| format!("Extraction failed for {url}: {redacted_message}"),
     )
 }
 
