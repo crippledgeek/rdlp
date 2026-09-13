@@ -219,6 +219,25 @@ impl ContainerFormat {
             .and_then(|e| e.parse().ok())
     }
 
+    /// Derive the container from a media type (`Content-Type`, `og:video:type`,
+    /// JSON-LD `encodingFormat`). Parameters after `;` are ignored and
+    /// type/subtype compare ASCII-case-insensitively (RFC 6838 §4.2,
+    /// RFC 9110 §8.3.1). The single place a media type becomes a
+    /// `ContainerFormat`; `None` means "not a container this crate names" —
+    /// it is NOT a media/non-media verdict (#579).
+    #[must_use]
+    pub fn from_mime(content_type: &str) -> Option<Self> {
+        let essence = content_type
+            .split(';')
+            .next()
+            .unwrap_or(content_type)
+            .trim();
+        MIME_TABLE
+            .iter()
+            .find(|(mime, _)| mime.eq_ignore_ascii_case(essence))
+            .map(|(_, container)| *container)
+    }
+
     /// Whether this container supports faststart (moov atom at beginning).
     #[inline]
     #[must_use]
@@ -226,6 +245,51 @@ impl ContainerFormat {
         matches!(self, Self::Mp4 | Self::Mov | Self::M4v | Self::F4v)
     }
 }
+
+/// IANA / de-facto media types → the container they name. The vocabulary is
+/// yt-dlp's `mimetype2ext` (`yt_dlp/utils/_utils.py`, read 2026-09-13),
+/// restricted to containers this enum models; manifests (`mpegurl`,
+/// `dash+xml`) are protocols, not containers, and are deliberately absent.
+/// Keys are lowercase `type/subtype`; lookup folds case and drops parameters.
+const MIME_TABLE: &[(&str, ContainerFormat)] = &[
+    // video
+    ("video/mp4", ContainerFormat::Mp4),
+    ("video/x-mp4-fragmented", ContainerFormat::Mp4),
+    ("video/webm", ContainerFormat::WebM),
+    ("video/x-matroska", ContainerFormat::Mkv),
+    ("video/quicktime", ContainerFormat::Mov),
+    ("video/x-m4v", ContainerFormat::M4v),
+    ("video/mp2t", ContainerFormat::Ts),
+    ("video/x-flv", ContainerFormat::Flv),
+    ("video/x-msvideo", ContainerFormat::Avi),
+    ("video/3gpp", ContainerFormat::ThreeGp),
+    ("video/mpeg", ContainerFormat::Mpg),
+    ("video/x-ms-wmv", ContainerFormat::Wmv),
+    ("video/x-ms-asf", ContainerFormat::Asf),
+    ("video/ogg", ContainerFormat::Ogg),
+    ("application/mxf", ContainerFormat::Mxf),
+    // audio
+    ("audio/mp4", ContainerFormat::M4a),
+    ("audio/x-m4a", ContainerFormat::M4a),
+    // RFC 3003: audio/mpeg may be MP1/MP2/MP3; MP3 is the one seen in practice.
+    ("audio/mpeg", ContainerFormat::Mp3),
+    ("audio/ogg", ContainerFormat::Ogg),
+    ("audio/opus", ContainerFormat::Opus),
+    ("audio/flac", ContainerFormat::Flac),
+    ("audio/x-flac", ContainerFormat::Flac),
+    ("audio/wav", ContainerFormat::Wav),
+    ("audio/x-wav", ContainerFormat::Wav),
+    ("audio/wave", ContainerFormat::Wav),
+    ("audio/aac", ContainerFormat::Aac),
+    ("audio/aacp", ContainerFormat::Aac),
+    ("audio/x-aac", ContainerFormat::Aac),
+    ("audio/webm", ContainerFormat::WebM),
+    ("audio/x-matroska", ContainerFormat::Mka),
+    ("audio/x-ms-wma", ContainerFormat::Wma),
+    ("audio/aiff", ContainerFormat::Aiff),
+    ("audio/x-aiff", ContainerFormat::Aiff),
+    ("audio/ac3", ContainerFormat::Ac3),
+];
 
 #[cfg(test)]
 mod tests {
@@ -577,6 +641,89 @@ mod tests {
                 ContainerFormat::from_path(std::path::Path::new(path)),
                 None,
                 "{path:?} must not resolve to a container"
+            );
+        }
+    }
+
+    /// The four `og:video:type` values #579 measured as "`is_media=true`, ext=None";
+    /// each names a container this enum already has.
+    #[test]
+    fn from_mime_names_the_containers_579_found_unnamed() {
+        assert_eq!(
+            ContainerFormat::from_mime("video/ogg"),
+            Some(ContainerFormat::Ogg)
+        );
+        assert_eq!(
+            ContainerFormat::from_mime("video/mp2t"),
+            Some(ContainerFormat::Ts)
+        );
+        assert_eq!(
+            ContainerFormat::from_mime("audio/aac"),
+            Some(ContainerFormat::Aac)
+        );
+        assert_eq!(
+            ContainerFormat::from_mime("video/x-msvideo"),
+            Some(ContainerFormat::Avi)
+        );
+    }
+
+    #[test]
+    fn from_mime_strips_parameters_and_folds_case() {
+        assert_eq!(
+            ContainerFormat::from_mime("Video/MP4; codecs=\"avc1.64001E\""),
+            Some(ContainerFormat::Mp4)
+        );
+        assert_eq!(
+            ContainerFormat::from_mime(" audio/MPEG "),
+            Some(ContainerFormat::Mp3)
+        );
+    }
+
+    #[test]
+    fn from_mime_distinguishes_audio_and_video_namespaces() {
+        // Same subtype, different container: the top-level type decides.
+        assert_eq!(
+            ContainerFormat::from_mime("video/mp4"),
+            Some(ContainerFormat::Mp4)
+        );
+        assert_eq!(
+            ContainerFormat::from_mime("audio/mp4"),
+            Some(ContainerFormat::M4a)
+        );
+        assert_eq!(
+            ContainerFormat::from_mime("video/x-matroska"),
+            Some(ContainerFormat::Mkv)
+        );
+        assert_eq!(
+            ContainerFormat::from_mime("audio/x-matroska"),
+            Some(ContainerFormat::Mka)
+        );
+    }
+
+    #[test]
+    fn from_mime_rejects_non_containers() {
+        for ct in [
+            "text/html",
+            "application/vnd.apple.mpegurl", // a manifest, not a container
+            "application/dash+xml",
+            "application/octet-stream",
+            "video/",
+            "",
+            "mp4",
+        ] {
+            assert_eq!(ContainerFormat::from_mime(ct), None, "{ct}");
+        }
+    }
+
+    #[test]
+    fn from_mime_covers_every_table_row_with_a_real_variant() {
+        // Every row's target must round-trip through as_ext → FromStr, which
+        // pins the table against a renamed or removed variant.
+        for (mime, container) in MIME_TABLE {
+            assert_eq!(ContainerFormat::from_mime(mime), Some(*container), "{mime}");
+            assert_eq!(
+                container.as_ext().parse::<ContainerFormat>().ok(),
+                Some(*container)
             );
         }
     }
