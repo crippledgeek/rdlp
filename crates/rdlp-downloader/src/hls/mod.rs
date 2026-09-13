@@ -7,10 +7,6 @@
 //! (the extractor did not call the expander) and are surfaced as a typed
 //! `RdlpError::Download`.
 
-// `Duration::from_mins` / `from_hours` (lint's suggested replacements) need Rust 1.95;
-// workspace MSRV is 1.88.
-#![allow(clippy::duration_suboptimal_units)]
-
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;

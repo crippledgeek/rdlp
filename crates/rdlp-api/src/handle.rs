@@ -381,10 +381,7 @@ mod join_error_tests {
     #[tokio::test]
     async fn a_cancelled_task_is_not_reported_as_a_panic() {
         let handle = tokio::spawn(async {
-            // Never completes, so the abort below always wins. A timer would
-            // work too, but every round duration trips
-            // `clippy::duration_suboptimal_units` toward a constructor newer
-            // than our MSRV (`from_hours`/`from_mins` are 1.91; MSRV is 1.88).
+            // Never completes, so the abort below always wins.
             std::future::pending::<()>().await;
         });
         handle.abort();

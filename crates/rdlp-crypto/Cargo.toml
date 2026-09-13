@@ -2,6 +2,7 @@
 name = "rdlp-crypto"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "Cryptographic utilities for rdlp including PRNG-based URL decryption"

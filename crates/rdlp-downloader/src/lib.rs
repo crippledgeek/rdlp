@@ -703,7 +703,6 @@ mod tests {
     #[test]
     fn registry_wires_download_and_merge_timeouts_from_config() {
         // Item 8/9: download_timeout + merge_timeout must reach DownloaderConfig.
-        // Non-round seconds dodge clippy::duration_suboptimal_units.
         let config = Config {
             download_timeout: Some(7201),
             merge_timeout: Some(599),

@@ -11,7 +11,7 @@ const ETA_EWMA_ALPHA: f64 = 0.3;
 
 /// Average-rate ETA: `elapsed * (1 - frac) / frac`. `None` when `frac` is
 /// non-positive or already complete (`>= 1.0`). Uses `try_from_secs_f64`
-/// (stable since 1.66; workspace floor is 1.85) so a non-finite OR finite-but-
+/// (stable since 1.66; workspace floor is 1.88) so a non-finite OR finite-but-
 /// overflowing result yields `None` instead of panicking — never panics /
 /// divides by zero. (Validated 2026-06-07: `from_secs_f64` panics on
 /// negative/NaN/inf AND finite overflow; the checked variant covers all four.)

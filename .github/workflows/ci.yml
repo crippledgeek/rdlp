@@ -79,6 +79,16 @@ jobs:
         # decays into an unchecked claim as the matcher evolves.
         run: bash scripts/check-no-dir-sweep-delete.sh --self-test
 
+      - name: Check every crate declares the MSRV
+        # #728: the workspace `rust-version` reaches a member only via
+        # `rust-version.workspace = true`. Without it Cargo enforces no floor and
+        # clippy (msrv defaults to Cargo.toml's rust-version) demands APIs newer
+        # than the declared toolchain.
+        run: bash scripts/check-msrv-declared.sh
+
+      - name: Verify the MSRV gate still fires
+        run: bash scripts/check-msrv-declared.sh --self-test
+
       - name: Check CLI arguments reject blank values
         # #540: a blank value reaches the domain layer looking like a real one --
         # `--recode-audio=` became `Encoder { name: "" }` and failed inside

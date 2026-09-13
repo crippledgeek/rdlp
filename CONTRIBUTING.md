@@ -37,7 +37,7 @@ More test coverage is always helpful:
 
 ### Prerequisites
 
-- Rust 1.85+ (2024 Edition)
+- Rust 1.88+ (2024 Edition; the floor is `rust-version` in the root `Cargo.toml`, inherited by every crate)
 - Git
 - FFmpeg (for post-processing features)
 - Basic understanding of async Rust (tokio)
