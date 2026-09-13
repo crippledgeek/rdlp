@@ -527,7 +527,7 @@ mod tests {
         use rdlp_redact::RedactedUrlBuf;
         let api_err = RdlpApiError::ExtractError {
             message: "page not found".into(),
-            source_url: RedactedUrlBuf::from("https://example.com"),
+            source_url: Some(RedactedUrlBuf::from("https://example.com")),
         };
         let app_err = AppError::from_api(Action::new("test"), &api_err);
         match app_err {
