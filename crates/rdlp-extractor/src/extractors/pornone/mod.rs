@@ -106,8 +106,13 @@ impl InfoExtractor for PornoneExtractor {
         for r in renditions {
             // Page-sourced URL: gate before it can be probed or returned.
             BaseExtractor::validate_url_security(&r.url)?;
+            // `format_id` is a lookup key elsewhere (the selector DSL's
+            // `FormatToken::FormatId`, resume-state's `find(|f| f.format_id
+            // == saved.format_id)`), so height alone collides whenever the
+            // site serves two renditions at the same height and different
+            // bitrates — fold the bitrate in too.
             let mut f = Format::new(
-                format!("mp4-{}p", r.height),
+                format!("mp4-{}p-{}k", r.height, r.bitrate_kbps),
                 &r.url,
                 "mp4",
                 DownloadProtocol::Https,
@@ -263,7 +268,40 @@ mod tests {
             assert_eq!(f.duration, Some(139.0), "propagate_duration");
         }
         let ids: Vec<&str> = info.formats.iter().map(|f| f.format_id.as_str()).collect();
-        assert!(ids.contains(&"mp4-406p"), "{ids:?}");
+        assert!(ids.contains(&"mp4-406p-500k"), "{ids:?}");
+    }
+
+    /// Two renditions sharing a height but not a bitrate must not collapse
+    /// onto the same `format_id` — it is a lookup key elsewhere (the
+    /// selector DSL's `FormatToken::FormatId`, resume-state's
+    /// `find(|f| f.format_id == saved.format_id)` in
+    /// `rdlp-api/src/orchestrator/state/mod.rs`), so a collision silently
+    /// picks the wrong rendition. Fails against `format!("mp4-{}p",
+    /// r.height)` (both would be `"mp4-406p"`); passes once the bitrate is
+    /// folded in.
+    #[tokio::test]
+    async fn same_height_renditions_get_distinct_format_ids() {
+        let mut server = mockito::Server::new_async().await;
+        let page = r#"<video>
+            <source src="https://s1.pornone.com/vid2/sig/1/1/9/9_720x406_500k.mp4" type="video/mp4"/>
+            <source src="https://s1.pornone.com/vid2/sig/1/1/9/9_720x406_2000k.mp4" type="video/mp4"/>
+        </video>"#;
+        let _m = server
+            .mock("GET", "/ass/slug/1/")
+            .with_body(page)
+            .create_async()
+            .await;
+        let ctx = test_ctx();
+        let info = PornoneExtractor::new()
+            .extract(&format!("{}/ass/slug/1/", server.url()), &ctx)
+            .await
+            .expect("extract");
+
+        let ids: Vec<&str> = info.formats.iter().map(|f| f.format_id.as_str()).collect();
+        assert_eq!(ids.len(), 2, "{ids:?}");
+        assert_ne!(ids[0], ids[1], "same-height renditions collided: {ids:?}");
+        assert!(ids.contains(&"mp4-406p-500k"), "{ids:?}");
+        assert!(ids.contains(&"mp4-406p-2000k"), "{ids:?}");
     }
 
     #[tokio::test]

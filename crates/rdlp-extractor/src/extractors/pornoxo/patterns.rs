@@ -15,7 +15,7 @@ pub(crate) static URL_PATTERN: Lazy<Regex> =
 /// Used ONLY by the `#[cfg(test)]` loopback seam in [`parse_video_id`], never
 /// in production — see that function.
 #[cfg(test)]
-static VIDEO_PATH_PATTERN: Lazy<Regex> = lazy_regex!(r"/videos/(\d+)/[^/?#]+");
+static VIDEO_PATH_PATTERN: Lazy<Regex> = lazy_regex!(r"/videos/(?P<id>\d+)/[^/?#]+");
 
 /// Whether this URL is a PornoXO video page.
 pub(crate) fn is_suitable(url: &str) -> bool {
@@ -28,31 +28,19 @@ pub(crate) fn is_suitable(url: &str) -> bool {
 /// lookalike host yields `None`.
 ///
 /// Test behavior: additionally accepts the path shape when the URL is a
-/// loopback origin, so the mockito-backed `extract` tests can drive one.
-///
-/// What counts as a loopback origin is NOT decided here. This shares the one
-/// definition — `base::common::manifest_url::is_loopback_origin` — with the
-/// SSRF gate's own `cfg(test)` seam, so the two cannot come to disagree about
-/// which origins qualify. The scope is that predicate's: HTTP(S) on loopback
-/// only, never arbitrary hosts, and production builds compile without the seam
-/// at all.
+/// loopback origin, so the mockito-backed `extract` tests can drive one, via
+/// the shared `base::common::manifest_url::loopback_path_id` helper (also
+/// used by PornOne) — so the two extractors cannot come to disagree about
+/// which origins qualify. Production builds compile without the seam at all.
 pub(crate) fn parse_video_id(url: &str) -> Option<String> {
     if let Some(id) = URL_PATTERN.captures(url).and_then(|c| c.get(1)) {
         return Some(id.as_str().to_owned());
     }
 
-    // Shares the definition of "loopback origin" with the SSRF gate's own
-    // `cfg(test)` seam, so the two cannot drift apart on what loopback means.
-    // The gates themselves stay separate: this is an id parser, not a security
-    // boundary, and the two should be free to change independently.
     #[cfg(test)]
-    if crate::base::common::manifest_url::is_loopback_origin(url) {
-        return VIDEO_PATH_PATTERN
-            .captures(url)
-            .and_then(|c| c.get(1))
-            .map(|m| m.as_str().to_owned());
-    }
+    return crate::base::common::manifest_url::loopback_path_id(url, &VIDEO_PATH_PATTERN);
 
+    #[cfg(not(test))]
     None
 }
 

@@ -12,7 +12,8 @@ use scraper::Html;
 
 use super::XVideosExtractor;
 use crate::base::common::{
-    BaseExtractor, PagedSearch, SearchPage, SearchPageSpec, resolve_card_url, resolve_media_url,
+    BaseExtractor, PagedSearch, SearchPage, SearchPageSpec, first_usable_attr, is_not_a_data_uri,
+    resolve_card_url, resolve_media_url,
 };
 
 const XVIDEOS_BASE_URL: &str = "https://www.xvideos.com";
@@ -152,15 +153,11 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
         // substitution stays ahead of resolution so the placeholder token never
         // survives into a URL.
         let thumbnail_url = block.select(img_sel).next().and_then(|img| {
-            let attrs = img.value();
-            THUMBNAIL_ATTRS
-                .iter()
-                .filter_map(|attr| attrs.attr(attr))
-                // An empty attribute joins to the BASE, so it would resolve
-                // "successfully" to the site root rather than being skipped.
-                .filter(|u| !u.is_empty() && !u.contains("lightbox-blank"))
-                .map(|u| u.replace("THUMBNUM", "1"))
-                .find_map(|u| resolve_media_url(XVIDEOS_BASE_URL, &u))
+            first_usable_attr(&img, &THUMBNAIL_ATTRS, |u| {
+                !u.contains("lightbox-blank") && is_not_a_data_uri(u)
+            })
+            .map(|u| u.replace("THUMBNUM", "1"))
+            .and_then(|u| resolve_media_url(XVIDEOS_BASE_URL, &u))
         });
 
         // Duration from .duration or span.duration

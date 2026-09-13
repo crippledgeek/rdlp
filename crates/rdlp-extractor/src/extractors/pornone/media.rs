@@ -31,6 +31,9 @@ pub(crate) struct Rendition {
     pub bitrate_kbps: u32,
 }
 
+/// Renditions are returned in DOM order — the order the page happens to list
+/// `<source>` tags in, never sorted by height or bitrate. Callers must not
+/// assume the first entry is the best (or worst) rendition.
 pub(crate) fn parse_renditions(document: &Html, page_url: &str) -> Vec<Rendition> {
     let mut seen = HashSet::new();
     document

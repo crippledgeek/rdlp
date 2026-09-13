@@ -13,8 +13,14 @@ use std::sync::LazyLock;
 
 use super::EPornerExtractor;
 use crate::base::common::{
-    BaseExtractor, PagedSearch, SearchPage, SearchPageSpec, resolve_card_url, resolve_media_url,
+    BaseExtractor, PagedSearch, SearchPage, SearchPageSpec, first_usable_attr, is_not_a_data_uri,
+    resolve_card_url, resolve_media_url,
 };
+
+/// Poster attributes in preference order. `data-src` carries the real image
+/// on lazy-loaded cards (101 of 125 in the committed capture); `src` is the
+/// fallback, filtered against a `data:` placeholder via [`is_not_a_data_uri`].
+const THUMBNAIL_ATTRS: [&str; 2] = ["data-src", "src"];
 
 const EPORNER_ROOT: &str = "https://www.eporner.com";
 
@@ -68,22 +74,14 @@ fn build_search_url(query: &SearchQuery, page: u32) -> String {
 ///
 /// `data-src` is tried FIRST, matching every sibling that handles lazy images
 /// (`hqporner/search.rs`, `xvideos/search.rs`,
-/// `tnaflix/tnaflix_search_helpers.rs`). Preferring `src` happens to agree on
-/// this fixture, where the placeholder is always a `data:` URI, but it loses
-/// the moment a placeholder is an ordinary URL — xvideos' own
+/// `tnaflix/tnaflix_search_helpers.rs`) via the shared
+/// [`first_usable_attr`]/[`is_not_a_data_uri`] pair. Preferring `src` happens
+/// to agree on this fixture, where the placeholder is always a `data:` URI,
+/// but it loses the moment a placeholder is an ordinary URL — xvideos' own
 /// `lightbox-blank.gif` is exactly that shape, and a `src`-first order would
-/// hand it back in preference to a real `data-src`. The `data:` filter stays
-/// on the `src` fallback so a card with no `data-src` and a placeholder `src`
-/// yields `None` rather than a blank pixel.
-fn card_poster_src(img: scraper::ElementRef<'_>) -> Option<&str> {
-    img.value()
-        .attr("data-src")
-        .filter(|s| !s.is_empty())
-        .or_else(|| {
-            img.value()
-                .attr("src")
-                .filter(|s| !s.is_empty() && !s.starts_with("data:"))
-        })
+/// hand it back in preference to a real `data-src`.
+fn card_poster_src<'a>(img: &scraper::ElementRef<'a>) -> Option<&'a str> {
+    first_usable_attr(img, &THUMBNAIL_ATTRS, is_not_a_data_uri)
 }
 
 /// Parse EPorner search/tag results.
@@ -132,7 +130,7 @@ fn parse_results(html: &str) -> Vec<SearchResultPreview> {
         let thumbnail_url = cover_a
             .select(&MBIMG_SEL)
             .next()
-            .and_then(card_poster_src)
+            .and_then(|img| card_poster_src(&img))
             .and_then(|src| resolve_media_url(EPORNER_ROOT, src));
 
         // Find the matching mbunder by scanning forward from the parent of
@@ -225,7 +223,7 @@ fn parse_results(html: &str) -> Vec<SearchResultPreview> {
         let thumbnail_url = link
             .select(&MBIMG_SEL)
             .next()
-            .and_then(card_poster_src)
+            .and_then(|img| card_poster_src(&img))
             .and_then(|src| resolve_media_url(EPORNER_ROOT, src));
         let Some(video_url) = resolve_card_url(EPORNER_ROOT, href) else {
             continue;

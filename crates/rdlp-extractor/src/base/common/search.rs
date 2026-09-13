@@ -319,6 +319,43 @@ pub(crate) fn resolve_media_url(origin: &str, src: &str) -> Option<String> {
     matches!(resolved.scheme(), "http" | "https").then(|| resolved.into())
 }
 
+/// The first non-empty, `extra`-approved attribute value on `el`, trying
+/// `attrs` in order.
+///
+/// The shared shape behind every "the image is lazy-loaded, so read
+/// `data-src` before the real `src`" card poster — hqporner
+/// (`data-src`/`src`), xvideos (`data-src`/`data-mzl`/`src`, plus rejecting a
+/// `lightbox-blank.gif` placeholder), eporner (`data-src`/`src`, plus
+/// rejecting a `data:` URI), pornone (`data-src`/`src`). Each site differs
+/// only in which attributes exist and what additionally disqualifies a
+/// candidate, so `extra` is the one remaining knob; a site with no extra rule
+/// passes `|_| true`.
+///
+/// Deliberately does NOT resolve the result against an origin — that step
+/// takes a different base URL per site (`resolve_media_url`/`resolve_card_url`
+/// already generalise it), so callers chain `.and_then(|s| resolve_media_url(origin, s))`
+/// themselves.
+pub(crate) fn first_usable_attr<'a>(
+    el: &scraper::ElementRef<'a>,
+    attrs: &[&str],
+    mut extra: impl FnMut(&str) -> bool,
+) -> Option<&'a str> {
+    let value = el.value();
+    attrs
+        .iter()
+        .filter_map(|attr| value.attr(attr))
+        .find(|s| !s.is_empty() && extra(s))
+}
+
+/// A `data:` URI must never win a poster fallback — the same `extra` rule
+/// duplicated at hqporner, xvideos, and eporner's own [`first_usable_attr`]
+/// call sites before this was pulled out. What must not reach the desktop's
+/// `<img src>` doesn't vary by site; only the attribute list and any other
+/// per-site placeholder rule (xvideos' `lightbox-blank.gif`) does.
+pub(crate) fn is_not_a_data_uri(s: &str) -> bool {
+    !s.starts_with("data:")
+}
+
 /// The parse-and-join shared by [`resolve_card_url`] and [`resolve_media_url`],
 /// returning `(base, resolved)` so each can apply its own admission policy.
 fn resolve_reference(origin: &str, reference: &str) -> Option<(Url, Url)> {

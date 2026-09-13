@@ -13,7 +13,9 @@ use rdlp_types::{SearchQuery, SearchResultPreview};
 use scraper::{Html, Selector};
 use std::sync::LazyLock;
 
-use crate::base::common::{BaseExtractor, SearchOrigin, resolve_card_url, resolve_media_url};
+use crate::base::common::{
+    BaseExtractor, SearchOrigin, first_usable_attr, resolve_card_url, resolve_media_url,
+};
 
 const DEFAULT_ORIGIN: &str = "https://pornone.com";
 
@@ -49,17 +51,6 @@ pub(crate) struct Listing {
 pub(crate) fn build_search_url(origin: &SearchOrigin, query: &SearchQuery, page: u32) -> String {
     let q = urlencoding::encode(&query.query);
     format!("{origin}/search/?q={q}&page={page}")
-}
-
-/// The real, non-empty thumbnail reference on a card's `<img>`: `data-src`
-/// when the lazy-loading placeholder left `src=""`, else `src` for the
-/// handful of eagerly-loaded cards that carry no `data-src` at all.
-fn thumb_src(img: &scraper::ElementRef) -> Option<String> {
-    let v = img.value();
-    v.attr("data-src")
-        .filter(|s| !s.is_empty())
-        .or_else(|| v.attr("src").filter(|s| !s.is_empty()))
-        .map(str::to_owned)
 }
 
 pub(crate) fn parse_search_page(origin: &SearchOrigin, html: &str) -> Listing {
@@ -98,8 +89,8 @@ pub(crate) fn parse_search_page(origin: &SearchOrigin, html: &str) -> Listing {
                 thumbnail_url: a
                     .select(&CARD_THUMB)
                     .next()
-                    .and_then(|i| thumb_src(&i))
-                    .and_then(|s| resolve_media_url(origin.as_ref(), &s)),
+                    .and_then(|i| first_usable_attr(&i, &["data-src", "src"], |_| true))
+                    .and_then(|s| resolve_media_url(origin.as_ref(), s)),
                 duration: a.select(&CARD_DURATION).next().and_then(|d| {
                     BaseExtractor::parse_duration(d.text().collect::<String>().trim())
                 }),

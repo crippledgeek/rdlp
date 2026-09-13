@@ -30,25 +30,19 @@ pub(crate) fn is_suitable(url: &str) -> bool {
 /// lookalike host yields `None`.
 ///
 /// Test behavior: additionally accepts the path shape when the URL is a
-/// loopback origin, so the mockito-backed `extract` tests can drive one.
-/// Shares the loopback definition with the SSRF gate's own `cfg(test)` seam
-/// (`base::common::manifest_url::is_loopback_origin`), mirroring PornoXO's
-/// precedent, so the two cannot come to disagree about which origins qualify.
+/// loopback origin, so the mockito-backed `extract` tests can drive one, via
+/// the shared `base::common::manifest_url::loopback_path_id` helper (also
+/// used by PornoXO) — so the two extractors cannot come to disagree about
+/// which origins qualify.
 pub(crate) fn parse_video_id(url: &str) -> Option<String> {
     if let Some(id) = URL_PATTERN.captures(url).and_then(|c| c.name("id")) {
         return Some(id.as_str().to_owned());
     }
 
     #[cfg(test)]
-    if crate::base::common::manifest_url::is_loopback_origin(url)
-        && let Ok(parsed) = url::Url::parse(url)
-    {
-        return VIDEO_PATH_PATTERN
-            .captures(parsed.path())
-            .and_then(|c| c.name("id"))
-            .map(|m| m.as_str().to_owned());
-    }
+    return crate::base::common::manifest_url::loopback_path_id(url, &VIDEO_PATH_PATTERN);
 
+    #[cfg(not(test))]
     None
 }
 
