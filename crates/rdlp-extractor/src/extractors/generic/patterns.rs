@@ -66,6 +66,21 @@ fn type_subtype(content_type: &str) -> &str {
         .trim()
 }
 
+/// Streaming-manifest media types, recognised by a subtype marker (the IANA
+/// and x- spellings differ only around it) and the extension each implies.
+/// The ONE place this vocabulary lives: `is_media_content_type` admits on a
+/// marker, `manifest_ext` names from the same marker (#579).
+pub(crate) const MANIFEST_MARKERS: &[(&str, &str)] = &[("mpegurl", "m3u8"), ("dash+xml", "mpd")];
+
+/// Name the manifest extension a media type implies via its marker, or `None`.
+pub(crate) fn manifest_ext(content_type: &str) -> Option<&'static str> {
+    let ct = type_subtype(content_type);
+    MANIFEST_MARKERS
+        .iter()
+        .find(|(marker, _)| contains_ignore_ascii_case(ct, marker))
+        .map(|(_, ext)| *ext)
+}
+
 /// Check if a Content-Type header indicates direct media.
 ///
 /// Also the gate for the OpenGraph `og:video:type` / `og:audio:type` hint, which
@@ -76,8 +91,7 @@ pub(crate) fn is_media_content_type(content_type: &str) -> bool {
     let ct = type_subtype(content_type);
     starts_with_ignore_ascii_case(ct, "video/")
         || starts_with_ignore_ascii_case(ct, "audio/")
-        || contains_ignore_ascii_case(ct, "mpegurl")
-        || contains_ignore_ascii_case(ct, "dash+xml")
+        || manifest_ext(content_type).is_some()
         || contains_ignore_ascii_case(ct, "x-flv")
         || contains_ignore_ascii_case(ct, "mp2t")
 }

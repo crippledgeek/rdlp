@@ -351,14 +351,6 @@ fn protocol_from_url(url: &str, ext: Option<&str>) -> DownloadProtocol {
         })
 }
 
-/// Streaming-manifest media types and the extension each implies. These are
-/// protocols, not containers, so they are not `ContainerFormat`'s to name.
-const MANIFEST_EXTS: &[(&str, &str)] = &[
-    ("application/vnd.apple.mpegurl", "m3u8"),
-    ("application/x-mpegurl", "m3u8"),
-    ("application/dash+xml", "mpd"),
-];
-
 /// Name the extension a media type implies, or `None`.
 ///
 /// Contract with [`patterns::is_media_content_type`] (#579): the gate decides
@@ -366,21 +358,10 @@ const MANIFEST_EXTS: &[(&str, &str)] = &[
 /// the container when rdlp knows it. A media type rdlp cannot name is still
 /// media and yields `None` — never a fabricated or subtype-derived string
 /// (the `json_ld.rs` decision against yt-dlp's garbage-subtype fallback).
-/// Manifests are matched here; containers come from
-/// [`ContainerFormat::from_mime`], the one table for that.
-///
-/// Media type/subtype names are case-insensitive (RFC 6838 §4.2, RFC 9110
-/// §8.3.1). Comparisons case-fold via `eq_ignore_ascii_case` — mirroring the
-/// zero-allocation idiom in `generic::patterns` — rather than `to_lowercase`,
-/// which would allocate a `String` on every call (PR #494 deliberately removed
-/// those allocations).
+/// Manifests are matched via [`patterns::manifest_ext`], the one table shared
+/// with the gate; containers come from [`ContainerFormat::from_mime`].
 fn content_type_to_ext(ct: &str) -> Option<&'static str> {
-    let essence = ct.split(';').next().unwrap_or(ct).trim();
-    MANIFEST_EXTS
-        .iter()
-        .find(|(mime, _)| mime.eq_ignore_ascii_case(essence))
-        .map(|(_, ext)| *ext)
-        .or_else(|| ContainerFormat::from_mime(essence).map(|c| c.as_ext()))
+    patterns::manifest_ext(ct).or_else(|| ContainerFormat::from_mime(ct).map(|c| c.as_ext()))
 }
 
 /// What a format is called when neither its URL nor its declared type named a
@@ -494,6 +475,15 @@ mod tests {
         );
         assert_eq!(content_type_to_ext("application/x-mpegurl"), Some("m3u8"));
         assert_eq!(content_type_to_ext("application/dash+xml"), Some("mpd"));
+    }
+
+    /// A marker-based match (not an exact-type table) also names the
+    /// `audio/*` HLS spellings the gate already admits — `protocol_from_url`
+    /// treats `m3u8` as HLS regardless of the media namespace it was named
+    /// through.
+    #[test]
+    fn content_type_to_ext_names_audio_manifest_spelling() {
+        assert_eq!(content_type_to_ext("audio/x-mpegurl"), Some("m3u8"));
     }
 
     /// The recorded `json_ld.rs` decision: an unnamed media type stays `None`
