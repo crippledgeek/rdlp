@@ -20,6 +20,8 @@
 
 use std::sync::LazyLock;
 
+use crate::bindings::rdlp::plugin::host_extract_helpers::{FetchOptions, RegexFlags};
+use crate::bindings::rdlp::plugin::host_fetch::{FetchError, Host as FetchHost, Request};
 use crate::instance::PluginStoreData;
 use wasmtime::component::Linker;
 
@@ -31,6 +33,31 @@ static RE_P: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"<\s?/\s?p\s?>\s?<\s?p[^>]*>").expect("valid <p> pattern"));
 static RE_TAGS: LazyLock<regex::Regex> =
     LazyLock::new(|| regex::Regex::new(r"<.*?>").expect("valid tag-strip pattern"));
+
+/// Plugin-facing manifest fetches share one timeout: yt-dlp's default socket
+/// timeout is 20 s and a master playlist / MPD is a few KB, so 30 s leaves
+/// headroom for a slow origin without letting a stalled one hold the
+/// extractor for minutes. `host:fetch` clamps it to its own `MAX_TIMEOUT_MS`.
+const MANIFEST_FETCH_TIMEOUT_MS: u32 = 30_000;
+
+/// Upper bound on a plugin-supplied regex pattern, in bytes, checked before
+/// compiling. Plugin patterns are third-party input, and `rust-regex-craft`
+/// requires untrusted patterns to be bounded on both pattern length and
+/// compiled size. The longest raw pattern literal in yt-dlp's 943 extractor
+/// modules is 338 bytes and rdlp's own longest (`xhamster` `_VALID_URL`) is
+/// 225, so 4 KiB is >10x anything a ported extractor needs. This bound
+/// alone is not sufficient — see [`PLUGIN_REGEX_SIZE_LIMIT`].
+const PLUGIN_REGEX_MAX_PATTERN_LEN: usize = 4096;
+
+/// Cap on the compiled size of a plugin-supplied regex, passed to
+/// `RegexBuilder::size_limit`; exceeding it fails the build with "Compiled
+/// regex exceeds size limit". Compiled size is independent of pattern
+/// length: Unicode `\w` spans ~140k codepoints, so the 6-byte `\w{50}`
+/// compiles to ~2.4 MiB and `\w{200}` to ~10 MiB (measured, regex 1.12.3).
+/// 4 MiB admits the largest pattern yt-dlp ships — `googledrive.py`'s
+/// `"(\w{39})"` at ~1.9 MiB — with 2x headroom, and sits 2.5x below the
+/// crate's 10 MiB default, which a plugin must not be able to spend freely.
+const PLUGIN_REGEX_SIZE_LIMIT: usize = 4 << 20;
 
 fn build_url_with_query(base_url: String, query: &[(String, String)]) -> String {
     use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
@@ -52,17 +79,69 @@ fn build_url_with_query(base_url: String, query: &[(String, String)]) -> String 
     format!("{base_url}{sep}{qs}")
 }
 
-fn build_regex(
-    pattern: &str,
-    flags: crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags,
-) -> Result<regex::Regex, regex::Error> {
-    use crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags;
+/// The one place a plugin-supplied pattern is compiled: every helper that
+/// derives a regex from plugin input goes through here so both bounds
+/// ([`PLUGIN_REGEX_MAX_PATTERN_LEN`], [`PLUGIN_REGEX_SIZE_LIMIT`]) apply
+/// uniformly. An over-long pattern is reported as a syntax error rather
+/// than compiled and then rejected — the length check exists to skip the
+/// compile.
+fn build_regex(pattern: &str, flags: RegexFlags) -> Result<regex::Regex, regex::Error> {
+    if pattern.len() > PLUGIN_REGEX_MAX_PATTERN_LEN {
+        return Err(regex::Error::Syntax(format!(
+            "plugin pattern is {} bytes; limit is {PLUGIN_REGEX_MAX_PATTERN_LEN}",
+            pattern.len()
+        )));
+    }
     let mut builder = regex::RegexBuilder::new(pattern);
+    builder.size_limit(PLUGIN_REGEX_SIZE_LIMIT);
     builder.case_insensitive(flags.contains(RegexFlags::IGNORE_CASE));
     builder.multi_line(flags.contains(RegexFlags::MULTILINE));
     builder.dot_matches_new_line(flags.contains(RegexFlags::DOTALL));
     builder.ignore_whitespace(flags.contains(RegexFlags::VERBOSE));
     builder.build()
+}
+
+/// A non-fatal extraction failure yields the empty result instead of an
+/// error — yt-dlp's `fatal=False` semantics for `_extract_m3u8_formats` /
+/// `_extract_mpd_formats`.
+fn empty_unless_fatal<T>(
+    result: Result<T, FetchError>,
+    fatal: bool,
+    empty: impl FnOnce() -> T,
+) -> Result<T, FetchError> {
+    match (result, fatal) {
+        (Ok(x), _) => Ok(x),
+        (Err(e), true) => Err(e),
+        (Err(_), false) => Ok(empty()),
+    }
+}
+
+impl PluginStoreData {
+    /// Fetch a manifest through the plugin's own `host:fetch` capability
+    /// (same SSRF gate, same body cap) and return `(url_fetched, body)`.
+    /// The URL returned carries the appended query so the caller resolves
+    /// relative manifest entries against what was actually requested.
+    async fn fetch_manifest_text(
+        &mut self,
+        url: String,
+        fetch: &FetchOptions,
+    ) -> Result<(String, String), FetchError> {
+        let url = build_url_with_query(url, &fetch.query);
+        let req = Request {
+            url: url.clone(),
+            method: if fetch.body.is_some() {
+                "POST".into()
+            } else {
+                "GET".into()
+            },
+            headers: fetch.headers.clone(),
+            body: fetch.body.clone(),
+            timeout_ms: Some(MANIFEST_FETCH_TIMEOUT_MS),
+        };
+        let resp = self.fetch(req).await?;
+        let body = String::from_utf8(resp.body).map_err(|e| FetchError::Network(e.to_string()))?;
+        Ok((url, body))
+    }
 }
 
 /// Strip HTML tags and collapse whitespace.
@@ -98,7 +177,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         &mut self,
         pattern: String,
         haystack: String,
-        re_flags: crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags,
+        re_flags: RegexFlags,
     ) -> Option<String> {
         let pat = build_regex(&pattern, re_flags).ok()?;
         let m = pat.captures(&haystack)?;
@@ -123,7 +202,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         &mut self,
         pattern: String,
         haystack: String,
-        re_flags: crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags,
+        re_flags: RegexFlags,
     ) -> Option<String> {
         let raw = self.search_regex(pattern, haystack, re_flags)?;
         Some(clean_html(&raw))
@@ -154,10 +233,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
             format!(r#"<meta[^>]+content='([^']*)'[^>]*(?:{attrs})=["']{escaped}["']"#),
         ];
         for pat in patterns {
-            let re = regex::RegexBuilder::new(pat)
-                .case_insensitive(true)
-                .build()
-                .ok()?;
+            let re = build_regex(pat, RegexFlags::IGNORE_CASE).ok()?;
             if let Some(m) = re.captures(&html)
                 && let Some(g) = m.get(1)
             {
@@ -187,11 +263,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
             format!(r#"<meta[^>]+?{content_re}[^>]+?{property_re}"#),
         ];
         for pat in &templates {
-            let Ok(re) = regex::RegexBuilder::new(pat)
-                .dot_matches_new_line(true)
-                .case_insensitive(true)
-                .build()
-            else {
+            let Ok(re) = build_regex(pat, RegexFlags::IGNORE_CASE | RegexFlags::DOTALL) else {
                 continue;
             };
             if let Some(m) = re.captures(&html)
@@ -222,7 +294,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         // Mirrors yt-dlp's `_search_json` brace-balanced extraction.
         // Default contains-pattern is `{(?s:.+)}` — greedy, allows nesting.
         let full = format!(r"(?:{start_pattern})\s*(?P<json>\{{(?s:.+)\}})\s*(?:{end_pattern})");
-        let re = regex::Regex::new(&full).ok()?;
+        let re = build_regex(&full, RegexFlags::empty()).ok()?;
         let cap = re.captures(&haystack)?;
         let json = cap.name("json")?.as_str();
         Some(json.to_string())
@@ -233,32 +305,15 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         url: String,
         _video_id: String,
         opts: crate::bindings::rdlp::plugin::host_extract_helpers::M3u8Options,
-        fetch: crate::bindings::rdlp::plugin::host_extract_helpers::FetchOptions,
-    ) -> Result<
-        crate::bindings::rdlp::plugin::host_extract_helpers::M3u8Extraction,
-        crate::bindings::rdlp::plugin::host_fetch::FetchError,
-    > {
+        fetch: FetchOptions,
+    ) -> Result<crate::bindings::rdlp::plugin::host_extract_helpers::M3u8Extraction, FetchError>
+    {
         use crate::bindings::rdlp::plugin::host_extract_helpers::{
             ExtractHelpersSubtitle, M3u8Extraction, M3u8Format,
         };
-        use crate::bindings::rdlp::plugin::host_fetch::{FetchError, Host as FetchHost, Request};
 
         let result: Result<M3u8Extraction, FetchError> = async {
-            let url = build_url_with_query(url, &fetch.query);
-            let req = Request {
-                url: url.clone(),
-                method: if fetch.body.is_some() {
-                    "POST".into()
-                } else {
-                    "GET".into()
-                },
-                headers: fetch.headers.clone(),
-                body: fetch.body.clone(),
-                timeout_ms: Some(30_000),
-            };
-            let resp = self.fetch(req).await?;
-            let body =
-                String::from_utf8(resp.body).map_err(|e| FetchError::Network(e.to_string()))?;
+            let (url, body) = self.fetch_manifest_text(url, &fetch).await?;
             let variants = rdlp_extractor::hls::parse_master_playlist(&url, &body)
                 .map_err(FetchError::Network)?;
             let formats: Vec<M3u8Format> = variants
@@ -300,14 +355,10 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         }
         .await;
 
-        match (result, opts.fatal) {
-            (Ok(x), _) => Ok(x),
-            (Err(e), true) => Err(e),
-            (Err(_), false) => Ok(M3u8Extraction {
-                formats: vec![],
-                subtitles: Vec::<ExtractHelpersSubtitle>::new(),
-            }),
-        }
+        empty_unless_fatal(result, opts.fatal, || M3u8Extraction {
+            formats: vec![],
+            subtitles: vec![],
+        })
     }
 
     async fn extract_mpd(
@@ -315,34 +366,17 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         url: String,
         _video_id: String,
         opts: crate::bindings::rdlp::plugin::host_extract_helpers::MpdOptions,
-        fetch: crate::bindings::rdlp::plugin::host_extract_helpers::FetchOptions,
-    ) -> Result<
-        crate::bindings::rdlp::plugin::host_extract_helpers::MpdExtraction,
-        crate::bindings::rdlp::plugin::host_fetch::FetchError,
-    > {
+        fetch: FetchOptions,
+    ) -> Result<crate::bindings::rdlp::plugin::host_extract_helpers::MpdExtraction, FetchError>
+    {
         use crate::bindings::rdlp::plugin::host_extract_helpers::{
             ExtractHelpersSubtitle, MpdExtraction, MpdFormat, MpdFragment,
         };
-        use crate::bindings::rdlp::plugin::host_fetch::{FetchError, Host as FetchHost, Request};
         use rdlp_extractor::base::common::dash::{DashExpansion, expand_dash_representations};
         use url::Url;
 
         let result: Result<MpdExtraction, FetchError> = async {
-            let url = build_url_with_query(url, &fetch.query);
-            let req = Request {
-                url: url.clone(),
-                method: if fetch.body.is_some() {
-                    "POST".into()
-                } else {
-                    "GET".into()
-                },
-                headers: fetch.headers.clone(),
-                body: fetch.body.clone(),
-                timeout_ms: Some(30_000),
-            };
-            let resp = self.fetch(req).await?;
-            let body =
-                String::from_utf8(resp.body).map_err(|e| FetchError::Network(e.to_string()))?;
+            let (url, body) = self.fetch_manifest_text(url, &fetch).await?;
             let base = Url::parse(&url).map_err(|e| FetchError::Network(e.to_string()))?;
             let DashExpansion { formats, subtitles } = expand_dash_representations(&body, &base)
                 .map_err(|e| FetchError::Network(format!("{e:#}")))?;
@@ -401,14 +435,10 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         }
         .await;
 
-        match (result, opts.fatal) {
-            (Ok(x), _) => Ok(x),
-            (Err(e), true) => Err(e),
-            (Err(_), false) => Ok(MpdExtraction {
-                formats: vec![],
-                subtitles: vec![],
-            }),
-        }
+        empty_unless_fatal(result, opts.fatal, || MpdExtraction {
+            formats: vec![],
+            subtitles: vec![],
+        })
     }
 
     fn extract_json_ld(

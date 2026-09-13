@@ -1,5 +1,5 @@
 use super::*;
-use crate::bindings::rdlp::plugin::host_extract_helpers::Host as _;
+use crate::bindings::rdlp::plugin::host_extract_helpers::{Host as _, RegexFlags};
 
 fn ctx() -> PluginStoreData {
     PluginStoreData::new("test", tokio_util::sync::CancellationToken::new())
@@ -11,7 +11,7 @@ fn search_regex_finds_first_match() {
     let r = c.search_regex(
         r"(\d+)".to_string(),
         "id=42 ts=99".to_string(),
-        crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
+        RegexFlags::empty(),
     );
     assert_eq!(r, Some("42".to_string()));
 }
@@ -28,11 +28,7 @@ fn search_regex_finds_first_match() {
 #[test]
 fn search_regex_group1_wins_over_group0_regression() {
     let mut c = ctx();
-    let r = c.search_regex(
-        r"(a)(b)?".to_string(),
-        "a".to_string(),
-        crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
-    );
+    let r = c.search_regex(r"(a)(b)?".to_string(), "a".to_string(), RegexFlags::empty());
     assert_eq!(r, Some("a".to_string()), "group 1 must be returned");
 }
 
@@ -48,11 +44,7 @@ fn search_regex_group1_wins_over_group0_regression() {
 #[test]
 fn search_regex_returns_empty_string_for_non_participating_group1() {
     let mut c = ctx();
-    let r = c.search_regex(
-        r"(x)?(y)".to_string(),
-        "y".to_string(),
-        crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
-    );
+    let r = c.search_regex(r"(x)?(y)".to_string(), "y".to_string(), RegexFlags::empty());
     // group 1 did not participate → empty string (not "y" from group 2)
     assert_eq!(
         r,
@@ -68,7 +60,7 @@ fn search_regex_no_groups_returns_whole_match() {
     let r = c.search_regex(
         r"\d+".to_string(),
         "abc 42 def".to_string(),
-        crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
+        RegexFlags::empty(),
     );
     assert_eq!(r, Some("42".to_string()));
 }
@@ -79,7 +71,7 @@ fn search_regex_no_match_returns_none() {
     let r = c.search_regex(
         r"NOPE".to_string(),
         "irrelevant".to_string(),
-        crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
+        RegexFlags::empty(),
     );
     assert_eq!(r, None);
 }
@@ -90,7 +82,7 @@ fn search_regex_ignore_case_flag() {
     let r = c.search_regex(
         r"(foo)".to_string(),
         "FOO bar".to_string(),
-        crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::IGNORE_CASE,
+        RegexFlags::IGNORE_CASE,
     );
     assert_eq!(r, Some("FOO".to_string()));
 }
@@ -101,7 +93,7 @@ fn html_search_regex_strips_tags() {
     let r = c.html_search_regex(
         r"<title>(.+?)</title>".to_string(),
         "<title>Hello <b>World</b></title>".to_string(),
-        crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
+        RegexFlags::empty(),
     );
     assert_eq!(r, Some("Hello World".to_string()));
 }
@@ -112,7 +104,7 @@ fn html_search_regex_returns_entities_verbatim() {
     let r = c.html_search_regex(
         r"<title>(.+?)</title>".to_string(),
         "<title>Tom &amp; Jerry</title>".to_string(),
-        crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
+        RegexFlags::empty(),
     );
     // Returned VERBATIM. The shim used to unescape here, matching yt-dlp;
     // it no longer does, because `InfoDict::decode_text_fields` decodes
@@ -1097,4 +1089,136 @@ fn mpd_fragment_carries_byte_range_fields() {
         Some("https://cdn.example.com/init.m4s")
     );
     assert_eq!(frag.init_byte_range, Some((0, 740)));
+}
+
+// ---- R1: plugin-supplied patterns are bounded (rust-regex-craft) --------
+
+/// Boundary pair, accepted side: a pattern of exactly
+/// `PLUGIN_REGEX_MAX_PATTERN_LEN` bytes compiles and matches.
+#[test]
+fn search_regex_accepts_pattern_at_max_len() {
+    let mut c = ctx();
+    let pat = "a".repeat(PLUGIN_REGEX_MAX_PATTERN_LEN);
+    let r = c.search_regex(pat.clone(), pat, RegexFlags::empty());
+    assert_eq!(r.map(|s| s.len()), Some(PLUGIN_REGEX_MAX_PATTERN_LEN));
+}
+
+/// Boundary pair, rejected side: one byte over the cap is refused before
+/// compiling, even though the pattern itself is trivially cheap.
+#[test]
+fn search_regex_rejects_pattern_one_over_max_len() {
+    let mut c = ctx();
+    let pat = "a".repeat(PLUGIN_REGEX_MAX_PATTERN_LEN + 1);
+    let r = c.search_regex(pat.clone(), pat, RegexFlags::empty());
+    assert_eq!(r, None);
+}
+
+/// A short pattern whose COMPILED form exceeds the cap is refused. The
+/// test proves its own demonstrator: `\w{100}` builds at the crate's
+/// default `size_limit` and fails at `PLUGIN_REGEX_SIZE_LIMIT`, so a
+/// `None` here can only come from the bound being applied.
+#[test]
+fn search_regex_rejects_pattern_compiling_above_size_limit() {
+    let pat = r"\w{100}";
+    assert!(
+        regex::RegexBuilder::new(pat).build().is_ok(),
+        "demonstrator must build at the crate default"
+    );
+    assert!(
+        regex::RegexBuilder::new(pat)
+            .size_limit(PLUGIN_REGEX_SIZE_LIMIT)
+            .build()
+            .is_err(),
+        "demonstrator must exceed PLUGIN_REGEX_SIZE_LIMIT"
+    );
+    let mut c = ctx();
+    let r = c.search_regex(pat.to_string(), "a".repeat(100), RegexFlags::empty());
+    assert_eq!(r, None);
+}
+
+/// `html_search_meta` builds its patterns from the plugin's `name`; an
+/// oversized name must go through the same bound as `search_regex`.
+#[test]
+fn html_search_meta_rejects_oversized_name() {
+    let mut c = ctx();
+    let name = "a".repeat(PLUGIN_REGEX_MAX_PATTERN_LEN + 1);
+    let html = format!(r#"<meta name="{name}" content="x">"#);
+    assert_eq!(c.html_search_meta(name, html), None);
+}
+
+/// `og_search_property` builds its patterns from the plugin's `prop`; same
+/// bound as `search_regex`.
+#[test]
+fn og_search_property_rejects_oversized_property() {
+    let mut c = ctx();
+    let prop = "a".repeat(PLUGIN_REGEX_MAX_PATTERN_LEN + 1);
+    let html = format!(r#"<meta property="og:{prop}" content="x">"#);
+    assert_eq!(c.og_search_property(prop, html), None);
+}
+
+/// `search_json` splices the plugin's start/end patterns in RAW, so it is
+/// the helper most exposed to an expensive pattern: both bounds apply.
+#[test]
+fn search_json_rejects_oversized_start_pattern() {
+    let mut c = ctx();
+    let start = "a".repeat(PLUGIN_REGEX_MAX_PATTERN_LEN + 1);
+    let hay = format!(r#"{start} {{"k":1}};"#);
+    assert_eq!(c.search_json(start, ";".to_string(), hay), None);
+}
+
+#[test]
+fn search_json_rejects_start_pattern_compiling_above_size_limit() {
+    let mut c = ctx();
+    let hay = format!(r#"{} {{"k":1}};"#, "a".repeat(100));
+    assert_eq!(
+        c.search_json(r"\w{100}".to_string(), ";".to_string(), hay),
+        None
+    );
+}
+
+// ---- D1: both manifest fetches share one fetch path ----------------------
+
+/// The shared timeout is read at the call site for BOTH manifest helpers,
+/// not merely declared: the recorded request carries it.
+#[tokio::test]
+async fn manifest_fetches_share_one_timeout() {
+    use crate::host::fetch::FetchCtx;
+    use crate::host::fetch_fixtures::FetchFixtures;
+    use std::sync::Arc;
+
+    for (is_m3u8, url) in [(true, "https://x/p.m3u8"), (false, "https://x/m.mpd")] {
+        let mut c = ctx();
+        let fixtures = Arc::new(FetchFixtures::new());
+        c.fetch = Some(FetchCtx {
+            client: rdlp_http::wreq::Client::builder()
+                .build()
+                .expect("test client"),
+            fixtures: Some(Arc::clone(&fixtures)),
+        });
+        if is_m3u8 {
+            let _ = c
+                .extract_m3u8(
+                    url.to_string(),
+                    "v".to_string(),
+                    m3u8_opts(false),
+                    empty_fetch(),
+                )
+                .await;
+        } else {
+            let _ = c
+                .extract_mpd(
+                    url.to_string(),
+                    "v".to_string(),
+                    mpd_opts(false),
+                    empty_fetch(),
+                )
+                .await;
+        }
+        let recorded = fixtures.last_request().expect("request recorded");
+        assert_eq!(
+            recorded.timeout_ms,
+            Some(MANIFEST_FETCH_TIMEOUT_MS),
+            "manifest fetch for {url} must carry the shared timeout"
+        );
+    }
 }

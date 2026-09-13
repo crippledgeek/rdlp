@@ -75,6 +75,8 @@ pub struct RecordedRequest {
     pub headers: Vec<(String, String)>,
     /// Request body bytes, if any.
     pub body: Option<Vec<u8>>,
+    /// Per-request timeout the caller asked for, if any.
+    pub timeout_ms: Option<u32>,
 }
 
 /// URL → canned-response map. Lookup is exact-string match.

@@ -94,6 +94,7 @@ impl crate::bindings::rdlp::plugin::host_fetch::Host for PluginStoreData {
                 method: req.method.clone(),
                 headers: req.headers.clone(),
                 body: req.body.clone(),
+                timeout_ms: req.timeout_ms,
             });
             if let Some(canned) = fixtures.get(&req.url) {
                 return Ok(Response {
