@@ -206,6 +206,7 @@ If you used `bug-fix-requires-failing-test` patterns from a real reported issue,
 | `koreanpornmovie` | WordPress/RetroTube `player-x.php?q=<base64>` iframe, decodes to direct MP4 or an external embed | … wraps content behind a base64-encoded plugin iframe |
 | `spankbang` | Inline `stream_data = {...}` Python-dict parse, POST formats-API fallback; Cloudflare-fronted (requires TLS impersonation) | … is Cloudflare-fronted and embeds a Python-literal (not JSON) data blob |
 | `pornoxo` | Signed HLS ladder in an inline `playerConfig` block, minted per page load (never cached); search is Cloudflare-gated behind a cookie-free tag-listing fallback | … signs its HLS master URL per page load, or gates search but not video pages |
+| `pornone` | Server-rendered `<source>` renditions, each individually signed; search filler-detection | … serves signed progressive MP4s in static HTML and pads empty searches with a fixed popular-videos grid |
 | `generic` | 12-strategy fallback | … is none of the above (first try generic before writing new code) |
 
 ---

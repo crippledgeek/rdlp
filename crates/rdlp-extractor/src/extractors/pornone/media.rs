@@ -6,19 +6,6 @@
 //! (#659 measured 403/404 for all of them), so the served set is the format
 //! list — one or several, never synthesised.
 
-// Consumed by `PornoneExtractor` (Task 3, #659) — not yet wired, so these
-// items are unused outside `#[cfg(test)]` until then. `expect` rather than
-// `allow`: it is self-cleaning — Task 3 wiring these in makes the lint stop
-// firing, and an unfulfilled `expect` then errors, forcing this line's
-// removal instead of letting it silently outlive its reason.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into PornoneExtractor in Task 3 (#659); test module already exercises these"
-    )
-)]
-
 use lazy_regex::{Lazy, Regex, lazy_regex};
 use scraper::{Html, Selector};
 use std::collections::HashSet;

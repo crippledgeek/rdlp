@@ -1,18 +1,5 @@
 //! URL routing for pornone.com.
 
-// Consumed by `PornoneExtractor` (Task 3, #659) — not yet wired, so these
-// items are unused outside `#[cfg(test)]` until then. `expect` rather than
-// `allow`: it is self-cleaning — Task 3 wiring these in makes the lint stop
-// firing, and an unfulfilled `expect` then errors, forcing this line's
-// removal instead of letting it silently outlive its reason.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into PornoneExtractor in Task 3 (#659); test module already exercises these"
-    )
-)]
-
 use lazy_regex::{Lazy, Regex, lazy_regex};
 
 /// A video page: `/{category}/{slug}/{id}/` — the category segment varies per
@@ -25,15 +12,44 @@ pub(crate) static URL_PATTERN: Lazy<Regex> = lazy_regex!(
     r"\Ahttps?://(?:www\.)?pornone\.com/(?P<category>[a-z0-9-]+)/(?P<slug>[a-z0-9-]+)/(?P<id>\d+)/?(?:[?#].*)?\z"
 );
 
+/// The `/{category}/{slug}/{id}/` path shape, without the host.
+///
+/// Used ONLY by the `#[cfg(test)]` loopback seam in [`parse_video_id`], never
+/// in production — see that function.
+#[cfg(test)]
+static VIDEO_PATH_PATTERN: Lazy<Regex> =
+    lazy_regex!(r"\A/[a-z0-9-]+/[a-z0-9-]+/(?P<id>\d+)/?(?:[?#].*)?\z");
+
 pub(crate) fn is_suitable(url: &str) -> bool {
     URL_PATTERN.is_match(url)
 }
 
+/// The numeric video id from a canonical PornOne video URL.
+///
+/// Production behavior: host-anchored via [`URL_PATTERN`], so a foreign or
+/// lookalike host yields `None`.
+///
+/// Test behavior: additionally accepts the path shape when the URL is a
+/// loopback origin, so the mockito-backed `extract` tests can drive one.
+/// Shares the loopback definition with the SSRF gate's own `cfg(test)` seam
+/// (`base::common::manifest_url::is_loopback_origin`), mirroring PornoXO's
+/// precedent, so the two cannot come to disagree about which origins qualify.
 pub(crate) fn parse_video_id(url: &str) -> Option<String> {
-    URL_PATTERN
-        .captures(url)
-        .and_then(|c| c.name("id"))
-        .map(|m| m.as_str().to_owned())
+    if let Some(id) = URL_PATTERN.captures(url).and_then(|c| c.name("id")) {
+        return Some(id.as_str().to_owned());
+    }
+
+    #[cfg(test)]
+    if crate::base::common::manifest_url::is_loopback_origin(url)
+        && let Ok(parsed) = url::Url::parse(url)
+    {
+        return VIDEO_PATH_PATTERN
+            .captures(parsed.path())
+            .and_then(|c| c.name("id"))
+            .map(|m| m.as_str().to_owned());
+    }
+
+    None
 }
 
 #[cfg(test)]
