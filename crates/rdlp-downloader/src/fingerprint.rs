@@ -43,6 +43,20 @@ impl Fnv1a64 {
         }
     }
 
+    /// Like [`Self::feed_opt_u64`] but for a signed field (DASH
+    /// `SegmentTimeline@r` is `i64`): `to_le_bytes` is lossless both ways, so
+    /// this needs no `as`/`cast_unsigned` (the latter is 1.87+, above the
+    /// workspace's 1.85 MSRV) and trips no `cast_sign_loss` lint.
+    pub(crate) fn feed_opt_i64(&mut self, v: Option<i64>) {
+        match v {
+            None => self.feed(&[0]),
+            Some(v) => {
+                self.feed(&[1]);
+                self.feed(&v.to_le_bytes());
+            }
+        }
+    }
+
     pub(crate) fn feed_opt_range(&mut self, r: Option<(u64, u64)>) {
         match r {
             None => self.feed(&[0]),
