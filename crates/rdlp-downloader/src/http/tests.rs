@@ -2,9 +2,11 @@
 
 #![allow(clippy::unreadable_literal)] // byte-count literals in HTTP range tests
 
+use super::state::etag;
 use super::*;
 use rdlp_core::Downloader;
 use rdlp_core::is_retryable_error;
+use rdlp_http::StrongValidator;
 
 /// Downloader for the chunk-retry tests: retries are real but instant.
 ///
@@ -61,64 +63,49 @@ async fn test_buffer_size_configuration() {
     assert_eq!(downloader.config.buffer_size, 16384);
 }
 
+/// RFC 9110 §15.3.7.3 permits combining parts only under a shared strong
+/// validator. A partial with no sidecar has none recorded, so the resume
+/// discards it and converges onto the fresh path — the pre-#565 behaviour
+/// (error, keep the partial) asserted here before is exactly what the spec
+/// replaces.
 #[tokio::test]
-async fn test_resume_fails_when_server_returns_200() {
-    use mockito::Server;
-    use tempfile::NamedTempFile;
+async fn resume_without_sidecar_restarts_from_zero() {
+    use mockito::{Matcher, Server};
 
     let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"partial", None).await;
 
-    // Mock endpoint that doesn't support Range requests (returns 200 instead of 206)
-    let mock = server
-        .mock("GET", "/video.mp4")
-        .match_header("Range", "bytes=1000-")
-        .with_status(200) // Server ignores Range header
-        .with_header("content-type", "video/mp4")
-        .with_body("full content from beginning")
+    let probe = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=0-262143")
+        .match_header("if-range", Matcher::Missing)
+        .with_status(200)
+        .with_body("fresh")
+        .expect(1)
+        .create_async()
+        .await;
+    let get = server
+        .mock("GET", "/v")
+        .match_header("range", Matcher::Missing)
+        .match_header("if-range", Matcher::Missing)
+        .with_status(200)
+        .with_header("etag", "\"n\"")
+        .with_body("fresh")
+        .expect(1)
         .create_async()
         .await;
 
-    // Create downloader with NO retries for this test (testing resume failure, not retry)
-    let retry_config = RetryConfig::new(
-        0, // No retries
-        Duration::from_millis(100),
-        Duration::from_millis(100),
-        2.0,
-    );
-    let downloader = HttpDownloader::new().with_retry_config(retry_config);
-    let temp_file = NamedTempFile::new().unwrap();
-    let path = temp_file.path();
-
-    // Write some initial data to simulate a partial download
-    tokio::fs::write(path, b"partial data").await.unwrap();
-
-    // Try to resume - should fail with error, NOT overwrite the file
-    let result = downloader
-        .download_with_resume(
-            &format!("{}/video.mp4", server.url()),
-            path,
-            1000,
-            None,
-            None,
-        )
-        .await;
-
-    mock.assert_async().await;
-
-    // Should return an error
-    assert!(result.is_err());
-
-    // Verify the error message mentions resume not supported
-    let err = result.unwrap_err();
-    assert!(matches!(err, RdlpError::Download { .. }));
-    assert!(err.to_string().contains("does not support resume"));
-    assert!(err.to_string().contains("206"));
-
-    // CRITICAL: Verify the partial file was NOT overwritten
-    let file_contents = tokio::fs::read(path).await.unwrap();
-    assert_eq!(
-        file_contents, b"partial data",
-        "Partial file should not be overwritten"
+    let stats = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 7, None, None)
+        .await
+        .unwrap();
+    probe.assert_async().await;
+    get.assert_async().await;
+    assert_eq!(stats.bytes_downloaded, 5);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"fresh");
+    assert!(
+        !HttpResumeState::sidecar_path(&out).exists(),
+        "sidecar is removed once the restarted download completes"
     );
 }
 
@@ -315,7 +302,7 @@ async fn test_chunk_retry_succeeds_on_second_attempt() {
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
-            url: &url,
+            source: &Source::new(&url, None),
             start: 0,
             end: 1023,
             chunk_path: &chunk_path,
@@ -360,7 +347,7 @@ async fn test_chunk_retry_exhausted_returns_error() {
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
-            url: &url,
+            source: &Source::new(&url, None),
             start: 0,
             end: 1023,
             chunk_path: &chunk_path,
@@ -403,7 +390,7 @@ async fn test_chunk_retry_non_retryable_fails_immediately() {
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
-            url: &url,
+            source: &Source::new(&url, None),
             start: 0,
             end: 1023,
             chunk_path: &chunk_path,
@@ -479,7 +466,7 @@ async fn test_chunk_retry_cleans_partial_file() {
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
-            url: &url,
+            source: &Source::new(&url, None),
             start: 0,
             end: 511,
             chunk_path: &chunk_path,
@@ -507,7 +494,7 @@ async fn test_chunk_retry_cleans_partial_file() {
 /// `test_chunk_retry_cleans_partial_file` cannot make, because a 5xx is
 /// retried *inside* `download_range_with_progress`'s own `with_retry` and so
 /// never reaches `download_chunk_with_retry`'s outer error-path cleanup at
-/// all. A wrong-span 206 is rejected by `validate_range_response` AFTER that
+/// all. A wrong-span 206 is rejected by `range_verdict` AFTER that
 /// inner retry has already returned `Ok`, so it is the outer loop — and only
 /// the outer loop's cleanup — that can be responsible for the file's absence
 /// here (see `chunk_retry_recovers_from_wrong_span_response`, which proves
@@ -573,7 +560,7 @@ async fn test_chunk_retry_removes_partial_before_next_attempt() {
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
-            url: &url,
+            source: &Source::new(&url, None),
             start: 0,
             end: 1023,
             chunk_path: &chunk_path,
@@ -604,137 +591,108 @@ async fn test_chunk_retry_removes_partial_before_next_attempt() {
     );
 }
 
+/// A parallel resume sends the sidecar's validator as `If-Range` on the
+/// initial ranged GET and on EVERY chunk (RFC 9110 §13.1.5), and each 206 is
+/// checked against it (§15.3.7.3) — the mocks only answer a request that
+/// carries it. The sidecar is gone once the merged output is complete.
 #[tokio::test]
-async fn test_parallel_resume() {
+async fn parallel_resume_carries_if_range_on_every_chunk() {
     use mockito::Server;
     use tempfile::TempDir;
 
     let mut server = Server::new_async().await;
     let temp_dir = TempDir::new().unwrap();
 
-    // Simulate a 20 MB file with 5 MB already downloaded (25%)
-    let total_size = 20 * 1024 * 1024; // 20 MB
-    let already_downloaded = 5 * 1024 * 1024; // 5 MB
-    let remaining_size = total_size - already_downloaded; // 15 MB
+    // A 20 MB file with 5 MB already downloaded (25%).
+    let total_size = 20 * 1024 * 1024;
+    let already_downloaded = 5 * 1024 * 1024;
 
-    // Create partial file with 5 MB of data
     let output = temp_dir.path().join("video.mp4");
     tokio::fs::write(&output, vec![0xAA; already_downloaded as usize])
         .await
         .unwrap();
+    HttpResumeState::new(etag("\"v1\""), Some(total_size))
+        .save(&output)
+        .await
+        .unwrap();
 
-    // Mock Range request for resume (server returns 206 with Content-Range)
-    let _mock_resume = server
+    // The initial ranged GET: its 206 supplies the total, then its body is
+    // dropped in favour of the parallel chunks below.
+    let mock_resume = server
         .mock("GET", "/video.mp4")
         .match_header("range", "bytes=5242880-")
+        .match_header("if-range", "\"v1\"")
         .with_status(206)
         .with_header(
             "Content-Range",
             &format!("bytes 5242880-20971519/{total_size}"),
         )
         .with_header("Accept-Ranges", "bytes")
-        .with_body(vec![0xBB; remaining_size as usize]) // Dummy data
-        .expect(0) // Should NOT be called - we use parallel resume instead
+        .with_header("etag", "\"v1\"")
+        .with_body("")
+        .expect(1)
         .create_async()
         .await;
 
-    // Mock parallel resume chunks (4 chunks for 15 MB remaining)
-    // Chunk 0: 5 MB - 8.75 MB (3.75 MB)
-    let _mock_chunk_0 = server
-        .mock("GET", "/video.mp4")
-        .match_header("range", "bytes=5242880-9175039")
-        .with_status(206)
-        .with_header("Content-Range", "bytes 5242880-9175039/20971520")
-        .with_body(vec![0xCC; (9175040 - 5242880) as usize])
-        .create_async()
-        .await;
+    // Four chunks of 3.75 MB for the 15 MB remainder, each fingerprinted by
+    // its fill byte so the merge order is verifiable.
+    let chunk_bounds: [(u64, u64, u8); 4] = [
+        (5242880, 9175039, 0xCC),
+        (9175040, 13107199, 0xDD),
+        (13107200, 17039359, 0xEE),
+        (17039360, 20971519, 0xFF),
+    ];
+    let mut chunk_mocks = Vec::with_capacity(chunk_bounds.len());
+    for (start, end, fill) in chunk_bounds {
+        let m = server
+            .mock("GET", "/video.mp4")
+            .match_header("range", format!("bytes={start}-{end}").as_str())
+            .match_header("if-range", "\"v1\"")
+            .with_status(206)
+            .with_header(
+                "Content-Range",
+                &format!("bytes {start}-{end}/{total_size}"),
+            )
+            .with_header("etag", "\"v1\"")
+            .with_body(vec![fill; usize::try_from(end - start + 1).unwrap()])
+            .expect(1)
+            .create_async()
+            .await;
+        chunk_mocks.push(m);
+    }
 
-    // Chunk 1: 8.75 MB - 12.5 MB (3.75 MB)
-    let _mock_chunk_1 = server
-        .mock("GET", "/video.mp4")
-        .match_header("range", "bytes=9175040-13107199")
-        .with_status(206)
-        .with_header("Content-Range", "bytes 9175040-13107199/20971520")
-        .with_body(vec![0xDD; (13107200 - 9175040) as usize])
-        .create_async()
-        .await;
-
-    // Chunk 2: 12.5 MB - 16.25 MB (3.75 MB)
-    let _mock_chunk_2 = server
-        .mock("GET", "/video.mp4")
-        .match_header("range", "bytes=13107200-17039359")
-        .with_status(206)
-        .with_header("Content-Range", "bytes 13107200-17039359/20971520")
-        .with_body(vec![0xEE; (17039360 - 13107200) as usize])
-        .create_async()
-        .await;
-
-    // Chunk 3: 16.25 MB - 20 MB (3.75 MB)
-    let _mock_chunk_3 = server
-        .mock("GET", "/video.mp4")
-        .match_header("range", "bytes=17039360-20971519")
-        .with_status(206)
-        .with_header("Content-Range", "bytes 17039360-20971519/20971520")
-        .with_body(vec![0xFF; (20971520 - 17039360) as usize])
-        .create_async()
-        .await;
-
-    // Create downloader with 4 concurrent fragments and no retries
-    // Use Legacy chunking strategy to maintain 4 large chunks for this test
-    use crate::chunking::ChunkSizeStrategy;
-    use rdlp_core::RetryConfig;
-    use std::time::Duration;
-    let no_retry_config =
-        RetryConfig::new(0, Duration::from_millis(1), Duration::from_millis(1), 1.0);
-
-    let downloader = HttpDownloader::new()
+    // Legacy chunking keeps the four large chunks the mocks are shaped for.
+    let downloader = chunk_test_downloader(0)
         .with_concurrent_fragments(4)
-        .with_retry_config(no_retry_config)
-        .with_chunk_strategy(ChunkSizeStrategy::Legacy { chunk_count: 4 });
+        .with_chunk_strategy(crate::chunking::ChunkSizeStrategy::Legacy { chunk_count: 4 });
 
     let url = format!("{}/video.mp4", server.url());
-
-    // Resume download - should use parallel resume
-    let result = downloader
+    let stats = downloader
         .download_with_resume(&url, &output, already_downloaded, None, None)
-        .await;
+        .await
+        .expect("parallel resume under a shared validator succeeds");
 
-    // Verify success
-    assert!(result.is_ok(), "Parallel resume should succeed");
-    let stats = result.unwrap();
-    assert_eq!(
-        stats.bytes_downloaded, total_size,
-        "Should download full file size"
-    );
+    mock_resume.assert_async().await;
+    for m in &chunk_mocks {
+        m.assert_async().await;
+    }
+    assert_eq!(stats.bytes_downloaded, total_size);
 
-    // Verify file size
-    let metadata = tokio::fs::metadata(&output).await.unwrap();
-    assert_eq!(metadata.len(), total_size, "Final file should be 20 MB");
-
-    // Verify file contents structure:
-    // First 5 MB: 0xAA (already downloaded)
-    // Next 3.75 MB: 0xCC (chunk 0)
-    // Next 3.75 MB: 0xDD (chunk 1)
-    // Next 3.75 MB: 0xEE (chunk 2)
-    // Last 3.75 MB: 0xFF (chunk 3)
     let contents = tokio::fs::read(&output).await.unwrap();
-    assert_eq!(contents.len(), total_size as usize);
-
-    // Check first 5 MB is original data (0xAA)
+    assert_eq!(contents.len(), usize::try_from(total_size).unwrap());
+    assert_eq!(contents[0], 0xAA, "kept partial starts the file");
     assert_eq!(
-        contents[0], 0xAA,
-        "First byte should be from original partial download"
-    );
-    assert_eq!(
-        contents[already_downloaded as usize - 1],
+        contents[usize::try_from(already_downloaded).unwrap() - 1],
         0xAA,
-        "Last byte of partial should be 0xAA"
+        "kept partial ends where the resume began"
     );
-
-    // Check first byte of resumed data (chunk 0 starts with 0xCC)
-    assert_eq!(
-        contents[already_downloaded as usize], 0xCC,
-        "First resumed byte should be from chunk 0"
+    for (start, end, fill) in chunk_bounds {
+        assert_eq!(contents[usize::try_from(start).unwrap()], fill);
+        assert_eq!(contents[usize::try_from(end).unwrap()], fill);
+    }
+    assert!(
+        !HttpResumeState::sidecar_path(&output).exists(),
+        "sidecar is removed once the parallel resume completes"
     );
 }
 
@@ -1177,11 +1135,14 @@ async fn download_with_resume_with_cancel_aborts_on_cancel() {
             let mut buf = [0u8; 1024];
             let _ = std::io::Read::read(&mut stream, &mut buf);
 
-            // Send 206 partial-content headers with a content-range that says total is 10MB
+            // 206 headers naming a 10 MB total and the sidecar's validator, so
+            // the resume takes the sequential append branch and parks on the
+            // body that never comes.
             let _ = stream.write_all(
                 b"HTTP/1.1 206 Partial Content\r\n\
                   Content-Range: bytes 0-10485759/10485760\r\n\
                   Content-Length: 10485760\r\n\
+                  ETag: \"v1\"\r\n\
                   Content-Type: application/octet-stream\r\n\
                   \r\n",
             );
@@ -1194,8 +1155,13 @@ async fn download_with_resume_with_cancel_aborts_on_cancel() {
 
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("out.bin");
-    // Pre-create a 0-byte file to satisfy resume preconditions if any.
+    // A 0-byte partial with a sidecar: without one the resume would restart
+    // through the fresh path rather than append (#565).
     tokio::fs::write(&out, b"").await.unwrap();
+    HttpResumeState::new(etag("\"v1\""), None)
+        .save(&out)
+        .await
+        .unwrap();
 
     let downloader = HttpDownloader::new();
     let url = format!("http://127.0.0.1:{port}/blackhole");
@@ -1212,6 +1178,12 @@ async fn download_with_resume_with_cancel_aborts_on_cancel() {
         .await;
 
     assert!(matches!(res, Err(RdlpError::Cancelled)));
+    // A cancel mid-stream is not success: the sidecar stays so the next
+    // attempt can send the same validator (#565).
+    assert!(
+        HttpResumeState::sidecar_path(&out).exists(),
+        "sidecar must survive a mid-stream cancel"
+    );
 }
 
 #[tokio::test]
@@ -1582,19 +1554,19 @@ fn validation_test_downloader() -> HttpDownloader {
 
 /// Test fixture only (not used in production code): a one-off
 /// [`ChunkRequestSpec`] for the range-validation tests below, which care
-/// about `url`/`start`/`end`/`chunk_path` only — `chunk_id` is an arbitrary
+/// about `source`/`start`/`end`/`chunk_path` only — `chunk_id` is an arbitrary
 /// log label and `tallies` a fresh, unread pair of counters. Plain positional
 /// parameters are unambiguous here — `start`/`end` are both `u64` but always
 /// supplied as a literal pair at the call site, matching `ChunkRequestSpec`'s
 /// own field order.
 fn range_request<'a>(
-    url: &'a str,
+    source: &'a Source,
     start: u64,
     end: u64,
     chunk_path: &'a Path,
 ) -> ChunkRequestSpec<'a> {
     ChunkRequestSpec {
-        url,
+        source,
         start,
         end,
         chunk_path,
@@ -1626,7 +1598,10 @@ async fn range_fetch_rejects_200_full_body() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None)
+        .download_range_with_progress(
+            range_request(&Source::new(&url, None), 0, 1023, &chunk_path),
+            None,
+        )
         .await;
 
     assert!(
@@ -1656,7 +1631,10 @@ async fn range_fetch_rejects_206_without_content_range() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None)
+        .download_range_with_progress(
+            range_request(&Source::new(&url, None), 0, 1023, &chunk_path),
+            None,
+        )
         .await;
 
     assert!(
@@ -1689,7 +1667,10 @@ async fn range_fetch_rejects_mismatched_content_range() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None)
+        .download_range_with_progress(
+            range_request(&Source::new(&url, None), 0, 1023, &chunk_path),
+            None,
+        )
         .await;
 
     assert!(
@@ -1731,7 +1712,10 @@ async fn range_fetch_rejects_short_body() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None)
+        .download_range_with_progress(
+            range_request(&Source::new(&url, None), 0, 1023, &chunk_path),
+            None,
+        )
         .await;
 
     assert!(
@@ -1766,7 +1750,10 @@ async fn range_fetch_rejects_overlong_body() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None)
+        .download_range_with_progress(
+            range_request(&Source::new(&url, None), 0, 1023, &chunk_path),
+            None,
+        )
         .await;
 
     assert!(
@@ -1808,13 +1795,87 @@ async fn range_fetch_accepts_conformant_206() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(range_request(&url, 4096, 5119, &chunk_path), None)
+        .download_range_with_progress(
+            range_request(&Source::new(&url, None), 4096, 5119, &chunk_path),
+            None,
+        )
         .await;
 
     assert_eq!(
         result.expect("a conformant 206 must be accepted"),
         1024,
         "must report exactly the requested span length"
+    );
+}
+
+/// `admit_for_verdict` must let a 416 through to `range_verdict` rather than
+/// having it rejected upstream as a generic non-2xx failure — otherwise the
+/// server's reported `complete_length` never reaches the caller. Retries off
+/// (0): this is about the verdict this one response produces, not a retry.
+#[tokio::test]
+async fn chunk_416_reaches_the_verdict_and_names_the_reported_length() {
+    use mockito::Server;
+    use tempfile::TempDir;
+
+    let mut server = Server::new_async().await;
+    let temp_dir = TempDir::new().unwrap();
+    let chunk_path = temp_dir.path().join("chunk_0");
+
+    let _mock = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(416)
+        .with_header("content-range", "bytes */12345")
+        .create_async()
+        .await;
+
+    let url = format!("{}/video.mp4", server.url());
+    let result = validation_test_downloader()
+        .download_range_with_progress(
+            range_request(&Source::new(&url, None), 0, 1023, &chunk_path),
+            None,
+        )
+        .await;
+
+    let err = result.expect_err("a 416 must be refused, not silently accepted");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("12345"),
+        "the reported complete length must reach the caller, proving the verdict path (not a \
+         generic non-2xx rejection) handled this response, got: {msg}"
+    );
+}
+
+/// A genuine 5xx must still be rejected exactly as before — `admit_for_verdict`
+/// only special-cases 200/206/416, so this still surfaces as the plain `Http`
+/// error the retry layer above this function keys its retry decision on.
+#[tokio::test]
+async fn chunk_503_is_still_a_plain_http_error() {
+    use mockito::Server;
+    use tempfile::TempDir;
+
+    let mut server = Server::new_async().await;
+    let temp_dir = TempDir::new().unwrap();
+    let chunk_path = temp_dir.path().join("chunk_0");
+
+    let _mock = server
+        .mock("GET", "/video.mp4")
+        .match_header("Range", mockito::Matcher::Any)
+        .with_status(503)
+        .create_async()
+        .await;
+
+    let url = format!("{}/video.mp4", server.url());
+    let result = validation_test_downloader()
+        .download_range_with_progress(
+            range_request(&Source::new(&url, None), 0, 1023, &chunk_path),
+            None,
+        )
+        .await;
+
+    assert!(
+        matches!(result, Err(RdlpError::Http { status: 503, .. })),
+        "a 503 must still surface as a plain Http error, got {result:?}"
     );
 }
 
@@ -1943,7 +2004,7 @@ async fn chunk_retry_recovers_from_wrong_span_response() {
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
-            url: &url,
+            source: &Source::new(&url, None),
             start: 0,
             end: 1023,
             chunk_path: &chunk_path,
@@ -2011,7 +2072,7 @@ async fn chunk_retry_recovers_from_short_body() {
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
-            url: &url,
+            source: &Source::new(&url, None),
             start: 0,
             end: 1023,
             chunk_path: &chunk_path,
@@ -2068,7 +2129,7 @@ async fn chunk_retry_does_not_retry_range_ignoring_server() {
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
-            url: &url,
+            source: &Source::new(&url, None),
             start: 0,
             end: 1023,
             chunk_path: &chunk_path,
@@ -2115,7 +2176,10 @@ async fn range_fetch_rejects_body_one_byte_short() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None)
+        .download_range_with_progress(
+            range_request(&Source::new(&url, None), 0, 1023, &chunk_path),
+            None,
+        )
         .await;
 
     assert!(
@@ -2145,7 +2209,10 @@ async fn range_fetch_rejects_body_one_byte_over() {
 
     let url = format!("{}/video.mp4", server.url());
     let result = validation_test_downloader()
-        .download_range_with_progress(range_request(&url, 0, 1023, &chunk_path), None)
+        .download_range_with_progress(
+            range_request(&Source::new(&url, None), 0, 1023, &chunk_path),
+            None,
+        )
         .await;
 
     assert!(
@@ -2168,16 +2235,17 @@ async fn range_fetch_rejects_body_one_byte_over() {
 #[tokio::test]
 async fn resume_rejects_response_starting_at_wrong_offset() {
     use mockito::Server;
-    use tempfile::NamedTempFile;
 
     let mut server = Server::new_async().await;
 
     let _mock = server
         .mock("GET", "/video.mp4")
         .match_header("Range", "bytes=1000-")
+        .match_header("if-range", "\"v1\"")
         .with_status(206)
         // Asked to resume at 1000; server answers from 5000.
         .with_header("content-range", "bytes 5000-9999/10000")
+        .with_header("etag", "\"v1\"")
         .with_body(vec![0x66u8; 5000])
         .create_async()
         .await;
@@ -2185,11 +2253,17 @@ async fn resume_rejects_response_starting_at_wrong_offset() {
     // Not a chunk test: this drives `download_with_resume`, and the offset
     // rejection it asserts happens above the retry layer. Retries stay off, as
     // they were before the chunk tests were converged onto a shared helper.
+    // The sidecar keeps this on the append path (#565); without one the
+    // partial would be discarded and the download restarted instead.
     let downloader = chunk_test_downloader(0);
 
-    let temp_file = NamedTempFile::new().unwrap();
-    let path = temp_file.path();
+    let dir = tempfile::TempDir::new().unwrap();
+    let path = &dir.path().join("video.mp4");
     tokio::fs::write(path, b"partial data").await.unwrap();
+    HttpResumeState::new(etag("\"v1\""), Some(10000))
+        .save(path)
+        .await
+        .unwrap();
 
     let result = downloader
         .download_with_resume(
@@ -2338,6 +2412,12 @@ async fn static_resume_failure_cleans_up_resume_chunks_d1() {
     let output = temp_dir.path().join("video.mp4");
     let original_bytes = vec![0xAAu8; already_downloaded as usize];
     tokio::fs::write(&output, &original_bytes).await.unwrap();
+    // The sidecar is what makes this a resume rather than a restart (#565);
+    // its validator rides every request below as `If-Range`.
+    HttpResumeState::new(etag("\"v1\""), Some(total_size))
+        .save(&output)
+        .await
+        .unwrap();
 
     // `download_with_resume` first issues an open-ended-range analysis
     // request (`Range: bytes={resume_from}-`) to confirm resume support and
@@ -2345,24 +2425,28 @@ async fn static_resume_failure_cleans_up_resume_chunks_d1() {
     let _resume_analysis = server
         .mock("GET", "/video.mp4")
         .match_header("range", "bytes=8388608-")
+        .match_header("if-range", "\"v1\"")
         .with_status(206)
         .with_header(
             "content-range",
             &format!("bytes 8388608-16777215/{total_size}"),
         )
         .with_header("accept-ranges", "bytes")
-        .with_body(vec![0xBBu8; chunk_size as usize])
+        .with_header("etag", "\"v1\"")
+        .with_body("")
         .create_async()
         .await;
 
     let _chunk0 = server
         .mock("GET", "/video.mp4")
         .match_header("range", "bytes=8388608-12582911")
+        .match_header("if-range", "\"v1\"")
         .with_status(206)
         .with_header(
             "content-range",
             &format!("bytes 8388608-12582911/{total_size}"),
         )
+        .with_header("etag", "\"v1\"")
         .with_body(vec![0xBBu8; chunk_size as usize])
         .create_async()
         .await;
@@ -2402,12 +2486,18 @@ async fn static_resume_failure_cleans_up_resume_chunks_d1() {
         "a failed resume must not touch the pre-existing partial output file"
     );
 
+    // The resume sidecar stays on failure so the next attempt can send its
+    // validator again (#565); it is the one download-owned file allowed here.
     let names = dir_entries(temp_dir.path()).await;
     assert_eq!(
         names,
-        std::collections::HashSet::from(["video.mp4".to_string(), "unrelated.txt".to_string()]),
+        std::collections::HashSet::from([
+            "video.mp4".to_string(),
+            "video.mp4.http_state.json".to_string(),
+            "unrelated.txt".to_string()
+        ]),
         "resume chunk files must be cleaned up after a failed resumed download; \
-         only the output file and the foreign file may remain, found: {names:?}"
+         only the output file, its sidecar and the foreign file may remain, found: {names:?}"
     );
 }
 
@@ -2810,19 +2900,17 @@ fn scripted_server(script: Vec<Option<Vec<u8>>>) -> u16 {
 /// `download_with_resume_with_cancel`'s own initial "HTTP GET (resume)"
 /// retry loop, on the sequential (below-threshold) branch.
 ///
-/// This loop treats ANY non-206 status as a hard "server doesn't support
-/// resume" failure (not gated through `is_retryable_error`), so a plain 5xx
-/// does not exercise it — only a genuine transport-level failure does.
 /// `scripted_server` drops the first connection before writing a response
 /// (mapped to `RdlpError::Network`, which IS retryable), then answers the
-/// second connection with a conformant 206.
+/// second connection with a conformant 206 carrying the sidecar's `ETag`, so
+/// the resume appends rather than restarting (#565).
 #[tokio::test]
 async fn download_with_resume_sequential_get_retry_is_reported_in_stats() {
     use tempfile::NamedTempFile;
 
     let body = vec![0x77u8; 500];
     let mut response = format!(
-        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 1000-1499/1500\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        "HTTP/1.1 206 Partial Content\r\nContent-Range: bytes 1000-1499/1500\r\nETag: \"v1\"\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()
     )
     .into_bytes();
@@ -2835,6 +2923,10 @@ async fn download_with_resume_sequential_get_retry_is_reported_in_stats() {
     let temp_file = NamedTempFile::new().unwrap();
     let path = temp_file.path();
     tokio::fs::write(path, vec![0x11u8; 1000]).await.unwrap();
+    HttpResumeState::new(etag("\"v1\""), Some(1500))
+        .save(path)
+        .await
+        .unwrap();
     let url = format!("http://127.0.0.1:{port}/video.mp4");
 
     let stats = downloader
@@ -2864,14 +2956,14 @@ async fn download_parallel_static_chunk_retry_is_reported_in_stats() {
         .mock("GET", "/file.bin")
         .match_header("range", "bytes=0-262143")
         .with_status(206)
-        .with_header("content-range", "bytes 0-262143/2048")
+        .with_header("content-range", "bytes 0-2047/2048")
         .with_body(vec![0u8; 2048])
         .expect(1)
         .create_async()
         .await;
 
     // Wrong SPAN (mismatched start/end, not just a mismatched total) is what
-    // `validate_range_response` rejects — a mismatched total alone is not
+    // `range_verdict` rejects — a mismatched total alone is not
     // checked and would be silently accepted on the first try.
     let mock_wrong_span = server
         .mock("GET", "/file.bin")
@@ -2932,7 +3024,7 @@ async fn download_parallel_static_chunk_500_retry_is_reported_in_stats() {
         .mock("GET", "/file.bin")
         .match_header("range", "bytes=0-262143")
         .with_status(206)
-        .with_header("content-range", "bytes 0-262143/2048")
+        .with_header("content-range", "bytes 0-2047/2048")
         .with_body(vec![0u8; 2048])
         .expect(1)
         .create_async()
@@ -2988,11 +3080,17 @@ async fn download_parallel_resume_chunk_retry_is_reported_in_stats() {
     let output_dir = tempfile::tempdir().unwrap();
     let output = output_dir.path().join("out.bin");
     tokio::fs::write(&output, vec![0xAA; 100]).await.unwrap();
+    HttpResumeState::new(etag("\"v1\""), Some(2148))
+        .save(&output)
+        .await
+        .unwrap();
 
     let _initial = server
         .mock("GET", "/file.bin")
         .match_header("Range", "bytes=100-")
+        .match_header("if-range", "\"v1\"")
         .with_status(206)
+        .with_header("etag", "\"v1\"")
         .with_header("content-range", "bytes 100-2147/2148")
         .with_header("accept-ranges", "bytes")
         .with_body(vec![0u8; 2048])
@@ -3006,6 +3104,7 @@ async fn download_parallel_resume_chunk_retry_is_reported_in_stats() {
         .mock("GET", "/file.bin")
         .match_header("Range", mockito::Matcher::Any)
         .with_status(206)
+        .with_header("etag", "\"v1\"")
         .with_header("content-range", "bytes 1000-3047/5000")
         .with_body(vec![0x99u8; 2048])
         .expect(1)
@@ -3015,6 +3114,7 @@ async fn download_parallel_resume_chunk_retry_is_reported_in_stats() {
         .mock("GET", "/file.bin")
         .match_header("Range", mockito::Matcher::Any)
         .with_status(206)
+        .with_header("etag", "\"v1\"")
         .with_header("content-range", "bytes 100-2147/2148")
         .with_body(vec![0x11u8; 2048])
         .expect(1)
@@ -3060,11 +3160,17 @@ async fn download_parallel_resume_chunk_500_retry_is_reported_in_stats() {
     let output_dir = tempfile::tempdir().unwrap();
     let output = output_dir.path().join("out.bin");
     tokio::fs::write(&output, vec![0xAA; 100]).await.unwrap();
+    HttpResumeState::new(etag("\"v1\""), Some(2148))
+        .save(&output)
+        .await
+        .unwrap();
 
     let _initial = server
         .mock("GET", "/file.bin")
         .match_header("Range", "bytes=100-")
+        .match_header("if-range", "\"v1\"")
         .with_status(206)
+        .with_header("etag", "\"v1\"")
         .with_header("content-range", "bytes 100-2147/2148")
         .with_header("accept-ranges", "bytes")
         .with_body(vec![0u8; 2048])
@@ -3083,6 +3189,7 @@ async fn download_parallel_resume_chunk_500_retry_is_reported_in_stats() {
         .mock("GET", "/file.bin")
         .match_header("Range", mockito::Matcher::Any)
         .with_status(206)
+        .with_header("etag", "\"v1\"")
         .with_header("content-range", "bytes 100-2147/2148")
         .with_body(vec![0x11u8; 2048])
         .expect(1)
@@ -3121,14 +3228,12 @@ async fn download_parallel_resume_chunk_500_retry_is_reported_in_stats() {
 /// same `DownloadStats.retries`, not just whichever one happens last.
 #[tokio::test]
 async fn download_to_file_sums_probe_and_download_retries() {
-    // `probe()`'s underlying `rdlp_http::probe_size` folds every HTTP status
-    // (including 5xx) into `Ok(ProbeResult { size: None, .. })` — only a
-    // genuine transport failure on `send()` produces the `Err` its
-    // `with_retry` can act on (verified: a plain mockito 500 here does NOT
-    // retry, since it is a successful response as far as `probe_size` is
-    // concerned; see #735). So proving the probe's OWN retry sums with the
-    // download's needs a real connection failure, not a status code —
-    // `scripted_server` drops the first connection on each leg.
+    // Both legs ride `send_with_retry`, which maps a transport failure to a
+    // retryable `Network` error and lets each leg's gate classify statuses
+    // (`probe_503_then_206_recovers_on_retry` covers the probe's 5xx, #735).
+    // One transport failure per leg is the shape that exercises both retry
+    // loops without either gate in the way — `scripted_server` drops the
+    // first connection on each leg.
     let body = vec![0xAAu8; 1024];
 
     let probe_body = vec![0u8; 4];
@@ -3181,7 +3286,10 @@ async fn download_to_file_sums_probe_and_download_retries() {
 // ---------------------------------------------------------------------------
 
 /// Downloader for the #674 tests: no retries, so a rejected response surfaces
-/// immediately as the test's result rather than being retried away.
+/// immediately as the test's result rather than being retried away. Every
+/// test writes a `"v1"` sidecar beside its partial and answers with that
+/// `ETag`, so the resume proceeds to the checks under test rather than
+/// restarting for want of a validator (#565).
 fn resume_gap_test_downloader() -> HttpDownloader {
     HttpDownloader::new().with_retry_config(crate::retry::test_retry_config(0))
 }
@@ -3190,7 +3298,9 @@ fn resume_gap_test_downloader() -> HttpDownloader {
 /// server-declared total — the server's tail is short of the file's actual
 /// end — must be refused. Only `first_pos` was checked before #674; a
 /// response like this would have been accepted and appended, silently
-/// truncating the file at `last_pos + 1` instead of completing it.
+/// truncating the file at `last_pos + 1` instead of completing it. The
+/// check lives in `range_verdict`'s open-ended arm (#565 folded
+/// `validate_range_response` into it).
 ///
 /// Pinned at the tight boundary (`last_pos = total - 2`), one short of the
 /// positive counterpart `resume_accepts_a_span_reaching_the_declared_total`'s
@@ -3206,6 +3316,7 @@ async fn resume_rejects_a_span_shorter_than_the_declared_total() {
         .mock("GET", "/video.mp4")
         .match_header("Range", "bytes=1000-")
         .with_status(206)
+        .with_header("etag", "\"v1\"")
         // Starts where the file ends (1000); total is 2000 (so the correct
         // end is 1999) and the span reaches only 1998 — one byte short.
         .with_header("content-range", "bytes 1000-1998/2000")
@@ -3217,6 +3328,12 @@ async fn resume_rejects_a_span_shorter_than_the_declared_total() {
     let temp_file = NamedTempFile::new().unwrap();
     let path = temp_file.path();
     tokio::fs::write(path, vec![0xAAu8; 1000]).await.unwrap();
+    // The partial's sidecar (#565): without a recorded validator a resume
+    // discards the partial and restarts, and these checks would never run.
+    HttpResumeState::new(etag("\"v1\""), Some(2000))
+        .save(path)
+        .await
+        .unwrap();
 
     let result = downloader
         .download_with_resume(
@@ -3229,8 +3346,9 @@ async fn resume_rejects_a_span_shorter_than_the_declared_total() {
         .await;
 
     assert!(
-        result.is_err(),
-        "a resume span short of the declared total must be refused, got {result:?}"
+        matches!(result, Err(RdlpError::Network { .. })),
+        "a resume span short of the declared total must be refused as the retryable \
+         wrong-span class, got {result:?}"
     );
     let contents = tokio::fs::read(path).await.unwrap();
     assert_eq!(
@@ -3253,6 +3371,7 @@ async fn resume_accepts_a_span_reaching_the_declared_total() {
         .mock("GET", "/video.mp4")
         .match_header("Range", "bytes=1000-")
         .with_status(206)
+        .with_header("etag", "\"v1\"")
         .with_header("content-range", "bytes 1000-1999/2000")
         .with_body(vec![0x11u8; 1000])
         .create_async()
@@ -3262,6 +3381,12 @@ async fn resume_accepts_a_span_reaching_the_declared_total() {
     let temp_file = NamedTempFile::new().unwrap();
     let path = temp_file.path();
     tokio::fs::write(path, vec![0xAAu8; 1000]).await.unwrap();
+    // The partial's sidecar (#565): without a recorded validator a resume
+    // discards the partial and restarts, and these checks would never run.
+    HttpResumeState::new(etag("\"v1\""), Some(2000))
+        .save(path)
+        .await
+        .unwrap();
 
     let result = downloader
         .download_with_resume(
@@ -3298,6 +3423,7 @@ async fn resume_rejects_a_body_shorter_than_the_promised_tail() {
         .mock("GET", "/video.mp4")
         .match_header("Range", "bytes=1000-")
         .with_status(206)
+        .with_header("etag", "\"v1\"")
         .with_header("content-range", "bytes 1000-1999/2000")
         // Promises 1000 bytes (1000-1999) but only sends 999.
         .with_body(vec![0x22u8; 999])
@@ -3308,6 +3434,12 @@ async fn resume_rejects_a_body_shorter_than_the_promised_tail() {
     let temp_file = NamedTempFile::new().unwrap();
     let path = temp_file.path();
     tokio::fs::write(path, vec![0xAAu8; 1000]).await.unwrap();
+    // The partial's sidecar (#565): without a recorded validator a resume
+    // discards the partial and restarts, and these checks would never run.
+    HttpResumeState::new(etag("\"v1\""), Some(2000))
+        .save(path)
+        .await
+        .unwrap();
 
     let result = downloader
         .download_with_resume(
@@ -3339,6 +3471,7 @@ async fn resume_rejects_a_body_longer_than_the_promised_tail() {
         .mock("GET", "/video.mp4")
         .match_header("Range", "bytes=1000-")
         .with_status(206)
+        .with_header("etag", "\"v1\"")
         .with_header("content-range", "bytes 1000-1999/2000")
         // Promises 1000 bytes (1000-1999) but sends 1001.
         .with_body(vec![0x33u8; 1001])
@@ -3349,6 +3482,12 @@ async fn resume_rejects_a_body_longer_than_the_promised_tail() {
     let temp_file = NamedTempFile::new().unwrap();
     let path = temp_file.path();
     tokio::fs::write(path, vec![0xAAu8; 1000]).await.unwrap();
+    // The partial's sidecar (#565): without a recorded validator a resume
+    // discards the partial and restarts, and these checks would never run.
+    HttpResumeState::new(etag("\"v1\""), Some(2000))
+        .save(path)
+        .await
+        .unwrap();
 
     let result = downloader
         .download_with_resume(
@@ -3386,6 +3525,7 @@ async fn resume_recovers_from_wrong_span_response_on_retry() {
         .mock("GET", "/video.mp4")
         .match_header("Range", "bytes=1000-")
         .with_status(206)
+        .with_header("etag", "\"v1\"")
         .with_header("content-range", "bytes 5000-5999/10000")
         .with_body(vec![0x99u8; 1000])
         .expect(1)
@@ -3396,6 +3536,7 @@ async fn resume_recovers_from_wrong_span_response_on_retry() {
         .mock("GET", "/video.mp4")
         .match_header("Range", "bytes=1000-")
         .with_status(206)
+        .with_header("etag", "\"v1\"")
         .with_header("content-range", "bytes 1000-1999/2000")
         .with_body(vec![0x11u8; 1000])
         .expect(1)
@@ -3406,6 +3547,12 @@ async fn resume_recovers_from_wrong_span_response_on_retry() {
     let temp_file = NamedTempFile::new().unwrap();
     let path = temp_file.path();
     tokio::fs::write(path, vec![0xAAu8; 1000]).await.unwrap();
+    // The partial's sidecar (#565): without a recorded validator a resume
+    // discards the partial and restarts, and these checks would never run.
+    HttpResumeState::new(etag("\"v1\""), Some(2000))
+        .save(path)
+        .await
+        .unwrap();
 
     let result = downloader
         .download_with_resume(
@@ -3561,4 +3708,1339 @@ async fn sequential_accepts_a_body_matching_content_length_exactly() {
         1024,
         "output file must be exactly Content-Length bytes"
     );
+}
+// #565 — the strong validator is captured on the fresh path and every chunk
+// is verified against it (RFC 9110 §13.1.5, §15.3.7.3).
+// ---------------------------------------------------------------------------
+
+/// Read the resume sidecar from a mockito body callback. The callback runs on
+/// mockito's own OS thread, never inside an async task, so the blocking read
+/// is not the hazard `clippy.toml` bans — this is policy (c), a test fixture.
+#[allow(clippy::disallowed_methods)] // std::fs helpers in test fixtures — per clippy.toml policy (c)
+fn read_sidecar_sync(output: &Path) -> Option<String> {
+    std::fs::read_to_string(HttpResumeState::sidecar_path(output)).ok()
+}
+
+/// Poll interval and ceiling for a body thread waiting on a sidecar rewrite;
+/// the ceiling is only reached on a regression, when the test then fails on
+/// what it saw.
+const SIDECAR_POLL: std::time::Duration = std::time::Duration::from_millis(10);
+const SIDECAR_MAX_POLLS: u32 = 300;
+
+/// From a mockito body callback: wait — bounded — until the sidecar names
+/// `wanted`, and return the last sidecar text seen (rewritten or not). mockito
+/// builds a body BEFORE it writes the headers, so a `with_body_from_request`
+/// callback would only ever see the sidecar from before the request; a
+/// `with_chunked_body` thread runs while hyper streams and can wait for the
+/// rewrite the response's own headers trigger.
+fn wait_for_sidecar_validator(output: &Path, wanted: &StrongValidator) -> Option<String> {
+    let mut latest = None;
+    for _ in 0..SIDECAR_MAX_POLLS {
+        latest = read_sidecar_sync(output);
+        let rewritten = latest
+            .as_deref()
+            .and_then(|s| serde_json::from_str::<HttpResumeState>(s).ok())
+            .is_some_and(|s| s.validator == *wanted);
+        if rewritten {
+            break;
+        }
+        std::thread::sleep(SIDECAR_POLL);
+    }
+    latest
+}
+
+/// Two-chunk parallel setup: a probe answering 206 with `etag`, and a
+/// downloader that will split `total` into two static chunks of `total / 2`.
+async fn two_chunk_setup(
+    server: &mut mockito::ServerGuard,
+    total: u64,
+    etag: &str,
+) -> (mockito::Mock, HttpDownloader) {
+    let probe = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=0-262143")
+        .with_status(206)
+        .with_header("content-range", &format!("bytes 0-{}/{total}", total - 1))
+        .with_header("etag", etag)
+        .with_body(vec![1u8; total as usize])
+        .create_async()
+        .await;
+    let half = usize::try_from(total / 2).unwrap();
+    let d = chunk_test_downloader(0)
+        .with_parallel_threshold(1)
+        .with_concurrent_fragments(2)
+        .with_chunk_strategy(crate::chunking::ChunkSizeStrategy::Fixed(half));
+    (probe, d)
+}
+
+/// A chunk whose 206 names a different representation than the probe's
+/// (§15.3.7.3: parts may be combined only under the same strong validator)
+/// must abort before the merge, not be spliced in.
+#[tokio::test]
+async fn parallel_chunk_with_different_etag_aborts_without_merging() {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("v.mp4");
+    let total = 4096u64;
+    let (_probe, d) = two_chunk_setup(&mut server, total, "\"a\"").await;
+    let _c0 = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=0-2047")
+        .match_header("if-range", "\"a\"")
+        .with_status(206)
+        .with_header("content-range", &format!("bytes 0-2047/{total}"))
+        .with_header("etag", "\"a\"")
+        .with_body(vec![1u8; 2048])
+        .create_async()
+        .await;
+    let _c1 = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=2048-4095")
+        .with_status(206)
+        .with_header("content-range", &format!("bytes 2048-4095/{total}"))
+        .with_header("etag", "\"b\"")
+        .with_body(vec![2u8; 2048])
+        .create_async()
+        .await;
+
+    let err = d
+        .download_to_file(&format!("{}/v", server.url()), &out, None)
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("validator changed"), "{err}");
+    assert!(!out.exists(), "no merged output after a validator mismatch");
+    assert!(
+        HttpResumeState::sidecar_path(&out).exists(),
+        "sidecar stays for diagnosis; next run re-probes"
+    );
+}
+
+/// §13.2.2 step 5: a 200 to `Range` + `If-Range` means the representation
+/// changed and the body is the whole new one. It can never be placed at a
+/// chunk's offset, so the download aborts with the whole-resource reason —
+/// not the "server ignored Range" reason a validator-less request gets.
+#[tokio::test]
+async fn parallel_chunk_answering_200_after_if_range_aborts() {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("v.mp4");
+    let total = 4096u64;
+    let (_probe, d) = two_chunk_setup(&mut server, total, "\"a\"").await;
+    let _c0 = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=0-2047")
+        .match_header("if-range", "\"a\"")
+        .with_status(206)
+        .with_header("content-range", &format!("bytes 0-2047/{total}"))
+        .with_header("etag", "\"a\"")
+        .with_body(vec![1u8; 2048])
+        .create_async()
+        .await;
+    let _c1 = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=2048-4095")
+        .match_header("if-range", "\"a\"")
+        .with_status(200)
+        .with_header("etag", "\"b\"")
+        .with_body(vec![2u8; total as usize])
+        .create_async()
+        .await;
+
+    let err = d
+        .download_to_file(&format!("{}/v", server.url()), &out, None)
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string().contains("server answered 200"),
+        "expected the Replaced verdict's reason, got: {err}"
+    );
+    assert!(!out.exists(), "no merged output after a 200 to If-Range");
+}
+
+/// The sidecar is on disk before the first body byte arrives — observed from
+/// inside the chunk's body callback, which mockito runs when the chunk
+/// request reaches it — and gone once the download succeeds. When the
+/// download fails instead, the sidecar stays.
+#[tokio::test]
+async fn fresh_download_writes_sidecar_before_body_and_removes_it_on_success() {
+    use mockito::Server;
+    let total = 4096u64;
+
+    // Success: one chunk covering the whole body.
+    let mut server = Server::new_async().await;
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("v.mp4");
+    let (_probe, d) = two_chunk_setup(&mut server, total, "\"a\"").await;
+    let d = d.with_chunk_strategy(crate::chunking::ChunkSizeStrategy::Fixed(
+        usize::try_from(total).unwrap(),
+    ));
+    let seen: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let seen_in_body = seen.clone();
+    let out_for_body = out.clone();
+    let _c0 = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=0-4095")
+        .match_header("if-range", "\"a\"")
+        .with_status(206)
+        .with_header("content-range", &format!("bytes 0-4095/{total}"))
+        .with_header("etag", "\"a\"")
+        .with_body_from_request(move |_| {
+            *seen_in_body.lock().unwrap() = read_sidecar_sync(&out_for_body);
+            vec![7u8; 4096]
+        })
+        .create_async()
+        .await;
+
+    let stats = d
+        .download_to_file(&format!("{}/v", server.url()), &out, None)
+        .await
+        .unwrap();
+    assert_eq!(stats.bytes_downloaded, total);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), vec![7u8; 4096]);
+    let seen = seen.lock().unwrap().clone();
+    let seen: HttpResumeState = serde_json::from_str(
+        seen.as_deref()
+            .expect("sidecar must exist when the first chunk request arrives"),
+    )
+    .unwrap();
+    assert_eq!(
+        seen.validator,
+        StrongValidator::ETag(rdlp_http::validator::StrongEntityTag::parse("\"a\"").unwrap())
+    );
+    assert_eq!(seen.complete_length, Some(total));
+    assert!(
+        !HttpResumeState::sidecar_path(&out).exists(),
+        "sidecar is removed once the download completes"
+    );
+
+    // Failure: the chunk answers 503 with no retries left; the sidecar stays.
+    let mut server = Server::new_async().await;
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("v.mp4");
+    let (_probe, d) = two_chunk_setup(&mut server, total, "\"a\"").await;
+    let d = d.with_chunk_strategy(crate::chunking::ChunkSizeStrategy::Fixed(
+        usize::try_from(total).unwrap(),
+    ));
+    let c0 = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=0-4095")
+        .with_status(503)
+        .with_body("unavailable")
+        .expect(1)
+        .create_async()
+        .await;
+    let err = d
+        .download_to_file(&format!("{}/v", server.url()), &out, None)
+        .await
+        .unwrap_err();
+    c0.assert_async().await;
+    assert!(
+        matches!(err, RdlpError::Http { status: 503, .. }),
+        "{err:?}"
+    );
+    let left = HttpResumeState::load(&out)
+        .await
+        .expect("sidecar written after the probe survives a failed chunk");
+    assert_eq!(
+        left.validator,
+        StrongValidator::ETag(rdlp_http::validator::StrongEntityTag::parse("\"a\"").unwrap())
+    );
+}
+
+/// On the sequential path the GET, not the probe, produced the bytes on
+/// disk, so the sidecar must carry the GET's validator — written after its
+/// headers and before its body is consumed.
+///
+/// mockito builds a response's body BEFORE it writes the headers
+/// (`server.rs::respond_with_mock`), so a `with_body_from_request` callback
+/// would only ever see the probe's sidecar. `with_chunked_body` instead runs
+/// on its own thread while hyper streams the response, so it can wait —
+/// bounded — for the GET's headers to have reached the client and the
+/// sidecar to have been rewritten, and record what it saw.
+#[tokio::test]
+async fn sequential_get_validator_overrides_probe_validator() {
+    use mockito::{Matcher, Server};
+
+    let mut server = Server::new_async().await;
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("v.mp4");
+    let body = vec![9u8; 1024];
+
+    let _probe = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=0-262143")
+        .with_status(200)
+        .with_header("etag", "\"probe\"")
+        .with_body(body.clone())
+        .create_async()
+        .await;
+
+    let get_validator =
+        StrongValidator::ETag(rdlp_http::validator::StrongEntityTag::parse("\"get\"").unwrap());
+    let seen: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let seen_in_body = seen.clone();
+    let out_for_body = out.clone();
+    let body_for_get = body.clone();
+    let wanted = get_validator.clone();
+    let _get = server
+        .mock("GET", "/v")
+        .match_header("range", Matcher::Missing)
+        .with_status(200)
+        .with_header("etag", "\"get\"")
+        .with_chunked_body(move |w| {
+            *seen_in_body.lock().unwrap() = wait_for_sidecar_validator(&out_for_body, &wanted);
+            w.write_all(&body_for_get)
+        })
+        .create_async()
+        .await;
+
+    let d = chunk_test_downloader(0);
+    let stats = d
+        .download_to_file(&format!("{}/v", server.url()), &out, None)
+        .await
+        .unwrap();
+    assert_eq!(stats.bytes_downloaded, 1024);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), body);
+
+    let seen = seen.lock().unwrap().clone();
+    let seen: HttpResumeState = serde_json::from_str(
+        seen.as_deref()
+            .expect("sidecar must exist while the GET body is being served"),
+    )
+    .unwrap();
+    assert_eq!(
+        seen.validator, get_validator,
+        "the GET's validator, not the probe's, is what the bytes on disk belong to"
+    );
+    assert!(
+        !HttpResumeState::sidecar_path(&out).exists(),
+        "sidecar is removed once the download completes"
+    );
+}
+
+/// "No sidecar" means "no validator" (RFC 9110 §15.3.7.3 grants combining only
+/// under a shared strong validator), so a fresh download whose probe offers
+/// none must clear a sidecar left behind by an earlier attempt before it
+/// requests any body — observed from inside the chunk's body callback.
+#[tokio::test]
+async fn fresh_download_without_probe_validator_clears_a_stale_sidecar() {
+    use mockito::Server;
+    let total = 4096u64;
+    let mut server = Server::new_async().await;
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("v.mp4");
+
+    let mut stale = HttpResumeState::new(
+        StrongValidator::ETag(rdlp_http::validator::StrongEntityTag::parse("\"old\"").unwrap()),
+        Some(1),
+    );
+    stale.save(&out).await.unwrap();
+
+    let _probe = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=0-262143")
+        .with_status(206)
+        .with_header("content-range", &format!("bytes 0-{}/{total}", total - 1))
+        .with_body(vec![1u8; total as usize])
+        .create_async()
+        .await;
+    let seen: Arc<Mutex<Option<Option<String>>>> = Arc::new(Mutex::new(None));
+    let seen_in_body = seen.clone();
+    let out_for_body = out.clone();
+    let _c0 = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=0-4095")
+        .match_header("if-range", mockito::Matcher::Missing)
+        .with_status(206)
+        .with_header("content-range", &format!("bytes 0-4095/{total}"))
+        .with_body_from_request(move |_| {
+            *seen_in_body.lock().unwrap() = Some(read_sidecar_sync(&out_for_body));
+            vec![7u8; 4096]
+        })
+        .create_async()
+        .await;
+
+    let d = chunk_test_downloader(0)
+        .with_parallel_threshold(1)
+        .with_concurrent_fragments(2)
+        .with_chunk_strategy(crate::chunking::ChunkSizeStrategy::Fixed(
+            usize::try_from(total).unwrap(),
+        ));
+    d.download_to_file(&format!("{}/v", server.url()), &out, None)
+        .await
+        .unwrap();
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(
+        seen,
+        Some(None),
+        "the stale sidecar must be gone when the first chunk request arrives"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #565 — the resume flow: `If-Range`, then 206 / 200 / 416 by verdict
+// (RFC 9110 §13.1.5, §13.2.2, §14.4, §15.3.7.3).
+// ---------------------------------------------------------------------------
+
+/// A partial file holding `partial`, optionally with a sidecar naming the
+/// validator and complete-length it was fetched under, and a downloader that
+/// never retries and never goes parallel — so the sequential branch is what
+/// each test drives unless it opts out.
+async fn resume_fixture(
+    partial: &[u8],
+    sidecar: Option<(&str, Option<u64>)>,
+) -> (tempfile::TempDir, std::path::PathBuf, HttpDownloader) {
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("v.mp4");
+    tokio::fs::write(&out, partial).await.unwrap();
+    if let Some((tag, complete_length)) = sidecar {
+        HttpResumeState::new(etag(tag), complete_length)
+            .save(&out)
+            .await
+            .unwrap();
+    }
+    let d = chunk_test_downloader(0).with_parallel_threshold(u64::MAX);
+    (dir, out, d)
+}
+
+/// The fresh path a restart converges onto: a probe (no `If-Range`) answering
+/// 200 so the download goes sequential, then the plain GET serving `body`.
+async fn fresh_mocks(
+    server: &mut mockito::ServerGuard,
+    body: &[u8],
+) -> (mockito::Mock, mockito::Mock) {
+    use mockito::Matcher;
+    let probe = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=0-262143")
+        .match_header("if-range", Matcher::Missing)
+        .with_status(200)
+        .with_body(body)
+        .expect(1)
+        .create_async()
+        .await;
+    let get = server
+        .mock("GET", "/v")
+        .match_header("range", Matcher::Missing)
+        .match_header("if-range", Matcher::Missing)
+        .with_status(200)
+        .with_body(body)
+        .expect(1)
+        .create_async()
+        .await;
+    (probe, get)
+}
+
+/// The happy path: `Range: bytes=N-` + `If-Range` + the identity pin go out
+/// together, the 206 is appended, and the sidecar is gone on success.
+#[tokio::test]
+async fn resume_sends_if_range_and_appends_on_206() {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"0123", Some(("\"v1\"", Some(8)))).await;
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=4-")
+        .match_header("if-range", "\"v1\"")
+        .match_header("accept-encoding", "identity")
+        .with_status(206)
+        .with_header("content-range", "bytes 4-7/8")
+        .with_header("etag", "\"v1\"")
+        .with_body("4567")
+        .expect(1)
+        .create_async()
+        .await;
+
+    let stats = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
+        .await
+        .unwrap();
+    m.assert_async().await;
+    assert_eq!(stats.bytes_downloaded, 8);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"01234567");
+    assert!(!HttpResumeState::sidecar_path(&out).exists());
+}
+
+/// §13.2.2 step 5: a 200 to `If-Range` means the representation changed and
+/// the body is the whole new one. It is written from zero as the fresh file —
+/// from THIS response, with no second fetch — and the sidecar rewritten in
+/// flight carries the new validator (observed from the body thread, which
+/// waits — bounded — for the rewrite; mockito builds the body before it sends
+/// the headers, so a `with_body_from_request` callback could not see it).
+#[tokio::test]
+async fn resume_200_after_if_range_rewrites_from_the_response_body() {
+    use mockito::Server;
+
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"old-", Some(("\"v1\"", Some(8)))).await;
+    let seen: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    let seen_in_body = seen.clone();
+    let out_for_body = out.clone();
+    let wanted = etag("\"v2\"");
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=4-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(200)
+        .with_header("etag", "\"v2\"")
+        .with_header("content-length", "6")
+        .with_chunked_body(move |w| {
+            *seen_in_body.lock().unwrap() = wait_for_sidecar_validator(&out_for_body, &wanted);
+            w.write_all(b"newnew")
+        })
+        .expect(1)
+        .create_async()
+        .await;
+
+    let stats = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
+        .await
+        .unwrap();
+    m.assert_async().await;
+    assert_eq!(stats.bytes_downloaded, 6);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"newnew");
+    let seen = seen.lock().unwrap().clone();
+    let seen: HttpResumeState = serde_json::from_str(
+        seen.as_deref()
+            .expect("a sidecar exists while the replacement body is being served"),
+    )
+    .unwrap();
+    assert_eq!(
+        seen.validator,
+        etag("\"v2\""),
+        "the sidecar names the NEW representation"
+    );
+    assert!(
+        !HttpResumeState::sidecar_path(&out).exists(),
+        "sidecar is removed once the rewrite completes"
+    );
+}
+
+/// §8.8.1: a strong validator is unique across versions, so a 200 carrying
+/// the SAME one with `Content-Length == N` says the N-byte partial already is
+/// the whole representation — finish without touching the file.
+///
+/// The mock body deliberately differs from the partial (a real server would
+/// send the identical bytes) so that consuming it is observable: the file
+/// must still hold the partial, not the body.
+#[tokio::test]
+async fn resume_200_same_validator_and_length_is_already_complete() {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"done", Some(("\"v1\"", Some(4)))).await;
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=4-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(200)
+        .with_header("etag", "\"v1\"")
+        .with_body("DONE")
+        .expect(1)
+        .create_async()
+        .await;
+
+    let stats = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
+        .await
+        .unwrap();
+    m.assert_async().await;
+    assert_eq!(stats.bytes_downloaded, 4);
+    assert_eq!(
+        tokio::fs::read(&out).await.unwrap(),
+        b"done",
+        "the partial is the whole representation; the body is not written"
+    );
+    assert!(!HttpResumeState::sidecar_path(&out).exists());
+}
+
+/// §14.4 `bytes */L` "indicates the current length": `L == N` says the
+/// partial is complete — but only a conforming server reaches 416 after the
+/// `If-Range` precondition held (§14.2), so one `If-Range` probe confirms
+/// the validator before the partial is declared done: no body, sidecar
+/// removed, file untouched.
+#[tokio::test]
+async fn resume_416_with_matching_length_is_complete_once_the_probe_confirms() {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"done", Some(("\"v1\"", None))).await;
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=4-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(416)
+        .with_header("content-range", "bytes */4")
+        .expect(1)
+        .create_async()
+        .await;
+    let probe = confirming_probe(&mut server, "\"v1\"", 4).await;
+
+    let stats = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
+        .await
+        .unwrap();
+    m.assert_async().await;
+    probe.assert_async().await;
+    assert_eq!(stats.bytes_downloaded, 4);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"done");
+    assert!(!HttpResumeState::sidecar_path(&out).exists());
+}
+
+/// A server that ignores `If-Range` can answer 416 `*/N` for a DIFFERENT
+/// N-byte representation. The confirming probe sees the other validator, so
+/// the partial is discarded and the download restarts rather than being
+/// declared complete on the strength of a length alone.
+#[tokio::test]
+async fn resume_416_with_matching_length_but_other_validator_restarts() {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"done", Some(("\"v1\"", None))).await;
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=4-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(416)
+        .with_header("content-range", "bytes */4")
+        .expect(1)
+        .create_async()
+        .await;
+    let probe = confirming_probe(&mut server, "\"v2\"", 4).await;
+    let (fresh_probe, get) = fresh_mocks(&mut server, b"DONE").await;
+
+    let stats = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
+        .await
+        .unwrap();
+    m.assert_async().await;
+    probe.assert_async().await;
+    fresh_probe.assert_async().await;
+    get.assert_async().await;
+    assert_eq!(stats.bytes_downloaded, 4);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"DONE");
+    assert!(!HttpResumeState::sidecar_path(&out).exists());
+}
+
+/// The `If-Range: "v1"` probe a resume sends to confirm a 416: a 206 whose
+/// `ETag` is `etag` and whose complete-length is `len`.
+async fn confirming_probe(
+    server: &mut mockito::ServerGuard,
+    etag: &str,
+    len: u64,
+) -> mockito::Mock {
+    server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=0-262143")
+        .match_header("if-range", "\"v1\"")
+        .with_status(206)
+        .with_header("content-range", &format!("bytes 0-0/{len}"))
+        .with_header("etag", etag)
+        .with_body("d")
+        .expect(1)
+        .create_async()
+        .await
+}
+
+/// A 416 `*/N` whose confirming probe gets NO answer — here a 503 with no
+/// retries left — must not read as "not confirmed": the outage says nothing
+/// about the partial, so the attempt errors and leaves the partial and its
+/// sidecar for the next one, instead of `restart` truncating a file that is,
+/// on a conforming server, already complete.
+#[tokio::test]
+async fn resume_416_then_unanswered_probe_keeps_partial_and_sidecar() {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"done", Some(("\"v1\"", None))).await;
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=4-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(416)
+        .with_header("content-range", "bytes */4")
+        .expect(1)
+        .create_async()
+        .await;
+    let outage = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=0-262143")
+        .match_header("if-range", "\"v1\"")
+        .with_status(503)
+        .expect(1)
+        .create_async()
+        .await;
+
+    let err = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
+        .await
+        .unwrap_err();
+    m.assert_async().await;
+    outage.assert_async().await;
+    assert!(
+        matches!(err, RdlpError::Http { status: 503, .. }),
+        "the probe's own failure must surface, got {err:?}"
+    );
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"done");
+    assert!(HttpResumeState::sidecar_path(&out).exists());
+}
+
+/// A resume 206 answering `bytes N-M/*` is still held to the complete
+/// length the sidecar recorded under the same strong validator (§8.8.1):
+/// a tail short of it is refused before a byte is appended, as the
+/// retryable wrong-span class, and the partial and sidecar stay.
+#[tokio::test]
+async fn resume_206_star_short_of_the_sidecar_total_is_refused() {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"partial", Some(("\"v1\"", Some(10)))).await;
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=7-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(206)
+        .with_header("etag", "\"v1\"")
+        // Two bytes (7-8) of the three the sidecar says remain (7-9).
+        .with_header("content-range", "bytes 7-8/*")
+        .with_body("xy")
+        .expect(1)
+        .create_async()
+        .await;
+
+    let err = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 7, None, None)
+        .await
+        .unwrap_err();
+    m.assert_async().await;
+    assert!(
+        matches!(err, RdlpError::Network { .. }),
+        "a tail short of the recorded total is the wrong-span class, got {err:?}"
+    );
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"partial");
+    assert!(HttpResumeState::sidecar_path(&out).exists());
+}
+
+/// The same recorded total bounds the BODY, not only the `Content-Range`
+/// span: a `bytes N-M/*` answer whose span reaches the sidecar's total but
+/// whose body stops short is caught by the byte count, held to the
+/// sidecar's length rather than to the body's own `Content-Length`. What
+/// was appended is a valid prefix under the same validator, so the sidecar
+/// stays for the next attempt.
+#[tokio::test]
+async fn resume_206_star_body_short_of_the_sidecar_total_is_refused() {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"partial", Some(("\"v1\"", Some(10)))).await;
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=7-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(206)
+        .with_header("etag", "\"v1\"")
+        .with_header("content-range", "bytes 7-9/*")
+        // Two bytes where the span (and the sidecar) say three; mockito
+        // sets `Content-Length: 2`, so the body's own length is consistent
+        // with itself and only the recorded total can refuse it.
+        .with_body("xy")
+        .expect(1)
+        .create_async()
+        .await;
+
+    let err = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 7, None, None)
+        .await
+        .unwrap_err();
+    m.assert_async().await;
+    assert!(
+        matches!(err, RdlpError::Network { .. }),
+        "a body short of the recorded total is incomplete, got {err:?}"
+    );
+    assert!(HttpResumeState::sidecar_path(&out).exists());
+}
+
+/// The positive counterpart: a `bytes N-M/*` tail reaching exactly the
+/// sidecar's total completes the file, and the sidecar is gone.
+#[tokio::test]
+async fn resume_206_star_reaching_the_sidecar_total_completes() {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"partial", Some(("\"v1\"", Some(10)))).await;
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=7-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(206)
+        .with_header("etag", "\"v1\"")
+        .with_header("content-range", "bytes 7-9/*")
+        .with_body("xyz")
+        .expect(1)
+        .create_async()
+        .await;
+
+    let stats = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 7, None, None)
+        .await
+        .unwrap();
+    m.assert_async().await;
+    assert_eq!(stats.bytes_downloaded, 10);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"partialxyz");
+    assert!(!HttpResumeState::sidecar_path(&out).exists());
+}
+
+/// `L < N`: the representation is now shorter than the partial, so the
+/// partial cannot be a prefix of it — discard and restart from zero.
+#[tokio::test]
+async fn resume_416_with_shorter_length_restarts() {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"toolong", Some(("\"v1\"", None))).await;
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=7-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(416)
+        .with_header("content-range", "bytes */3")
+        .expect(1)
+        .create_async()
+        .await;
+    let (probe, get) = fresh_mocks(&mut server, b"abc").await;
+
+    let stats = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 7, None, None)
+        .await
+        .unwrap();
+    m.assert_async().await;
+    probe.assert_async().await;
+    get.assert_async().await;
+    assert_eq!(stats.bytes_downloaded, 3);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"abc");
+    assert!(!HttpResumeState::sidecar_path(&out).exists());
+}
+
+/// §14.1.2: a range is satisfiable iff `first-pos < current length`, so a
+/// 416 whose `*/L` has `L > N` contradicts itself. Not a restart — an error,
+/// with the partial and its sidecar left for diagnosis.
+#[tokio::test]
+async fn resume_416_with_longer_length_is_an_error() {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"ab", Some(("\"v1\"", None))).await;
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=2-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(416)
+        .with_header("content-range", "bytes */10")
+        .expect(1)
+        .create_async()
+        .await;
+
+    let err = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 2, None, None)
+        .await
+        .unwrap_err();
+    m.assert_async().await;
+    assert!(matches!(err, RdlpError::Download { .. }), "{err:?}");
+    assert!(err.to_string().contains("416"), "{err}");
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"ab");
+    assert!(HttpResumeState::sidecar_path(&out).exists());
+}
+
+/// §15.5.17: `Content-Range` on a 416 is only a SHOULD. Without it the length
+/// is asked of a probe sent under the same `If-Range`: a 206 whose validator
+/// matches and whose complete-length is `N` means complete; anything else
+/// means discard and restart.
+#[tokio::test]
+async fn resume_416_without_content_range_probes_then_completes_or_restarts() {
+    use mockito::Server;
+
+    // Case A: the probe says the representation is exactly N bytes.
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"done", Some(("\"v1\"", None))).await;
+    let m416 = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=4-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(416)
+        .expect(1)
+        .create_async()
+        .await;
+    let probe = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=0-262143")
+        .match_header("if-range", "\"v1\"")
+        .with_status(206)
+        .with_header("content-range", "bytes 0-0/4")
+        .with_header("etag", "\"v1\"")
+        .with_body("d")
+        .expect(1)
+        .create_async()
+        .await;
+    let stats = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
+        .await
+        .unwrap();
+    m416.assert_async().await;
+    probe.assert_async().await;
+    assert_eq!(stats.bytes_downloaded, 4);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"done");
+    assert!(!HttpResumeState::sidecar_path(&out).exists());
+
+    // Case B: the probe reports another length; the partial is discarded and
+    // the fresh path (no `If-Range`) serves the 9-byte representation.
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"done", Some(("\"v1\"", None))).await;
+    let _m416 = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=4-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(416)
+        .expect(1)
+        .create_async()
+        .await;
+    let probe = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=0-262143")
+        .match_header("if-range", "\"v1\"")
+        .with_status(206)
+        .with_header("content-range", "bytes 0-0/9")
+        .with_header("etag", "\"v1\"")
+        .with_body("n")
+        .expect(1)
+        .create_async()
+        .await;
+    let (fresh_probe, get) = fresh_mocks(&mut server, b"ninebytes").await;
+    let stats = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
+        .await
+        .unwrap();
+    probe.assert_async().await;
+    fresh_probe.assert_async().await;
+    get.assert_async().await;
+    assert_eq!(stats.bytes_downloaded, 9);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"ninebytes");
+    assert!(!HttpResumeState::sidecar_path(&out).exists());
+}
+
+/// A matching strong validator with a DIFFERENT complete-length than the
+/// sidecar recorded is a validator that cannot be trusted (§8.8.1 makes it
+/// unique per representation, so the two cannot both be right) — the
+/// partial is discarded and the download restarts rather than appended.
+#[tokio::test]
+async fn resume_206_with_changed_complete_length_restarts() {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"0123", Some(("\"v1\"", Some(8)))).await;
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=4-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(206)
+        .with_header("content-range", "bytes 4-9/10")
+        .with_header("etag", "\"v1\"")
+        .with_body("456789")
+        .expect(1)
+        .create_async()
+        .await;
+    let (probe, get) = fresh_mocks(&mut server, b"0123456789").await;
+
+    let stats = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
+        .await
+        .unwrap();
+    m.assert_async().await;
+    probe.assert_async().await;
+    get.assert_async().await;
+    assert_eq!(stats.bytes_downloaded, 10);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"0123456789");
+    assert!(!HttpResumeState::sidecar_path(&out).exists());
+}
+
+/// A 206 to `If-Range: "v1"` that names another representation (or none:
+/// §15.3.7 requires `ETag` on a 206) cannot be combined with the partial
+/// (§15.3.7.3) — and the fresh download is the only exit, because an error
+/// here would send the orchestrator straight back into the same resume.
+/// Discard and restart; the file is then the fresh body.
+#[tokio::test]
+async fn resume_206_with_different_etag_restarts_instead_of_erroring() {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"0123", Some(("\"v1\"", Some(8)))).await;
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=4-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(206)
+        .with_header("content-range", "bytes 4-7/8")
+        .with_header("etag", "\"v2\"")
+        .with_body("4567")
+        .expect(1)
+        .create_async()
+        .await;
+    let (probe, get) = fresh_mocks(&mut server, b"ABCDEFGH").await;
+
+    let stats = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
+        .await
+        .unwrap();
+    m.assert_async().await;
+    probe.assert_async().await;
+    get.assert_async().await;
+    assert_eq!(stats.bytes_downloaded, 8);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"ABCDEFGH");
+    assert!(!HttpResumeState::sidecar_path(&out).exists());
+}
+
+#[tokio::test]
+async fn resume_206_without_etag_restarts_instead_of_erroring() {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"0123", Some(("\"v1\"", Some(8)))).await;
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=4-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(206)
+        .with_header("content-range", "bytes 4-7/8")
+        .with_body("4567")
+        .expect(1)
+        .create_async()
+        .await;
+    let (probe, get) = fresh_mocks(&mut server, b"ABCDEFGH").await;
+
+    let stats = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
+        .await
+        .unwrap();
+    m.assert_async().await;
+    probe.assert_async().await;
+    get.assert_async().await;
+    assert_eq!(stats.bytes_downloaded, 8);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"ABCDEFGH");
+    assert!(!HttpResumeState::sidecar_path(&out).exists());
+}
+
+/// §14.1.2 / §8.4: byte offsets are over the coded form, so a content-coded
+/// 206 can never be appended at the partial's offset. Rejected before any
+/// byte lands; the partial and its sidecar stay.
+#[tokio::test]
+async fn resume_rejects_content_coded_206_before_writing() {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"0123", Some(("\"v1\"", Some(8)))).await;
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=4-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(206)
+        .with_header("content-range", "bytes 4-7/8")
+        .with_header("content-encoding", "gzip")
+        .with_header("etag", "\"v1\"")
+        .with_body("4567")
+        .expect(1)
+        .create_async()
+        .await;
+
+    let err = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
+        .await
+        .unwrap_err();
+    m.assert_async().await;
+    assert!(err.to_string().contains("content-coded"), "{err}");
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"0123");
+    assert!(HttpResumeState::sidecar_path(&out).exists());
+}
+
+/// The sidecar outlives a failed or cancelled resume, so the next attempt can
+/// send its validator again; only success removes it.
+#[tokio::test]
+async fn resume_keeps_sidecar_on_failure_and_on_cancel() {
+    use mockito::Server;
+    use tokio_util::sync::CancellationToken;
+
+    // Failure: a 503 with no retries left.
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"0123", Some(("\"v1\"", Some(8)))).await;
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=4-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(503)
+        .with_body("unavailable")
+        .expect(1)
+        .create_async()
+        .await;
+    let err = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
+        .await
+        .unwrap_err();
+    m.assert_async().await;
+    assert!(
+        matches!(err, RdlpError::Http { status: 503, .. }),
+        "{err:?}"
+    );
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"0123");
+    assert!(HttpResumeState::sidecar_path(&out).exists());
+
+    // Cancel: a pre-cancelled token short-circuits before any request.
+    let (_dir, out, d) = resume_fixture(b"0123", Some(("\"v1\"", Some(8)))).await;
+    let token = CancellationToken::new();
+    token.cancel();
+    let err = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, Some(&token))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, RdlpError::Cancelled), "{err:?}");
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"0123");
+    assert!(HttpResumeState::sidecar_path(&out).exists());
+}
+
+/// The rewrite after a 200-to-`If-Range` must never leave v1's bytes under a
+/// sidecar naming v2: a later resume would append v2's tail to v1's prefix —
+/// the corruption #565 exists to prevent. Discarding the partial (and its
+/// v1 sidecar) comes FIRST, so a failure anywhere in the window leaves "no
+/// sidecar" or the old one, both of which restart. Forced here by making the
+/// partial unwritable so `File::create` fails.
+#[cfg(unix)]
+#[tokio::test]
+async fn resume_200_rewrite_failure_never_leaves_new_sidecar_over_old_bytes() {
+    use mockito::Server;
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut server = Server::new_async().await;
+    let (_dir, out, d) = resume_fixture(b"old-", Some(("\"v1\"", Some(8)))).await;
+    let _m = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=4-")
+        .match_header("if-range", "\"v1\"")
+        .with_status(200)
+        .with_header("etag", "\"v2\"")
+        .with_body("newnew")
+        .create_async()
+        .await;
+
+    tokio::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o444))
+        .await
+        .unwrap();
+    let result = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
+        .await;
+    tokio::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o644))
+        .await
+        .unwrap();
+
+    assert!(matches!(result, Err(RdlpError::Io(_))), "{result:?}");
+    assert_eq!(
+        tokio::fs::read(&out).await.unwrap(),
+        b"old-",
+        "the unwritable partial still holds v1's bytes"
+    );
+    let left = HttpResumeState::load(&out).await;
+    assert!(
+        left.as_ref().is_none_or(|s| s.validator != etag("\"v2\"")),
+        "v1's bytes must not sit under a sidecar naming v2: {left:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// `stream_body` — the one body loop; `StreamPolicy` is the only thing its
+// callers (file paths vs stdout) disagree on.
+// ---------------------------------------------------------------------------
+
+/// A writer that accepts `capacity` bytes and then reports `BrokenPipe`, as
+/// a consumer that closed its end of a pipe does.
+struct PipeWithCapacity {
+    accepted: Vec<u8>,
+    capacity: usize,
+}
+
+impl tokio::io::AsyncWrite for PipeWithCapacity {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let room = self.capacity - self.accepted.len();
+        if room == 0 {
+            return std::task::Poll::Ready(Err(std::io::ErrorKind::BrokenPipe.into()));
+        }
+        let n = buf.len().min(room);
+        self.accepted.extend_from_slice(&buf[..n]);
+        std::task::Poll::Ready(Ok(n))
+    }
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+/// Two body frames, `abc` then `def`, into a pipe that closes after three
+/// bytes: `StopOnBrokenPipe` (stdout) returns `Ok` with the bytes delivered
+/// before the break; `FailOnWriteError` (a file) surfaces the `Io` error.
+async fn stream_into_pipe(policy: StreamPolicy) -> (Result<u64>, Vec<u8>) {
+    use mockito::Server;
+    let mut server = Server::new_async().await;
+    let _m = server
+        .mock("GET", "/v")
+        .with_status(200)
+        .with_chunked_body(|w| {
+            w.write_all(b"abc")?;
+            // Keep the second frame off the wire until the first has been
+            // consumed, so the two arrive as distinct chunks.
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            w.write_all(b"def")
+        })
+        .create_async()
+        .await;
+    let d = chunk_test_downloader(0);
+    let response = rdlp_http::download_request(d.client(), &format!("{}/v", server.url()), None)
+        .send()
+        .await
+        .unwrap();
+    let mut pipe = PipeWithCapacity {
+        accepted: Vec::new(),
+        capacity: 3,
+    };
+    let result = d
+        .stream_body(
+            response,
+            BodySink {
+                writer: &mut pipe,
+                policy,
+                offset: 0,
+                transfer: None,
+            },
+            None,
+            None,
+        )
+        .await;
+    (result, pipe.accepted)
+}
+
+#[tokio::test]
+async fn stream_body_stop_on_broken_pipe_returns_bytes_before_the_break() {
+    let (result, accepted) = stream_into_pipe(StreamPolicy::StopOnBrokenPipe).await;
+    assert_eq!(accepted, b"abc");
+    assert!(matches!(result, Ok(3)), "{result:?}");
+}
+
+#[tokio::test]
+async fn stream_body_fail_on_write_error_surfaces_broken_pipe() {
+    let (result, accepted) = stream_into_pipe(StreamPolicy::FailOnWriteError).await;
+    assert_eq!(accepted, b"abc");
+    assert!(
+        matches!(&result, Err(RdlpError::Io(e)) if e.kind() == std::io::ErrorKind::BrokenPipe),
+        "{result:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// #565 final-review fixes: the plain GET's coding gate, and the 416 re-probe
+// under a `Last-Modified` validator.
+// ---------------------------------------------------------------------------
+
+/// The plain sequential GET has no `Range`, so `range_verdict` never sees it —
+/// yet RFC 9110 §12.5.3 makes honouring `Accept-Encoding: identity` only a
+/// SHOULD. A server that answers the pin with `Content-Encoding: gzip` must be
+/// refused before a byte lands or a sidecar names the coded length; otherwise
+/// the final file is gzip bytes and a later resume computes offsets over them
+/// (§14.1.2).
+#[tokio::test]
+async fn sequential_get_rejects_content_coded_200_before_writing() {
+    use mockito::{Matcher, Server};
+    let mut server = Server::new_async().await;
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("v.mp4");
+    let m = server
+        .mock("GET", "/v")
+        .match_header("range", Matcher::Missing)
+        .match_header("accept-encoding", "identity")
+        .with_status(200)
+        .with_header("content-encoding", "gzip")
+        .with_header("etag", "\"v1\"")
+        .with_body("not really gzip")
+        .expect(1)
+        .create_async()
+        .await;
+
+    let d = chunk_test_downloader(0);
+    let err = d
+        .download_sequential(
+            &format!("{}/v", server.url()),
+            &out,
+            None,
+            None,
+            &AtomicU64::new(0),
+        )
+        .await
+        .unwrap_err();
+    m.assert_async().await;
+    assert!(
+        matches!(&err, RdlpError::Download { message, .. } if message.contains("content-coded")),
+        "{err:?}"
+    );
+    assert!(
+        !out.exists() || tokio::fs::metadata(&out).await.unwrap().len() == 0,
+        "no coded byte may reach the output file"
+    );
+    assert!(
+        !HttpResumeState::sidecar_path(&out).exists(),
+        "no sidecar may describe a body that was refused"
+    );
+}
+
+/// §15.3.7: a 206 to an `If-Range` request SHOULD NOT repeat `Last-Modified`,
+/// so the re-probe after a 416-without-`Content-Range` must apply the same
+/// lenient rule `verify_partial` does for a `Last-Modified` sidecar — an
+/// absent `Last-Modified` on the probe's 206 confirms the partial rather than
+/// forcing a restart.
+#[tokio::test]
+async fn resume_416_without_content_range_probe_confirms_last_modified_partial() {
+    use mockito::Server;
+    const LAST_MODIFIED: &str = "Sun, 06 Nov 1994 08:49:37 GMT";
+    let lm = StrongValidator::LastModified(
+        rdlp_http::validator::ImfFixdate::parse(LAST_MODIFIED).unwrap(),
+    );
+
+    let mut server = Server::new_async().await;
+    let dir = tempfile::TempDir::new().unwrap();
+    let out = dir.path().join("v.mp4");
+    tokio::fs::write(&out, b"done").await.unwrap();
+    HttpResumeState::new(lm, None).save(&out).await.unwrap();
+    let d = chunk_test_downloader(0).with_parallel_threshold(u64::MAX);
+
+    let m416 = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=4-")
+        .match_header("if-range", LAST_MODIFIED)
+        .with_status(416)
+        .expect(1)
+        .create_async()
+        .await;
+    let probe = server
+        .mock("GET", "/v")
+        .match_header("range", "bytes=0-262143")
+        .match_header("if-range", LAST_MODIFIED)
+        .with_status(206)
+        .with_header("content-range", "bytes 0-0/4")
+        .with_body("d")
+        .expect(1)
+        .create_async()
+        .await;
+
+    let stats = d
+        .download_with_resume(&format!("{}/v", server.url()), &out, 4, None, None)
+        .await
+        .unwrap();
+    m416.assert_async().await;
+    probe.assert_async().await;
+    assert_eq!(stats.bytes_downloaded, 4);
+    assert_eq!(tokio::fs::read(&out).await.unwrap(), b"done");
+    assert!(!HttpResumeState::sidecar_path(&out).exists());
 }

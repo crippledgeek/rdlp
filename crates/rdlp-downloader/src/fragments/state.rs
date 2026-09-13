@@ -4,7 +4,7 @@
 //! `<output>.hls_state.json`, matched on schema version + a path-only
 //! fingerprint so CDN host/token rotation does not break resume. Load/save
 //! are async (`tokio::fs`) because the workspace bans blocking `std::fs` in
-//! async contexts; the file is tiny.
+//! async contexts; the load is bounded by `atomic::MAX_SIDECAR_BYTES`.
 
 use std::path::Path;
 

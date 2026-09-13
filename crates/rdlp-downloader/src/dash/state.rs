@@ -4,7 +4,8 @@
 //! URL match is path-only — CDN host swaps don't break resume.
 //!
 //! Load/save are async (`tokio::fs`) because the workspace clippy config
-//! bans blocking `std::fs` in async contexts. The file is tiny.
+//! bans blocking `std::fs` in async contexts. The load is bounded by
+//! `atomic::MAX_SIDECAR_BYTES`, shared by every resume sidecar.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
@@ -74,8 +75,8 @@ impl DashDownloadState {
     }
 
     /// Load state if present and matching the requested MPD URL (path-only).
-    /// Returns `None` for: missing file, parse failure, version mismatch,
-    /// path mismatch, or repr-id mismatch.
+    /// Returns `None` for: missing file, parse failure, an over-bound file,
+    /// version mismatch, path mismatch, or repr-id mismatch.
     #[must_use]
     pub async fn load_matching(
         path: &Path,

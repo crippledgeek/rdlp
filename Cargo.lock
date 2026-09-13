@@ -6528,12 +6528,15 @@ name = "rdlp-http"
 version = "0.1.0"
 dependencies = [
  "bytes",
+ "chrono",
  "futures-util",
+ "hex",
  "mockito",
  "openssl-sys",
  "rdlp-redact",
  "rdlp-security",
  "rdlp-types",
+ "serde",
  "serde_json",
  "thiserror 2.0.18",
  "tokio",

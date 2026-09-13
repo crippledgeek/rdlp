@@ -2,11 +2,11 @@
 //!
 //! Provides parallel download using multiple range requests with fine-grained chunking.
 
-use super::HttpDownloader;
 use super::chunk_ledger::ChunkLedger;
 use super::chunk_manifest::{ChunkManifest, ChunkManifestTracker};
 use super::chunk_name::{ChunkKind, ChunkSet};
 use super::config::DownloaderConfig;
+use super::{HttpDownloader, Source};
 use crate::adaptive::{AdaptiveConfig, AdaptiveController, ChunkRequest, ControllerMode};
 use crate::chunking::{ChunkSizeStrategy, calculate_chunks};
 use crate::progress::{ProgressMetrics, ProgressReporterConfig, spawn_progress_reporter};
@@ -79,7 +79,7 @@ pub async fn download_chunk_with_retry(
     cancel: Option<&CancellationToken>,
 ) -> Result<u64> {
     let ChunkRequestSpec {
-        url,
+        source,
         start,
         end,
         chunk_path,
@@ -106,7 +106,7 @@ pub async fn download_chunk_with_retry(
             let attempt = downloader
                 .download_range_with_progress(
                     ChunkRequestSpec {
-                        url,
+                        source,
                         start,
                         end,
                         chunk_path,
@@ -136,8 +136,8 @@ pub async fn download_chunk_with_retry(
     outcome
 }
 
-/// Which bytes of which URL a chunk download covers, where they land, and
-/// the attempt-wide counters the transfer reports into.
+/// Which bytes of which representation a chunk download covers, where they
+/// land, and the attempt-wide counters the transfer reports into.
 ///
 /// These six values travel together through the AIMD unfold closure and the
 /// retry loop. Grouping them takes [`download_chunk_with_retry`] from eight
@@ -145,7 +145,8 @@ pub async fn download_chunk_with_retry(
 /// offsets and a `u64` id from sitting in a row where only their order
 /// distinguishes them.
 pub struct ChunkRequestSpec<'a> {
-    pub url: &'a str,
+    /// The URL and the validator every ranged request carries (#565).
+    pub source: &'a Source,
     /// First byte of the range, inclusive.
     pub start: u64,
     /// Last byte of the range, inclusive.
@@ -246,7 +247,7 @@ static DOWNLOAD_ID_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// expected size to verify against, or a size with nothing to check it
 /// against are each an incomplete description of the same download.
 pub(super) struct DownloadTarget<'a> {
-    pub(super) url: &'a str,
+    pub(super) source: &'a Source,
     pub(super) path: &'a Path,
     pub(super) total_size: u64,
 }
@@ -257,7 +258,7 @@ pub(super) struct DownloadTarget<'a> {
 /// `resume_from` — none of the four means "resume this transfer" without
 /// the other three.
 pub(super) struct ResumeTarget<'a> {
-    pub(super) url: &'a str,
+    pub(super) source: &'a Source,
     pub(super) path: &'a Path,
     pub(super) resume_from: u64,
     pub(super) total_size: u64,
@@ -276,7 +277,7 @@ impl HttpDownloader {
         retries: Arc<AtomicU64>,
     ) -> Result<DownloadStats> {
         let DownloadTarget {
-            url,
+            source,
             path,
             total_size,
         } = target;
@@ -289,7 +290,7 @@ impl HttpDownloader {
             ChunkSet::for_attempt(path, download_id, attempt.chunk_kind()).map_err(|e| {
                 RdlpError::Download {
                     message: format!("{e:#}"),
-                    url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
+                    url: Some(rdlp_redact::RedactedUrlBuf::from(source.url.as_str())),
                 }
             })?;
 
@@ -305,7 +306,7 @@ impl HttpDownloader {
         );
 
         let span = TransferSpan {
-            url,
+            source,
             offset: attempt.byte_offset(),
             len: total_size,
         };
@@ -341,7 +342,7 @@ impl HttpDownloader {
 
         // Backstop (#526): the assembly must match the advertised length before
         // this file is handed back as a completed download.
-        verify_output_size(path, total_size, url).await?;
+        verify_output_size(path, total_size, &source.url).await?;
 
         // The merge above succeeded, so the manifest's job for this attempt
         // is done — leaving it behind would let a future scan trust stale
@@ -378,7 +379,7 @@ impl HttpDownloader {
         retries: Arc<AtomicU64>,
     ) -> Result<DownloadStats> {
         let ResumeTarget {
-            url,
+            source,
             path,
             resume_from,
             total_size,
@@ -393,7 +394,7 @@ impl HttpDownloader {
             ChunkSet::for_attempt(path, download_id, attempt.chunk_kind()).map_err(|e| {
                 RdlpError::Download {
                     message: format!("{e:#}"),
-                    url: Some(rdlp_redact::RedactedUrlBuf::from(url)),
+                    url: Some(rdlp_redact::RedactedUrlBuf::from(source.url.as_str())),
                 }
             })?;
 
@@ -417,7 +418,7 @@ impl HttpDownloader {
         );
 
         let span = TransferSpan {
-            url,
+            source,
             offset: attempt.byte_offset(),
             len: remaining_size,
         };
@@ -462,7 +463,7 @@ impl HttpDownloader {
         // that disagreed with the file's real length: the appended bytes land
         // at EOF regardless of the offset the ranges were requested from, so a
         // mismatch shows up here as a wrong final size.
-        verify_output_size(path, total_size, url).await?;
+        verify_output_size(path, total_size, &source.url).await?;
 
         tracking.manifest.delete().await;
 
@@ -527,7 +528,7 @@ impl HttpDownloader {
             tracking,
         } = run;
         let TransferSpan {
-            url,
+            source,
             offset: byte_offset,
             len: size_to_download,
         } = span;
@@ -538,7 +539,7 @@ impl HttpDownloader {
         let controller = self.build_controller(size_to_download, log_callback);
         let sem = controller.semaphore().clone();
 
-        let url_shared: Arc<str> = Arc::from(url);
+        let source_shared = Arc::new(source.clone());
 
         // Generate tasks lazily using stream::unfold driven by controller.next_chunk().
         // buffer_unordered with a generous buffer lets the semaphore control actual concurrency.
@@ -558,7 +559,7 @@ impl HttpDownloader {
 
         let buffered = {
             let downloader = self.clone();
-            let url_arc = url_shared.clone();
+            let source_arc = source_shared.clone();
             let temp_dir_owned = temp_dir.to_path_buf();
             let chunk_set_owned = chunk_set.clone();
             // Clone once outside the closure; each iteration re-clones from this.
@@ -572,7 +573,7 @@ impl HttpDownloader {
             stream::try_unfold((controller.clone(), 0u64), move |(ctrl, chunk_id)| {
                 let sem = sem.clone();
                 let downloader = downloader.clone();
-                let url = url_arc.clone();
+                let source = source_arc.clone();
                 let chunk_path = chunk_set_owned.path_in(&temp_dir_owned, chunk_id);
                 // Registered BEFORE this chunk's download starts (the future
                 // below hasn't been polled yet), so a chunk that fails
@@ -606,7 +607,7 @@ impl HttpDownloader {
 
                     let job = AdaptiveChunkJob {
                         downloader,
-                        url,
+                        source,
                         chunk_id,
                         chunk_path,
                         byte_offset,
@@ -647,7 +648,7 @@ impl HttpDownloader {
             tracking,
         } = run;
         let TransferSpan {
-            url,
+            source,
             offset: byte_offset,
             len: size_to_download,
         } = span;
@@ -666,7 +667,7 @@ impl HttpDownloader {
             "Static chunk analysis"
         );
 
-        let url_shared: Arc<str> = Arc::from(url);
+        let source_shared = Arc::new(source.clone());
         let temp_dir_owned = temp_dir.to_path_buf();
 
         let results: Vec<(usize, PathBuf, u64)> = match stream::iter(0..plan.total_chunks)
@@ -679,7 +680,7 @@ impl HttpDownloader {
                 // front here since the chunk ids are all known in advance.
                 tracking.ledger.register(chunk_path.clone());
                 let downloader = self.clone();
-                let url = Arc::clone(&url_shared);
+                let source = Arc::clone(&source_shared);
                 let tallies = tracking.tallies.clone();
                 let manifest = tracking.manifest.clone();
 
@@ -687,7 +688,7 @@ impl HttpDownloader {
                     let result = download_chunk_with_retry(
                         &downloader,
                         ChunkRequestSpec {
-                            url: &url,
+                            source: &source,
                             start,
                             end,
                             chunk_path: &chunk_path,
@@ -722,14 +723,15 @@ impl HttpDownloader {
 }
 
 /// The span of bytes being transferred in one download attempt: the
-/// resource URL, the byte offset every chunk's range is shifted by (0 for a
-/// fresh download, `resume_from` for a resume), and the length of THIS
+/// resource (URL plus the validator its ranges are checked against, #565),
+/// the byte offset every chunk's range is shifted by (0 for a fresh
+/// download, `resume_from` for a resume), and the length of THIS
 /// attempt's transfer (the full size for fresh, the remaining size for
 /// resume). The three travel together — every chunk-planning call in both
 /// `download_parallel_adaptive` and `download_parallel_static` needs all
 /// three to compute a single chunk's absolute range.
 struct TransferSpan<'a> {
-    url: &'a str,
+    source: &'a Source,
     offset: u64,
     len: u64,
 }
@@ -826,7 +828,7 @@ fn build_manifest_tracker(
 /// positional list.
 struct AdaptiveChunkJob {
     downloader: HttpDownloader,
-    url: Arc<str>,
+    source: Arc<Source>,
     chunk_id: u64,
     chunk_path: PathBuf,
     byte_offset: u64,
@@ -848,7 +850,7 @@ struct AdaptiveChunkJob {
 async fn run_adaptive_chunk(job: AdaptiveChunkJob) -> Result<(u64, PathBuf, u64)> {
     let AdaptiveChunkJob {
         downloader,
-        url,
+        source,
         chunk_id,
         chunk_path,
         byte_offset,
@@ -868,7 +870,7 @@ async fn run_adaptive_chunk(job: AdaptiveChunkJob) -> Result<(u64, PathBuf, u64)
             () = token.cancelled() => return Err(RdlpError::Cancelled),
             p = semaphore.acquire_owned() => p.map_err(|_| RdlpError::Download {
                 message: "Semaphore closed".to_string(),
-                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(source.url.as_str())),
             })?,
         }
     } else {
@@ -877,7 +879,7 @@ async fn run_adaptive_chunk(job: AdaptiveChunkJob) -> Result<(u64, PathBuf, u64)
             .await
             .map_err(|_| RdlpError::Download {
                 message: "Semaphore closed".to_string(),
-                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(source.url.as_str())),
             })?
     };
 
@@ -889,7 +891,7 @@ async fn run_adaptive_chunk(job: AdaptiveChunkJob) -> Result<(u64, PathBuf, u64)
     let result = download_chunk_with_retry(
         &downloader,
         ChunkRequestSpec {
-            url: &url,
+            source: &source,
             start: abs_start,
             end: abs_end,
             chunk_path: &chunk_path,
@@ -1020,9 +1022,11 @@ impl StaticChunkPlan {
 /// writes that output — a dropped, duplicated, or misordered parallel chunk;
 /// a write that silently short-completes — leaves the upstream checks
 /// satisfied but the output wrong, and only shows up here. Called from three
-/// sites: the parallel chunk merge, the sequential-resume append, and the
-/// sequential fresh download — "output" is deliberately the general term,
-/// not "merged" or "assembled", since two of the three never merge anything.
+/// sites: `download_parallel` and `download_parallel_resume` after their
+/// chunk merge, and `stream_to_file` for every file-bound body it writes
+/// (the sequential fresh download, the resume append and the resume's
+/// 200-rewrite) — "output" is deliberately the general term, not "merged"
+/// or "assembled", since the third site never merges anything.
 ///
 /// A size match is not a proof of correctness (#526 produced a full-length file
 /// with displaced interior bytes), so this complements the upstream checks
@@ -1404,8 +1408,9 @@ mod tests {
             });
         let download_id = DOWNLOAD_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
         let chunk_set = ChunkSet::for_attempt("video.mp4", download_id, ChunkKind::Fresh).unwrap();
+        let source = Source::new(&url, None);
         let span = TransferSpan {
-            url: &url,
+            source: &source,
             offset: Attempt::Fresh.byte_offset(),
             len: total_size,
         };
@@ -1461,8 +1466,9 @@ mod tests {
             .with_adaptive(true);
         let download_id = DOWNLOAD_ID_COUNTER.fetch_add(1, Ordering::Relaxed);
         let chunk_set = ChunkSet::for_attempt("video.mp4", download_id, ChunkKind::Fresh).unwrap();
+        let source = Source::new(&url, None);
         let span = TransferSpan {
-            url: &url,
+            source: &source,
             offset: Attempt::Fresh.byte_offset(),
             len: total_size,
         };

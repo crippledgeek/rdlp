@@ -1674,6 +1674,58 @@ mod cqs_resume_split_tests {
         );
     }
 
+    /// #565: a `.rdlp-part` found already complete is finalized by the
+    /// orchestrator without the downloader running again, so the plain-HTTP
+    /// resume sidecar the downloader would have removed on its own success
+    /// must be removed here — through the sidecar owner's API — or it
+    /// outlives the file it described. A partial's sidecar, by contrast,
+    /// is exactly what the next resume needs and stays.
+    #[tokio::test]
+    async fn resolve_resume_complete_removes_the_http_resume_sidecar() {
+        use rdlp_downloader::http::HttpResumeState;
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let orchestrator = create_test_orchestrator();
+
+        let complete_path = temp_dir.path().join("complete.mp4");
+        tokio::fs::write(&complete_path, vec![1u8; 100])
+            .await
+            .unwrap();
+        let complete_sidecar = HttpResumeState::sidecar_path(&complete_path);
+        tokio::fs::write(&complete_sidecar, b"{}").await.unwrap();
+
+        let partial_path = temp_dir.path().join("partial.mp4");
+        tokio::fs::write(&partial_path, vec![1u8; 50])
+            .await
+            .unwrap();
+        let partial_sidecar = HttpResumeState::sidecar_path(&partial_path);
+        tokio::fs::write(&partial_sidecar, b"{}").await.unwrap();
+
+        assert_eq!(
+            orchestrator
+                .resolve_resume(&complete_path, Some(100))
+                .await
+                .unwrap(),
+            ResumeOutcome::Complete { size: 100 }
+        );
+        assert!(
+            !complete_sidecar.exists(),
+            "a Complete outcome must remove the sidecar the finalized file leaves behind"
+        );
+
+        assert_eq!(
+            orchestrator
+                .resolve_resume(&partial_path, Some(100))
+                .await
+                .unwrap(),
+            ResumeOutcome::Resume(50)
+        );
+        assert!(
+            partial_sidecar.exists(),
+            "a Resume outcome must leave the sidecar the next attempt sends as If-Range"
+        );
+    }
+
     /// #561 spec-review MEDIUM: a chunk set whose merged total equals
     /// `expected_size` must finalize as `Complete`, not `Resume(expected)`
     /// (which would ask the downloader to resume from EOF and never call

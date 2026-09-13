@@ -3,6 +3,7 @@
 use super::{Orchestrator, errors::Result};
 use anyhow::Context;
 use log::{debug, warn};
+use rdlp_downloader::http::HttpResumeState;
 use rdlp_downloader::{ChunkKind, ChunkManifest, ChunkSet, intact_len};
 use std::path::{Path, PathBuf};
 use tracing::instrument;
@@ -813,9 +814,19 @@ impl ResumeOutcome {
 /// the first cut of this split returned `Resume(size)` unconditionally after
 /// a merge, so a chunk set whose recorded total equaled `expected_size` was
 /// asked to resume from EOF instead of finalizing).
-const fn outcome_for_size(size: u64, expected_size: Option<u64>) -> ResumeOutcome {
+///
+/// A `Complete` outcome is finalized by the caller without the downloader
+/// ever running again, so the one artifact the downloader would have removed
+/// on its own success — the plain-HTTP resume sidecar (`<part>.http_state.json`,
+/// #565) — is removed here, once, for both callers. A stale sidecar beside
+/// the finalized file would otherwise describe bytes that no longer exist at
+/// that name.
+async fn outcome_for_size(size: u64, expected_size: Option<u64>, part: &Path) -> ResumeOutcome {
     match expected_size {
-        Some(expected) if size == expected => ResumeOutcome::Complete { size },
+        Some(expected) if size == expected => {
+            HttpResumeState::remove(part).await;
+            ResumeOutcome::Complete { size }
+        }
         _ => ResumeOutcome::Resume(size),
     }
 }
@@ -923,7 +934,7 @@ impl Orchestrator {
                 // Discover (log-only) any legacy chunks left next to the
                 // already-complete file (#573).
                 log_legacy_chunks(output_path).await;
-                Ok(outcome_for_size(size, expected_size))
+                Ok(outcome_for_size(size, expected_size, output_path).await)
             }
             ResumePlan::Resume(size) => {
                 #[allow(clippy::cast_precision_loss)] // display-only MB value
@@ -931,7 +942,7 @@ impl Orchestrator {
                 debug!("Found partial download ({size_mb:.1} MB), resuming...");
                 // Discover (log-only) any legacy chunks from failed parallel attempts
                 log_legacy_chunks(output_path).await;
-                Ok(outcome_for_size(size, expected_size))
+                Ok(outcome_for_size(size, expected_size, output_path).await)
             }
             ResumePlan::LargerThanReported { size, expected } => {
                 set_aside_oversized(output_path, size, expected).await?;
@@ -976,7 +987,7 @@ impl Orchestrator {
                         // expected_size is complete, not "resume from EOF" —
                         // route through the same decision `AlreadyComplete`
                         // uses so the two paths can't drift.
-                        Ok(outcome_for_size(size, expected_size))
+                        Ok(outcome_for_size(size, expected_size, output_path).await)
                     }
                     Err(e) => {
                         // The one deletion in this arm, and the one with an

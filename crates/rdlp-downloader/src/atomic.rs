@@ -1,6 +1,22 @@
 //! Shared sidecar-save utilities: an atomic JSON writer, a monotonic-ish
-//! wall-clock helper, and a consecutive-save-failure tracker. Used by both the
-//! HLS (`fragments`) and DASH (`dash`) resume-state modules.
+//! wall-clock helper, a consecutive-save-failure tracker, and the one bounded
+//! sidecar reader ([`read_json_sidecar`]). Used by the three resume-state
+//! sidecars below, each written through [`atomic_write_json`], and by the
+//! chunk-completion manifest (`http::chunk_manifest::ChunkManifest`, #675),
+//! which shares the writer and the reader but keys on `download_id` +
+//! `ChunkKind` rather than on a resume identity:
+//!
+//! - `fragments::state::HlsResumeState` (`<output>.hls_state.json`) —
+//!   matches on schema version plus a path-only FNV-1a-64 fingerprint over
+//!   the ordered fragment list, folded with the fragment count.
+//! - `dash::state::DashDownloadState` (`<output>.dash_state.json`) —
+//!   matches on schema version plus the MPD URL's path and the chosen
+//!   video/audio representation ids.
+//! - `http::state::HttpResumeState` (`<output>.http_state.json`) — matches
+//!   on schema version only; the sidecar *carries* the strong validator
+//!   rather than matching against one, and the caller checks it against the
+//!   server's response (`If-Range`, RFC 9110 §13.1.5) instead of the sidecar
+//!   checking it against the request.
 
 use std::path::Path;
 use std::time::SystemTime;
@@ -8,6 +24,7 @@ use std::time::SystemTime;
 use log::warn;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
+use tokio::io::AsyncReadExt;
 
 /// Atomically write `value` as JSON to `path` (write-temp-in-same-dir + rename).
 /// A kill mid-write leaves the previous file intact — never a torn file.
@@ -48,42 +65,56 @@ pub async fn atomic_write_json<T: Serialize + Send + 'static>(
 }
 
 /// Maximum size, in bytes, of any JSON sidecar [`read_json_sidecar`] will
-/// read. A bound on the RESOURCE the read touches (memory for
-/// `read_to_string`, parse time), not on any semantic property of the
-/// content — deliberately not tied to a chunk count or id value (see the
-/// history in `rdlp-api`'s `collect_contiguous_chunks` for why an id-shaped
-/// bound was wrong). The largest legitimate sidecar in this codebase is the
-/// chunk-completion manifest (#675), whose `completed` map serializes at
-/// roughly 25-30 bytes per entry (`"<digits>":<digits>,`); even an extreme
-/// but entirely legitimate ~24 GiB adaptive download (100,000 chunks at the
-/// 256 KiB AIMD floor) produces a manifest of a few MB. This cap leaves
-/// several times that as headroom before refusing to
-/// read a sidecar at all.
+/// read. A bound on the RESOURCE the read touches (memory for the body,
+/// parse time), not on any semantic property of the content — deliberately
+/// not tied to a chunk count or id value (see the history in `rdlp-api`'s
+/// `collect_contiguous_chunks` for why an id-shaped bound was wrong). The
+/// largest legitimate sidecar in this codebase is the chunk-completion
+/// manifest (#675), whose `completed` map serializes at roughly 25-30 bytes
+/// per entry (`"<digits>":<digits>,`); even an extreme but entirely
+/// legitimate ~24 GiB adaptive download (100,000 chunks at the 256 KiB AIMD
+/// floor) produces a manifest of a few MB. The next largest is DASH's
+/// `completed_segments` (a 24-hour file at 1-second segments, two
+/// representations, is about 1 MiB). This cap leaves several times that as
+/// headroom before refusing to read a sidecar at all, while still bounding
+/// what a corrupt, truncated-and-regrown, or hostile file can pull into
+/// memory: a sidecar is trusted state read before any download begins, and
+/// reading it must never itself be the thing that exhausts memory.
 pub(crate) const MAX_SIDECAR_BYTES: u64 = 16 * 1024 * 1024; // 16 MiB
 
-/// Read and parse a JSON sidecar at `path`, or `None` for any reason it
-/// can't be trusted at the byte level: missing file, unreadable, or
-/// malformed JSON. Returns the raw deserialized value with NO identity or
-/// version check — every sidecar (HLS `HlsResumeState`, DASH
-/// `DashDownloadState`, and the chunk-completion `ChunkManifest`, #675) has
-/// its own notion of "matches what the caller expects" (a fingerprint, an
-/// MPD path + representation ids, a `download_id` + `ChunkKind`), so that
-/// gate stays in each type's own `load`/`load_matching`, which calls this
-/// for the read-and-parse mechanics they'd otherwise all duplicate.
+/// Read and parse a JSON sidecar of at most [`MAX_SIDECAR_BYTES`] at `path`,
+/// or `None` for any reason it can't be trusted at the byte level: missing
+/// file, unreadable, malformed JSON, or over the bound. Returns the raw
+/// deserialized value with NO identity or version check — every sidecar
+/// (HLS `HlsResumeState`, DASH `DashDownloadState`, HTTP `HttpResumeState`,
+/// and the chunk-completion `ChunkManifest`, #675) has its own notion of
+/// "matches what the caller expects" (a fingerprint, an MPD path +
+/// representation ids, a schema version, a `download_id` + `ChunkKind`), so
+/// that gate stays in each type's own `load`/`load_matching`, which calls
+/// this for the read-and-parse mechanics they'd otherwise all duplicate.
+///
+/// The bound is enforced on the read itself (`take`), not on a size checked
+/// beforehand, so a file that grows between the two cannot slip past it.
 pub(crate) async fn read_json_sidecar<T: DeserializeOwned>(path: &Path) -> Option<T> {
-    let len = tokio::fs::metadata(path).await.ok()?.len();
-    if len > MAX_SIDECAR_BYTES {
+    let file = tokio::fs::File::open(path).await.ok()?;
+    let mut body = Vec::new();
+    // One byte past the bound is read so an over-long file is detected as
+    // such rather than parsed as a truncation of itself.
+    file.take(MAX_SIDECAR_BYTES.saturating_add(1))
+        .read_to_end(&mut body)
+        .await
+        .ok()?;
+    if body.len() as u64 > MAX_SIDECAR_BYTES {
         warn!(
-            len,
+            len = body.len(),
             max = MAX_SIDECAR_BYTES;
-            "Refusing to read oversized sidecar {}: {len} bytes exceeds the {MAX_SIDECAR_BYTES} \
-             byte cap",
+            "Refusing to read oversized sidecar {}: exceeds the {MAX_SIDECAR_BYTES} byte cap; \
+             starting over",
             path.display()
         );
         return None;
     }
-    let body = tokio::fs::read_to_string(path).await.ok()?;
-    serde_json::from_str(&body).ok()
+    serde_json::from_slice(&body).ok()
 }
 
 /// Whether an on-disk artifact whose length was recorded at write time is
@@ -194,53 +225,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn read_json_sidecar_accepts_a_file_exactly_at_the_cap() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("state.json");
-        // Pad the JSON body with whitespace (valid, ignored by serde) up to
-        // exactly `MAX_SIDECAR_BYTES` so the boundary is pinned precisely,
-        // not merely "some file under the cap".
-        let value = serde_json::to_vec(&Sample {
-            a: 1,
-            b: String::new(),
-        })
-        .unwrap();
-        let padding = usize::try_from(MAX_SIDECAR_BYTES).unwrap() - value.len();
-        let mut body = vec![b' '; padding];
-        body.extend_from_slice(&value);
-        tokio::fs::write(&path, &body).await.expect("write");
-        assert_eq!(
-            tokio::fs::metadata(&path).await.unwrap().len(),
-            MAX_SIDECAR_BYTES
-        );
-
-        let loaded: Option<Sample> = read_json_sidecar(&path).await;
-        assert!(loaded.is_some(), "a file exactly at the cap must be read");
-    }
-
-    #[tokio::test]
-    async fn read_json_sidecar_rejects_a_file_one_byte_over_the_cap() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("state.json");
-        let value = serde_json::to_vec(&Sample {
-            a: 1,
-            b: String::new(),
-        })
-        .unwrap();
-        let padding = usize::try_from(MAX_SIDECAR_BYTES).unwrap() - value.len() + 1;
-        let mut body = vec![b' '; padding];
-        body.extend_from_slice(&value);
-        tokio::fs::write(&path, &body).await.expect("write");
-        assert_eq!(
-            tokio::fs::metadata(&path).await.unwrap().len(),
-            MAX_SIDECAR_BYTES + 1
-        );
-
-        let loaded: Option<Sample> = read_json_sidecar(&path).await;
-        assert!(loaded.is_none(), "one byte over the cap must be refused");
-    }
-
-    #[tokio::test]
     async fn writes_roundtrippable_json() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("state.json");
@@ -300,6 +284,56 @@ mod tests {
     #[test]
     fn intact_len_rejects_zero_on_disk_against_nonzero_recorded() {
         assert_eq!(intact_len(0, 512), None);
+    }
+
+    /// `Sample` JSON padded with trailing whitespace to exactly `len` bytes;
+    /// JSON permits the padding, so only the size bound can reject it.
+    fn padded_sample(len: u64) -> Vec<u8> {
+        let mut body = serde_json::to_vec(&Sample {
+            a: 1,
+            b: "x".into(),
+        })
+        .expect("serialize");
+        let len = usize::try_from(len).expect("fits usize");
+        assert!(body.len() <= len);
+        body.resize(len, b' ');
+        body
+    }
+
+    /// The bound is inclusive: a sidecar of exactly `MAX_SIDECAR_BYTES` is
+    /// read, one byte more is not. Both sides are pinned so a `>=`-for-`>`
+    /// slip cannot pass.
+    #[tokio::test]
+    async fn read_json_sidecar_accepts_at_the_bound_and_rejects_one_past_it() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let at = dir.path().join("at.json");
+        let past = dir.path().join("past.json");
+        tokio::fs::write(&at, padded_sample(MAX_SIDECAR_BYTES))
+            .await
+            .expect("write");
+        tokio::fs::write(&past, padded_sample(MAX_SIDECAR_BYTES + 1))
+            .await
+            .expect("write");
+        assert_eq!(
+            read_json_sidecar::<Sample>(&at).await,
+            Some(Sample {
+                a: 1,
+                b: "x".into()
+            })
+        );
+        assert_eq!(read_json_sidecar::<Sample>(&past).await, None);
+    }
+
+    #[tokio::test]
+    async fn read_json_sidecar_is_none_for_missing_or_unparsable() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let missing = dir.path().join("nope.json");
+        assert_eq!(read_json_sidecar::<Sample>(&missing).await, None);
+        let garbage = dir.path().join("garbage.json");
+        tokio::fs::write(&garbage, b"{not json")
+            .await
+            .expect("write");
+        assert_eq!(read_json_sidecar::<Sample>(&garbage).await, None);
     }
 
     #[cfg_attr(miri, ignore)]

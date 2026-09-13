@@ -1,21 +1,31 @@
 //! HTTP/HTTPS downloader implementation
 //!
-//! Provides HTTP downloading with parallel chunk support, resume capability,
-//! and automatic retry logic using the backon crate.
+//! Provides HTTP downloading with parallel chunk support, validator-checked
+//! resume (`If-Range`, RFC 9110 §13.1.5 — see the `state` submodule), and
+//! automatic retry logic using the backon crate.
 
 mod chunk_ledger;
 pub(crate) mod chunk_manifest;
 pub(crate) mod chunk_name;
 mod config;
 mod parallel;
+mod state;
 mod trait_impl;
+mod verdict;
 
 #[cfg(test)]
 mod tests;
 
 #[cfg(test)]
 pub(crate) use parallel::{ChunkRequestSpec, download_chunk_with_retry, verify_output_size};
+pub use state::HttpResumeState;
+pub(crate) use state::Source;
+pub(crate) use verdict::{
+    RangeVerdict, RangedRequestMeta, admit_for_verdict, admit_partial_span, bounded_len,
+    range_verdict, reject_content_coding,
+};
 
+use log::debug;
 use rdlp_core::{
     DownloadProgress, DownloadStats, ProgressCallback, RdlpError, Result, RetryConfig,
     check_http_response,
@@ -32,6 +42,7 @@ use crate::chunking::ChunkSizeStrategy;
 use crate::progress::SpeedMeter;
 use crate::retry::{RetryPolicy, with_retry};
 use config::{DownloaderConfig, PROGRESS_UPDATE_INTERVAL};
+use rdlp_http::{RangedRequest, StrongValidator};
 use rdlp_ratelimit::RateLimiter;
 
 /// Map a `rdlp_http::BodyCapError` into the `RdlpError` shape for a capped
@@ -83,6 +94,20 @@ fn to_header_map(headers: Option<&HashMap<String, String>>) -> HeaderMap {
 /// truth for probe-result shape, used by both `HttpDownloader::probe` and
 /// `BaseExtractor::detect_file_size`. Closes #306.
 pub(crate) use rdlp_http::ProbeResult;
+
+/// The one `Content-Range` grammar (RFC 9110 §14.4), shared with the probe.
+pub(crate) use rdlp_http::ContentRange;
+
+/// The representation's total length implied by a body of `remaining` bytes
+/// arriving at `offset`: `None` when the length is unknown, or when the sum
+/// would not fit — a server-supplied `Content-Length` is untrusted input, and
+/// an overflowed total must read as "unknown", never as a small number.
+pub(crate) const fn total_from_remaining(remaining: Option<u64>, offset: u64) -> Option<u64> {
+    match remaining {
+        Some(rest) => rest.checked_add(offset),
+        None => None,
+    }
+}
 
 /// Multiple of the idle timeout used as a whole-request backstop.
 ///
@@ -159,326 +184,16 @@ pub(crate) fn same_origin_headers(
     }
 }
 
-/// HTTP status a single-part ranged response must carry (RFC 9110 §15.3.7).
-///
-/// A `200` means the server ignored `Range` — permitted by §14.2 — and the
-/// content is the WHOLE representation, not the requested span. Writing such a
-/// body at a position computed for one span is the corruption in #526 (parallel
-/// chunk path) and #564 (HLS/DASH fragment path), so every ranged fetch accepts
-/// this status and no other.
-const HTTP_PARTIAL_CONTENT: u16 = 206;
-
-/// A parsed, validated single-part `Content-Range` response header.
-///
-/// Grammar (RFC 9110 §14.4):
-///
-/// ```text
-/// Content-Range = range-unit SP ( range-resp / unsatisfied-range )
-/// range-resp    = incl-range "/" ( complete-length / "*" )
-/// incl-range    = first-pos "-" last-pos
-/// ```
-///
-/// Both positions are INCLUSIVE, so the span covers
-/// `last_pos - first_pos + 1` bytes.
-///
-/// Only the `bytes` range unit is represented: §14.4 requires that a recipient
-/// which does not understand the unit "MUST NOT attempt to recombine it with a
-/// stored representation", and recombining is exactly what the chunk merge
-/// does. `unsatisfied-range` (`bytes */1234`, sent with 416) is likewise not
-/// represented — it describes no enclosed content.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct ContentRange {
-    /// First byte position of the enclosed span (inclusive).
-    first_pos: u64,
-    /// Last byte position of the enclosed span (inclusive).
-    last_pos: u64,
-    /// Total length of the selected representation; `None` when the server
-    /// sent `*` to signal that the complete length was unknown (§14.4).
-    complete_length: Option<u64>,
-}
-
-impl ContentRange {
-    /// Parse a `Content-Range` field value, returning `None` when it is absent,
-    /// malformed, carries a non-`bytes` unit, or is *invalid* per RFC 9110
-    /// §14.4 — that is, `last-pos < first-pos`, or a `complete-length` less
-    /// than or equal to `last-pos`. The spec's directive for an invalid value
-    /// is that the recipient "MUST NOT attempt to recombine the received
-    /// content with a stored representation", so an unparseable or invalid
-    /// header and a missing one are treated alike: the response is not usable.
-    fn parse(value: &str) -> Option<Self> {
-        let (unit, rest) = value.trim().split_once(' ')?;
-        if !unit.eq_ignore_ascii_case("bytes") {
-            return None;
-        }
-
-        let (incl_range, complete) = rest.trim().split_once('/')?;
-        let (first, last) = incl_range.split_once('-')?;
-
-        let first_pos: u64 = first.trim().parse().ok()?;
-        let last_pos: u64 = last.trim().parse().ok()?;
-
-        // §14.4: a last-pos below first-pos makes the field value invalid.
-        if last_pos < first_pos {
-            return None;
-        }
-
-        let complete_length = match complete.trim() {
-            "*" => None,
-            digits => {
-                let total: u64 = digits.parse().ok()?;
-                // §14.4: a complete-length <= last-pos makes the value invalid.
-                if total <= last_pos {
-                    return None;
-                }
-                Some(total)
-            }
-        };
-
-        Some(Self {
-            first_pos,
-            last_pos,
-            complete_length,
-        })
-    }
-
-    /// Read the header map and parse the `Content-Range` field if present.
-    fn from_headers(headers: &wreq::header::HeaderMap) -> Option<Self> {
-        headers
-            .get("content-range")
-            .and_then(|v| v.to_str().ok())
-            .and_then(Self::parse)
-    }
-}
-
-/// The inclusive byte span a ranged fetch asked the server for.
-///
-/// Both bounds are inclusive, matching the `Range: bytes=start-end` request
-/// form and RFC 9110 §14.4's `incl-range`, so the span covers
-/// `end - start + 1` bytes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct RequestedSpan {
-    /// First byte position requested (inclusive).
-    start: u64,
-    /// Last byte position requested (inclusive).
-    end: u64,
-}
-
-impl RequestedSpan {
-    /// Build a span, rejecting an inverted range.
-    ///
-    /// The invariant `start <= end` is what makes [`Self::len`]'s subtraction
-    /// total; enforcing it here rather than at the call site means no caller
-    /// can construct a span whose length underflows.
-    pub(crate) const fn new(start: u64, end: u64) -> Option<Self> {
-        if end < start {
-            return None;
-        }
-        Some(Self { start, end })
-    }
-
-    /// Number of bytes the span covers.
-    ///
-    /// Cannot underflow: [`Self::new`] rejects `end < start`.
-    pub(crate) const fn len(self) -> u64 {
-        self.end - self.start + 1
-    }
-}
-
-/// The span a ranged fetch asked the server for.
-///
-/// Two shapes share one validator: a **closed** span with a known end (the
-/// parallel chunk fetch and the HLS/DASH fragment fetcher, both of which write
-/// a body at a byte offset computed *before* the request), and an
-/// **open-ended** span requesting "from `start` to the end of the resource"
-/// (`Range: bytes={start}-`, the sequential-resume path, which does not
-/// know the total length until the response headers arrive —
-/// #674). Only the closed case can compare `last_pos` directly; the
-/// open-ended case instead checks, when the server discloses a total, that
-/// `last_pos` reaches its end — a shorter tail is exactly the shape that
-/// silently truncates the file the caller is about to resume onto.
-///
-/// When the server answers `bytes {start}-{last_pos}/*` (total genuinely
-/// unknown, §14.4), this span check has nothing to compare `last_pos`
-/// against and accepts it. The transfer is not left unbounded, though: the
-/// caller's byte-count and final-size checks (`ExpectedTransfer`,
-/// `verify_output_size`) fall back to `Content-Length + resume_from` for
-/// their own expected total in that case, so a short or over-long body is
-/// still caught — just one layer up, once the actual byte count is known.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ExpectedSpan {
-    /// `Range: bytes={start}-{end}` — end already known.
-    Closed(RequestedSpan),
-    /// `Range: bytes={start}-` — end determined by the server's response.
-    OpenEnded {
-        /// First byte position requested (inclusive).
-        start: u64,
-    },
-}
-
-impl ExpectedSpan {
-    /// Render the span that was ASKED for, in error messages, using the
-    /// `Content-Range` response header's `bytes 0-1023` notation (a space,
-    /// no `/total` since none was requested) — not the *request*'s
-    /// `Range: bytes=0-1023` header form, which uses `=` and never appears
-    /// in these messages. Every message pairs this against the response's
-    /// actual `Content-Range`, so the two use one notation.
-    fn describe(self) -> String {
-        match self {
-            Self::Closed(span) => format!("bytes {}-{}", span.start, span.end),
-            Self::OpenEnded { start } => format!("bytes {start}-"),
-        }
-    }
-}
-
-/// Confirm a ranged response actually carries the requested span before any of
-/// its bytes are written into the output.
-///
-/// Three callers, each writing a ranged body at a position it already knows:
-/// - the parallel chunk downloader ([`download_chunk_with_retry`]), which
-///   concatenates each chunk at a fixed offset in the merged output;
-/// - the HLS/DASH fragment fetcher (`fragments::fetch_with_optional_range`),
-///   which appends `#EXT-X-BYTERANGE` / `mediaRange` bodies sequentially (#564);
-/// - `trait_impl::download_with_resume_with_cancel`, which appends the resumed
-///   tail at the end of a partial file (#674).
-///
-/// The first two pass [`ExpectedSpan::Closed`] and additionally know the
-/// exact end, so their span is checked byte-for-byte; the resume caller
-/// passes [`ExpectedSpan::OpenEnded`] and only learns the end from the
-/// response.
-///
-/// In every case a response enclosing a different span silently relocates
-/// every byte after it — the ~517 MB interior displacement in #526. RFC 9110
-/// §15.3.7 places this duty on the client: "A client MUST inspect a 206
-/// response's Content-Type and Content-Range field(s) to determine what parts
-/// are enclosed and whether additional requests are needed."
-///
-/// Only `Content-Range` is inspected here. The Content-Type half of that
-/// sentence exists to distinguish a single-part response from a
-/// `multipart/byteranges` one (§14.6), which arises only for a multi-range
-/// request; this client always asks for exactly one range. A multipart body
-/// would carry no top-level `Content-Range` anyway, so it is rejected by the
-/// missing-header branch below rather than silently accepted.
-///
-/// Returns the parsed [`ContentRange`] (never a silent acceptance) when the
-/// status is 206, `Content-Range` is present and valid, and the enclosed span
-/// matches what was requested — closed spans exactly, open-ended spans at
-/// `first_pos` and, when a total is disclosed, at `last_pos` too. Returns
-/// `Err` otherwise. Callers that need the enclosed span or its disclosed
-/// total (currently the resume path, to avoid re-parsing the same header)
-/// use the returned `ContentRange`; callers that only need the pass/fail
-/// verdict (the chunk and fragment fetchers) discard it with `?;`.
-pub(crate) fn validate_range_response(
-    response: &wreq::Response,
-    span: ExpectedSpan,
-    url: &str,
-) -> Result<ContentRange> {
-    let redacted = || Some(rdlp_redact::RedactedUrlBuf::from(url));
-    let requested = span.describe();
-
-    // The sequential-resume path is the only caller that passes
-    // `OpenEnded` (see the type's doc); a failure there means an
-    // operator is staring at a stalled resume with a partial file on disk,
-    // so its messages carry the recovery step. The chunk/fragment paths pass
-    // `Closed` and retry or fail the whole download internally — an operator
-    // never reads their message mid-flow, so it stays free of instructions
-    // that don't apply to them.
-    let resume_guidance = matches!(span, ExpectedSpan::OpenEnded { .. })
-        .then_some(" Please delete the partial file and restart the download.")
-        .unwrap_or_default();
-
-    // §14.2 permits a server to ignore Range; the reply is then a 200 carrying
-    // the WHOLE representation. Accepting it here is what wrote whole-file
-    // content into a slot sized for one span.
-    let status = response.status().as_u16();
-    if status != HTTP_PARTIAL_CONTENT {
-        // For a resume the operator-facing fact is that the server will not
-        // continue from the partial file; for a chunk it is that the body
-        // cannot be placed at its offset. Same defect, two audiences.
-        let message = match span {
-            ExpectedSpan::OpenEnded { .. } => format!(
-                "Server does not support resume (expected HTTP {HTTP_PARTIAL_CONTENT}, got \
-                 {status}). Cannot continue download without overwriting existing \
-                 data.{resume_guidance}"
-            ),
-            ExpectedSpan::Closed(_) => format!(
-                "ranged request for {requested} got HTTP {status}, expected \
-                 {HTTP_PARTIAL_CONTENT} (Partial Content). The server ignored the Range \
-                 header, so the body is the whole resource rather than the requested span \
-                 and cannot be placed at this position in the output."
-            ),
-        };
-        return Err(RdlpError::Download {
-            url: redacted(),
-            message,
-        });
-    }
-
-    // §15.3.7.1: a single-part 206 MUST carry Content-Range. Without it there
-    // is no way to confirm which span arrived.
-    let Some(range) = ContentRange::from_headers(response.headers()) else {
-        return Err(RdlpError::Download {
-            url: redacted(),
-            message: format!(
-                "ranged request for {requested} got a {HTTP_PARTIAL_CONTENT} response \
-                 with a missing, malformed, or invalid Content-Range header; the enclosed \
-                 span cannot be verified.{resume_guidance}",
-            ),
-        });
-    };
-
-    // Closed spans must match exactly. Open-ended spans must at least start
-    // where requested, and — only when the server discloses a total — must
-    // also reach its end; a shorter tail is legal per §14.2 ("may only be
-    // possible to send a portion... expecting the client to re-request the
-    // remainder") but is not this client's re-request protocol, so it is
-    // refused rather than silently appended as if it were the whole tail.
-    let span_matches = match span {
-        ExpectedSpan::Closed(closed) => {
-            range.first_pos == closed.start && range.last_pos == closed.end
-        }
-        ExpectedSpan::OpenEnded { start } => {
-            range.first_pos == start
-                && range
-                    .complete_length
-                    .is_none_or(|total| range.last_pos == total - 1)
-        }
-    };
-    if !span_matches {
-        // A wrong span is a per-response anomaly rather than a statement
-        // about what the server supports — a retry against another CDN node
-        // plausibly gets the right bytes. Reported as `Network` so
-        // `is_retryable_error` accepts it: the chunk path's per-chunk
-        // `with_retry` re-fetches the chunk, and the resume path's own
-        // `with_retry` (this error propagates unrewrapped — see
-        // `trait_impl::download_with_resume_with_cancel`) re-issues the
-        // resume request, instead of either failing a multi-gigabyte
-        // download over one bad response.
-        return Err(RdlpError::Network {
-            url: redacted(),
-            message: format!(
-                "ranged request for {requested} got Content-Range bytes {}-{}{}; the \
-                 response encloses a different span than requested and would corrupt the \
-                 output at this position.{resume_guidance}",
-                range.first_pos,
-                range.last_pos,
-                range
-                    .complete_length
-                    .map_or_else(String::new, |total| format!("/{total}")),
-            ),
-        });
-    }
-
-    Ok(range)
-}
-
 /// A byte-counted transfer's known-in-advance length and human-readable name.
 ///
 /// Shared by every ranged/full-body fetch that must catch a truncated or
-/// over-long response before it corrupts the output: the parallel chunk fetch,
-/// the sequential-resume append, and the sequential fresh download (#674) all
-/// stream a body whose exact length is known before the first byte arrives
-/// (from a `Content-Range` span or a `Content-Length` header), so the check
-/// and its error wording live once here rather than once per call site.
+/// over-long response before it corrupts the output: the parallel chunk fetch
+/// (`download_range_with_progress`) and every file-bound body that goes
+/// through `stream_body` — the sequential fresh download, the resume append
+/// and the resume's 200-rewrite (#674) — all stream a body whose exact length
+/// is known before the first byte arrives (from a `Content-Range` span or a
+/// `Content-Length` header), so the check and its error wording live once
+/// here rather than once per call site.
 pub(crate) struct ExpectedTransfer<'a> {
     /// Exact byte count the transfer is expected to deliver.
     pub(crate) expected_len: u64,
@@ -719,12 +434,16 @@ impl HttpDownloader {
     /// - 200 → server ignored Range; parse total from `Content-Length`,
     ///   `supports_ranges = false`. The probe body is discarded (caller
     ///   re-issues a plain GET via `download_sequential`).
+    /// - 416 → admitted as data like 200/206 (it is one of a ranged
+    ///   request's three answers, `admit_for_verdict`): read as "no info"
+    ///   (`size`/`validator`/`complete_length` all `None`) with the headers
+    ///   kept, not retried and not `unanswered()`.
     /// - other (4xx/5xx) → typed `RdlpError::Http { status, .. }`, retried
     ///   via `is_retryable_error` (429/5xx) up to `retry_config`'s limit;
     ///   a non-retryable 4xx returns on the first response. Either way, if
     ///   every attempt is exhausted the probe falls back to
-    ///   `ProbeResult { size: None, supports_ranges: false }` — the
-    ///   downloader then takes the sequential path (issue #735).
+    ///   `ProbeResult::unanswered()` — the downloader then takes the
+    ///   sequential path (issue #735).
     ///
     /// `retries` counts every retry this probe takes into the download's
     /// tally (issue #672).
@@ -733,53 +452,107 @@ impl HttpDownloader {
         url: &str,
         retries: &std::sync::atomic::AtomicU64,
     ) -> Result<ProbeResult> {
-        use config::PROBE_WINDOW_BYTES;
+        self.probe_with(url, None, retries).await
+    }
 
-        // F3 probe delegates to the shared `rdlp_http::probe_size` helper
-        // (closes #306). Retry semantics preserved via the with_retry
-        // wrapper; the shared helper itself is leaf-level (no retry) and
-        // now surfaces non-2xx as a typed `ProbeError::Status`, which we
-        // map to `RdlpError::Http` so `is_retryable_error` can classify it.
-        let client = self.client.clone();
-        let url_string = url.to_string();
+    /// [`Self::probe`] with an `If-Range` (§13.1.5) and the fold to
+    /// `unanswered()` when the probe never got an answer — the fresh path's
+    /// shape, where "no answer" simply means "go sequential".
+    pub(crate) async fn probe_with(
+        &self,
+        url: &str,
+        validator: Option<&StrongValidator>,
+        retries: &std::sync::atomic::AtomicU64,
+    ) -> Result<ProbeResult> {
+        Ok(self
+            .probe_answered(url, validator, retries)
+            .await
+            .unwrap_or_else(|e| {
+                log::warn!(
+                    "probe of {} failed ({e}); falling back to sequential download",
+                    rdlp_redact::RedactedUrl::new(url)
+                );
+                ProbeResult::unanswered()
+            }))
+    }
+
+    /// The probe with `If-Range` (§13.1.5), erroring when no answer came
+    /// back: the resume path asks it what a 416 left unsaid — whether the
+    /// representation the partial belongs to is still the current one, and
+    /// how long it is — and there an unanswered probe must NOT read as
+    /// "not confirmed", or a transient outage would discard a partial that
+    /// is very likely complete. One probe path: [`Self::probe_with`] is this
+    /// plus the fold.
+    ///
+    /// # Errors
+    /// The transport or `Http` error that outlived the retries.
+    pub(crate) async fn probe_answered(
+        &self,
+        url: &str,
+        validator: Option<&StrongValidator>,
+        retries: &std::sync::atomic::AtomicU64,
+    ) -> Result<ProbeResult> {
+        // The request half is `rdlp_http::probe_request` (the F3 shape,
+        // closes #306) and the parse half `ProbeResult::from_response`; the
+        // send between them rides the one retry seam. The gate is the ranged
+        // one: 200/206/416 are the probe's answers and come back as data,
+        // every other status is a typed `Http` error the retry layer judges
+        // (5xx/429 retried, the rest not — #735).
         let hdrs = self.headers();
-        let window = PROBE_WINDOW_BYTES;
-        let timeout = self.config.read_timeout;
+        let spec = rdlp_http::ProbeSpec {
+            url,
+            headers: Some(&hdrs),
+            window_bytes: config::PROBE_WINDOW_BYTES,
+            timeout: self.config.read_timeout,
+            validator,
+        };
+        let response = self
+            .send_with_retry(
+                SendSpec {
+                    label: "HTTP probe (F3)",
+                    url,
+                    gate: &admit_for_verdict,
+                    retries,
+                },
+                || rdlp_http::probe_request(&self.client, &spec),
+            )
+            .await?;
+        Ok(ProbeResult::from_response(&response))
+    }
 
-        let probed = with_retry(
-            RetryPolicy::new(&self.config.retry_config, &"HTTP probe (F3)").counting_into(retries),
-            || {
-                let client = client.clone();
-                let url = url_string.clone();
-                let hdrs = hdrs.clone();
-                async move {
-                    rdlp_http::probe_size(&client, &url, Some(&hdrs), window, timeout)
-                        .await
-                        .map_err(|e| match e {
-                            rdlp_http::ProbeError::Status { status } => RdlpError::Http {
-                                status,
-                                reason: format!("probe HTTP {status}"),
-                            },
-                            rdlp_http::ProbeError::Network(e) => RdlpError::Network {
-                                message: format!("probe failed: {e}"),
-                                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
-                            },
-                        })
-                }
+    /// Send one download request under the retry policy: `build` a fresh
+    /// request per attempt, map a transport failure to a retryable
+    /// `Network` error, and let `spec.gate` decide which statuses come back
+    /// as a response and which as an error for the retry layer to judge.
+    ///
+    /// The one seam behind the fresh sequential GET, the ranged chunk fetch,
+    /// the resume request, the stdout path and the probe; they differ only
+    /// in the label, the request and the gate, which is exactly what
+    /// [`SendSpec`] and `build` carry.
+    ///
+    /// `build` borrows rather than clones: the retry closure is re-entered per
+    /// attempt and each attempt needs a new `RequestBuilder`, but nothing it
+    /// is built from changes between attempts.
+    ///
+    /// Every retry the policy takes is counted into `spec.retries` (issue
+    /// #672), so a retry spent on the probe, a chunk or the resume request
+    /// all reach the one `DownloadStats.retries` the caller reports.
+    pub(crate) async fn send_with_retry<T>(
+        &self,
+        spec: SendSpec<'_, T>,
+        build: impl Fn() -> wreq::RequestBuilder + Send + Sync,
+    ) -> Result<T> {
+        with_retry(
+            RetryPolicy::new(&self.config.retry_config, &spec.label).counting_into(spec.retries),
+            || async {
+                let response = build().send().await.map_err(|e| RdlpError::Network {
+                    message: format!("{} request failed: {e}", spec.label),
+                    url: Some(rdlp_redact::RedactedUrlBuf::from(spec.url)),
+                })?;
+                (spec.gate)(response)
             },
         )
-        .await;
-
-        Ok(probed.unwrap_or_else(|e| {
-            log::warn!(
-                "probe of {} failed ({e}); falling back to sequential download",
-                rdlp_redact::RedactedUrl::new(url)
-            );
-            ProbeResult {
-                size: None,
-                supports_ranges: false,
-            }
-        }))
+        .await
     }
 
     /// Download a specific byte range with shared progress tracking.
@@ -804,7 +577,7 @@ impl HttpDownloader {
         cancel: Option<&tokio_util::sync::CancellationToken>,
     ) -> Result<u64> {
         let crate::http::parallel::ChunkRequestSpec {
-            url,
+            source,
             start,
             end,
             chunk_path,
@@ -819,9 +592,20 @@ impl HttpDownloader {
             return Err(RdlpError::Cancelled);
         }
 
-        let client = self.client.clone();
-        let url = url.to_string();
+        let url = source.url.clone();
         let hdrs = self.headers();
+
+        // Built once, before the retry loop: an inverted range is a caller
+        // bug, not a transient condition, so it fails fast rather than
+        // spending a retry budget on it.
+        let Some(span) = rdlp_http::RangeSpec::span(start, end) else {
+            return Err(RdlpError::Download {
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
+                message: format!(
+                    "internal error: chunk requested an inverted byte range {start}-{end}"
+                ),
+            });
+        };
 
         // NOTE: plain `with_retry`, not the cancellable form — this loop's
         // backoff sleeps are not themselves raced against `cancel`. That is
@@ -830,44 +614,71 @@ impl HttpDownloader {
         // `with_retry_cancellable`. A future caller
         // invoking this directly and expecting a cancel to interrupt a backoff
         // would not get one.
-        let response = with_retry(
-            RetryPolicy::new(&self.config.retry_config, &"HTTP GET (range)")
-                .counting_into(tallies.retries.as_ref()),
-            || {
-                let client = client.clone();
-                let url = url.clone();
-                let hdrs = hdrs.clone();
-                async move {
-                    let response = client
-                        .get(&url)
-                        .headers(hdrs)
-                        .header("Range", format!("bytes={start}-{end}"))
-                        .send()
-                        .await
-                        .map_err(|e| RdlpError::Network {
-                            message: format!("Range request failed: {e}"),
-                            url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
-                        })?;
+        //
+        // `If-Range` carries the validator the download started under, so a
+        // server that changed the representation answers 200 instead of a
+        // 206 that would be spliced in as if nothing changed (RFC 9110 §13.1.5).
+        let response = self
+            .send_with_retry(
+                SendSpec {
+                    label: "HTTP GET (range)",
+                    url: &url,
+                    gate: &admit_for_verdict,
+                    retries: tallies.retries.as_ref(),
+                },
+                || {
+                    rdlp_http::download_request(&self.client, &url, Some(&hdrs))
+                        .ranged(span, source.validator.as_ref())
+                },
+            )
+            .await?;
 
-                    check_http_response(&response)?;
-                    Ok(response)
-                }
-            },
-        )
-        .await?;
-
-        // Confirm the response encloses exactly the requested span BEFORE any
-        // of its bytes reach the chunk file (#526).
-        let Some(span) = RequestedSpan::new(start, end) else {
-            return Err(RdlpError::Download {
-                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
-                message: format!(
-                    "internal error: chunk requested an inverted byte range {start}-{end}"
-                ),
-            });
-        };
-        validate_range_response(&response, ExpectedSpan::Closed(span), &url)?;
-        let expected_len = span.len();
+        // Confirm the response encloses exactly the requested span, is not
+        // content-coded, and still names the representation the download
+        // started with — BEFORE any of its bytes reach the chunk file (#526,
+        // #565).
+        match range_verdict(&response, &source.meta(span), &url)? {
+            RangeVerdict::Partial { .. } => {}
+            RangeVerdict::Replaced => {
+                return Err(RdlpError::Download {
+                    url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
+                    message: format!(
+                        "resource changed under a parallel chunk fetch for bytes {start}-{end} \
+                         (server answered 200 to a Range request it previously honoured); \
+                         cannot place a whole-resource body at this position in the merged \
+                         output."
+                    ),
+                });
+            }
+            RangeVerdict::Unsatisfiable { complete_length } => {
+                let representation = complete_length.map_or_else(
+                    || "of unreported length".to_string(),
+                    |n| format!("now {n} bytes"),
+                );
+                return Err(RdlpError::Download {
+                    url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
+                    message: format!(
+                        "chunk request for bytes {start}-{end} was refused as unsatisfiable \
+                         (416); the representation is {representation}. A chunk range cannot be \
+                         unsatisfiable unless the representation shrank underneath this download."
+                    ),
+                });
+            }
+            // `span` is bounded, so `range_verdict` reports a validator
+            // mismatch as an error above; this arm exists for the match to
+            // stay exhaustive and reads the same as that error if it were
+            // ever reached.
+            RangeVerdict::Mismatched { mismatch } => {
+                return Err(RdlpError::Download {
+                    url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
+                    message: format!(
+                        "chunk response for bytes {start}-{end} is not the representation this \
+                         download started with: {mismatch}"
+                    ),
+                });
+            }
+        }
+        let expected_len = bounded_len(span, &url)?;
         let context = format!("ranged chunk for bytes {start}-{end}");
         let transfer = ExpectedTransfer {
             expected_len,
@@ -966,10 +777,7 @@ impl HttpDownloader {
         cancel: Option<&tokio_util::sync::CancellationToken>,
         retries: &std::sync::atomic::AtomicU64,
     ) -> Result<DownloadStats> {
-        let progress: Option<Arc<dyn ProgressCallback>> = progress.map(Arc::from);
         let start_time = Instant::now();
-        let client = self.client.clone();
-        let url_string: Arc<str> = Arc::from(url);
         let hdrs = self.headers();
 
         // Check for pre-cancelled token before issuing the network request.
@@ -979,97 +787,215 @@ impl HttpDownloader {
             return Err(RdlpError::Cancelled);
         }
 
-        let response = with_retry(
-            RetryPolicy::new(&self.config.retry_config, &"HTTP GET").counting_into(retries),
-            || {
-                let client = client.clone();
-                let url = url_string.clone();
-                let hdrs = hdrs.clone();
-                async move {
-                    let response = client.get(&*url).headers(hdrs).send().await.map_err(|e| {
-                        RdlpError::Network {
-                            message: format!("GET request failed: {e}"),
-                            url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_ref())),
-                        }
-                    })?;
+        // No `Range`, but the identity pin: a later resume computes its
+        // offset over these bytes, and RFC 9110 §14.1.2 makes offsets comparable only
+        // under one coding.
+        let response = self
+            .send_with_retry(
+                SendSpec {
+                    label: "HTTP GET",
+                    url,
+                    gate: &require_success,
+                    retries,
+                },
+                || rdlp_http::download_request(&self.client, url, Some(&hdrs)),
+            )
+            .await?;
 
-                    check_http_response(&response)?;
-                    Ok(response)
-                }
-            },
-        )
-        .await?;
+        // No `Range` means `range_verdict` never sees this response, so the
+        // coding check it would have run is applied here — before the sidecar
+        // can name a coded length and before `File::create` (§12.5.3 makes
+        // the identity pin only a SHOULD).
+        reject_content_coding(response.headers(), url)?;
 
         let total_size = response.content_length();
-        // #674: when the server discloses a length, hold the sequential body
-        // to it exactly — the same over-long/short guard the parallel chunk
-        // path has always had, extended to the single-file path that never
-        // had it. A chunked-encoding response with no `Content-Length` can't
-        // be bounded this way and downloads unchecked, as before.
-        let context = "sequential download";
-        let transfer = total_size.map(|expected_len| ExpectedTransfer {
+
+        // This GET, not the probe, produced the bytes about to land on disk,
+        // so its validator is the one a resume must send back — and when it
+        // offers none, the probe's must not survive to be sent on its behalf.
+        HttpResumeState::record(
+            path,
+            rdlp_http::StrongValidator::from_headers(response.headers()),
+            total_size,
+        )
+        .await
+        .map_err(RdlpError::Io)?;
+
+        let downloaded = self
+            .stream_to_file(
+                response,
+                Sink {
+                    path,
+                    mode: WriteMode::Create,
+                    expected_total: total_size,
+                },
+                progress.as_deref(),
+                cancel,
+            )
+            .await?;
+
+        let stats = DownloadStats::new(
+            downloaded,
+            start_time.elapsed(),
+            crate::retry::retries_taken(retries),
+        );
+        if let Some(callback) = progress {
+            callback.on_complete(&stats);
+        }
+        Ok(stats)
+    }
+
+    /// Stream `response`'s body into the sink; returns the bytes now on disk
+    /// (`Append { from }`: `from` plus what was streamed).
+    ///
+    /// Opens the file as [`WriteMode`] says and names the path in any I/O
+    /// error; the loop itself is [`Self::stream_body`], shared with the
+    /// stdout path. When the sink names an expected total (#674), the body is
+    /// held to it frame by frame and at its end ([`ExpectedTransfer`]), and
+    /// the file on disk is measured against it once written
+    /// (`verify_output_size`) — the same three guards the parallel chunk
+    /// path has, applied to the single-file paths.
+    pub(crate) async fn stream_to_file(
+        &self,
+        response: wreq::Response,
+        sink: Sink<'_>,
+        progress: Option<&dyn ProgressCallback>,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
+    ) -> Result<u64> {
+        let path = sink.path;
+        let named = |verb: &str, e: std::io::Error| {
+            RdlpError::Io(std::io::Error::new(
+                e.kind(),
+                format!("failed to {verb} output file '{}': {e}", path.display()),
+            ))
+        };
+        let (file, offset) = match sink.mode {
+            WriteMode::Create => (File::create(path).await, 0),
+            WriteMode::Append { from } => (
+                tokio::fs::OpenOptions::new().append(true).open(path).await,
+                from,
+            ),
+        };
+        let file = file.map_err(|e| named("open", e))?;
+        let mut writer = BufWriter::with_capacity(self.config.buffer_size, file);
+        let url = response.uri().to_string();
+
+        let context = match sink.mode {
+            WriteMode::Create => "sequential download",
+            WriteMode::Append { .. } => "resumed download",
+        };
+        let transfer = sink.expected_total.map(|expected_len| ExpectedTransfer {
             expected_len,
             context,
         });
-        let file = File::create(path).await.map_err(|e| {
-            RdlpError::Io(std::io::Error::new(
-                e.kind(),
-                format!("failed to create output file '{}': {e}", path.display()),
-            ))
-        })?;
-        let mut writer = BufWriter::with_capacity(self.config.buffer_size, file);
+        let downloaded = self
+            .stream_body(
+                response,
+                BodySink {
+                    writer: &mut writer,
+                    policy: StreamPolicy::FailOnWriteError,
+                    offset,
+                    transfer,
+                },
+                progress,
+                cancel,
+            )
+            .await
+            .map_err(|e| match e {
+                RdlpError::Io(e) => named("write", e),
+                other => other,
+            })?;
+
+        if let Some(total) = sink.expected_total {
+            parallel::verify_output_size(path, total, &url).await?;
+        }
+        Ok(downloaded)
+    }
+
+    /// The one body-streaming loop: read-timeout and cancel racing, the rate
+    /// limiter, the progress cadence, and the flush that runs before any
+    /// return — behind the fresh sequential GET, the resume append, the
+    /// resume's 200-rewrite (all via [`Self::stream_to_file`]) and the stdout
+    /// path (`download_to_writer_with_cancel`). Returns `sink.offset` plus the
+    /// bytes handed to the writer.
+    ///
+    /// `cancel` — when `Some`, each chunk poll races the token; on
+    /// cancellation the writer is flushed before `RdlpError::Cancelled` is
+    /// returned so bytes already buffered reach their destination.
+    ///
+    /// When `sink.transfer` names an expected total (#674), a frame that
+    /// would overrun it is refused before it is written and a stream that
+    /// ends short of it is an error; the stdout path passes `None` because a
+    /// consumer closing the pipe is a graceful stop, not a short body.
+    pub(crate) async fn stream_body<W: tokio::io::AsyncWrite + Unpin + Send>(
+        &self,
+        response: wreq::Response,
+        sink: BodySink<'_, W>,
+        progress: Option<&dyn ProgressCallback>,
+        cancel: Option<&tokio_util::sync::CancellationToken>,
+    ) -> Result<u64> {
+        let start_time = Instant::now();
+        let url = response.uri().to_string();
+        let BodySink {
+            writer,
+            policy,
+            offset,
+            transfer,
+        } = sink;
+        let mut downloaded = offset;
+        let total_size = transfer
+            .as_ref()
+            .map(|t| t.expected_len)
+            .or_else(|| total_from_remaining(response.content_length(), offset));
 
         let stream = response.bytes_stream();
         tokio::pin!(stream);
-        let mut downloaded: u64 = 0;
         let mut last_update = Instant::now();
-        let update_interval = PROGRESS_UPDATE_INTERVAL;
         let read_timeout = self.config.read_timeout;
         let mut speed_meter = SpeedMeter::new();
         speed_meter.update(downloaded, start_time);
 
         loop {
-            let next = match next_with_cancel_and_timeout(
-                stream.as_mut(),
-                cancel,
-                read_timeout,
-                &url_string,
-            )
-            .await
-            {
-                Ok(item) => item,
-                Err(RdlpError::Cancelled) => {
-                    // Flush partial bytes already in BufWriter to disk.
-                    writer.flush().await.ok();
-                    return Err(RdlpError::Cancelled);
-                }
-                Err(e) => return Err(e),
-            };
+            let next =
+                match next_with_cancel_and_timeout(stream.as_mut(), cancel, read_timeout, &url)
+                    .await
+                {
+                    Ok(item) => item,
+                    Err(RdlpError::Cancelled) => {
+                        // Flush errors are swallowed in favour of surfacing
+                        // the original Cancelled.
+                        writer.flush().await.ok();
+                        return Err(RdlpError::Cancelled);
+                    }
+                    Err(e) => return Err(e),
+                };
 
             let Some(chunk_result) = next else { break };
             let chunk = chunk_result.map_err(|e| RdlpError::Network {
                 message: format!(
                     "Failed to read response body from {}: {e}",
-                    rdlp_redact::RedactedUrl::new(url_string.as_ref())
+                    rdlp_redact::RedactedUrl::new(&url)
                 ),
-                url: Some(rdlp_redact::RedactedUrlBuf::from(url_string.as_ref())),
+                url: Some(rdlp_redact::RedactedUrlBuf::from(url.as_str())),
             })?;
 
             if let Some(ref transfer) = transfer {
-                transfer.reject_overlong(downloaded, chunk.len() as u64, url_string.as_ref())?;
+                transfer.reject_overlong(downloaded, chunk.len() as u64, &url)?;
             }
 
-            writer.write_all(&chunk).await.map_err(|e| {
-                RdlpError::Io(std::io::Error::new(
-                    e.kind(),
-                    format!("failed to write to output file '{}': {e}", path.display()),
-                ))
-            })?;
+            match writer.write_all(&chunk).await {
+                Ok(()) => {}
+                Err(e) if policy.stops_on(&e) => {
+                    debug!("Broken pipe on writer, stopping gracefully");
+                    break;
+                }
+                Err(e) => return Err(RdlpError::Io(e)),
+            }
             downloaded += chunk.len() as u64;
 
-            if let Some(ref callback) = progress {
+            if let Some(callback) = progress {
                 let now = Instant::now();
-                if now.duration_since(last_update) >= update_interval {
+                if now.duration_since(last_update) >= PROGRESS_UPDATE_INTERVAL {
                     speed_meter.update(downloaded, now);
                     let speed = speed_meter.bytes_per_sec().unwrap_or(0.0);
 
@@ -1084,32 +1010,110 @@ impl HttpDownloader {
             }
         }
 
-        writer.flush().await.map_err(|e| {
-            RdlpError::Io(std::io::Error::new(
-                e.kind(),
-                format!("failed to flush output file '{}': {e}", path.display()),
-            ))
-        })?;
+        match writer.flush().await {
+            Ok(()) => {}
+            Err(e) if policy.stops_on(&e) => debug!("Broken pipe on flush, ignoring"),
+            Err(e) => return Err(RdlpError::Io(e)),
+        }
 
         // #674: `reject_overlong` bounds each frame but the stream can still
         // end short (see `ExpectedTransfer::confirm_exact`'s doc comment for
         // why the end of the stream is not itself proof of completeness).
         if let Some(ref transfer) = transfer {
-            transfer.confirm_exact(downloaded, url_string.as_ref())?;
-        }
-        if let Some(total) = total_size {
-            parallel::verify_output_size(path, total, url_string.as_ref()).await?;
+            transfer.confirm_exact(downloaded, &url)?;
         }
 
-        let duration = start_time.elapsed();
-        let stats = DownloadStats::new(downloaded, duration, crate::retry::retries_taken(retries));
-
-        if let Some(callback) = progress {
-            callback.on_complete(&stats);
-        }
-
-        Ok(stats)
+        Ok(downloaded)
     }
+}
+
+/// What a write failure means to [`HttpDownloader::stream_body`] — the one
+/// policy on which its callers differ.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StreamPolicy {
+    /// A file: any write or flush error is the download's error.
+    FailOnWriteError,
+    /// A pipe (stdout): the consumer going away is a graceful stop, not a
+    /// failure — the bytes delivered so far are the result. The count
+    /// returned excludes the chunk whose write hit the broken pipe but can
+    /// still overstate delivery by up to one `BufWriter` buffer that never
+    /// reached the pipe; inherent to buffered I/O, acceptable for stats.
+    StopOnBrokenPipe,
+}
+
+impl StreamPolicy {
+    fn stops_on(self, e: &std::io::Error) -> bool {
+        matches!(self, Self::StopOnBrokenPipe) && matches!(e.kind(), std::io::ErrorKind::BrokenPipe)
+    }
+}
+
+/// Where [`HttpDownloader::stream_body`] writes, how a write failure is
+/// treated, how many bytes the destination already holds, and — when the
+/// server disclosed it — how many it must hold once this body is written.
+pub(crate) struct BodySink<'a, W> {
+    pub writer: &'a mut W,
+    pub policy: StreamPolicy,
+    /// Bytes already at the destination before this body; progress reports
+    /// and the returned total count from here.
+    pub offset: u64,
+    /// The whole-destination byte count the body is held to (`offset` plus
+    /// this body), when known; `None` streams unchecked.
+    pub transfer: Option<ExpectedTransfer<'a>>,
+}
+
+/// How [`HttpDownloader::stream_to_file`] opens its file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WriteMode {
+    /// Truncate and write from byte 0.
+    Create,
+    /// Append to an existing partial that already holds `from` bytes.
+    Append {
+        /// Bytes already on disk; the streamed body continues from here.
+        from: u64,
+    },
+}
+
+/// Where [`HttpDownloader::stream_to_file`] writes, how, and how large the
+/// file must be afterwards.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Sink<'a> {
+    pub path: &'a Path,
+    pub mode: WriteMode,
+    /// The file's expected final size — `Content-Length` for a body written
+    /// from zero, the `Content-Range` complete-length (or `Content-Length`
+    /// plus the offset) for an appended tail — when the server disclosed
+    /// it (#674). `None` writes unchecked, as a chunked-encoding response
+    /// without a length always has.
+    pub expected_total: Option<u64>,
+}
+
+/// How one [`HttpDownloader::send_with_retry`] call names itself and admits
+/// a response — as the response itself (`T = Response`) or as whatever the
+/// gate read off it, so a caller that must interpret the response inside
+/// the retry loop does not read it a second time outside.
+#[derive(Clone, Copy)]
+pub(crate) struct SendSpec<'a, T = wreq::Response> {
+    /// Names the request in retry log lines and the transport-failure error.
+    pub label: &'static str,
+    /// Redacted into the transport-failure error.
+    pub url: &'a str,
+    /// The download-wide retry tally every retry of this send counts into
+    /// (issue #672).
+    pub retries: &'a std::sync::atomic::AtomicU64,
+    /// Which statuses come back, and as what: [`require_success`] for a
+    /// plain GET, [`admit_for_verdict`] for a ranged one whose 200/206/416
+    /// are answers rather than failures (both `T = Response`), and
+    /// [`verdict::admit_partial_span`] for the resume request, which hands
+    /// back the response together with its [`RangeVerdict`] because a
+    /// wrong-span 206 is worth a fresh attempt and the verdict is read once.
+    pub gate: &'a (dyn Fn(wreq::Response) -> Result<T> + Sync),
+}
+
+/// [`check_http_response`] as a [`SendSpec::gate`]: only a success status
+/// comes back as a response.
+pub(crate) fn require_success(response: wreq::Response) -> Result<wreq::Response> {
+    check_http_response(&response)?;
+    Ok(response)
 }
 
 impl Default for HttpDownloader {
@@ -1165,102 +1169,17 @@ where
 }
 
 #[cfg(test)]
-mod content_range_tests {
-    //! Tests for `ContentRange`'s parsing and header-reading behavior. The
-    //! standalone `parse_content_range_total` wrapper this module used to
-    //! cover was removed once the resume path started consuming the
-    //! `ContentRange` `validate_range_response` already parses (#674 review)
-    //! instead of re-parsing the header itself; `from_headers` remains
-    //! covered indirectly through the mockito-driven `validate_range_response`
-    //! tests in `tests.rs`.
-    use super::*;
+mod total_from_remaining_tests {
+    use super::total_from_remaining;
 
-    // -----------------------------------------------------------------------
-    // `ContentRange::parse` grammar branches (RFC 9110 §14.4).
-    //
-    // The chunk path decides whether a response may be written into its offset
-    // slot from this parser's verdict, so each accept/reject branch is pinned
-    // individually rather than only through the mockito-driven tests.
-    // -----------------------------------------------------------------------
-
+    /// The sum is exact up to `u64::MAX` and unknown one past it: a
+    /// server-supplied `Content-Length` must never wrap into a small total.
     #[test]
-    fn parses_a_conformant_single_part_range() {
-        let range = ContentRange::parse("bytes 0-1023/2048").expect("valid range must parse");
-        assert_eq!(range.first_pos, 0);
-        assert_eq!(range.last_pos, 1023);
-        assert_eq!(range.complete_length, Some(2048));
-    }
-
-    /// `*` for complete-length is explicitly legal — "An asterisk character
-    /// ("*") in place of the complete-length indicates that the representation
-    /// length was unknown when the header field was generated" (§14.4). The
-    /// span is still fully usable, so this MUST parse; rejecting it would
-    /// break every server that cannot cheaply determine total length.
-    #[test]
-    fn accepts_unknown_complete_length() {
-        let range =
-            ContentRange::parse("bytes 0-1023/*").expect("unknown complete-length is legal");
-        assert_eq!(range.first_pos, 0);
-        assert_eq!(range.last_pos, 1023);
-        assert_eq!(range.complete_length, None);
-    }
-
-    /// §14.4: a recipient that does not understand the range unit "MUST NOT
-    /// attempt to recombine it with a stored representation" — and recombining
-    /// is exactly what the chunk merge does.
-    #[test]
-    fn rejects_unknown_range_unit() {
-        assert!(ContentRange::parse("items 0-1023/2048").is_none());
-        assert!(ContentRange::parse("seconds 0-10/60").is_none());
-    }
-
-    #[test]
-    fn accepts_case_insensitive_unit() {
-        assert!(ContentRange::parse("BYTES 0-1023/2048").is_some());
-    }
-
-    /// §14.4 invalidity: "a last-pos value less than its first-pos value".
-    #[test]
-    fn rejects_last_pos_below_first_pos() {
-        assert!(ContentRange::parse("bytes 1023-0/2048").is_none());
-    }
-
-    /// §14.4 invalidity: "a complete-length value less than or equal to its
-    /// last-pos value". Positions are inclusive, so a 0-1023 span needs at
-    /// least 1024 total bytes; 1024 is the tightest legal value.
-    #[test]
-    fn rejects_complete_length_not_above_last_pos() {
-        assert!(ContentRange::parse("bytes 0-1023/1023").is_none());
-        assert!(ContentRange::parse("bytes 0-1023/1024").is_some());
-    }
-
-    /// A single-position span is legal and covers exactly one byte.
-    #[test]
-    fn accepts_single_byte_span() {
-        let range = ContentRange::parse("bytes 5-5/10").expect("single-byte span is valid");
-        assert_eq!(range.first_pos, range.last_pos);
-    }
-
-    #[test]
-    fn rejects_unsatisfied_range_form() {
-        // `bytes */1234` accompanies a 416 and encloses no content.
-        assert!(ContentRange::parse("bytes */1234").is_none());
-    }
-
-    #[test]
-    fn rejects_structurally_malformed_values() {
-        assert!(ContentRange::parse("").is_none());
-        assert!(ContentRange::parse("bytes").is_none());
-        assert!(ContentRange::parse("bytes 0-1023").is_none());
-        assert!(ContentRange::parse("bytes abc-def/2048").is_none());
-        assert!(ContentRange::parse("0-1023/2048").is_none());
-    }
-
-    /// A `complete-length` that parses as neither a digit string nor `*` is
-    /// unparseable, distinct from the `*` (genuinely unknown) case above.
-    #[test]
-    fn rejects_unparseable_complete_length() {
-        assert!(ContentRange::parse("bytes 0-1023/notanumber").is_none());
+    fn sums_exactly_and_reports_overflow_as_unknown() {
+        assert_eq!(total_from_remaining(Some(5), 3), Some(8));
+        assert_eq!(total_from_remaining(None, 3), None);
+        assert_eq!(total_from_remaining(Some(u64::MAX - 3), 3), Some(u64::MAX));
+        assert_eq!(total_from_remaining(Some(u64::MAX - 2), 3), None);
     }
 }
 

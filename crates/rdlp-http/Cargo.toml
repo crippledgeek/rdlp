@@ -16,6 +16,9 @@ tracing = { workspace = true }
 thiserror = { workspace = true }
 bytes = { workspace = true }
 futures-util = { workspace = true }
+chrono = { version = "0.4", default-features = false, features = ["std"] }
+serde = { workspace = true }
+hex = { workspace = true }
 
 # `prefix-symbols` is documented Linux/Android-only by wreq upstream; on
 # macOS it emits a broken `build_script_main_*` mangling that breaks the

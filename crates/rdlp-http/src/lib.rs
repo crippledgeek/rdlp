@@ -29,17 +29,34 @@
 //! ```
 
 #![warn(missing_docs)]
+// A `mockito::ServerGuard` in this crate's tests must outlive the mock
+// asserts that follow its last request use — the assertion is what proves
+// the mock was hit, so holding the guard there is the point. Clippy's
+// `significant_drop_tightening` reads that as "drop it earlier," which would
+// tear the mock server down before the assertion runs: a false positive for
+// every mockito test in this crate. One crate-wide, test-only decision
+// instead of a per-module copy (`probe.rs`/`request.rs` each carried an
+// identical `#[allow]` before this).
+#![cfg_attr(test, allow(clippy::significant_drop_tightening))]
 
 mod body;
 mod client;
 mod config;
+pub mod content_range;
 pub mod probe;
 mod redirect;
+pub mod request;
+pub mod validator;
 
 pub use body::{BodyCap, BodyCapError, read_body_capped};
 pub use client::HttpClientFactory;
 pub use config::HttpClientConfig;
-pub use probe::{DEFAULT_PROBE_WINDOW_BYTES, ProbeError, ProbeResult, probe_size};
+pub use content_range::ContentRange;
+pub use probe::{
+    DEFAULT_PROBE_WINDOW_BYTES, ProbeError, ProbeResult, ProbeSpec, probe_request, probe_size,
+};
+pub use request::{RangeSpec, RangedRequest, download_request};
+pub use validator::{StrongValidator, ValidatorMismatch};
 
 /// Re-export `wreq` for downstream crates so they can consume the HTTP
 /// client library via a single facade (`rdlp_http::wreq::Client`, etc).
