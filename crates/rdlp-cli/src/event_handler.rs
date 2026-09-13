@@ -293,7 +293,13 @@ mod tests {
 
     #[test]
     fn quiet_alone_no_longer_decides_the_bar() {
-        // quiet=true, show_progress=true: an explicit `--progress` over `--quiet`.
+        // At this level `quiet` and `show_progress` are two independent
+        // constructor args, not a CLI flag pair — this proves the HANDLER
+        // draws the bar from `show_progress` regardless of `quiet`. Which flag
+        // combination actually produces quiet=true, show_progress=true is the
+        // merge layer's claim, covered by
+        // `test_merge_config_progress_flag_wins_over_config_false` and the
+        // `-o -` test in `crates/rdlp-cli/src/config_tests.rs`.
         let mut h = CliEventHandler::new(Arc::new(MultiProgress::new()), true, true);
         h.update_progress(&some_progress());
         assert!(h.progress_bar.is_some());
