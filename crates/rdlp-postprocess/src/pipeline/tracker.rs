@@ -392,7 +392,7 @@ impl FileTracker {
     // Safe: invoked via tokio::task::spawn_blocking from pipeline/mod.rs:182.
     #[allow(clippy::disallowed_methods)]
     pub fn cleanup(&mut self) {
-        let to_delete: Vec<PathBuf> = self.temp_files.drain(..).collect();
+        let to_delete: Vec<PathBuf> = std::mem::take(&mut self.temp_files);
         for path in to_delete {
             // Release from registry first (under lock), then delete.
             self.temp_registry.release(&path);

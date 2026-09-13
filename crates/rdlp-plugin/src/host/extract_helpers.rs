@@ -3,8 +3,8 @@
 //! these via WIT bindings; the Python compat shim's I/O methods become
 //! 2-line passthroughs over them.
 //!
-//! All functions sync (pure CPU) except `extract_m3u8` which fetches
-//! via the existing `host:fetch` wreq client.
+//! All functions sync (pure CPU) except `extract_m3u8` and `extract_mpd`,
+//! which fetch via the `host:fetch` wreq client.
 
 // Lints below are from the new per-crate pedantic/nursery config; these
 // pre-existing patterns are accepted for now — addressed in a separate pass.
@@ -94,7 +94,7 @@ pub fn add_to_linker(linker: &mut Linker<PluginStoreData>) -> wasmtime::Result<(
 }
 
 impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreData {
-    async fn search_regex(
+    fn search_regex(
         &mut self,
         pattern: String,
         haystack: String,
@@ -119,17 +119,17 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         }
     }
 
-    async fn html_search_regex(
+    fn html_search_regex(
         &mut self,
         pattern: String,
         haystack: String,
         re_flags: crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags,
     ) -> Option<String> {
-        let raw = self.search_regex(pattern, haystack, re_flags).await?;
+        let raw = self.search_regex(pattern, haystack, re_flags)?;
         Some(clean_html(&raw))
     }
 
-    async fn html_search_meta(&mut self, name: String, html: String) -> Option<String> {
+    fn html_search_meta(&mut self, name: String, html: String) -> Option<String> {
         // Mirrors yt-dlp's `_html_search_meta` (extractor/common.py:1492+).
         // Tries 5 attribute names: itemprop / name / property / id / http-equiv.
         // Tries content-after AND content-before patterns.
@@ -167,7 +167,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         None
     }
 
-    async fn og_search_property(&mut self, prop: String, html: String) -> Option<String> {
+    fn og_search_property(&mut self, prop: String, html: String) -> Option<String> {
         // Mirrors yt-dlp's `_og_regexes` + `_og_search_property` (common.py:1463-1490).
         let prop_escaped = regex::escape(&prop);
         // content= with double-quote (group 1), single-quote (group 2),
@@ -207,13 +207,13 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         None
     }
 
-    async fn rta_search(&mut self, html: String) -> Option<u8> {
+    fn rta_search(&mut self, html: String) -> Option<u8> {
         // Delegates to the shared host+generic-extractor RTA detector (#497)
         // — mirrors yt-dlp's `_rta_search` (common.py:1520-1539).
         rdlp_extractor::base::common::age_rating::rta_search(&html)
     }
 
-    async fn search_json(
+    fn search_json(
         &mut self,
         start_pattern: String,
         end_pattern: String,
@@ -411,7 +411,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         }
     }
 
-    async fn extract_json_ld(
+    fn extract_json_ld(
         &mut self,
         html: String,
     ) -> Option<crate::bindings::rdlp::plugin::host_extract_helpers::JsonLdVideo> {

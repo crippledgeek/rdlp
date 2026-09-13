@@ -5,16 +5,14 @@ fn ctx() -> PluginStoreData {
     PluginStoreData::new("test", tokio_util::sync::CancellationToken::new())
 }
 
-#[tokio::test]
-async fn search_regex_finds_first_match() {
+#[test]
+fn search_regex_finds_first_match() {
     let mut c = ctx();
-    let r = c
-        .search_regex(
-            r"(\d+)".to_string(),
-            "id=42 ts=99".to_string(),
-            crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
-        )
-        .await;
+    let r = c.search_regex(
+        r"(\d+)".to_string(),
+        "id=42 ts=99".to_string(),
+        crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
+    );
     assert_eq!(r, Some("42".to_string()));
 }
 
@@ -27,16 +25,14 @@ async fn search_regex_finds_first_match() {
 /// Pattern `(a)(b)?` against `"a"`:
 ///   - group 1 = "a", group 2 = None (optional, didn't match)
 ///   - expected: "a" (group 1)
-#[tokio::test]
-async fn search_regex_group1_wins_over_group0_regression() {
+#[test]
+fn search_regex_group1_wins_over_group0_regression() {
     let mut c = ctx();
-    let r = c
-        .search_regex(
-            r"(a)(b)?".to_string(),
-            "a".to_string(),
-            crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
-        )
-        .await;
+    let r = c.search_regex(
+        r"(a)(b)?".to_string(),
+        "a".to_string(),
+        crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
+    );
     assert_eq!(r, Some("a".to_string()), "group 1 must be returned");
 }
 
@@ -49,16 +45,14 @@ async fn search_regex_group1_wins_over_group0_regression() {
 /// Note: in the `regex` crate, a non-participating optional group returns
 /// `None` from `m.get(1)`. Our implementation maps that to `""` to match
 /// yt-dlp's `m.group(1)` returning `""` for a non-participating group in Python's re.
-#[tokio::test]
-async fn search_regex_returns_empty_string_for_non_participating_group1() {
+#[test]
+fn search_regex_returns_empty_string_for_non_participating_group1() {
     let mut c = ctx();
-    let r = c
-        .search_regex(
-            r"(x)?(y)".to_string(),
-            "y".to_string(),
-            crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
-        )
-        .await;
+    let r = c.search_regex(
+        r"(x)?(y)".to_string(),
+        "y".to_string(),
+        crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
+    );
     // group 1 did not participate → empty string (not "y" from group 2)
     assert_eq!(
         r,
@@ -68,68 +62,58 @@ async fn search_regex_returns_empty_string_for_non_participating_group1() {
 }
 
 /// Sanity check: no capture groups → return the whole match (group 0).
-#[tokio::test]
-async fn search_regex_no_groups_returns_whole_match() {
+#[test]
+fn search_regex_no_groups_returns_whole_match() {
     let mut c = ctx();
-    let r = c
-        .search_regex(
-            r"\d+".to_string(),
-            "abc 42 def".to_string(),
-            crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
-        )
-        .await;
+    let r = c.search_regex(
+        r"\d+".to_string(),
+        "abc 42 def".to_string(),
+        crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
+    );
     assert_eq!(r, Some("42".to_string()));
 }
 
-#[tokio::test]
-async fn search_regex_no_match_returns_none() {
+#[test]
+fn search_regex_no_match_returns_none() {
     let mut c = ctx();
-    let r = c
-        .search_regex(
-            r"NOPE".to_string(),
-            "irrelevant".to_string(),
-            crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
-        )
-        .await;
+    let r = c.search_regex(
+        r"NOPE".to_string(),
+        "irrelevant".to_string(),
+        crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
+    );
     assert_eq!(r, None);
 }
 
-#[tokio::test]
-async fn search_regex_ignore_case_flag() {
+#[test]
+fn search_regex_ignore_case_flag() {
     let mut c = ctx();
-    let r = c
-        .search_regex(
-            r"(foo)".to_string(),
-            "FOO bar".to_string(),
-            crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::IGNORE_CASE,
-        )
-        .await;
+    let r = c.search_regex(
+        r"(foo)".to_string(),
+        "FOO bar".to_string(),
+        crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::IGNORE_CASE,
+    );
     assert_eq!(r, Some("FOO".to_string()));
 }
 
-#[tokio::test]
-async fn html_search_regex_strips_tags() {
+#[test]
+fn html_search_regex_strips_tags() {
     let mut c = ctx();
-    let r = c
-        .html_search_regex(
-            r"<title>(.+?)</title>".to_string(),
-            "<title>Hello <b>World</b></title>".to_string(),
-            crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
-        )
-        .await;
+    let r = c.html_search_regex(
+        r"<title>(.+?)</title>".to_string(),
+        "<title>Hello <b>World</b></title>".to_string(),
+        crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
+    );
     assert_eq!(r, Some("Hello World".to_string()));
 }
 
-#[tokio::test]
-async fn html_search_regex_returns_entities_verbatim() {
+#[test]
+fn html_search_regex_returns_entities_verbatim() {
     let mut c = ctx();
-    let r = c
-        .html_search_regex(
-            r"<title>(.+?)</title>".to_string(),
-            "<title>Tom &amp; Jerry</title>".to_string(),
-            crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
-        )
-        .await;
+    let r = c.html_search_regex(
+        r"<title>(.+?)</title>".to_string(),
+        "<title>Tom &amp; Jerry</title>".to_string(),
+        crate::bindings::rdlp::plugin::host_extract_helpers::RegexFlags::empty(),
+    );
     // Returned VERBATIM. The shim used to unescape here, matching yt-dlp;
     // it no longer does, because `InfoDict::decode_text_fields` decodes
     // whatever a plugin returns and two single-pass decodes compose into the
@@ -137,36 +121,30 @@ async fn html_search_regex_returns_entities_verbatim() {
     assert_eq!(r, Some("Tom &amp; Jerry".to_string()));
 }
 
-#[tokio::test]
-async fn html_search_meta_property_form() {
+#[test]
+fn html_search_meta_property_form() {
     let mut c = ctx();
-    let r = c
-        .html_search_meta(
-            "og:title".to_string(),
-            r#"<meta property="og:title" content="Hello"/>"#.to_string(),
-        )
-        .await;
+    let r = c.html_search_meta(
+        "og:title".to_string(),
+        r#"<meta property="og:title" content="Hello"/>"#.to_string(),
+    );
     assert_eq!(r, Some("Hello".to_string()));
 }
 
-#[tokio::test]
-async fn html_search_meta_name_form() {
+#[test]
+fn html_search_meta_name_form() {
     let mut c = ctx();
-    let r = c
-        .html_search_meta(
-            "description".to_string(),
-            r#"<meta name="description" content="Page text"/>"#.to_string(),
-        )
-        .await;
+    let r = c.html_search_meta(
+        "description".to_string(),
+        r#"<meta name="description" content="Page text"/>"#.to_string(),
+    );
     assert_eq!(r, Some("Page text".to_string()));
 }
 
-#[tokio::test]
-async fn html_search_meta_missing_returns_none() {
+#[test]
+fn html_search_meta_missing_returns_none() {
     let mut c = ctx();
-    let r = c
-        .html_search_meta("nope".to_string(), "<html></html>".to_string())
-        .await;
+    let r = c.html_search_meta("nope".to_string(), "<html></html>".to_string());
     assert_eq!(r, None);
 }
 
@@ -175,16 +153,14 @@ async fn html_search_meta_missing_returns_none() {
 ///
 /// Before the fix `[^"']*` stopped at the first `'` inside `"a'b"`,
 /// returning `"a"` instead of `"a'b"`.
-#[tokio::test]
-async fn html_search_meta_mixed_quote_content_not_truncated_regression() {
+#[test]
+fn html_search_meta_mixed_quote_content_not_truncated_regression() {
     let mut c = ctx();
     // content is double-quoted but contains an apostrophe
-    let r = c
-        .html_search_meta(
-            "x".to_string(),
-            r#"<meta name="x" content="a'b">"#.to_string(),
-        )
-        .await;
+    let r = c.html_search_meta(
+        "x".to_string(),
+        r#"<meta name="x" content="a'b">"#.to_string(),
+    );
     assert_eq!(
         r,
         Some("a'b".to_string()),
@@ -193,126 +169,105 @@ async fn html_search_meta_mixed_quote_content_not_truncated_regression() {
 }
 
 /// Companion: content in single quotes may contain a double-quote.
-#[tokio::test]
-async fn html_search_meta_double_quote_inside_single_quoted_content() {
+#[test]
+fn html_search_meta_double_quote_inside_single_quoted_content() {
     let mut c = ctx();
-    let r = c
-        .html_search_meta(
-            "x".to_string(),
-            r#"<meta name='x' content='say "hello"'>"#.to_string(),
-        )
-        .await;
+    let r = c.html_search_meta(
+        "x".to_string(),
+        r#"<meta name='x' content='say "hello"'>"#.to_string(),
+    );
     assert_eq!(r, Some(r#"say "hello""#.to_string()));
 }
 
-#[tokio::test]
-async fn og_search_property_extracts_title() {
+#[test]
+fn og_search_property_extracts_title() {
     let mut c = ctx();
-    let r = c
-        .og_search_property(
-            "title".to_string(),
-            r#"<meta property="og:title" content="My Video"/>"#.to_string(),
-        )
-        .await;
+    let r = c.og_search_property(
+        "title".to_string(),
+        r#"<meta property="og:title" content="My Video"/>"#.to_string(),
+    );
     assert_eq!(r, Some("My Video".to_string()));
 }
 
-#[tokio::test]
-async fn og_search_property_extracts_image() {
+#[test]
+fn og_search_property_extracts_image() {
     let mut c = ctx();
-    let r = c
-        .og_search_property(
-            "image".to_string(),
-            r#"<meta property="og:image" content="https://x.com/y.jpg"/>"#.to_string(),
-        )
-        .await;
+    let r = c.og_search_property(
+        "image".to_string(),
+        r#"<meta property="og:image" content="https://x.com/y.jpg"/>"#.to_string(),
+    );
     assert_eq!(r, Some("https://x.com/y.jpg".to_string()));
 }
 
-#[tokio::test]
-async fn og_search_property_returns_entities_verbatim() {
+#[test]
+fn og_search_property_returns_entities_verbatim() {
     let mut c = ctx();
-    let r = c
-        .og_search_property(
-            "title".to_string(),
-            r#"<meta property="og:title" content="A &amp; B"/>"#.to_string(),
-        )
-        .await;
+    let r = c.og_search_property(
+        "title".to_string(),
+        r#"<meta property="og:title" content="A &amp; B"/>"#.to_string(),
+    );
     // Verbatim — see `html_search_regex_returns_entities_verbatim` above.
     assert_eq!(r, Some("A &amp; B".to_string()));
 }
 
-#[tokio::test]
-async fn og_search_property_extracts_unquoted_value() {
+#[test]
+fn og_search_property_extracts_unquoted_value() {
     let mut c = ctx();
-    let r = c
-        .og_search_property(
-            "image".to_string(),
-            r#"<meta property="og:image" content=https://x.com/y.jpg />"#.to_string(),
-        )
-        .await;
+    let r = c.og_search_property(
+        "image".to_string(),
+        r#"<meta property="og:image" content=https://x.com/y.jpg />"#.to_string(),
+    );
     assert_eq!(r, Some("https://x.com/y.jpg".to_string()));
 }
 
-#[tokio::test]
-async fn rta_search_official_meta_returns_18() {
+#[test]
+fn rta_search_official_meta_returns_18() {
     let mut c = ctx();
-    let r = c
-        .rta_search(r#"<meta name="rating" content="RTA-5042-1996-1400-1577-RTA">"#.to_string())
-        .await;
+    let r =
+        c.rta_search(r#"<meta name="rating" content="RTA-5042-1996-1400-1577-RTA">"#.to_string());
     assert_eq!(r, Some(18));
 }
 
-#[tokio::test]
-async fn rta_search_2257_marker_returns_18() {
+#[test]
+fn rta_search_2257_marker_returns_18() {
     let mut c = ctx();
-    let r = c
-        .rta_search("footer text > 18 U.S.C. § 2257 statement".to_string())
-        .await;
+    let r = c.rta_search("footer text > 18 U.S.C. § 2257 statement".to_string());
     assert_eq!(r, Some(18));
 }
 
-#[tokio::test]
-async fn rta_search_no_marker_returns_none() {
+#[test]
+fn rta_search_no_marker_returns_none() {
     let mut c = ctx();
-    let r = c
-        .rta_search("<html><body>nothing</body></html>".to_string())
-        .await;
+    let r = c.rta_search("<html><body>nothing</body></html>".to_string());
     assert_eq!(r, None);
 }
 
-#[tokio::test]
-async fn search_json_extracts_simple_object() {
+#[test]
+fn search_json_extracts_simple_object() {
     let mut c = ctx();
-    let r = c
-        .search_json(
-            r"var data\s*=".to_string(),
-            ";".to_string(),
-            r#"var data = {"key": "value"};"#.to_string(),
-        )
-        .await;
+    let r = c.search_json(
+        r"var data\s*=".to_string(),
+        ";".to_string(),
+        r#"var data = {"key": "value"};"#.to_string(),
+    );
     assert_eq!(r, Some(r#"{"key": "value"}"#.to_string()));
 }
 
-#[tokio::test]
-async fn search_json_handles_nested() {
+#[test]
+fn search_json_handles_nested() {
     let mut c = ctx();
-    let r = c
-        .search_json(
-            r"var x\s*=".to_string(),
-            ";".to_string(),
-            r#"var x = {"a": {"b": [1,2,3]}};"#.to_string(),
-        )
-        .await;
+    let r = c.search_json(
+        r"var x\s*=".to_string(),
+        ";".to_string(),
+        r#"var x = {"a": {"b": [1,2,3]}};"#.to_string(),
+    );
     assert_eq!(r, Some(r#"{"a": {"b": [1,2,3]}}"#.to_string()));
 }
 
-#[tokio::test]
-async fn search_json_no_match_returns_none() {
+#[test]
+fn search_json_no_match_returns_none() {
     let mut c = ctx();
-    let r = c
-        .search_json(r"NOPE".to_string(), String::new(), "irrelevant".to_string())
-        .await;
+    let r = c.search_json(r"NOPE".to_string(), String::new(), "irrelevant".to_string());
     assert_eq!(r, None);
 }
 
@@ -357,13 +312,13 @@ hi.m3u8\n";
     assert_eq!(fmt.width, Some(1920));
 }
 
-#[tokio::test]
-async fn extract_json_ld_returns_typed_video() {
+#[test]
+fn extract_json_ld_returns_typed_video() {
     let mut c = ctx();
     let html = r#"<script type="application/ld+json">
     {"@type":"VideoObject","name":"Test","description":"d","thumbnailUrl":"https://x/t.jpg","duration":"PT5M","uploadDate":"2024-01-01"}
     </script>"#;
-    let r = c.extract_json_ld(html.to_string()).await.unwrap();
+    let r = c.extract_json_ld(html.to_string()).unwrap();
     assert_eq!(r.title, Some("Test".to_string()));
     assert_eq!(r.duration, Some(300));
 }

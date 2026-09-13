@@ -52,16 +52,11 @@ pub fn add_to_linker(linker: &mut Linker<PluginStoreData>) -> wasmtime::Result<(
 }
 
 impl crate::bindings::rdlp::plugin::host_html_select::Host for PluginStoreData {
-    async fn select(&mut self, html: String, css_selector: String) -> Vec<String> {
+    fn select(&mut self, html: String, css_selector: String) -> Vec<String> {
         HtmlSelectCtx::select_text(&html, &css_selector)
     }
 
-    async fn select_attr(
-        &mut self,
-        html: String,
-        css_selector: String,
-        attr: String,
-    ) -> Vec<String> {
+    fn select_attr(&mut self, html: String, css_selector: String, attr: String) -> Vec<String> {
         HtmlSelectCtx::select_attr_values(&html, &css_selector, &attr)
     }
 }
