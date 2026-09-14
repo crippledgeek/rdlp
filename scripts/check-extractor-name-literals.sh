@@ -35,6 +35,24 @@ _enum=crates/rdlp-types/src/extractor_name.rs
 NAMES=$(grep -oE 'serialize = "[^"]+"' "$_enum" | sed -E 's/serialize = "([^"]+)"/\1/' | paste -sd '|' -)
 [ -n "$NAMES" ] || { echo "ERROR: derived an empty NAMES from $_enum"; exit 2; }
 
+# The derived names are spliced verbatim into $BARE below as a regex
+# alternation. A future variant spelled with a regex metacharacter (`.`,
+# `+`, `(`, ...) would silently change what that alternation matches instead
+# of failing loudly, so reject any such name before it is used. Takes the
+# pipe-joined list as $1 so the self-test below can exercise the same check
+# against a synthetic offender without touching the real enum file.
+assert_names_are_regex_safe() {
+    local offenders
+    offenders=$(printf '%s' "$1" | tr '|' '\n' | grep -vE '^[A-Za-z0-9]+$' || true)
+    if [ -n "$offenders" ]; then
+        echo "ERROR: extractor name(s) contain characters outside [A-Za-z0-9], which would corrupt the derived regex alternation:"
+        printf '%s\n' "$offenders"
+        return 1
+    fi
+    return 0
+}
+assert_names_are_regex_safe "$NAMES" || exit 2
+
 BRACKETED='"\[[A-Za-z0-9]+\]'
 BARE="\"(${NAMES})\""
 
@@ -97,6 +115,14 @@ if [ "$SELF_TEST" -eq 1 ]; then
             exit 1
         fi
     done
+
+    # A synthetic name containing a regex metacharacter must trip
+    # assert_names_are_regex_safe rather than being silently spliced into
+    # $BARE.
+    if assert_names_are_regex_safe "PornHub|a.b|XVideos" >/dev/null 2>&1; then
+        echo "SELF-TEST FAILED: assert_names_are_regex_safe accepted 'a.b'"
+        exit 1
+    fi
 
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
