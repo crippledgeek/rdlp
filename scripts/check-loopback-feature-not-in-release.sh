@@ -79,7 +79,7 @@ if [ "${1:-}" = "--self-test" ]; then
     # print "ok" having checked no binary at all -- the exact fail-open class
     # Important-1 fixed for the per-binary `cargo tree` call, now asserted
     # for the list that feeds it.
-    bins=$(list_workspace_binaries)
+    bins=$(list_workspace_binaries) || exit 2
     if [ -z "$bins" ]; then
         echo "SELF-TEST FAILED: the binary-crate derivation returned nothing."
         exit 1
@@ -93,7 +93,7 @@ if [ "${1:-}" = "--self-test" ]; then
     exit 0
 fi
 
-bins=$(list_workspace_binaries)
+bins=$(list_workspace_binaries) || exit 2
 if [ -z "$bins" ]; then
     echo "ERROR: cargo metadata + jq derived no workspace binary crates -- cannot run this gate." >&2
     exit 2
