@@ -2,6 +2,7 @@
 
 use std::collections::HashSet;
 
+use super::NAME;
 use crate::base::common::MAX_PLAYLIST_SIZE;
 use crate::extractors::hqporner::search_patterns::next_listing_page_url;
 
@@ -44,14 +45,14 @@ impl ListingCrawl {
         let next = next_listing_page_url(webpage, page_url)?;
         if self.visited.contains(&next) {
             log::debug!(
-                "[HQPorner] Pagination revisits {}, stopping",
+                "[{NAME}] Pagination revisits {}, stopping",
                 rdlp_redact::RedactedUrl::new(&next)
             );
             return None;
         }
         if self.visited.len() >= MAX_LISTING_PAGES {
             log::debug!(
-                "[HQPorner] Listing page cap {MAX_LISTING_PAGES} reached, stopping pagination"
+                "[{NAME}] Listing page cap {MAX_LISTING_PAGES} reached, stopping pagination"
             );
             return None;
         }

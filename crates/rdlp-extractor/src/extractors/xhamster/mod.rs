@@ -39,6 +39,10 @@ use crate::hls::detect_format_sizes_lazy;
 
 pub use patterns::{XHAMSTER_EMBED_PATTERN, XHAMSTER_VIDEO_PATTERN};
 
+/// The one spelling of this site's display name (#756); `name()`,
+/// `InfoDict::new`, log tags and filter errors all read it.
+pub(crate) const NAME: &str = "XHamster";
+
 /// Timeout for extracting a single video in playlist mode (30 seconds)
 const VIDEO_EXTRACTION_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -105,7 +109,7 @@ impl XHamsterExtractor {
         let initials = match structured_initials {
             Some(val) => Some(val),
             None => {
-                debug!("[XHamster] window.initials extraction failed, trying regex fallback");
+                debug!("[{NAME}] window.initials extraction failed, trying regex fallback");
                 parse_initials_json(&webpage)
             }
         };
@@ -148,7 +152,7 @@ impl XHamsterExtractor {
             (info, formats)
         } else {
             // Legacy fallback
-            debug!("[XHamster] No window.initials found, using legacy extraction");
+            debug!("[{NAME}] No window.initials found, using legacy extraction");
             let info = utils::extract_metadata_from_html(
                 &webpage,
                 &video_id,
@@ -215,7 +219,7 @@ impl XHamsterExtractor {
             .captures(&webpage)
             .and_then(|caps| caps.get(1))
         {
-            debug!(video_url:? = rdlp_redact::RedactedUrl::new(video_url.as_str()); "[XHamster] Found video URL in embed page");
+            debug!(video_url:? = rdlp_redact::RedactedUrl::new(video_url.as_str()); "[{NAME}] Found video URL in embed page");
             return self.extract_video(video_url.as_str(), ctx).await;
         }
 
@@ -232,7 +236,7 @@ impl XHamsterExtractor {
                     .map(|s| s.to_string())
             })
         {
-            debug!(video_url:?; "[XHamster] Found video URL in embed vars");
+            debug!(video_url:?; "[{NAME}] Found video URL in embed vars");
             return self.extract_video(&video_url, ctx).await;
         }
 
@@ -247,10 +251,6 @@ impl XHamsterExtractor {
 }
 
 impl PagedSearch for XHamsterExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[XHamster]"
-    }
-
     fn validate_search_filters(&self, filters: &[rdlp_types::SearchFilter]) -> Result<()> {
         search::validate_search_filters(filters)
     }
@@ -270,7 +270,7 @@ impl PagedSearch for XHamsterExtractor {
             patterns::build_search_url_page(query, page as usize)
         };
 
-        debug!(page, url:? = rdlp_security::sanitize_for_logging(&page_url); "[XHamster] Fetching search page");
+        debug!(page, url:? = rdlp_security::sanitize_for_logging(&page_url); "[{NAME}] Fetching search page");
 
         let webpage = BaseExtractor::fetch_webpage(&page_url, ctx).await?;
         let initials = search::parse_initials_json(&webpage)?;
@@ -296,7 +296,7 @@ impl Default for XHamsterExtractor {
 #[async_trait]
 impl InfoExtractor for XHamsterExtractor {
     fn name(&self) -> &str {
-        "XHamster"
+        NAME
     }
 
     fn valid_url(&self) -> &regex::Regex {
@@ -331,7 +331,7 @@ impl InfoExtractor for XHamsterExtractor {
 #[async_trait]
 impl SearchExtractor for XHamsterExtractor {
     fn name(&self) -> &str {
-        "XHamster"
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
@@ -368,7 +368,7 @@ fn parse_initials_json(webpage: &str) -> Option<serde_json::Value> {
     .map(|m| m.as_str())?;
 
     serde_json::from_str(json_str)
-        .inspect_err(|e| debug!("[XHamster] Failed to parse window.initials JSON: {e}"))
+        .inspect_err(|e| debug!("[{NAME}] Failed to parse window.initials JSON: {e}"))
         .ok()
 }
 

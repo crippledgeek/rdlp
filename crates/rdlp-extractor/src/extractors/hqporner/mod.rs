@@ -45,6 +45,10 @@ use listing_crawl::ListingCrawl;
 
 pub use patterns::HQPORNER_VIDEO_PATTERN;
 
+/// The one spelling of this site's display name (#756); `name()`,
+/// `InfoDict::new`, log tags and filter errors all read it.
+const NAME: &str = "HQPorner";
+
 /// Pattern to extract duration from text like "26m 52s", "1h 6m 39s", or "45s".
 static DURATION_PATTERN: Lazy<Regex> = lazy_regex!(r"(?:(?:(\d+)h\s*)?(?:(\d+)m\s*))?(\d+)s");
 
@@ -178,7 +182,7 @@ fn extract_iframe_url(webpage: &str) -> Option<String> {
 #[async_trait]
 impl InfoExtractor for HQPornerExtractor {
     fn name(&self) -> &str {
-        "HQPorner"
+        NAME
     }
 
     fn valid_url(&self) -> &Regex {
@@ -306,7 +310,7 @@ impl InfoExtractor for HQPornerExtractor {
                     Ok(info) => all_results.push(info),
                     Err(e) => {
                         warn!(
-                            "[HQPorner] Failed to extract {}: {e}",
+                            "[{NAME}] Failed to extract {}: {e}",
                             rdlp_redact::RedactedUrl::new(video_url)
                         );
                     }
@@ -345,10 +349,6 @@ impl InfoExtractor for HQPornerExtractor {
 }
 
 impl PagedSearch for HQPornerExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[HQPorner]"
-    }
-
     // HQPorner has no filter validation today; Ok(()) preserves that.
     fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {
         Ok(())
@@ -382,7 +382,7 @@ impl PagedSearch for HQPornerExtractor {
 #[async_trait]
 impl SearchExtractor for HQPornerExtractor {
     fn name(&self) -> &str {
-        "HQPorner"
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {

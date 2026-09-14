@@ -10,7 +10,7 @@ use rdlp_types::{
 };
 use scraper::Html;
 
-use super::XNXXExtractor;
+use super::{NAME, XNXXExtractor};
 use crate::base::common::BaseExtractor;
 use crate::base::common::{PagedSearch, SearchPage, SearchPageSpec};
 
@@ -203,10 +203,6 @@ pub(crate) fn has_more_pages(html: &str, query: &SearchQuery, page: u32) -> bool
 }
 
 impl PagedSearch for XNXXExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[xnxx]"
-    }
-
     // XNXX has no filter validation today (the pre-refactor single-GET
     // search path never validated); `Ok(())` is the only value that preserves that.
     fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {
@@ -245,7 +241,7 @@ impl PagedSearch for XNXXExtractor {
 #[async_trait]
 impl SearchExtractor for XNXXExtractor {
     fn name(&self) -> &str {
-        XNXX_NAME_STR
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
@@ -278,8 +274,6 @@ impl SearchExtractor for XNXXExtractor {
 }
 
 // The name string must match XNXXExtractor::name()
-const XNXX_NAME_STR: &str = "XNXX";
-
 #[cfg(test)]
 mod tests {
     use super::*;

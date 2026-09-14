@@ -26,9 +26,9 @@ const VIDEO_EXTRACTION_TIMEOUT: Duration = Duration::from_secs(30);
 /// Number of concurrent video extractions (balance speed vs rate limiting)
 const CONCURRENT_EXTRACTIONS: usize = 4;
 
-use super::PornHubExtractor;
 use super::patterns::{AJAX_TOKEN_PATTERN, VIDEO_COUNT_PATTERN, VIDEO_LINK_PATTERN};
 use super::utils::{extract_host, set_age_cookies};
+use super::{NAME, PornHubExtractor};
 
 /// Pagination metadata
 struct PaginationInfo {
@@ -57,7 +57,7 @@ pub async fn extract_playlist(
     // Set age verification cookies
     set_age_cookies(&host, ctx).await?;
 
-    debug!(playlist_id:?; "[PornHub] Extracting playlist");
+    debug!(playlist_id:?; "[{NAME}] Extracting playlist");
 
     // Fetch first page
     let response = ctx
@@ -85,11 +85,11 @@ pub async fn extract_playlist(
         (title, pagination, videos)
     };
 
-    info!(title:? = playlist_title; "[PornHub] Playlist");
+    info!(title:? = playlist_title; "[{NAME}] Playlist");
     debug!(
         video_count:? = pagination_info.video_count,
         has_token = pagination_info.token.is_some();
-        "[PornHub] Playlist info"
+        "[{NAME}] Playlist info"
     );
 
     if all_video_urls.is_empty() {
@@ -106,11 +106,11 @@ pub async fn extract_playlist(
     if let Some(video_count) = pagination_info.video_count {
         let page_count = calculate_page_count(video_count);
 
-        debug!(video_count, page_count; "[PornHub] Paginated playlist");
+        debug!(video_count, page_count; "[{NAME}] Paginated playlist");
 
         // Fetch remaining pages
         for page_num in 2..=page_count {
-            debug!(page = page_num; "[PornHub] Fetching page");
+            debug!(page = page_num; "[{NAME}] Fetching page");
 
             match download_page(page_num, &pagination_info, &host, ctx).await {
                 Ok(page_html) => {
@@ -132,7 +132,7 @@ pub async fn extract_playlist(
     }
 
     let total = all_video_urls.len();
-    debug!(total; "[PornHub] Found videos in playlist");
+    debug!(total; "[{NAME}] Found videos in playlist");
 
     // Security check: limit playlist size to prevent memory exhaustion
     if total > MAX_PLAYLIST_SIZE {
@@ -143,7 +143,7 @@ pub async fn extract_playlist(
     }
 
     // Extract videos in parallel using buffer_unordered for concurrent processing
-    debug!(total, concurrent = CONCURRENT_EXTRACTIONS; "[PornHub] Extracting videos");
+    debug!(total, concurrent = CONCURRENT_EXTRACTIONS; "[{NAME}] Extracting videos");
 
     // Progress counter for verbose logging
     let completed = Arc::new(AtomicUsize::new(0));
@@ -171,7 +171,7 @@ pub async fn extract_playlist(
                         info.playlist_index = Some(position);
                         info.playlist_count = Some(total);
 
-                        debug!(done, total, title:? = video_title_hint; "[PornHub] Extracted video");
+                        debug!(done, total, title:? = video_title_hint; "[{NAME}] Extracted video");
 
                         Some((position, info))
                     }
@@ -179,12 +179,12 @@ pub async fn extract_playlist(
                         // Bumped from debug → warn so users see silent-pruning.
                         warn!(
                             position, total, title:? = video_title_hint;
-                            "[PornHub] Failed to extract playlist item: {e}"
+                            "[{NAME}] Failed to extract playlist item: {e}"
                         );
                         None
                     }
                     Err(_) => {
-                        warn!(position, total, title:? = video_title_hint; "[PornHub] Timed out extracting playlist item");
+                        warn!(position, total, title:? = video_title_hint; "[{NAME}] Timed out extracting playlist item");
                         None
                     }
                 }
@@ -218,12 +218,12 @@ pub async fn extract_playlist(
     }
 
     let extracted = results.len();
-    info!(extracted, total; "[PornHub] Successfully extracted videos");
+    info!(extracted, total; "[{NAME}] Successfully extracted videos");
     if extracted < total {
         warn!(
             extracted,
             total;
-            "[PornHub] {} of {} playlist items could not be extracted",
+            "[{NAME}] {} of {} playlist items could not be extracted",
             total - extracted,
             total
         );
@@ -281,7 +281,7 @@ fn extract_video_urls(webpage: &str, host: &str) -> Vec<(String, String)> {
                 .filter(|s| !s.is_empty())
                 .unwrap_or_else(|| format!("Video {}", video_id.as_str()));
 
-            debug!(video_id:? = video_id.as_str(), title:?; "[PornHub] Found video");
+            debug!(video_id:? = video_id.as_str(), title:?; "[{NAME}] Found video");
 
             videos.push((video_url, title));
         }

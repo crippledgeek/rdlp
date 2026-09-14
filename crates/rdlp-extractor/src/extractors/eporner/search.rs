@@ -11,7 +11,7 @@ use rdlp_types::{
 use scraper::{Html, Selector};
 use std::sync::LazyLock;
 
-use super::EPornerExtractor;
+use super::{EPornerExtractor, NAME};
 use crate::base::common::{
     BaseExtractor, PagedSearch, SearchPage, SearchPageSpec, first_resolvable_media_attr,
     is_not_a_data_uri, resolve_card_url,
@@ -245,10 +245,6 @@ fn parse_results(html: &str) -> Vec<SearchResultPreview> {
 }
 
 impl PagedSearch for EPornerExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[EPorner]"
-    }
-
     // EPorner has no filter validation today; Ok(()) preserves that.
     fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {
         Ok(())
@@ -284,7 +280,7 @@ impl PagedSearch for EPornerExtractor {
 #[async_trait]
 impl SearchExtractor for EPornerExtractor {
     fn name(&self) -> &str {
-        "EPorner"
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {

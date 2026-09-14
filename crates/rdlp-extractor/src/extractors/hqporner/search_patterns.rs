@@ -4,6 +4,7 @@ use lazy_regex::{Lazy, Regex, lazy_regex};
 use log::warn;
 use url::form_urlencoded;
 
+use super::NAME;
 use crate::base::common::resolve_card_url;
 
 /// HQPorner search base URL.
@@ -70,7 +71,7 @@ pub(crate) fn next_listing_page_url(webpage: &str, page_url: &str) -> Option<Str
     let resolved = resolve_card_url(page_url, href);
     if resolved.is_none() {
         warn!(
-            "[HQPorner] Ignoring off-origin pagination href {}",
+            "[{NAME}] Ignoring off-origin pagination href {}",
             rejected_href_for_log(href)
         );
     }

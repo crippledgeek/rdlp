@@ -27,6 +27,10 @@ use crate::base::common::json_ld::{
 };
 use crate::base::common::{BaseExtractor, PagedSearch, SearchOrigin, SearchPage};
 
+/// The one spelling of this site's display name (#756); `name()`,
+/// `InfoDict::new`, log tags and filter errors all read it.
+pub(crate) const NAME: &str = "PornOne";
+
 /// pornone.com — server-rendered, individually-signed progressive MP4
 /// renditions; cookie-free search with fixed-grid filler detection.
 pub struct PornoneExtractor {
@@ -61,7 +65,7 @@ impl Default for PornoneExtractor {
 #[async_trait]
 impl InfoExtractor for PornoneExtractor {
     fn name(&self) -> &str {
-        "PornOne"
+        NAME
     }
 
     fn valid_url(&self) -> &Regex {
@@ -81,7 +85,7 @@ impl InfoExtractor for PornoneExtractor {
             .ok_or_else(|| RdlpError::extraction("URL is not a PornOne video page", url))?;
 
         debug!(
-            "[PornOne] Extracting {video_id} from {}",
+            "[{NAME}] Extracting {video_id} from {}",
             rdlp_redact::RedactedUrl::new(url)
         );
 
@@ -150,10 +154,6 @@ impl InfoExtractor for PornoneExtractor {
 }
 
 impl PagedSearch for PornoneExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[PornOne]"
-    }
-
     fn validate_search_filters(&self, filters: &[SearchFilter]) -> Result<()> {
         search_patterns::validate(filters)
     }
@@ -172,7 +172,7 @@ impl PagedSearch for PornoneExtractor {
     ) -> Result<SearchPage> {
         let url = search::build_search_url(&self.origin, query, page);
         debug!(
-            "[PornOne] Fetching search page {page}: {}",
+            "[{NAME}] Fetching search page {page}: {}",
             rdlp_redact::RedactedUrl::new(&url)
         );
         let body = BaseExtractor::fetch_webpage(&url, ctx).await?;
@@ -191,7 +191,7 @@ impl PagedSearch for PornoneExtractor {
 #[async_trait]
 impl SearchExtractor for PornoneExtractor {
     fn name(&self) -> &str {
-        "PornOne"
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {

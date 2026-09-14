@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use rdlp_core::{ExtractionContext, Result, SearchExtractor};
 use rdlp_types::{SearchPageResponse, SearchQuery, SearchResultPreview};
 
-use super::NineAnimeExtractor;
 use super::search_patterns;
+use super::{NAME, NineAnimeExtractor};
 use crate::base::common::{PagedSearch, SearchPage, SearchPageSpec};
 
 const BASE_URL: &str = "https://9animetv.to";
@@ -73,10 +73,6 @@ pub(crate) fn extract_total_pages(html: &str) -> Option<u32> {
 }
 
 impl PagedSearch for NineAnimeExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[NineAnime]"
-    }
-
     // NineAnime has no filter validation today; Ok(()) preserves that.
     fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {
         Ok(())
@@ -120,7 +116,7 @@ impl PagedSearch for NineAnimeExtractor {
 #[async_trait]
 impl SearchExtractor for NineAnimeExtractor {
     fn name(&self) -> &str {
-        "NineAnime"
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
@@ -311,7 +307,7 @@ mod tests {
     #[test]
     fn test_search_name() {
         let ext = NineAnimeExtractor::new();
-        assert_eq!(SearchExtractor::name(&ext), "NineAnime");
+        assert_eq!(SearchExtractor::name(&ext), "9anime");
     }
 
     #[test]

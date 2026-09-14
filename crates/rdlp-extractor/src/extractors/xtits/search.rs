@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use rdlp_core::{ExtractionContext, Result, SearchExtractor};
 use rdlp_types::{SearchPageResponse, SearchQuery, SearchResultPreview};
 
-use super::XTitsExtractor;
 use super::search_patterns;
+use super::{NAME, XTitsExtractor};
 use crate::base::common::{PagedSearch, SearchPage, SearchPageSpec};
 
 /// Maximum results cap for a full search (matches the pre-refactor
@@ -68,10 +68,6 @@ pub(crate) fn detect_max_page(html: &str) -> u32 {
 }
 
 impl PagedSearch for XTitsExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[XTits]"
-    }
-
     // XTits has no filter validation today (the pre-refactor single-GET
     // search path never validated); `Ok(())` is the only value that preserves that.
     fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {
@@ -115,7 +111,7 @@ impl PagedSearch for XTitsExtractor {
 #[async_trait]
 impl SearchExtractor for XTitsExtractor {
     fn name(&self) -> &str {
-        "XTits"
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {

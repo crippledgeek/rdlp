@@ -25,7 +25,9 @@ use serde_json::Value;
 
 use crate::base::common::BaseExtractor;
 
-const SPANKBANG_NAME: &str = "SpankBang";
+/// The one spelling of this site's display name (#756); `name()`, `InfoDict::new`,
+/// log tags and filter errors all read it.
+pub(crate) const NAME: &str = "SpankBang";
 const SPANKBANG_PRIORITY: i32 = 100;
 const FORMATS_API_URL: &str = "https://spankbang.com/api/videos/stream";
 
@@ -83,7 +85,7 @@ impl SpankBangExtractor {
 #[async_trait]
 impl InfoExtractor for SpankBangExtractor {
     fn name(&self) -> &str {
-        SPANKBANG_NAME
+        NAME
     }
 
     fn valid_url(&self) -> &Regex {
@@ -119,7 +121,7 @@ impl InfoExtractor for SpankBangExtractor {
 
         // yt-dlp parity: rewrite /<id>/embed → /<id>/video before fetching.
         let canonical = url.replace(&format!("/{video_id}/embed"), &format!("/{video_id}/video"));
-        debug!("[spankbang] fetching video page id={video_id}");
+        debug!("[{NAME}] fetching video page id={video_id}");
 
         // SpankBang gates some content by country; matches yt-dlp's default.
         let webpage =
@@ -138,7 +140,7 @@ impl InfoExtractor for SpankBangExtractor {
         if let Some(data) = formats::parse_inline_stream_data(&webpage) {
             formats = formats::build_formats(&data);
             debug!(
-                "[spankbang] inline stream_data produced {} formats",
+                "[{NAME}] inline stream_data produced {} formats",
                 formats.len()
             );
             formats =
@@ -147,7 +149,7 @@ impl InfoExtractor for SpankBangExtractor {
         }
 
         if formats.is_empty() {
-            warn!("[spankbang] inline stream_data missing, falling back to formats API");
+            warn!("[{NAME}] inline stream_data missing, falling back to formats API");
             let key = formats::parse_streamkey(&webpage).ok_or_else(|| RdlpError::Extraction {
                 message: format!(
                     "SpankBang: neither inline stream_data nor data-streamkey present \
@@ -182,7 +184,7 @@ impl InfoExtractor for SpankBangExtractor {
         let meta = metadata::parse(&webpage);
         let title = meta.title.clone().unwrap_or_else(|| video_id.clone());
 
-        let mut info = InfoDict::new(&video_id, &title, SPANKBANG_NAME, url);
+        let mut info = InfoDict::new(&video_id, &title, NAME, url);
         info.description = meta.description;
         info.thumbnail = meta.thumbnail;
         info.uploader = meta.uploader;

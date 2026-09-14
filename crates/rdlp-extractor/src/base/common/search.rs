@@ -8,7 +8,7 @@
 //! RedTube) delegate that appending here.
 
 use log::debug;
-use rdlp_core::{ExtractionContext, RdlpError, Result};
+use rdlp_core::{ExtractionContext, RdlpError, Result, SearchExtractor};
 use rdlp_types::{
     SearchFilter, SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchResultPreview,
 };
@@ -130,6 +130,12 @@ impl AsRef<str> for SearchOrigin {
     fn as_ref(&self) -> &str {
         &self.0
     }
+}
+
+/// The one place a site name becomes a log prefix (#756). Built from
+/// `SearchExtractor::name` so the tag cannot drift from the name.
+pub(crate) fn log_tag(name: &str) -> String {
+    format!("[{name}]")
 }
 
 /// Per-site configuration for the default [`PagedSearch::fetch_page`] (via
@@ -496,16 +502,17 @@ pub(crate) fn append_search_filters(url: &mut String, filters: &[SearchFilter]) 
 /// and reporting a hard failure as "no results" hides each site's actionable
 /// message; a later-page error returns the results gathered so far.
 /// Implementors supply only the per-site pieces (a single
-/// [`fetch_page`](Self::fetch_page), a log tag, filter validation);
+/// [`fetch_page`](Self::fetch_page), filter validation); the log tag is
+/// derived from `SearchExtractor::name` (see [`log_tag`]);
 /// [`search_all_pages`](Self::search_all_pages) is the shared default and
 /// should not be overridden.
 ///
 /// Each `fetch_page` computes its own `has_more` (from a site page count via
 /// the [`Termination`] helper, or from result-emptiness). Per-page
 /// primary↔fallback fetching is a private concern of each site's `fetch_page`.
-pub(crate) trait PagedSearch: Send + Sync {
-    /// Bracketed site tag used in log lines, e.g. `"[XHamster]"`.
-    fn search_log_tag(&self) -> &'static str;
+pub(crate) trait PagedSearch: SearchExtractor {
+    // `search_log_tag` removed (#756) — the log tag is derived from
+    // `SearchExtractor::name` via `log_tag`, so it cannot drift from it.
 
     /// Validate the query's filters against this site's supported filter set.
     fn validate_search_filters(&self, filters: &[SearchFilter]) -> Result<()>;
@@ -590,7 +597,7 @@ pub(crate) trait PagedSearch: Send + Sync {
     ) -> Result<Vec<SearchResultPreview>> {
         self.validate_search_filters(&query.filters)?;
 
-        let tag = self.search_log_tag();
+        let tag = log_tag(SearchExtractor::name(self));
         let max_results = query.max_results.unwrap_or(self.max_results_default());
         let mut all_results: Vec<SearchResultPreview> = Vec::new();
         let mut page = self.first_page_index();
@@ -688,6 +695,11 @@ pub(crate) trait PagedSearch: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn log_tag_brackets_the_search_extractor_name() {
+        assert_eq!(log_tag("PornoXO"), "[PornoXO]");
+    }
 
     fn filter(key: &str, value: &str) -> SearchFilter {
         SearchFilter {
@@ -828,10 +840,24 @@ mod tests {
         }
     }
 
-    impl PagedSearch for MockSearch {
-        fn search_log_tag(&self) -> &'static str {
-            "[Mock]"
+    #[async_trait::async_trait]
+    impl SearchExtractor for MockSearch {
+        fn name(&self) -> &str {
+            "Mock"
         }
+        fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
+            Vec::new()
+        }
+        async fn search(
+            &self,
+            query: &SearchQuery,
+            ctx: &ExtractionContext,
+        ) -> Result<Vec<SearchResultPreview>> {
+            self.search_all_pages(query, ctx).await
+        }
+    }
+
+    impl PagedSearch for MockSearch {
         fn validate_search_filters(&self, _filters: &[SearchFilter]) -> Result<()> {
             if self.validation_fails {
                 Err(RdlpError::extraction(

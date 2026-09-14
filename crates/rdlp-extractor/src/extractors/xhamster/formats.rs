@@ -16,6 +16,7 @@ use rdlp_core::JsEngine;
 
 use crate::base::common::BaseExtractor;
 
+use super::NAME;
 use super::js_extract::PlayerJsSource;
 use super::patterns;
 
@@ -110,7 +111,7 @@ async fn collect_hls_formats(
         let Some(deciphered) =
             super::js_extract::decipher_url(&hls_url, js_engine, player_js).await
         else {
-            debug!(format_id:?; "[XHamster] Failed to decipher HLS URL");
+            debug!(format_id:?; "[{NAME}] Failed to decipher HLS URL");
             continue;
         };
         if !seen_urls.insert(deciphered.clone()) {
@@ -185,7 +186,7 @@ async fn collect_standard_formats(
                 let Some(deciphered) =
                     super::js_extract::decipher_url(std_url, js_engine, player_js).await
                 else {
-                    debug!(format_id:?; "[XHamster] Failed to decipher standard URL");
+                    debug!(format_id:?; "[{NAME}] Failed to decipher standard URL");
                     continue;
                 };
 
@@ -197,7 +198,7 @@ async fn collect_standard_formats(
                 let is_hls = deciphered.contains("m3u8") || deciphered.contains("media=hls");
                 if !is_hls {
                     debug!(
-                        "[XHamster] Skipping standard direct URL {} (CDN-blocked)",
+                        "[{NAME}] Skipping standard direct URL {} (CDN-blocked)",
                         format_id
                     );
                     continue;
@@ -259,7 +260,7 @@ pub async fn extract_from_initials(
     let video_model = match initials.get("videoModel") {
         Some(vm) => vm,
         None => {
-            debug!("[XHamster] No videoModel in initials");
+            debug!("[{NAME}] No videoModel in initials");
             return formats;
         }
     };
@@ -278,7 +279,7 @@ pub async fn extract_from_initials(
     // (HLS + encrypted standard) are functional. File sizes from
     // sources.download are still used to annotate decrypted formats.
     debug!(
-        "[XHamster] Skipping {} videoModel.sources direct URL key(s) (CDN-blocked)",
+        "[{NAME}] Skipping {} videoModel.sources direct URL key(s) (CDN-blocked)",
         sources.keys().filter(|k| *k != "download").count()
     );
 
@@ -290,7 +291,7 @@ pub async fn extract_from_initials(
 
     if let Some(xplayer_sources) = xplayer_sources_val.and_then(|v| v.as_object()) {
         debug!(
-            "[XHamster] Found xplayerSettings.sources with {} keys",
+            "[{NAME}] Found xplayerSettings.sources with {} keys",
             xplayer_sources.len()
         );
 
@@ -309,13 +310,13 @@ pub async fn extract_from_initials(
             formats.extend(std_formats);
         }
     } else {
-        debug!("[XHamster] No xplayerSettings.sources found");
+        debug!("[{NAME}] No xplayerSettings.sources found");
     }
 
     // Phase 4: Propagate file sizes from sources.download to extracted formats.
     propagate_download_sizes(&mut formats, &format_sizes);
 
-    debug!("[XHamster] Total formats extracted: {}", formats.len());
+    debug!("[{NAME}] Total formats extracted: {}", formats.len());
     fixup_formats(&mut formats);
     crate::base::common::BaseExtractor::dedup_format_ids(&mut formats);
     formats

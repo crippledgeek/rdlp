@@ -11,7 +11,7 @@ pub(crate) fn supported_filters() -> Vec<SearchFilterDescriptor> {
 
 pub(crate) fn validate(filters: &[SearchFilter]) -> Result<()> {
     validate_against_descriptors(filters, &supported_filters(), &[])
-        .map_err(|e| format_std_filter_error("PornOne", e))
+        .map_err(|e| format_std_filter_error(super::NAME, e))
 }
 
 #[cfg(test)]

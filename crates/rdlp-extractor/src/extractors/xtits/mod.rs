@@ -27,6 +27,10 @@ use crate::base::common::BaseExtractor;
 /// Base URL for making relative hrefs absolute.
 const XTITS_BASE_URL: &str = "https://www.xtits.com";
 
+/// The one spelling of this site's display name (#756); `name()`,
+/// `InfoDict::new`, log tags and filter errors all read it.
+pub(crate) const NAME: &str = "XTits";
+
 /// XTits extractor
 pub struct XTitsExtractor;
 
@@ -79,7 +83,7 @@ where
     let container_selector = match scraper::Selector::parse(container_sel) {
         Ok(s) => s,
         Err(e) => {
-            log::error!("[XTits] dynamic CSS selector failed to parse: {container_sel:?}: {e}");
+            log::error!("[{NAME}] dynamic CSS selector failed to parse: {container_sel:?}: {e}");
             return Vec::new();
         }
     };
@@ -175,7 +179,7 @@ fn parse_duration_text(html: &Html) -> Option<f64> {
 #[async_trait]
 impl InfoExtractor for XTitsExtractor {
     fn name(&self) -> &str {
-        "XTits"
+        NAME
     }
 
     fn valid_url(&self) -> &Regex {

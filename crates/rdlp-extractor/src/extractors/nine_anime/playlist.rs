@@ -18,7 +18,7 @@ use rdlp_core::{ExtractionContext, RdlpError, Result};
 use rdlp_types::InfoDict;
 use scraper::Html;
 
-use super::{build_subtitle_map, episodes, metadata, patterns, resolve_episode_formats};
+use super::{NAME, build_subtitle_map, episodes, metadata, patterns, resolve_episode_formats};
 use crate::base::common::BaseExtractor;
 
 /// Extract all episodes of an anime as a playlist.
@@ -146,7 +146,7 @@ pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<In
             episode.data_id
         );
 
-        let mut info = InfoDict::new(&video_id, &title, "9anime", &webpage_url);
+        let mut info = InfoDict::new(&video_id, &title, NAME, &webpage_url);
         info.thumbnail = anime_metadata.thumbnail.clone();
         info.description = anime_metadata.description.clone();
 

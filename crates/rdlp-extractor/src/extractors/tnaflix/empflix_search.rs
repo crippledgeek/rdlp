@@ -7,6 +7,12 @@ use rdlp_core::{ExtractionContext, Result};
 use super::{search_patterns, tnaflix_search_helpers};
 use crate::base::common::{PagedSearch, SearchPage, Termination};
 
+/// The one spelling of this site's display name (#756); `name()`,
+/// `InfoDict::new`, log tags and filter errors all read it. Also read by
+/// `TNAFlixExtractor::empflix()` in `info.rs` (the InfoExtractor side of
+/// this same site).
+pub(super) const NAME: &str = "EMPFlix";
+
 /// EMPFlix search extractor
 ///
 /// EMPFlix shares the same HTML structure as TNAFlix.  This extractor reuses
@@ -39,10 +45,6 @@ impl EMPFlixSearchExtractor {
 }
 
 impl PagedSearch for EMPFlixSearchExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[EMPFlix]"
-    }
-
     fn validate_search_filters(&self, filters: &[rdlp_types::SearchFilter]) -> Result<()> {
         tnaflix_search_helpers::validate_search_filters(filters)
     }
@@ -57,7 +59,7 @@ impl PagedSearch for EMPFlixSearchExtractor {
         ctx: &ExtractionContext,
     ) -> Result<SearchPage> {
         let page_url = Self::build_page_url(query, page as usize);
-        debug!(page; "[EMPFlix] Fetching search page: {}", rdlp_security::sanitize_for_logging(&page_url));
+        debug!(page; "[{NAME}] Fetching search page: {}", rdlp_security::sanitize_for_logging(&page_url));
 
         let webpage = crate::base::common::BaseExtractor::fetch_webpage(&page_url, ctx).await?;
         let page_results = tnaflix_search_helpers::parse_search_results(&webpage);
@@ -66,7 +68,7 @@ impl PagedSearch for EMPFlixSearchExtractor {
         debug!(
             count = page_results.len(),
             max_pages;
-            "[EMPFlix] Search page {page} returned {} results",
+            "[{NAME}] Search page {page} returned {} results",
             page_results.len()
         );
 
@@ -89,7 +91,7 @@ impl Default for EMPFlixSearchExtractor {
 #[async_trait]
 impl rdlp_core::SearchExtractor for EMPFlixSearchExtractor {
     fn name(&self) -> &str {
-        "EMPFlix"
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {

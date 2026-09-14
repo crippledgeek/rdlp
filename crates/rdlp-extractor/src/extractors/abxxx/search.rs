@@ -24,7 +24,7 @@ use rdlp_types::{
 };
 use serde_json::Value;
 
-use super::{ABXXX_BASE_URL, AbxxxExtractor};
+use super::{ABXXX_BASE_URL, AbxxxExtractor, NAME};
 use crate::base::common::{PagedSearch, SearchPage, SearchPageSpec};
 use crate::base::kvs::api as kvs_api;
 
@@ -77,14 +77,14 @@ fn entry_to_preview(entry: &Value) -> Option<SearchResultPreview> {
     // Validate path components to prevent path-traversal via API response (M3).
     if !is_safe_path_segment(video_id) {
         warn!(
-            "[ABXXX] dropping entry: video_id contains unsafe characters: {:?}",
+            "[{NAME}] dropping entry: video_id contains unsafe characters: {:?}",
             video_id
         );
         return None;
     }
     if !dir.is_empty() && !is_safe_path_segment(dir) {
         warn!(
-            "[ABXXX] dropping entry: dir contains unsafe characters: {:?}",
+            "[{NAME}] dropping entry: dir contains unsafe characters: {:?}",
             dir
         );
         return None;
@@ -201,10 +201,6 @@ fn parse_response(body: &str) -> Result<(Vec<SearchResultPreview>, Option<u64>, 
 }
 
 impl PagedSearch for AbxxxExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[ABXXX]"
-    }
-
     // ABXXX has no filter validation today: the bespoke search()/search_page() never
     // validated — resolved_sort tolerates any value (falls back to "relevance"), no reject
     // path. Ok(()) is the only value that preserves that.
@@ -272,7 +268,7 @@ impl PagedSearch for AbxxxExtractor {
 #[async_trait]
 impl SearchExtractor for AbxxxExtractor {
     fn name(&self) -> &str {
-        "ABXXX"
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {

@@ -16,14 +16,12 @@ use rdlp_types::{
     SearchFilterDescriptor, SearchFilterValue, SearchPageResponse, SearchQuery, SearchResultPreview,
 };
 
-use super::SpankBangExtractor;
+use super::{NAME, SpankBangExtractor};
 use super::{metadata, patterns};
 use crate::base::common::BaseExtractor;
 use crate::base::common::{PAGE_RATE_LIMIT_MS, PagedSearch, SearchPage, SearchPageSpec};
 
 const SPANKBANG_BASE_URL: &str = "https://spankbang.com";
-const SPANKBANG_NAME_STR: &str = "SpankBang";
-
 /// Approximate result-cards-per-page on a typical query. Used as a coarse
 /// `total_estimate` for the paginated response shape; not authoritative.
 const RESULTS_PER_PAGE: u64 = 36;
@@ -225,10 +223,6 @@ fn has_more_pages(html: &str, query: &SearchQuery, page: u32) -> bool {
 }
 
 impl PagedSearch for SpankBangExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[spankbang]"
-    }
-
     // SpankBang advertises an `ordering` filter but has never validated it
     // (the pre-refactor single-GET search path never checked); `Ok(())` is
     // the only value that preserves that.
@@ -268,7 +262,7 @@ impl PagedSearch for SpankBangExtractor {
 #[async_trait]
 impl SearchExtractor for SpankBangExtractor {
     fn name(&self) -> &str {
-        SPANKBANG_NAME_STR
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
@@ -306,7 +300,7 @@ impl SearchExtractor for SpankBangExtractor {
         loop {
             let page_url = build_search_url(query, page);
             let sanitized = rdlp_security::sanitize_for_logging(&page_url);
-            debug!("[spankbang] fetching search page {}: {sanitized}", page + 1);
+            debug!("[{NAME}] fetching search page {}: {sanitized}", page + 1);
 
             let webpage = BaseExtractor::fetch_webpage_with_headers(
                 &page_url,
@@ -353,7 +347,7 @@ impl SearchExtractor for SpankBangExtractor {
         }
 
         debug!(
-            "[spankbang] search complete: {} results across {} page(s)",
+            "[{NAME}] search complete: {} results across {} page(s)",
             all_results.len(),
             page + 1
         );
@@ -372,7 +366,7 @@ impl SearchExtractor for SpankBangExtractor {
         }
 
         let sanitized = rdlp_security::sanitize_for_logging(&preview.video_url);
-        debug!("[spankbang] enriching preview from video page: {sanitized}");
+        debug!("[{NAME}] enriching preview from video page: {sanitized}");
 
         let webpage = match BaseExtractor::fetch_webpage_with_headers(
             &preview.video_url,
@@ -385,7 +379,7 @@ impl SearchExtractor for SpankBangExtractor {
             Err(e) => {
                 // Enrichment is best-effort; surface the original preview on
                 // failure rather than fail the whole search-row render.
-                debug!("[spankbang] enrich fetch failed: {e}");
+                debug!("[{NAME}] enrich fetch failed: {e}");
                 return Ok(preview);
             }
         };

@@ -197,6 +197,7 @@ async fn fetch_all_episodes_impl(
 
 #[cfg(test)]
 mod tests {
+    use super::super::NAME;
     use super::*;
 
     #[test]
@@ -331,8 +332,7 @@ mod tests {
             info.title.as_deref().unwrap()
         );
 
-        let mut dict =
-            rdlp_types::InfoDict::new("40198", composed, "9anime", "https://9animetv.to/x");
+        let mut dict = rdlp_types::InfoDict::new("40198", composed, NAME, "https://9animetv.to/x");
         dict.decode_text_fields();
 
         assert_eq!(dict.title, "Sailor Moon - Episode 15 - Usagi's Disaster");

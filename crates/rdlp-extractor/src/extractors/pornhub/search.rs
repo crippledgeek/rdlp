@@ -9,7 +9,7 @@ use rdlp_core::{RdlpError, Result};
 use rdlp_types::{SearchFilter, SearchResultPreview};
 use serde::Deserialize;
 
-use super::search_patterns;
+use super::{NAME, search_patterns};
 
 /// Top-level API response from `pornhub.com/webmasters/search`.
 #[derive(Debug, PartialEq, Deserialize)]
@@ -116,7 +116,7 @@ fn parse_api_search_results_impl(json: &str) -> anyhow::Result<Vec<SearchResultP
 fn api_video_to_preview(mut video: ApiVideo) -> Option<SearchResultPreview> {
     if video.url.is_empty() {
         debug!(
-            "[PornHub] Search result missing URL for video_id={}, skipping",
+            "[{NAME}] Search result missing URL for video_id={}, skipping",
             video.video_id
         );
         return None;
@@ -191,7 +191,7 @@ pub(crate) fn validate_search_filters(filters: &[SearchFilter]) -> Result<()> {
             ("tags", KeyValidation::FreeText),
         ],
     )
-    .map_err(|e| format_std_filter_error("PornHub", e))
+    .map_err(|e| format_std_filter_error(NAME, e))
 }
 
 #[cfg(test)]

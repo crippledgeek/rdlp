@@ -30,6 +30,10 @@ use self::detection::{
 use self::direct::{PrefetchResponse, prefetch, title_from_url};
 use self::json_ld::JsonLdStrategy;
 
+/// The one spelling of this extractor's display name (#756); `name()`,
+/// `InfoDict::new` and log lines all read it.
+const NAME: &str = "Generic";
+
 /// Maximum page size to parse (2 MB). Pages larger than this are truncated.
 const MAX_PAGE_SIZE: usize = 2 * 1024 * 1024;
 
@@ -68,7 +72,7 @@ impl GenericExtractor {
 #[async_trait]
 impl InfoExtractor for GenericExtractor {
     fn name(&self) -> &str {
-        "Generic"
+        NAME
     }
 
     fn valid_url(&self) -> &Regex {
@@ -176,7 +180,7 @@ impl InfoExtractor for GenericExtractor {
 
         // === Phase 4: Build InfoDict ===
         let video_id = generate_video_id(url);
-        let mut info = InfoDict::new(&video_id, &title, "Generic", url);
+        let mut info = InfoDict::new(&video_id, &title, NAME, url);
         info.description = description;
         info.thumbnail = thumbnail;
         info.age_limit = rta_search(&webpage);
@@ -219,7 +223,7 @@ fn try_direct_media(url: &str, pf: &PrefetchResponse) -> Result<Option<InfoDict>
             Err(_) => {
                 // Malformed input URL — fall back to legacy placeholder so the
                 // download path can still try with the raw URL string.
-                let mut info = InfoDict::new(&video_id, &title, "Generic", url);
+                let mut info = InfoDict::new(&video_id, &title, NAME, url);
                 let format = Format::new("dash", url, "mpd", DownloadProtocol::HttpDashSegments);
                 info.formats = vec![format];
                 return Ok(Some(info));
@@ -233,7 +237,7 @@ fn try_direct_media(url: &str, pf: &PrefetchResponse) -> Result<Option<InfoDict>
             }) => {
                 // Subtitles deliberately dropped here — InfoDict has no subtitles field today.
                 // Tracking issue (to be filed) for orchestrator-level propagation.
-                let mut info = InfoDict::new(&video_id, &title, "Generic", url);
+                let mut info = InfoDict::new(&video_id, &title, NAME, url);
                 info.formats = formats;
                 return Ok(Some(info));
             }
@@ -250,7 +254,7 @@ fn try_direct_media(url: &str, pf: &PrefetchResponse) -> Result<Option<InfoDict>
                     "DASH expansion failed for {}: {e}; falling back to legacy single-Format path",
                     rdlp_redact::RedactedUrl::new(url)
                 );
-                let mut info = InfoDict::new(&video_id, &title, "Generic", url);
+                let mut info = InfoDict::new(&video_id, &title, NAME, url);
                 let format = Format::new("dash", url, "mpd", DownloadProtocol::HttpDashSegments);
                 info.formats = vec![format];
                 return Ok(Some(info));
@@ -268,7 +272,7 @@ fn try_direct_media(url: &str, pf: &PrefetchResponse) -> Result<Option<InfoDict>
         });
 
         let video_id = generate_video_id(url);
-        let mut info = InfoDict::new(&video_id, &title, "Generic", url);
+        let mut info = InfoDict::new(&video_id, &title, NAME, url);
 
         let protocol = protocol_from_url(url, ext.as_deref());
         let ext = ext_or_guess(ext.as_deref());
@@ -285,7 +289,7 @@ fn try_direct_media(url: &str, pf: &PrefetchResponse) -> Result<Option<InfoDict>
     if pf.is_hls_manifest() {
         let title = title_from_url(url);
         let video_id = generate_video_id(url);
-        let mut info = InfoDict::new(&video_id, &title, "Generic", url);
+        let mut info = InfoDict::new(&video_id, &title, NAME, url);
         let format = Format::new("generic-hls", url, "m3u8", DownloadProtocol::M3u8);
         info.formats = vec![format];
         return Ok(Some(info));
@@ -374,7 +378,7 @@ const GUESSED_EXT: &str = "mp4";
 /// The one place an absent extension becomes a filename extension.
 fn ext_or_guess(ext: Option<&str>) -> &str {
     ext.unwrap_or_else(|| {
-        log::debug!("[Generic] No extension from URL or media type; guessing {GUESSED_EXT}");
+        log::debug!("[{NAME}] No extension from URL or media type; guessing {GUESSED_EXT}");
         GUESSED_EXT
     })
 }

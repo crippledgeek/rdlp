@@ -10,7 +10,7 @@ use rdlp_types::{
 };
 use scraper::Html;
 
-use super::XVideosExtractor;
+use super::{NAME, XVideosExtractor};
 use crate::base::common::{
     BaseExtractor, PagedSearch, SearchPage, SearchPageSpec, first_resolvable_media_attr,
     is_not_a_data_uri, resolve_card_url,
@@ -200,10 +200,6 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
 }
 
 impl PagedSearch for XVideosExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[XVideos]"
-    }
-
     // XVideos has no filter validation today (the pre-refactor single-GET
     // search path never validated); `Ok(())` is the only value that preserves that.
     fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {
@@ -247,7 +243,7 @@ impl PagedSearch for XVideosExtractor {
 #[async_trait]
 impl SearchExtractor for XVideosExtractor {
     fn name(&self) -> &str {
-        "XVideos"
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {

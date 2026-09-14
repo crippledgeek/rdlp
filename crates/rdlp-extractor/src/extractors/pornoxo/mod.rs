@@ -25,6 +25,10 @@ use crate::base::common::json_ld::{
 use crate::base::common::{BaseExtractor, PagedSearch, SearchOrigin, SearchPage, filter_value};
 use crate::hls::detect_format_sizes_lazy;
 
+/// The one spelling of this site's display name (#756); `name()`,
+/// `InfoDict::new`, log tags and filter errors all read it.
+pub(crate) const NAME: &str = "PornoXO";
+
 /// PornoXO — signed per-page-load HLS ladder read from an inline `playerConfig`.
 pub struct PornoxoExtractor {
     /// Origin the listing/search URLs are built against. Production literal by
@@ -59,7 +63,7 @@ impl Default for PornoxoExtractor {
 #[async_trait]
 impl InfoExtractor for PornoxoExtractor {
     fn name(&self) -> &str {
-        "PornoXO"
+        NAME
     }
 
     fn valid_url(&self) -> &Regex {
@@ -79,7 +83,7 @@ impl InfoExtractor for PornoxoExtractor {
             .ok_or_else(|| RdlpError::extraction("URL is not a PornoXO video page", url))?;
 
         debug!(
-            "[PornoXO] Extracting {video_id} from {}",
+            "[{NAME}] Extracting {video_id} from {}",
             rdlp_redact::RedactedUrl::new(url)
         );
 
@@ -150,10 +154,6 @@ impl InfoExtractor for PornoxoExtractor {
 }
 
 impl PagedSearch for PornoxoExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[PornoXO]"
-    }
-
     fn validate_search_filters(&self, filters: &[SearchFilter]) -> Result<()> {
         search_patterns::validate(filters)
     }
@@ -185,7 +185,7 @@ impl PagedSearch for PornoxoExtractor {
         let url = search::build_listing_url(&self.origin, query, page);
 
         debug!(
-            "[PornoXO] Fetching {route} listing page {page}: {}",
+            "[{NAME}] Fetching {route} listing page {page}: {}",
             rdlp_redact::RedactedUrl::new(&url)
         );
 
@@ -248,7 +248,7 @@ impl PagedSearch for PornoxoExtractor {
 #[async_trait]
 impl SearchExtractor for PornoxoExtractor {
     fn name(&self) -> &str {
-        "PornoXO"
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {

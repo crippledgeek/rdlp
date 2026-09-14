@@ -6,7 +6,7 @@ use rdlp_core::{RdlpError, Result};
 use rdlp_types::{SearchFilter, SearchResultPreview};
 use serde_json::Value;
 
-use super::patterns;
+use super::{NAME, patterns};
 
 /// Parse `window.initials` JSON from the search page HTML.
 pub fn parse_initials_json(html: &str) -> Result<Value> {
@@ -51,7 +51,7 @@ fn parse_search_results_json_impl(initials: &Value) -> anyhow::Result<Vec<Search
         let video_url = match item.get("pageURL").and_then(|v| v.as_str()) {
             Some(url) => url.to_string(),
             None => {
-                debug!("[XHamster] Search result missing pageURL, skipping");
+                debug!("[{NAME}] Search result missing pageURL, skipping");
                 continue;
             }
         };
@@ -112,7 +112,7 @@ pub fn validate_search_filters(filters: &[SearchFilter]) -> Result<()> {
             ("max-duration", KeyValidation::NumericU32),
         ],
     )
-    .map_err(|e| format_std_filter_error("XHamster", e))
+    .map_err(|e| format_std_filter_error(NAME, e))
 }
 
 #[cfg(test)]

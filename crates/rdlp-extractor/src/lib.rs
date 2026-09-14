@@ -495,4 +495,32 @@ mod tests {
         assert!(extractor.is_some());
         assert_eq!(extractor.unwrap().name(), "HQPorner");
     }
+
+    /// #756: `SearchExtractor::name` is documented as "should match the
+    /// corresponding `InfoExtractor::name()`", and nothing checked it. Every
+    /// search-capable site must be registered under the same name as an
+    /// `InfoExtractor`, so `--search-site <name>` and `"extractor": "<name>"`
+    /// in `--dump-json` agree.
+    ///
+    /// When the two sides disagree (nine_anime: `"9anime"` vs `"NineAnime"`,
+    /// caught by this test), resolve toward `InfoExtractor::name()`, never the
+    /// other way. `InfoExtractor::name()` is the one written to disk —
+    /// `record_in_archive` persists it into `--download-archive` files,
+    /// `%(extractor)s` names output directories/files from it, and
+    /// `--dump-json` emits it — so changing it invalidates every existing
+    /// archive entry and renames users' folders. `SearchExtractor::name()`
+    /// only feeds the case-insensitive `--search-site` lookup and has no
+    /// on-disk footprint; it is the side that moves.
+    #[test]
+    fn every_search_extractor_name_is_a_registered_info_extractor_name() {
+        let registry = ExtractorRegistry::new();
+        let info: std::collections::HashSet<&str> =
+            registry.list_extractors().into_iter().collect();
+        for name in registry.list_search_extractors() {
+            assert!(
+                info.contains(name),
+                "search extractor {name:?} has no InfoExtractor of the same name"
+            );
+        }
+    }
 }

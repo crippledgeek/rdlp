@@ -8,7 +8,7 @@ use rdlp_core::{RdlpError, Result};
 use rdlp_types::{SearchFilter, SearchFilterDescriptor, SearchResultPreview};
 use serde::{Deserialize, Deserializer};
 
-use super::patterns;
+use super::{NAME, patterns};
 
 /// Top-level API response from `redtube.Videos.searchVideos`.
 #[derive(Debug, Deserialize)]
@@ -114,7 +114,7 @@ pub(crate) fn parse_api_search_results(
 fn api_video_to_preview(video: ApiVideo) -> Option<SearchResultPreview> {
     if video.url.is_empty() {
         debug!(
-            "[RedTube] Search result missing URL for video_id={}, skipping",
+            "[{NAME}] Search result missing URL for video_id={}, skipping",
             video.video_id
         );
         return None;
@@ -238,7 +238,7 @@ pub(crate) fn validate_search_filters(
             ("tags", KeyValidation::FreeText),
         ],
     )
-    .map_err(|e| format_std_filter_error("RedTube", e))
+    .map_err(|e| format_std_filter_error(NAME, e))
 }
 
 #[cfg(test)]

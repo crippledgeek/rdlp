@@ -72,7 +72,7 @@ pub(super) async fn scrape_durations_from_html_response(
             // Network failure was previously indistinguishable from "page
             // had no durations" — surface it at debug so investigators
             // can find why the duration map is empty.
-            log::debug!("[KoreanPornMovie] duration scrape failed: {e}");
+            log::debug!("[{NAME}] duration scrape failed: {e}");
             return std::collections::HashMap::new();
         }
     };
@@ -163,11 +163,11 @@ pub(super) fn extract_formats_from_html(html: &Html, _page_url: &str) -> Vec<For
         && let Some(embed_url) = meta_content(html, &META_EMBED_URL_SELECTOR)
     {
         log::info!(
-            "[KoreanPornMovie] Video is an external embed: {} — try that URL directly",
+            "[{NAME}] Video is an external embed: {} — try that URL directly",
             embed_url
         );
         log::info!(
-            "[KoreanPornMovie] Use: rdlp \"{}\" instead",
+            "[{NAME}] Use: rdlp \"{}\" instead",
             embed_url.replace("/embed/", "/view_video.php?viewkey=")
         );
     }
