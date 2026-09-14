@@ -235,7 +235,8 @@ pub(crate) async fn resolve_episode_formats(
     let all_formats = crate::hls::expand_hls_in_place(all_formats, ctx.http_client.clone()).await;
 
     // Enrich HLS formats with resolution, codecs, duration, segments
-    let (mut all_formats, hls_flags) = detect_format_sizes_lazy(all_formats, ctx, "9anime").await;
+    let (mut all_formats, hls_flags) =
+        detect_format_sizes_lazy(all_formats, ctx, "NineAnime").await;
 
     // Restore audio type label in format_note (enrichment overwrites it).
     // Must run AFTER detect_format_sizes_lazy because the helper sets
@@ -293,7 +294,7 @@ fn build_subtitle_map(
 #[async_trait]
 impl InfoExtractor for NineAnimeExtractor {
     fn name(&self) -> &str {
-        "9anime"
+        "NineAnime"
     }
 
     fn valid_url(&self) -> &regex::Regex {
@@ -359,7 +360,7 @@ impl InfoExtractor for NineAnimeExtractor {
             None => anime_metadata.title,
         };
 
-        let mut info = InfoDict::new(video_id, title, "9anime", url);
+        let mut info = InfoDict::new(video_id, title, "NineAnime", url);
         info.formats = all_formats;
         info.thumbnail = anime_metadata.thumbnail;
         info.description = anime_metadata.description;
@@ -406,7 +407,7 @@ impl InfoExtractor for NineAnimeExtractor {
         let (formats, hls_flags, subtitle_tracks) =
             resolve_episode_formats(&episode_id, ctx).await?;
 
-        let mut info = InfoDict::new("", "", "9anime", url);
+        let mut info = InfoDict::new("", "", "NineAnime", url);
         info.formats = formats;
         info.is_live = Some(hls_flags.is_live);
 
@@ -427,7 +428,7 @@ mod tests {
     #[test]
     fn test_name() {
         let extractor = NineAnimeExtractor::new();
-        assert_eq!(extractor.name(), "9anime");
+        assert_eq!(extractor.name(), "NineAnime");
     }
 
     #[test]

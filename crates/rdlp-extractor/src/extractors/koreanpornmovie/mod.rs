@@ -261,10 +261,6 @@ impl SearchExtractor for KoreanPornMovieExtractor {
 }
 
 impl PagedSearch for KoreanPornMovieExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[KoreanPornMovie]"
-    }
-
     // KPM validates no filters today (the bespoke search_page never validated). Ok(()) preserves that.
     fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {
         Ok(())

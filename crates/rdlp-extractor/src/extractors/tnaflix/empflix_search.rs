@@ -39,10 +39,6 @@ impl EMPFlixSearchExtractor {
 }
 
 impl PagedSearch for EMPFlixSearchExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[EMPFlix]"
-    }
-
     fn validate_search_filters(&self, filters: &[rdlp_types::SearchFilter]) -> Result<()> {
         tnaflix_search_helpers::validate_search_filters(filters)
     }

@@ -201,10 +201,6 @@ fn parse_response(body: &str) -> Result<(Vec<SearchResultPreview>, Option<u64>, 
 }
 
 impl PagedSearch for AbxxxExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[ABXXX]"
-    }
-
     // ABXXX has no filter validation today: the bespoke search()/search_page() never
     // validated — resolved_sort tolerates any value (falls back to "relevance"), no reject
     // path. Ok(()) is the only value that preserves that.

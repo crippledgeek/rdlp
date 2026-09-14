@@ -73,10 +73,6 @@ pub(crate) fn extract_total_pages(html: &str) -> Option<u32> {
 }
 
 impl PagedSearch for NineAnimeExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[NineAnime]"
-    }
-
     // NineAnime has no filter validation today; Ok(()) preserves that.
     fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {
         Ok(())

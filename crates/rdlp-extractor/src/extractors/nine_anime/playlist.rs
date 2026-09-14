@@ -146,7 +146,7 @@ pub async fn extract_season(url: &str, ctx: &ExtractionContext) -> Result<Vec<In
             episode.data_id
         );
 
-        let mut info = InfoDict::new(&video_id, &title, "9anime", &webpage_url);
+        let mut info = InfoDict::new(&video_id, &title, "NineAnime", &webpage_url);
         info.thumbnail = anime_metadata.thumbnail.clone();
         info.description = anime_metadata.description.clone();
 

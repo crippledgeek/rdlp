@@ -202,10 +202,6 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
 }
 
 impl PagedSearch for XVideosExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[XVideos]"
-    }
-
     // XVideos has no filter validation today (the pre-refactor single-GET
     // search path never validated); `Ok(())` is the only value that preserves that.
     fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {

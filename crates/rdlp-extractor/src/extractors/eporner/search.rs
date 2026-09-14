@@ -246,10 +246,6 @@ fn parse_results(html: &str) -> Vec<SearchResultPreview> {
 }
 
 impl PagedSearch for EPornerExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[EPorner]"
-    }
-
     // EPorner has no filter validation today; Ok(()) preserves that.
     fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {
         Ok(())

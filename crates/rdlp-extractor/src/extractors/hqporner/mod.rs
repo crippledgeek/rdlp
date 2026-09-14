@@ -347,10 +347,6 @@ impl InfoExtractor for HQPornerExtractor {
 }
 
 impl PagedSearch for HQPornerExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[HQPorner]"
-    }
-
     // HQPorner has no filter validation today; Ok(()) preserves that.
     fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {
         Ok(())

@@ -362,7 +362,7 @@ mod tests {
         assert!(extractors.contains(&"PornHub"));
         assert!(extractors.contains(&"XTits"));
         assert!(extractors.contains(&"XHamster"));
-        assert!(extractors.contains(&"9anime"));
+        assert!(extractors.contains(&"NineAnime"));
         assert!(extractors.contains(&"HQPorner"));
         assert!(extractors.contains(&"SpankBang"));
     }
@@ -460,7 +460,7 @@ mod tests {
         let nine_anime =
             registry.find_extractor("https://9animetv.to/watch/sword-art-online-2274?ep=26565");
         assert!(nine_anime.is_some());
-        assert_eq!(nine_anime.unwrap().name(), "9anime");
+        assert_eq!(nine_anime.unwrap().name(), "NineAnime");
 
         let hqporner =
             registry.find_extractor("https://hqporner.com/hdporn/81203-full_body_massage.html");
@@ -488,5 +488,23 @@ mod tests {
         let extractor = registry.find_search_extractor("hqporner");
         assert!(extractor.is_some());
         assert_eq!(extractor.unwrap().name(), "HQPorner");
+    }
+
+    /// #756: `SearchExtractor::name` is documented as "should match the
+    /// corresponding `InfoExtractor::name()`", and nothing checked it. Every
+    /// search-capable site must be registered under the same name as an
+    /// `InfoExtractor`, so `--search-site <name>` and `"extractor": "<name>"`
+    /// in `--dump-json` agree.
+    #[test]
+    fn every_search_extractor_name_is_a_registered_info_extractor_name() {
+        let registry = ExtractorRegistry::new();
+        let info: std::collections::HashSet<&str> =
+            registry.list_extractors().into_iter().collect();
+        for name in registry.list_search_extractors() {
+            assert!(
+                info.contains(name),
+                "search extractor {name:?} has no InfoExtractor of the same name"
+            );
+        }
     }
 }

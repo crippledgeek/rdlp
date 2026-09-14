@@ -352,10 +352,6 @@ impl RedTubeExtractor {
 }
 
 impl PagedSearch for RedTubeExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[RedTube]"
-    }
-
     fn validate_search_filters(&self, filters: &[rdlp_types::SearchFilter]) -> Result<()> {
         let descriptors = patterns::search_filter_descriptors();
         search::validate_search_filters(filters, &descriptors)

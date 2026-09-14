@@ -203,10 +203,6 @@ pub(crate) fn has_more_pages(html: &str, query: &SearchQuery, page: u32) -> bool
 }
 
 impl PagedSearch for XNXXExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[xnxx]"
-    }
-
     // XNXX has no filter validation today (the pre-refactor single-GET
     // search path never validated); `Ok(())` is the only value that preserves that.
     fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {

@@ -121,10 +121,6 @@ impl PornHubExtractor {
 }
 
 impl PagedSearch for PornHubExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[PornHub]"
-    }
-
     fn validate_search_filters(&self, filters: &[rdlp_types::SearchFilter]) -> Result<()> {
         search::validate_search_filters(filters)
     }

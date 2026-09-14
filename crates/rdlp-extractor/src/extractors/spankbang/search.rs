@@ -228,10 +228,6 @@ fn has_more_pages(html: &str, query: &SearchQuery, page: u32) -> bool {
 }
 
 impl PagedSearch for SpankBangExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[spankbang]"
-    }
-
     // SpankBang advertises an `ordering` filter but has never validated it
     // (the pre-refactor single-GET search path never checked); `Ok(())` is
     // the only value that preserves that.

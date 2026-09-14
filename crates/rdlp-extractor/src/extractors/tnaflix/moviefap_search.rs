@@ -25,10 +25,6 @@ impl MovieFapSearchExtractor {
 }
 
 impl PagedSearch for MovieFapSearchExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[MovieFap]"
-    }
-
     fn validate_search_filters(&self, filters: &[rdlp_types::SearchFilter]) -> Result<()> {
         moviefap_search_helpers::validate_search_filters(filters)
     }

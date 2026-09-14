@@ -150,10 +150,6 @@ impl InfoExtractor for PornoxoExtractor {
 }
 
 impl PagedSearch for PornoxoExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[PornoXO]"
-    }
-
     fn validate_search_filters(&self, filters: &[SearchFilter]) -> Result<()> {
         search_patterns::validate(filters)
     }

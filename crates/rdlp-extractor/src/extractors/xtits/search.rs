@@ -68,10 +68,6 @@ pub(crate) fn detect_max_page(html: &str) -> u32 {
 }
 
 impl PagedSearch for XTitsExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[XTits]"
-    }
-
     // XTits has no filter validation today (the pre-refactor single-GET
     // search path never validated); `Ok(())` is the only value that preserves that.
     fn validate_search_filters(&self, _filters: &[rdlp_types::SearchFilter]) -> Result<()> {

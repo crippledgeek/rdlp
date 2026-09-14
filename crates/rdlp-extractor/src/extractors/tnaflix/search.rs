@@ -45,10 +45,6 @@ impl TNAFlixSearchExtractor {
 }
 
 impl PagedSearch for TNAFlixSearchExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[TNAFlix]"
-    }
-
     fn validate_search_filters(&self, filters: &[rdlp_types::SearchFilter]) -> Result<()> {
         tnaflix_search_helpers::validate_search_filters(filters)
     }

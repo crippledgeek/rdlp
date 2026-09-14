@@ -249,10 +249,6 @@ impl XHamsterExtractor {
 }
 
 impl PagedSearch for XHamsterExtractor {
-    fn search_log_tag(&self) -> &'static str {
-        "[XHamster]"
-    }
-
     fn validate_search_filters(&self, filters: &[rdlp_types::SearchFilter]) -> Result<()> {
         search::validate_search_filters(filters)
     }
