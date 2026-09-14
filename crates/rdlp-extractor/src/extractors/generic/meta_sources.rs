@@ -174,8 +174,8 @@ impl DetectionStrategy for OpenGraphStrategy {
         // leaves out-of-order authoring undefined, so rather than discard it
         // (which let a `text/html` embed ship as a format — issue #498, the
         // #493 defect via malformed ordering) we hold it here and apply it,
-        // after the walk, to that kind's *first* root — fill-if-absent, so an
-        // explicit in-block type always wins. A later same-kind orphan
+        // after the walk, to every typeless root of that kind — fill-if-absent,
+        // so an explicit in-block type always wins. A later same-kind orphan
         // overwrites an earlier one: the orphan nearest its eventual root wins.
         // Indexed by `OgKind::index` — two kinds, so a two-slot array suffices.
         let mut orphan_types: [Option<&str>; 2] = [None, None];
@@ -215,12 +215,18 @@ impl DetectionStrategy for OpenGraphStrategy {
             }
         }
 
+        // An orphaned type applies to every typeless root of its kind (#579):
+        // declared before any root, it has no positional binding, and its job
+        // is gating (#498) — a page-wide `og:video:type` gates every
+        // `og:video` in yt-dlp's generic extractor too. Fill-if-absent, so an
+        // explicit in-block type still wins.
         for kind in [OgKind::Video, OgKind::Audio] {
             let Some(mime) = orphan_types[kind.index()] else {
                 continue;
             };
-            if let Some(entry) = entries.iter_mut().find(|entry| entry.kind == kind)
-                && entry.mime.is_none()
+            for entry in entries
+                .iter_mut()
+                .filter(|e| e.kind == kind && e.mime.is_none())
             {
                 entry.mime = Some(mime);
             }
@@ -436,7 +442,7 @@ mod tests {
 
         assert!(
             OpenGraphStrategy.detect(&ctx).is_empty(),
-            "an orphaned :type binds to the kind's first root"
+            "an orphaned :type binds to every typeless root of the kind"
         );
     }
 
@@ -456,6 +462,70 @@ mod tests {
         let formats = OpenGraphStrategy.detect(&ctx);
         assert_eq!(formats.len(), 1, "explicit video/mp4 type wins over orphan");
         assert_eq!(formats[0].url, "https://cdn.example.com/real.mp4");
+    }
+
+    /// #579 confirmed-2: with the type declared before BOTH roots there is no
+    /// positional signal, so the orphan applies to every typeless root of its
+    /// kind — yt-dlp gates all og:video candidates on a page-wide
+    /// og:video:type (generic.py:1191-1194), and the orphan's purpose here is
+    /// gating (#498): gating only the first root would ship the rest.
+    #[test]
+    fn og_orphan_type_gates_every_root_of_its_kind() {
+        let raw = r#"<html><head>
+            <meta property="og:video:type" content="text/html">
+            <meta property="og:video" content="https://example.com/embed/1/">
+            <meta property="og:video" content="https://example.com/embed/2/">
+        </head></html>"#;
+        let html = Html::parse_document(raw);
+        let url = Url::parse("https://example.com/page").unwrap();
+        let ctx = make_ctx(&html, raw, &url);
+        assert!(
+            OpenGraphStrategy.detect(&ctx).is_empty(),
+            "both embeds are gated"
+        );
+    }
+
+    #[test]
+    fn og_orphan_media_type_names_every_typeless_root_of_its_kind() {
+        let raw = r#"<html><head>
+            <meta property="og:video:type" content="video/mp4">
+            <meta property="og:video" content="https://cdn.example.com/first">
+            <meta property="og:video" content="https://cdn.example.com/second">
+        </head></html>"#;
+        let html = Html::parse_document(raw);
+        let url = Url::parse("https://example.com/page").unwrap();
+        let ctx = make_ctx(&html, raw, &url);
+        let formats = OpenGraphStrategy.detect(&ctx);
+        let exts: Vec<Option<&str>> = formats.iter().map(|f| f.ext.as_deref()).collect();
+        assert_eq!(exts, vec![Some("mp4"), Some("mp4")]);
+    }
+
+    /// The orphan never crosses kinds and never overrides an in-block type.
+    #[test]
+    fn og_orphan_type_respects_kind_and_explicit_types() {
+        let raw = r#"<html><head>
+            <meta property="og:video:type" content="video/mp4">
+            <meta property="og:audio" content="https://cdn.example.com/track">
+            <meta property="og:video" content="https://cdn.example.com/a">
+            <meta property="og:video" content="https://cdn.example.com/b">
+            <meta property="og:video:type" content="video/webm">
+        </head></html>"#;
+        let html = Html::parse_document(raw);
+        let url = Url::parse("https://example.com/page").unwrap();
+        let ctx = make_ctx(&html, raw, &url);
+        let formats = OpenGraphStrategy.detect(&ctx);
+        let by_url: Vec<(&str, Option<&str>)> = formats
+            .iter()
+            .map(|f| (f.url.as_str(), f.ext.as_deref()))
+            .collect();
+        assert_eq!(
+            by_url,
+            vec![
+                ("https://cdn.example.com/track", None), // audio: untouched by a video orphan
+                ("https://cdn.example.com/a", Some("mp4")), // typeless → orphan
+                ("https://cdn.example.com/b", Some("webm")), // explicit in-block type wins
+            ]
+        );
     }
 
     /// A Flash object is a plugin embed, not a stream, so it is dropped.

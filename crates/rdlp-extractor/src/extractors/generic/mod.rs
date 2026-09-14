@@ -19,7 +19,7 @@ use scraper::Html;
 use url::Url;
 
 use rdlp_core::{ExtractionContext, InfoExtractor, Result};
-use rdlp_types::{DownloadProtocol, Format, InfoDict};
+use rdlp_types::{ContainerFormat, DownloadProtocol, Format, InfoDict};
 
 use crate::base::common::BaseExtractor;
 use crate::base::common::age_rating::rta_search;
@@ -271,12 +271,8 @@ fn try_direct_media(url: &str, pf: &PrefetchResponse) -> Result<Option<InfoDict>
         let mut info = InfoDict::new(&video_id, &title, "Generic", url);
 
         let protocol = protocol_from_url(url, ext.as_deref());
-        let mut format = Format::new(
-            format!("generic-direct-{}", ext.as_deref().unwrap_or("video")),
-            url,
-            ext.as_deref().unwrap_or("mp4"),
-            protocol,
-        );
+        let ext = ext_or_guess(ext.as_deref());
+        let mut format = Format::new(format!("generic-direct-{ext}"), url, ext, protocol);
         if let Some(size) = pf.content_length {
             format.filesize = Some(size);
         }
@@ -324,14 +320,10 @@ fn generate_video_id(url: &str) -> String {
 
 /// Convert a `DetectedFormat` to an `rdlp_types::Format`.
 fn detected_to_format(df: DetectedFormat) -> Format {
-    let format_id = format!(
-        "generic-{}-{}",
-        df.source.replace([':', '.'], "-"),
-        df.ext.as_deref().unwrap_or("video")
-    );
-    let ext = df.ext.as_deref().unwrap_or("mp4");
-
     let protocol = protocol_from_url(&df.url, df.ext.as_deref());
+    let ext = ext_or_guess(df.ext.as_deref());
+    let format_id = format!("generic-{}-{ext}", df.source.replace([':', '.'], "-"));
+
     let mut format = Format::new(&format_id, &df.url, ext, protocol);
 
     if let Some(q) = df.quality {
@@ -359,32 +351,32 @@ fn protocol_from_url(url: &str, ext: Option<&str>) -> DownloadProtocol {
         })
 }
 
-/// Map Content-Type to a file extension.
+/// Name the extension a media type implies, or `None`.
 ///
-/// Media type/subtype names are case-insensitive (RFC 6838 §4.2, RFC 9110
-/// §8.3.1). Comparisons case-fold via `eq_ignore_ascii_case` — mirroring the
-/// zero-allocation idiom in `generic::patterns` — rather than `to_lowercase`,
-/// which would allocate a `String` on every call (PR #494 deliberately removed
-/// those allocations).
+/// Contract with [`patterns::is_media_content_type`] (#579): the gate decides
+/// *media or not* by namespace (`video/*`, `audio/*`, manifests); this names
+/// the container when rdlp knows it. A media type rdlp cannot name is still
+/// media and yields `None` — never a fabricated or subtype-derived string
+/// (the `json_ld.rs` decision against yt-dlp's garbage-subtype fallback).
+/// Manifests are matched via [`patterns::manifest_ext`], the one table shared
+/// with the gate; containers come from [`ContainerFormat::from_mime`].
 fn content_type_to_ext(ct: &str) -> Option<&'static str> {
-    let ct = ct.split(';').next().unwrap_or(ct).trim();
-    const TABLE: &[(&str, &str)] = &[
-        ("video/mp4", "mp4"),
-        ("video/webm", "webm"),
-        ("video/x-flv", "flv"),
-        ("video/quicktime", "mov"),
-        ("video/x-matroska", "mkv"),
-        ("audio/mpeg", "mp3"),
-        ("audio/mp4", "m4a"),
-        ("audio/ogg", "ogg"),
-        ("application/vnd.apple.mpegurl", "m3u8"),
-        ("application/x-mpegurl", "m3u8"),
-        ("application/dash+xml", "mpd"),
-    ];
-    TABLE
-        .iter()
-        .find(|(candidate, _)| candidate.eq_ignore_ascii_case(ct))
-        .map(|(_, ext)| *ext)
+    patterns::manifest_ext(ct).or_else(|| ContainerFormat::from_mime(ct).map(|c| c.as_ext()))
+}
+
+/// What a format is called when neither its URL nor its declared type named a
+/// container. A guess, and logged as one. `mp4` rather than yt-dlp's
+/// `unknown_video` because rdlp's post-processing routes on
+/// `ContainerFormat::from_path`, which an unknown extension would turn into
+/// "no container" at every stage — a cross-crate decision outside #579.
+const GUESSED_EXT: &str = "mp4";
+
+/// The one place an absent extension becomes a filename extension.
+fn ext_or_guess(ext: Option<&str>) -> &str {
+    ext.unwrap_or_else(|| {
+        log::debug!("[Generic] No extension from URL or media type; guessing {GUESSED_EXT}");
+        GUESSED_EXT
+    })
 }
 
 #[cfg(test)]
@@ -464,6 +456,64 @@ mod tests {
     fn content_type_to_ext_is_case_insensitive() {
         assert_eq!(content_type_to_ext("VIDEO/WEBM"), Some("webm"));
         assert_eq!(content_type_to_ext("Video/MP4; codecs=avc1"), Some("mp4"));
+    }
+
+    /// #579: the gate admitted these, the table could not name them.
+    #[test]
+    fn content_type_to_ext_names_everything_579_measured_as_none() {
+        assert_eq!(content_type_to_ext("video/ogg"), Some("ogg"));
+        assert_eq!(content_type_to_ext("video/mp2t"), Some("ts"));
+        assert_eq!(content_type_to_ext("audio/aac"), Some("aac"));
+        assert_eq!(content_type_to_ext("video/x-msvideo"), Some("avi"));
+    }
+
+    #[test]
+    fn content_type_to_ext_keeps_manifest_types() {
+        assert_eq!(
+            content_type_to_ext("application/vnd.apple.mpegurl"),
+            Some("m3u8")
+        );
+        assert_eq!(content_type_to_ext("application/x-mpegurl"), Some("m3u8"));
+        assert_eq!(content_type_to_ext("application/dash+xml"), Some("mpd"));
+    }
+
+    /// A marker-based match (not an exact-type table) also names the
+    /// `audio/*` HLS spellings the gate already admits — `protocol_from_url`
+    /// treats `m3u8` as HLS regardless of the media namespace it was named
+    /// through.
+    #[test]
+    fn content_type_to_ext_names_audio_manifest_spelling() {
+        assert_eq!(content_type_to_ext("audio/x-mpegurl"), Some("m3u8"));
+    }
+
+    /// The recorded `json_ld.rs` decision: an unnamed media type stays `None`
+    /// rather than becoming its subtype.
+    #[test]
+    fn content_type_to_ext_unknown_media_type_is_none() {
+        assert_eq!(content_type_to_ext("video/vnd.dlna.mpeg-tts"), None);
+        assert_eq!(content_type_to_ext("application/octet-stream"), None);
+    }
+
+    #[test]
+    fn ext_or_guess_passes_a_known_ext_through_and_names_the_guess_once() {
+        assert_eq!(ext_or_guess(Some("webm")), "webm");
+        assert_eq!(ext_or_guess(None), GUESSED_EXT);
+    }
+
+    /// Both format builders must agree on the fallback — the two sites used to
+    /// each write "mp4" and "video" by hand.
+    #[test]
+    fn detected_format_without_ext_uses_the_single_guess() {
+        let df = DetectedFormat {
+            url: "https://example.com/stream".to_string(),
+            ext: None,
+            quality: None,
+            confidence: detection::Confidence::High,
+            source: "og:video",
+        };
+        let format = detected_to_format(df);
+        assert_eq!(format.ext, GUESSED_EXT);
+        assert_eq!(format.format_id, format!("generic-og-video-{GUESSED_EXT}"));
     }
 
     #[test]
