@@ -12,7 +12,8 @@ use scraper::Html;
 
 use super::XVideosExtractor;
 use crate::base::common::{
-    BaseExtractor, PagedSearch, SearchPage, SearchPageSpec, resolve_card_url, resolve_media_url,
+    BaseExtractor, PagedSearch, SearchPage, SearchPageSpec, first_resolvable_media_attr,
+    is_not_a_data_uri, resolve_card_url,
 };
 
 const XVIDEOS_BASE_URL: &str = "https://www.xvideos.com";
@@ -140,27 +141,24 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
         // available). Falls back to `data-mzl` (mosaique listing image)
         // if neither works, then `src` as last resort.
         //
-        // Resolved through `resolve_media_url` — deliberately NOT
-        // `resolve_card_url`: XVideos' posters live on `*.xvideos-cdn.com`, so
-        // an origin comparison would drop every real thumbnail. What it refuses
-        // is a non-`http(s)` reference reaching the desktop's `<img src>`, and
-        // it absolutizes a relative one. Both the placeholder filter and the
-        // resolution apply PER candidate: after an `or_else` chain they would
-        // run only on whichever attribute won, so a `data-src` holding the
-        // blank placeholder (or an unusable `data:` value) would yield `None`
-        // instead of falling through to `data-mzl`/`src`. The `THUMBNUM`
-        // substitution stays ahead of resolution so the placeholder token never
-        // survives into a URL.
+        // Resolved through `first_resolvable_media_attr` (built on
+        // `resolve_media_url`, deliberately NOT `resolve_card_url`: XVideos'
+        // posters live on `*.xvideos-cdn.com`, so an origin comparison would
+        // drop every real thumbnail — what it refuses is a non-`http(s)`
+        // reference reaching the desktop's `<img src>`, and it absolutizes a
+        // relative one). Both the placeholder filter and the resolution
+        // apply PER CANDIDATE: a `data-src` holding the blank placeholder (or
+        // an unusable `data:` value) falls through to `data-mzl`/`src`
+        // instead of costing the card its poster. The `THUMBNUM` substitution
+        // runs AFTER resolution — the token is inert path content that never
+        // affects whether a candidate resolves, so doing it on the final
+        // absolute URL is equivalent and simpler than threading a transform
+        // through the shared per-candidate walk.
         let thumbnail_url = block.select(img_sel).next().and_then(|img| {
-            let attrs = img.value();
-            THUMBNAIL_ATTRS
-                .iter()
-                .filter_map(|attr| attrs.attr(attr))
-                // An empty attribute joins to the BASE, so it would resolve
-                // "successfully" to the site root rather than being skipped.
-                .filter(|u| !u.is_empty() && !u.contains("lightbox-blank"))
-                .map(|u| u.replace("THUMBNUM", "1"))
-                .find_map(|u| resolve_media_url(XVIDEOS_BASE_URL, &u))
+            first_resolvable_media_attr(&img, XVIDEOS_BASE_URL, &THUMBNAIL_ATTRS, |u| {
+                !u.contains("lightbox-blank") && is_not_a_data_uri(u)
+            })
+            .map(|u| u.replace("THUMBNUM", "1"))
         });
 
         // Duration from .duration or span.duration

@@ -9,7 +9,7 @@ use scraper::{Html, Selector};
 use std::sync::LazyLock;
 
 use super::parse_duration;
-use crate::base::common::resolve_media_url;
+use crate::base::common::{first_resolvable_media_attr, is_not_a_data_uri};
 
 /// Base for resolving a card's poster reference. Only relative references
 /// consult it — [`resolve_media_url`] admits any `http(s)` host, which is what
@@ -62,23 +62,18 @@ pub(crate) fn parse_search_results(html: &str) -> Vec<SearchResultPreview> {
 
         let video_url = format!("https://hqporner.com{href}");
 
-        // `resolve_media_url`, not the hand-rolled `//` → `https:` prefix this
-        // replaced: HQPorner's posters are on `fastporndelivery.hqporner.com`,
-        // so an origin comparison would drop every real one, but a `data:` or
-        // `javascript:` value must not reach the desktop's `<img src>` and a
-        // relative `src` must not reach the UI unresolved. Resolution is tried
-        // PER candidate rather than after the fallback chain, so an unusable
-        // `data-src` placeholder still falls through to `src`.
+        // `first_resolvable_media_attr`, not the hand-rolled `//` → `https:`
+        // prefix this replaced: HQPorner's posters are on
+        // `fastporndelivery.hqporner.com`, so an origin comparison would drop
+        // every real one, but a `data:` or `javascript:` value must not reach
+        // the desktop's `<img src>` and a relative `src` must not reach the
+        // UI unresolved. An empty attribute must not become a candidate
+        // either: joining `""` against the base yields the BASE, so it would
+        // resolve "successfully" to the site root — lazy cards really do ship
+        // `data-src="…" src=""`. The resolve attempt is per candidate, so an
+        // unusable `data-src` still falls through to `src`.
         let thumbnail_url = thumbs.get(i).and_then(|el| {
-            THUMBNAIL_ATTRS
-                .iter()
-                .filter_map(|attr| el.value().attr(attr))
-                // An empty attribute must not become a candidate: joining `""`
-                // against the base yields the BASE, so it would resolve
-                // "successfully" to the site root. Lazy cards really do ship
-                // `data-src="…" src=""`.
-                .filter(|src| !src.is_empty())
-                .find_map(|src| resolve_media_url(SITE_ROOT, src))
+            first_resolvable_media_attr(el, SITE_ROOT, &THUMBNAIL_ATTRS, is_not_a_data_uri)
         });
 
         let duration = durations.get(i).and_then(|el| {

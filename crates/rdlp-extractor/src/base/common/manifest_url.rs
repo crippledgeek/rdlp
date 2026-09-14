@@ -56,6 +56,40 @@ pub(crate) fn is_loopback_origin(url: &str) -> bool {
             .is_some_and(|h| h == "127.0.0.1" || h == "localhost" || h == "[::1]" || h == "::1")
 }
 
+/// The numeric id from a loopback URL's PATH, captured by `path_pattern`'s
+/// named `id` group.
+///
+/// The shared shape behind every extractor whose production URL pattern is
+/// host-anchored (PornoXO, PornOne, …): a mockito loopback URL never matches
+/// that pattern, so `parse_video_id` needs a second, test-only route to drive
+/// `extract()` end to end. Extracted from two near-identical copies
+/// (`extractors/pornoxo/patterns.rs`, `extractors/pornone/patterns.rs`) so a
+/// third site does not become a third copy.
+///
+/// Shares [`is_loopback_origin`]'s definition of loopback so this and the
+/// SSRF gate's seam cannot disagree about which origins qualify. Stays a
+/// separate function on purpose: this is an id-parsing convenience, not a
+/// security boundary, and the two must be free to change independently.
+///
+/// Lives in this module for the same reason: it exists purely to be
+/// co-located with [`is_loopback_origin`], the one piece of knowledge it
+/// actually shares. It is test-only ROUTING support, not a security gate
+/// itself — `manifest_url.rs` is where the shared predicate lives, not a
+/// statement that this function belongs to the SSRF surface.
+///
+/// `cfg(test)`-only: production builds carry no loopback concept at all.
+#[cfg(test)]
+pub(crate) fn loopback_path_id(url: &str, path_pattern: &regex::Regex) -> Option<String> {
+    if !is_loopback_origin(url) {
+        return None;
+    }
+    let parsed = url::Url::parse(url).ok()?;
+    path_pattern
+        .captures(parsed.path())
+        .and_then(|c| c.name("id"))
+        .map(|m| m.as_str().to_owned())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -121,5 +155,27 @@ mod tests {
     #[test]
     fn ordinary_public_urls_pass() {
         assert!(validate_manifest_sourced_url("https://cdn.example.com/v.m3u8").is_ok());
+    }
+
+    /// `loopback_path_id` itself, independent of either caller: loopback
+    /// scoping and the named-group extraction both pinned here so a caller's
+    /// own tests only need to prove it is WIRED, not that it works.
+    #[test]
+    fn loopback_path_id_extracts_the_named_group_on_loopback_only() {
+        let pattern = regex::Regex::new(r"\A/videos/(?P<id>\d+)/[^/?#]+/?\z").expect("valid");
+        assert_eq!(
+            loopback_path_id("http://127.0.0.1:1234/videos/42/x/", &pattern).as_deref(),
+            Some("42")
+        );
+        assert_eq!(
+            loopback_path_id("https://evil.test/videos/42/x/", &pattern),
+            None,
+            "a non-loopback host must not take the fallback route"
+        );
+        assert_eq!(
+            loopback_path_id("http://127.0.0.1:1234/nope/", &pattern),
+            None,
+            "loopback but the path doesn't match the caller's pattern"
+        );
     }
 }
