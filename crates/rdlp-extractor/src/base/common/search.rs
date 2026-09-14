@@ -353,11 +353,12 @@ pub(crate) fn first_resolvable_media_attr(
         .find_map(|s| resolve_media_url(origin, s))
 }
 
-/// A `data:` URI must never win a poster fallback — the same `extra` rule
-/// duplicated at hqporner, xvideos, and eporner's own [`first_usable_attr`]
-/// call sites before this was pulled out. What must not reach the desktop's
+/// A `data:` URI must never win a poster fallback. Shared as an `extra`
+/// predicate by all four [`first_resolvable_media_attr`] call sites —
+/// hqporner, eporner, and pornone pass it directly; xvideos combines it with
+/// its own `lightbox-blank.gif` rejection. What must not reach the desktop's
 /// `<img src>` doesn't vary by site; only the attribute list and any other
-/// per-site placeholder rule (xvideos' `lightbox-blank.gif`) does.
+/// per-site placeholder rule does.
 pub(crate) fn is_not_a_data_uri(s: &str) -> bool {
     !s.starts_with("data:")
 }
