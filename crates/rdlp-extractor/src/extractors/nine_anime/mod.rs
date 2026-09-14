@@ -49,7 +49,7 @@ use crate::hls::{HlsStreamFlags, detect_format_sizes_lazy};
 
 /// The one spelling of this site's display name (#756); `name()`,
 /// `InfoDict::new`, log tags and filter errors all read it.
-pub(crate) const NAME: &str = "9anime";
+pub(crate) const NAME: rdlp_types::ExtractorName = rdlp_types::ExtractorName::NineAnime;
 
 /// 9anime episode extractor.
 ///
@@ -239,7 +239,8 @@ pub(crate) async fn resolve_episode_formats(
     let all_formats = crate::hls::expand_hls_in_place(all_formats, ctx.http_client.clone()).await;
 
     // Enrich HLS formats with resolution, codecs, duration, segments
-    let (mut all_formats, hls_flags) = detect_format_sizes_lazy(all_formats, ctx, NAME).await;
+    let (mut all_formats, hls_flags) =
+        detect_format_sizes_lazy(all_formats, ctx, NAME.as_str()).await;
 
     // Restore audio type label in format_note (enrichment overwrites it).
     // Must run AFTER detect_format_sizes_lazy because the helper sets
@@ -297,7 +298,7 @@ fn build_subtitle_map(
 #[async_trait]
 impl InfoExtractor for NineAnimeExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn valid_url(&self) -> &regex::Regex {
@@ -363,7 +364,7 @@ impl InfoExtractor for NineAnimeExtractor {
             None => anime_metadata.title,
         };
 
-        let mut info = InfoDict::new(video_id, title, NAME, url);
+        let mut info = InfoDict::new(video_id, title, NAME.as_str(), url);
         info.formats = all_formats;
         info.thumbnail = anime_metadata.thumbnail;
         info.description = anime_metadata.description;
@@ -410,7 +411,7 @@ impl InfoExtractor for NineAnimeExtractor {
         let (formats, hls_flags, subtitle_tracks) =
             resolve_episode_formats(&episode_id, ctx).await?;
 
-        let mut info = InfoDict::new("", "", NAME, url);
+        let mut info = InfoDict::new("", "", NAME.as_str(), url);
         info.formats = formats;
         info.is_live = Some(hls_flags.is_live);
 
@@ -595,7 +596,8 @@ mod tests {
         let http: Arc<wreq::Client> = ctx.http_client.clone();
 
         let formats = crate::hls::expand_hls_in_place(vec![f], http).await;
-        let (formats, _flags) = crate::hls::detect_format_sizes_lazy(formats, &ctx, NAME).await;
+        let (formats, _flags) =
+            crate::hls::detect_format_sizes_lazy(formats, &ctx, NAME.as_str()).await;
 
         assert!(
             formats.iter().all(|fmt| fmt.fragments.is_some()),

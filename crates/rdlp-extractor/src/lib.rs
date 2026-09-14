@@ -496,30 +496,43 @@ mod tests {
         assert_eq!(extractor.unwrap().name(), "HQPorner");
     }
 
-    /// #756: `SearchExtractor::name` is documented as "should match the
-    /// corresponding `InfoExtractor::name()`", and nothing checked it. Every
-    /// search-capable site must be registered under the same name as an
-    /// `InfoExtractor`, so `--search-site <name>` and `"extractor": "<name>"`
-    /// in `--dump-json` agree.
+    /// #756/#(this task): `SearchExtractor::name` is documented as "should
+    /// match the corresponding `InfoExtractor::name()`", and nothing checked
+    /// it. Every search-capable site must be registered under the same name
+    /// as an `InfoExtractor`, so `--search-site <name>` and
+    /// `"extractor": "<name>"` in `--dump-json` agree.
     ///
     /// When the two sides disagree (nine_anime: `"9anime"` vs `"NineAnime"`,
-    /// caught by this test), resolve toward `InfoExtractor::name()`, never the
-    /// other way. `InfoExtractor::name()` is the one written to disk —
-    /// `record_in_archive` persists it into `--download-archive` files,
-    /// `%(extractor)s` names output directories/files from it, and
-    /// `--dump-json` emits it — so changing it invalidates every existing
-    /// archive entry and renames users' folders. `SearchExtractor::name()`
-    /// only feeds the case-insensitive `--search-site` lookup and has no
-    /// on-disk footprint; it is the side that moves.
+    /// caught by this test's predecessor), resolve toward
+    /// `InfoExtractor::name()`, never the other way. `InfoExtractor::name()`
+    /// is the one written to disk — `record_in_archive` persists it into
+    /// `--download-archive` files, `%(extractor)s` names output
+    /// directories/files from it, and `--dump-json` emits it — so changing it
+    /// invalidates every existing archive entry and renames users' folders.
+    /// `SearchExtractor::name()` only feeds the case-insensitive
+    /// `--search-site` lookup and has no on-disk footprint; it is the side
+    /// that moves.
+    ///
+    /// Now exhaustive in both directions: the registry's registered set must
+    /// equal `ExtractorName`'s declared set exactly (a registry addition with
+    /// no matching variant, or a variant with nothing registered, both fail),
+    /// in addition to the original search-vs-info direction.
     #[test]
-    fn every_search_extractor_name_is_a_registered_info_extractor_name() {
+    fn built_in_extractor_names_and_the_enum_are_the_same_set() {
+        use rdlp_types::ExtractorName;
+        use strum::IntoEnumIterator as _;
+
         let registry = ExtractorRegistry::new();
-        let info: std::collections::HashSet<&str> =
+        let registered: std::collections::BTreeSet<&str> =
             registry.list_extractors().into_iter().collect();
+        let declared: std::collections::BTreeSet<&str> =
+            ExtractorName::iter().map(|n| n.as_str()).collect();
+        assert_eq!(registered, declared, "registry vs ExtractorName drift");
+
         for name in registry.list_search_extractors() {
             assert!(
-                info.contains(name),
-                "search extractor {name:?} has no InfoExtractor of the same name"
+                registered.contains(name) && name.parse::<ExtractorName>().is_ok(),
+                "search extractor {name:?} is not a registered ExtractorName"
             );
         }
     }

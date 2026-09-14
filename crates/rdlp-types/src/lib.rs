@@ -32,6 +32,7 @@ pub mod config;
 pub mod container;
 #[cfg(test)]
 mod enum_test_support;
+pub mod extractor_name;
 pub mod fixup_policy;
 pub mod format;
 pub mod info_dict;
@@ -59,6 +60,7 @@ pub use browser_emulation::BrowserEmulation;
 pub use browser_type::BrowserType;
 pub use config::{Config, ConfigValidationError};
 pub use container::ContainerFormat;
+pub use extractor_name::ExtractorName;
 pub use fixup_policy::FixupPolicy;
 pub use format::{
     Codec, Format, FormatSelectError, FormatSelector, FormatSorter, Fragment, format_select,

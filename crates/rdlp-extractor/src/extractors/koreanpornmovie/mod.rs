@@ -30,7 +30,7 @@ use crate::base::common::{PagedSearch, SearchPage};
 
 /// The one spelling of this site's display name (#756); `name()`,
 /// `InfoDict::new`, log tags and filter errors all read it.
-const NAME: &str = "KoreanPornMovie";
+const NAME: rdlp_types::ExtractorName = rdlp_types::ExtractorName::KoreanPornMovie;
 
 // ============================================================================
 // Selectors
@@ -100,7 +100,7 @@ impl Default for KoreanPornMovieExtractor {
 #[async_trait]
 impl InfoExtractor for KoreanPornMovieExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn valid_url(&self) -> &Regex {
@@ -160,7 +160,7 @@ impl InfoExtractor for KoreanPornMovieExtractor {
             // Extract video formats from clean-tube-player iframe
             let formats = extract_formats_from_html(&html, url);
 
-            let mut info = InfoDict::new(&slug, &title, NAME, url);
+            let mut info = InfoDict::new(&slug, &title, NAME.as_str(), url);
             info.description = description;
             info.thumbnail = thumbnail;
             info.upload_date = upload_date;
@@ -198,7 +198,7 @@ impl InfoExtractor for KoreanPornMovieExtractor {
 #[async_trait]
 impl SearchExtractor for KoreanPornMovieExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {

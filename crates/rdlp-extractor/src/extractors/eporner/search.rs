@@ -280,7 +280,7 @@ impl PagedSearch for EPornerExtractor {
 #[async_trait]
 impl SearchExtractor for EPornerExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {

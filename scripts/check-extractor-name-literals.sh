@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# CI guard (#756): a site extractor's display name is spelled once, in its
-# `const NAME`. Every other spelling — a bracketed log tag `"[PornoXO]"`, a
-# bare `"PornoXO"` passed to InfoDict::new / format_std_filter_error / name()
-# — is a copy nothing keeps in sync (EPorner logged as `[eporner]`, SpankBang
-# as `[spankbang]`, before this gate). Textual check; the bracketed form is
-# matched exactly, the bare form only for names the registry knows.
+# CI guard (#756, vocabulary now typed by rdlp_types::ExtractorName): a site
+# extractor's display name is spelled once, in its `const NAME`. Every other
+# spelling — a bracketed log tag `"[PornoXO]"`, a bare `"PornoXO"` passed to
+# InfoDict::new / format_std_filter_error / name() — is a copy nothing keeps
+# in sync (EPorner logged as `[eporner]`, SpankBang as `[spankbang]`, before
+# this gate). Textual check; the bracketed form is matched exactly, the bare
+# form only for names the registry knows.
 #
 # NAMES is every registered extractor's `name()`, the Generic fallback
 # included: it has no search side, but its `[Generic]` log prefix and six
@@ -24,11 +25,33 @@ cd "$(git rev-parse --show-toplevel)" || exit 2
 SELF_TEST=0
 [ "${1:-}" = "--self-test" ] && SELF_TEST=1
 
-# Names as `name()` returns them (the registry's vocabulary). Keep in sync
-# with the `const NAME` declarations; the parity test in
-# rdlp-extractor/src/lib.rs guards the InfoExtractor/SearchExtractor pair,
-# this list guards the literals.
-NAMES='ABXXX|EMPFlix|EPorner|Generic|HQPorner|KoreanPornMovie|MovieFap|9anime|PornHub|PornOne|PornoXO|RedTube|SpankBang|TNAFlix|XHamster|XNXX|XTits|XVideos'
+# The vocabulary is rdlp_types::ExtractorName; read its strum spellings so
+# this list cannot drift from the type (const NAME sites now hold a typed
+# ExtractorName variant, not a string literal — the parity test in
+# rdlp-extractor/src/lib.rs guards the registry/enum sets, this list guards
+# the literals still scattered as strings).
+_enum=crates/rdlp-types/src/extractor_name.rs
+[ -f "$_enum" ] || { echo "ERROR: $_enum missing — cannot derive NAMES"; exit 2; }
+NAMES=$(grep -oE 'serialize = "[^"]+"' "$_enum" | sed -E 's/serialize = "([^"]+)"/\1/' | paste -sd '|' -)
+[ -n "$NAMES" ] || { echo "ERROR: derived an empty NAMES from $_enum"; exit 2; }
+
+# The derived names are spliced verbatim into $BARE below as a regex
+# alternation. A future variant spelled with a regex metacharacter (`.`,
+# `+`, `(`, ...) would silently change what that alternation matches instead
+# of failing loudly, so reject any such name before it is used. Takes the
+# pipe-joined list as $1 so the self-test below can exercise the same check
+# against a synthetic offender without touching the real enum file.
+assert_names_are_regex_safe() {
+    local offenders
+    offenders=$(printf '%s' "$1" | tr '|' '\n' | grep -vE '^[A-Za-z0-9]+$' || true)
+    if [ -n "$offenders" ]; then
+        echo "ERROR: extractor name(s) contain characters outside [A-Za-z0-9], which would corrupt the derived regex alternation:"
+        printf '%s\n' "$offenders"
+        return 1
+    fi
+    return 0
+}
+assert_names_are_regex_safe "$NAMES" || exit 2
 
 BRACKETED='"\[[A-Za-z0-9]+\]'
 BARE="\"(${NAMES})\""
@@ -67,7 +90,11 @@ scan() {
         if [ -n "$bracket_hits" ]; then
             printf '%s\n' "$bracket_hits" | sed "s#^#${file}:#"
         fi
-        bare_hits=$(printf '%s\n' "$prod" | grep -nE "$BARE" | grep -vE 'const NAME: &str = "' || true)
+        # `const NAME` itself no longer holds a string literal — it is typed
+        # `ExtractorName` — so unlike before this change, no exclusion is
+        # needed for the declaration line: `$BARE` cannot match a line with
+        # no quotes in it.
+        bare_hits=$(printf '%s\n' "$prod" | grep -nE "$BARE" || true)
         if [ -n "$bare_hits" ]; then
             printf '%s\n' "$bare_hits" | sed "s#^#${file}:#"
         fi
@@ -77,6 +104,26 @@ scan() {
 SCAN_ROOTS=(crates/rdlp-extractor/src/extractors)
 
 if [ "$SELF_TEST" -eq 1 ]; then
+    # Canary that the derivation above actually read the `serialize`
+    # attribute (not, say, `rename`, or an empty/truncated match): `9anime`
+    # is the one spelling that cannot come from a lowercased variant
+    # identifier (NineAnime), and `PornOne` pins that the pipe found more
+    # than one row rather than stopping at the first.
+    for canary in '9anime' 'PornOne'; do
+        if ! printf '%s' "$NAMES" | grep -qE "(^|\|)${canary}(\||\$)"; then
+            echo "SELF-TEST FAILED: derived NAMES is missing $canary: $NAMES"
+            exit 1
+        fi
+    done
+
+    # A synthetic name containing a regex metacharacter must trip
+    # assert_names_are_regex_safe rather than being silently spliced into
+    # $BARE.
+    if assert_names_are_regex_safe "PornHub|a.b|XVideos" >/dev/null 2>&1; then
+        echo "SELF-TEST FAILED: assert_names_are_regex_safe accepted 'a.b'"
+        exit 1
+    fi
+
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
     printf 'fn name(&self) -> &str { "RedTube" }\nconst T: &str = "[RedTube]";\n' > "$tmp/x.rs"

@@ -14,7 +14,7 @@ use super::tnaflix_search_helpers;
 /// `InfoDict::new`, log tags and filter errors all read it. Also read by
 /// `TNAFlixExtractor::tnaflix()` in `info.rs` (the InfoExtractor side of
 /// this same site).
-pub(super) const NAME: &str = "TNAFlix";
+pub(super) const NAME: rdlp_types::ExtractorName = rdlp_types::ExtractorName::TnaFlix;
 
 /// TNAFlix search extractor
 ///
@@ -97,7 +97,7 @@ impl Default for TNAFlixSearchExtractor {
 #[async_trait]
 impl SearchExtractor for TNAFlixSearchExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {

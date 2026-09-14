@@ -42,7 +42,7 @@ pub use patterns::{PORNHUB_PLAYLIST_URL_PATTERN, PORNHUB_VIDEO_URL_PATTERN};
 
 /// The one spelling of this site's display name (#756); `name()`,
 /// `InfoDict::new`, log tags and filter errors all read it.
-pub(crate) const NAME: &str = "PornHub";
+pub(crate) const NAME: rdlp_types::ExtractorName = rdlp_types::ExtractorName::PornHub;
 
 /// Expected number of results per API page. Used to detect the last page:
 /// if a page returns fewer than this, there are no more pages.
@@ -234,7 +234,7 @@ impl PagedSearch for PornHubExtractor {
 #[async_trait]
 impl SearchExtractor for PornHubExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
@@ -261,7 +261,7 @@ impl SearchExtractor for PornHubExtractor {
 #[async_trait]
 impl InfoExtractor for PornHubExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn valid_url(&self) -> &regex::Regex {

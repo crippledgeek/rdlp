@@ -41,7 +41,7 @@ use crate::base::kvs::{api as kvs_api, file_formats as kvs_file_formats, url_obf
 pub(crate) const ABXXX_BASE_URL: &str = "https://abxxx.com";
 /// The one spelling of this site's display name (#756); `name()`, `InfoDict::new`,
 /// log tags and filter errors all read it.
-const NAME: &str = "ABXXX";
+const NAME: rdlp_types::ExtractorName = rdlp_types::ExtractorName::Abxxx;
 const ABXXX_PRIORITY: i32 = 50;
 
 /// ABXXX video extractor.
@@ -177,7 +177,7 @@ fn apply_file_format_info(format: &mut Format, info: kvs_file_formats::KvsFileFo
 #[async_trait]
 impl InfoExtractor for AbxxxExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn valid_url(&self) -> &Regex {
@@ -324,7 +324,7 @@ impl InfoExtractor for AbxxxExtractor {
             .or_else(|| slug.as_deref().map(humanize_slug).filter(|s| !s.is_empty()))
             .unwrap_or_else(|| format!("ABXXX video {video_id}"));
 
-        let mut info = InfoDict::new(video_id.clone(), title, NAME, url);
+        let mut info = InfoDict::new(video_id.clone(), title, NAME.as_str(), url);
         info.formats = formats;
         info.duration = lookup.duration.or(duration_from_query);
         info.description = lookup.description;

@@ -41,7 +41,7 @@ pub use patterns::{XHAMSTER_EMBED_PATTERN, XHAMSTER_VIDEO_PATTERN};
 
 /// The one spelling of this site's display name (#756); `name()`,
 /// `InfoDict::new`, log tags and filter errors all read it.
-pub(crate) const NAME: &str = "XHamster";
+pub(crate) const NAME: rdlp_types::ExtractorName = rdlp_types::ExtractorName::XHamster;
 
 /// Timeout for extracting a single video in playlist mode (30 seconds)
 const VIDEO_EXTRACTION_TIMEOUT: Duration = Duration::from_secs(30);
@@ -296,7 +296,7 @@ impl Default for XHamsterExtractor {
 #[async_trait]
 impl InfoExtractor for XHamsterExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn valid_url(&self) -> &regex::Regex {
@@ -331,7 +331,7 @@ impl InfoExtractor for XHamsterExtractor {
 #[async_trait]
 impl SearchExtractor for XHamsterExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {

@@ -27,7 +27,7 @@ use crate::base::wgcz_network::WgczNetworkBase;
 
 /// The one spelling of this site's display name (#756); `name()`,
 /// `InfoDict::new`, log tags and filter errors all read it.
-pub(crate) const NAME: &str = "XVideos";
+pub(crate) const NAME: rdlp_types::ExtractorName = rdlp_types::ExtractorName::XVideos;
 
 /// Parse height (in pixels) from an XVideos MP4 URL.
 ///
@@ -133,7 +133,7 @@ impl XVideosExtractor {
         // Thumbnail: prefer inline JS, fall back to JSON-LD
         let thumbnail = inline_meta.thumbnail_url.or(json_ld.thumbnail_url.clone());
 
-        let mut info = InfoDict::new(eid, title, NAME, url);
+        let mut info = InfoDict::new(eid, title, NAME.as_str(), url);
         info.thumbnail = thumbnail;
         info.description = json_ld.description;
         info.duration = duration;
@@ -153,7 +153,7 @@ impl XVideosExtractor {
 #[async_trait]
 impl InfoExtractor for XVideosExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn valid_url(&self) -> &Regex {

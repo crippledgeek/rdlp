@@ -29,7 +29,7 @@ const XTITS_BASE_URL: &str = "https://www.xtits.com";
 
 /// The one spelling of this site's display name (#756); `name()`,
 /// `InfoDict::new`, log tags and filter errors all read it.
-pub(crate) const NAME: &str = "XTits";
+pub(crate) const NAME: rdlp_types::ExtractorName = rdlp_types::ExtractorName::XTits;
 
 /// XTits extractor
 pub struct XTitsExtractor;
@@ -179,7 +179,7 @@ fn parse_duration_text(html: &Html) -> Option<f64> {
 #[async_trait]
 impl InfoExtractor for XTitsExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn valid_url(&self) -> &Regex {

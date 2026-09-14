@@ -29,7 +29,7 @@ use crate::base::common::{BaseExtractor, PagedSearch, SearchOrigin, SearchPage};
 
 /// The one spelling of this site's display name (#756); `name()`,
 /// `InfoDict::new`, log tags and filter errors all read it.
-pub(crate) const NAME: &str = "PornOne";
+pub(crate) const NAME: rdlp_types::ExtractorName = rdlp_types::ExtractorName::PornOne;
 
 /// pornone.com — server-rendered, individually-signed progressive MP4
 /// renditions; cookie-free search with fixed-grid filler detection.
@@ -65,7 +65,7 @@ impl Default for PornoneExtractor {
 #[async_trait]
 impl InfoExtractor for PornoneExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn valid_url(&self) -> &Regex {
@@ -191,7 +191,7 @@ impl PagedSearch for PornoneExtractor {
 #[async_trait]
 impl SearchExtractor for PornoneExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {

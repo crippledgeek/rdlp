@@ -36,7 +36,7 @@ use patterns::REDTUBE_URL_PATTERN;
 
 /// The one spelling of this site's display name (#756); `name()`,
 /// `InfoDict::new`, log tags and filter errors all read it.
-pub(crate) const NAME: &str = "RedTube";
+pub(crate) const NAME: rdlp_types::ExtractorName = rdlp_types::ExtractorName::RedTube;
 
 /// The two distinct origins RedTube talks to: the JSON API host and the HTML
 /// (web) host. Grouped because they are one cohesive per-site concern.
@@ -108,7 +108,7 @@ impl RedTubeExtractor {
 
         let body = crate::base::common::fetch_capped_text(response, &api_url).await?;
 
-        BaseExtractor::log_content_if_verbose(ctx, NAME, "API video response", &body, 500);
+        BaseExtractor::log_content_if_verbose(ctx, NAME.as_str(), "API video response", &body, 500);
 
         formats::parse_api_video_response(&body)
     }
@@ -243,7 +243,7 @@ impl Default for RedTubeExtractor {
 #[async_trait]
 impl InfoExtractor for RedTubeExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn valid_url(&self) -> &Regex {
@@ -466,7 +466,7 @@ impl PagedSearch for RedTubeExtractor {
 #[async_trait]
 impl SearchExtractor for RedTubeExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {

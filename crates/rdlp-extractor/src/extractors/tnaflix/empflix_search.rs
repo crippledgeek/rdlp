@@ -11,7 +11,7 @@ use crate::base::common::{PagedSearch, SearchPage, Termination};
 /// `InfoDict::new`, log tags and filter errors all read it. Also read by
 /// `TNAFlixExtractor::empflix()` in `info.rs` (the InfoExtractor side of
 /// this same site).
-pub(super) const NAME: &str = "EMPFlix";
+pub(super) const NAME: rdlp_types::ExtractorName = rdlp_types::ExtractorName::EmpFlix;
 
 /// EMPFlix search extractor
 ///
@@ -91,7 +91,7 @@ impl Default for EMPFlixSearchExtractor {
 #[async_trait]
 impl rdlp_core::SearchExtractor for EMPFlixSearchExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {

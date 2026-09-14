@@ -14,7 +14,7 @@ use crate::base::common::{PagedSearch, SearchPage, Termination};
 /// `InfoDict::new`, log tags and filter errors all read it. Also read by
 /// `TNAFlixExtractor::moviefap()` in `info.rs` (the InfoExtractor side of
 /// this same site).
-pub(super) const NAME: &str = "MovieFap";
+pub(super) const NAME: rdlp_types::ExtractorName = rdlp_types::ExtractorName::MovieFap;
 
 /// MovieFap search extractor
 ///
@@ -77,7 +77,7 @@ impl Default for MovieFapSearchExtractor {
 #[async_trait]
 impl rdlp_core::SearchExtractor for MovieFapSearchExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
