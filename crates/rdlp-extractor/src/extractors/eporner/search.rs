@@ -13,8 +13,8 @@ use std::sync::LazyLock;
 
 use super::EPornerExtractor;
 use crate::base::common::{
-    BaseExtractor, PagedSearch, SearchPage, SearchPageSpec, first_usable_attr, is_not_a_data_uri,
-    resolve_card_url, resolve_media_url,
+    BaseExtractor, PagedSearch, SearchPage, SearchPageSpec, first_resolvable_media_attr,
+    is_not_a_data_uri, resolve_card_url,
 };
 
 /// Poster attributes in preference order. `data-src` carries the real image
@@ -63,7 +63,7 @@ fn build_search_url(query: &SearchQuery, page: u32) -> String {
     }
 }
 
-/// The usable poster reference on an eporner card `img`.
+/// The usable, RESOLVED poster URL on an eporner card `img`.
 ///
 /// 101 of the 125 cards in the committed capture are lazy-loaded:
 /// `<img class="lazyimg" src="data:image/gif;base64,…1x1…"
@@ -75,13 +75,16 @@ fn build_search_url(query: &SearchQuery, page: u32) -> String {
 /// `data-src` is tried FIRST, matching every sibling that handles lazy images
 /// (`hqporner/search.rs`, `xvideos/search.rs`,
 /// `tnaflix/tnaflix_search_helpers.rs`) via the shared
-/// [`first_usable_attr`]/[`is_not_a_data_uri`] pair. Preferring `src` happens
-/// to agree on this fixture, where the placeholder is always a `data:` URI,
-/// but it loses the moment a placeholder is an ordinary URL — xvideos' own
-/// `lightbox-blank.gif` is exactly that shape, and a `src`-first order would
-/// hand it back in preference to a real `data-src`.
-fn card_poster_src<'a>(img: &scraper::ElementRef<'a>) -> Option<&'a str> {
-    first_usable_attr(img, &THUMBNAIL_ATTRS, is_not_a_data_uri)
+/// [`first_resolvable_media_attr`]/[`is_not_a_data_uri`] pair, which also
+/// resolves PER candidate — an `extra`-approved candidate that still fails to
+/// resolve falls through to `src` rather than costing the card its poster.
+/// Preferring `src` happens to agree on this fixture, where the placeholder
+/// is always a `data:` URI, but it loses the moment a placeholder is an
+/// ordinary URL — xvideos' own `lightbox-blank.gif` is exactly that shape,
+/// and a `src`-first order would hand it back in preference to a real
+/// `data-src`.
+fn card_poster_src(img: &scraper::ElementRef<'_>) -> Option<String> {
+    first_resolvable_media_attr(img, EPORNER_ROOT, &THUMBNAIL_ATTRS, is_not_a_data_uri)
 }
 
 /// Parse EPorner search/tag results.
@@ -130,8 +133,7 @@ fn parse_results(html: &str) -> Vec<SearchResultPreview> {
         let thumbnail_url = cover_a
             .select(&MBIMG_SEL)
             .next()
-            .and_then(|img| card_poster_src(&img))
-            .and_then(|src| resolve_media_url(EPORNER_ROOT, src));
+            .and_then(|img| card_poster_src(&img));
 
         // Find the matching mbunder by scanning forward from the parent of
         // mbcontent until the next mbtit anchor pointing at the same href.
@@ -223,8 +225,7 @@ fn parse_results(html: &str) -> Vec<SearchResultPreview> {
         let thumbnail_url = link
             .select(&MBIMG_SEL)
             .next()
-            .and_then(|img| card_poster_src(&img))
-            .and_then(|src| resolve_media_url(EPORNER_ROOT, src));
+            .and_then(|img| card_poster_src(&img));
         let Some(video_url) = resolve_card_url(EPORNER_ROOT, href) else {
             continue;
         };

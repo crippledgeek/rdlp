@@ -319,8 +319,8 @@ pub(crate) fn resolve_media_url(origin: &str, src: &str) -> Option<String> {
     matches!(resolved.scheme(), "http" | "https").then(|| resolved.into())
 }
 
-/// The first non-empty, `extra`-approved attribute value on `el`, trying
-/// `attrs` in order.
+/// The first attribute value on `el`, tried in `attrs` order, that is
+/// non-empty, `extra`-approved, AND actually resolves against `origin`.
 ///
 /// The shared shape behind every "the image is lazy-loaded, so read
 /// `data-src` before the real `src`" card poster — hqporner
@@ -331,20 +331,26 @@ pub(crate) fn resolve_media_url(origin: &str, src: &str) -> Option<String> {
 /// candidate, so `extra` is the one remaining knob; a site with no extra rule
 /// passes `|_| true`.
 ///
-/// Deliberately does NOT resolve the result against an origin — that step
-/// takes a different base URL per site (`resolve_media_url`/`resolve_card_url`
-/// already generalise it), so callers chain `.and_then(|s| resolve_media_url(origin, s))`
-/// themselves.
-pub(crate) fn first_usable_attr<'a>(
-    el: &scraper::ElementRef<'a>,
+/// The resolve attempt is PER CANDIDATE, not just on whichever one `extra`
+/// committed to first: an original site copy of this walk (hqporner,
+/// xvideos) tried `resolve_media_url` on every survivor via `find_map` so an
+/// `extra`-approved-but-otherwise-unusable candidate (a scheme
+/// `resolve_media_url` itself refuses, e.g. `javascript:`) still falls
+/// through to the next attribute. Picking one candidate and resolving once —
+/// this function's first cut — silently narrowed that contract; see
+/// `first_resolvable_media_attr_falls_through_a_non_data_candidate_that_still_fails_to_resolve`.
+pub(crate) fn first_resolvable_media_attr(
+    el: &scraper::ElementRef<'_>,
+    origin: &str,
     attrs: &[&str],
     mut extra: impl FnMut(&str) -> bool,
-) -> Option<&'a str> {
+) -> Option<String> {
     let value = el.value();
     attrs
         .iter()
         .filter_map(|attr| value.attr(attr))
-        .find(|s| !s.is_empty() && extra(s))
+        .filter(|s| !s.is_empty() && extra(s))
+        .find_map(|s| resolve_media_url(origin, s))
 }
 
 /// A `data:` URI must never win a poster fallback — the same `extra` rule
@@ -1271,6 +1277,26 @@ mod tests {
         );
         assert_eq!(resolve_media_url(ORIGIN, "data:text/html,x"), None);
         assert_eq!(resolve_media_url(ORIGIN, "javascript:alert(1)"), None);
+    }
+
+    /// The regression this function exists to prevent: a candidate that
+    /// passes `extra` (it isn't a `data:` URI) but still fails to RESOLVE
+    /// (`javascript:` is refused by `resolve_media_url`, per the test above)
+    /// must fall through to the next attribute, not cost the card its
+    /// poster. Picking one `extra`-approved candidate and resolving once —
+    /// this function's first cut — would return `None` here instead.
+    #[test]
+    fn first_resolvable_media_attr_falls_through_a_non_data_candidate_that_still_fails_to_resolve()
+    {
+        let html = r#"<img data-src="javascript:alert(1)" src="https://cdn.example.com/t.jpg">"#;
+        let doc = scraper::Html::parse_fragment(html);
+        let sel = scraper::Selector::parse("img").expect("valid");
+        let img = doc.select(&sel).next().expect("fragment has an img");
+
+        assert_eq!(
+            first_resolvable_media_attr(&img, ORIGIN, &["data-src", "src"], is_not_a_data_uri),
+            Some("https://cdn.example.com/t.jpg".to_owned())
+        );
     }
 
     /// Both resolvers take the origin as a `&str`, so a caller that hands over

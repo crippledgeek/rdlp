@@ -71,6 +71,12 @@ pub(crate) fn is_loopback_origin(url: &str) -> bool {
 /// separate function on purpose: this is an id-parsing convenience, not a
 /// security boundary, and the two must be free to change independently.
 ///
+/// Lives in this module for the same reason: it exists purely to be
+/// co-located with [`is_loopback_origin`], the one piece of knowledge it
+/// actually shares. It is test-only ROUTING support, not a security gate
+/// itself — `manifest_url.rs` is where the shared predicate lives, not a
+/// statement that this function belongs to the SSRF surface.
+///
 /// `cfg(test)`-only: production builds carry no loopback concept at all.
 #[cfg(test)]
 pub(crate) fn loopback_path_id(url: &str, path_pattern: &regex::Regex) -> Option<String> {

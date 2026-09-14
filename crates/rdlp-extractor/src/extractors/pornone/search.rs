@@ -14,7 +14,7 @@ use scraper::{Html, Selector};
 use std::sync::LazyLock;
 
 use crate::base::common::{
-    BaseExtractor, SearchOrigin, first_usable_attr, resolve_card_url, resolve_media_url,
+    BaseExtractor, SearchOrigin, first_resolvable_media_attr, resolve_card_url,
 };
 
 const DEFAULT_ORIGIN: &str = "https://pornone.com";
@@ -86,11 +86,9 @@ pub(crate) fn parse_search_page(origin: &SearchOrigin, html: &str) -> Listing {
             Some(SearchResultPreview {
                 video_url,
                 title,
-                thumbnail_url: a
-                    .select(&CARD_THUMB)
-                    .next()
-                    .and_then(|i| first_usable_attr(&i, &["data-src", "src"], |_| true))
-                    .and_then(|s| resolve_media_url(origin.as_ref(), s)),
+                thumbnail_url: a.select(&CARD_THUMB).next().and_then(|i| {
+                    first_resolvable_media_attr(&i, origin.as_ref(), &["data-src", "src"], |_| true)
+                }),
                 duration: a.select(&CARD_DURATION).next().and_then(|d| {
                     BaseExtractor::parse_duration(d.text().collect::<String>().trim())
                 }),
