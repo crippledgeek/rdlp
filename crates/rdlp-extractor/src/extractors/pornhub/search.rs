@@ -191,7 +191,7 @@ pub(crate) fn validate_search_filters(filters: &[SearchFilter]) -> Result<()> {
             ("tags", KeyValidation::FreeText),
         ],
     )
-    .map_err(|e| format_std_filter_error(NAME, e))
+    .map_err(|e| format_std_filter_error(NAME.as_str(), e))
 }
 
 #[cfg(test)]

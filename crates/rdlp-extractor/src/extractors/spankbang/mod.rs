@@ -27,7 +27,7 @@ use crate::base::common::BaseExtractor;
 
 /// The one spelling of this site's display name (#756); `name()`, `InfoDict::new`,
 /// log tags and filter errors all read it.
-pub(crate) const NAME: &str = "SpankBang";
+pub(crate) const NAME: rdlp_types::ExtractorName = rdlp_types::ExtractorName::SpankBang;
 const SPANKBANG_PRIORITY: i32 = 100;
 const FORMATS_API_URL: &str = "https://spankbang.com/api/videos/stream";
 
@@ -85,7 +85,7 @@ impl SpankBangExtractor {
 #[async_trait]
 impl InfoExtractor for SpankBangExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn valid_url(&self) -> &Regex {
@@ -184,7 +184,7 @@ impl InfoExtractor for SpankBangExtractor {
         let meta = metadata::parse(&webpage);
         let title = meta.title.clone().unwrap_or_else(|| video_id.clone());
 
-        let mut info = InfoDict::new(&video_id, &title, NAME, url);
+        let mut info = InfoDict::new(&video_id, &title, NAME.as_str(), url);
         info.description = meta.description;
         info.thumbnail = meta.thumbnail;
         info.uploader = meta.uploader;

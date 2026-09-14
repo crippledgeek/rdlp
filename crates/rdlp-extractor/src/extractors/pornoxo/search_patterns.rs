@@ -99,7 +99,7 @@ pub(crate) const URL_FILTER_PARAMS: [(&str, &str); 3] = [
 /// unsorted query.
 pub(crate) fn validate(filters: &[SearchFilter]) -> Result<()> {
     validate_against_descriptors(filters, &supported_filters(), &[])
-        .map_err(|e| format_std_filter_error(NAME, e))
+        .map_err(|e| format_std_filter_error(NAME.as_str(), e))
 }
 
 #[cfg(test)]

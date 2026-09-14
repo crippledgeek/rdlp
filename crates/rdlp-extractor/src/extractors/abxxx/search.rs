@@ -268,7 +268,7 @@ impl PagedSearch for AbxxxExtractor {
 #[async_trait]
 impl SearchExtractor for AbxxxExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {

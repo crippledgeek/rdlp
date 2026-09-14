@@ -47,7 +47,7 @@ pub use patterns::HQPORNER_VIDEO_PATTERN;
 
 /// The one spelling of this site's display name (#756); `name()`,
 /// `InfoDict::new`, log tags and filter errors all read it.
-const NAME: &str = "HQPorner";
+const NAME: rdlp_types::ExtractorName = rdlp_types::ExtractorName::HqPorner;
 
 /// Pattern to extract duration from text like "26m 52s", "1h 6m 39s", or "45s".
 static DURATION_PATTERN: Lazy<Regex> = lazy_regex!(r"(?:(?:(\d+)h\s*)?(?:(\d+)m\s*))?(\d+)s");
@@ -182,7 +182,7 @@ fn extract_iframe_url(webpage: &str) -> Option<String> {
 #[async_trait]
 impl InfoExtractor for HQPornerExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn valid_url(&self) -> &Regex {
@@ -382,7 +382,7 @@ impl PagedSearch for HQPornerExtractor {
 #[async_trait]
 impl SearchExtractor for HQPornerExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {

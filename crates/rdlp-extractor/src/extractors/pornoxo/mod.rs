@@ -27,7 +27,7 @@ use crate::hls::detect_format_sizes_lazy;
 
 /// The one spelling of this site's display name (#756); `name()`,
 /// `InfoDict::new`, log tags and filter errors all read it.
-pub(crate) const NAME: &str = "PornoXO";
+pub(crate) const NAME: rdlp_types::ExtractorName = rdlp_types::ExtractorName::PornoXo;
 
 /// PornoXO — signed per-page-load HLS ladder read from an inline `playerConfig`.
 pub struct PornoxoExtractor {
@@ -63,7 +63,7 @@ impl Default for PornoxoExtractor {
 #[async_trait]
 impl InfoExtractor for PornoxoExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn valid_url(&self) -> &Regex {
@@ -248,7 +248,7 @@ impl PagedSearch for PornoxoExtractor {
 #[async_trait]
 impl SearchExtractor for PornoxoExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {

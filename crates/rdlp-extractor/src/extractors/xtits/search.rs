@@ -111,7 +111,7 @@ impl PagedSearch for XTitsExtractor {
 #[async_trait]
 impl SearchExtractor for XTitsExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {

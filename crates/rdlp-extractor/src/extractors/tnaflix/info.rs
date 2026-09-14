@@ -32,7 +32,7 @@ impl TNAFlixExtractor {
     #[must_use]
     pub fn tnaflix() -> Self {
         Self {
-            name: TNAFLIX_NAME,
+            name: TNAFLIX_NAME.as_str(),
             url_pattern: &TNAFLIX_URL_PATTERN,
             base: TnaFlixNetworkBase::new(),
         }
@@ -42,7 +42,7 @@ impl TNAFlixExtractor {
     #[must_use]
     pub fn empflix() -> Self {
         Self {
-            name: EMPFLIX_NAME,
+            name: EMPFLIX_NAME.as_str(),
             url_pattern: &EMPFLIX_URL_PATTERN,
             base: TnaFlixNetworkBase::new(),
         }
@@ -52,7 +52,7 @@ impl TNAFlixExtractor {
     #[must_use]
     pub fn moviefap() -> Self {
         Self {
-            name: MOVIEFAP_NAME,
+            name: MOVIEFAP_NAME.as_str(),
             url_pattern: &MOVIEFAP_URL_PATTERN,
             base: TnaFlixNetworkBase::new(),
         }
@@ -121,7 +121,7 @@ impl InfoExtractor for TNAFlixExtractor {
 
             BaseExtractor::log_if_verbose(
                 ctx,
-                MOVIEFAP_NAME,
+                MOVIEFAP_NAME.as_str(),
                 &format!("cdn.php URL: {}", rdlp_redact::RedactedUrl::new(&cdn_url)),
             );
 
@@ -137,7 +137,7 @@ impl InfoExtractor for TNAFlixExtractor {
             let video_data = if video_data.is_empty() && url.contains("empflix.com") {
                 BaseExtractor::log_if_verbose(
                     ctx,
-                    EMPFLIX_NAME,
+                    EMPFLIX_NAME.as_str(),
                     "No sources in HTML, trying AJAX endpoint...",
                 );
                 ajax::parse_empflix_ajax(&self.base, &video_id, url, ctx).await?

@@ -116,7 +116,7 @@ impl PagedSearch for NineAnimeExtractor {
 #[async_trait]
 impl SearchExtractor for NineAnimeExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {

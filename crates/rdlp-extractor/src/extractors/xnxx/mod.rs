@@ -29,7 +29,7 @@ use crate::base::wgcz_network::WgczNetworkBase;
 
 /// The one spelling of this site's display name (#756); `name()`, `InfoDict::new`,
 /// log tags and filter errors all read it.
-pub(crate) const NAME: &str = "XNXX";
+pub(crate) const NAME: rdlp_types::ExtractorName = rdlp_types::ExtractorName::Xnxx;
 const XNXX_PRIORITY: i32 = 100;
 
 /// XNXX site extractor.
@@ -100,7 +100,7 @@ fn build_formats(format_urls: &crate::base::wgcz_network::WgczFormatUrls) -> Vec
 #[async_trait]
 impl InfoExtractor for XNXXExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn valid_url(&self) -> &Regex {
@@ -169,7 +169,7 @@ impl InfoExtractor for XNXXExtractor {
         let upload_date = ld.upload_date;
 
         // --- build InfoDict ---
-        let mut info = InfoDict::new(&video_id, &title, NAME, url);
+        let mut info = InfoDict::new(&video_id, &title, NAME.as_str(), url);
         info.extractor = NAME.to_string();
         info.description = description;
         info.thumbnail = thumbnail;
@@ -231,7 +231,7 @@ mod tests {
         let mut info = InfoDict::new(
             video_id,
             &title,
-            NAME,
+            NAME.as_str(),
             "https://www.xnxx.com/video-14cco143/slug",
         );
         info.extractor = NAME.to_string();

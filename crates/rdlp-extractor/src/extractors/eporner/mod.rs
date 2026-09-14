@@ -28,7 +28,7 @@ use hash::calc_hash;
 /// Extractor name.
 /// The one spelling of this site's display name (#756); `name()`, `InfoDict::new`,
 /// log tags and filter errors all read it.
-const NAME: &str = "EPorner";
+const NAME: rdlp_types::ExtractorName = rdlp_types::ExtractorName::EPorner;
 /// Extractor priority (higher than generic fallback).
 const EPORNER_PRIORITY: i32 = 100;
 /// EPorner root URL.
@@ -387,7 +387,7 @@ async fn build_info(
     // fallback to the legacy variant-URL path).
     let formats = crate::hls::expand_hls_in_place(formats, ctx.http_client.clone()).await;
 
-    let mut info = InfoDict::new(id, title, NAME, page_url);
+    let mut info = InfoDict::new(id, title, NAME.as_str(), page_url);
     info.view_count = views;
     info.duration = duration_iso
         .as_deref()
@@ -407,7 +407,7 @@ async fn build_info(
 #[async_trait]
 impl InfoExtractor for EPornerExtractor {
     fn name(&self) -> &str {
-        NAME
+        NAME.as_str()
     }
 
     fn valid_url(&self) -> &Regex {

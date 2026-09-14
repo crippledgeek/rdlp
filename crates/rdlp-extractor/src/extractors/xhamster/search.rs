@@ -112,7 +112,7 @@ pub fn validate_search_filters(filters: &[SearchFilter]) -> Result<()> {
             ("max-duration", KeyValidation::NumericU32),
         ],
     )
-    .map_err(|e| format_std_filter_error(NAME, e))
+    .map_err(|e| format_std_filter_error(NAME.as_str(), e))
 }
 
 #[cfg(test)]

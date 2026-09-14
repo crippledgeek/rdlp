@@ -41,7 +41,13 @@ pub async fn parse_empflix_ajax(
 
     let json_text = crate::base::common::fetch_capped_text(response, &ajax_url).await?;
 
-    BaseExtractor::log_content_if_verbose(ctx, EMPFLIX_NAME, "AJAX Response", &json_text, 500);
+    BaseExtractor::log_content_if_verbose(
+        ctx,
+        EMPFLIX_NAME.as_str(),
+        "AJAX Response",
+        &json_text,
+        500,
+    );
 
     // Parse JSON to extract HTML field
     let json: serde_json::Value =
@@ -98,7 +104,13 @@ pub async fn parse_moviefap_xml(
 
     let xml_text = crate::base::common::fetch_capped_text(response, cdn_url).await?;
 
-    BaseExtractor::log_content_if_verbose(ctx, MOVIEFAP_NAME, "XML Response", &xml_text, 1000);
+    BaseExtractor::log_content_if_verbose(
+        ctx,
+        MOVIEFAP_NAME.as_str(),
+        "XML Response",
+        &xml_text,
+        1000,
+    );
 
     // Use base to parse XML
     let video_data = base.parse_moviefap_xml(&xml_text);
