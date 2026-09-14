@@ -9,8 +9,10 @@
     missing_docs
 )]
 
-use base64::Engine as _;
-use ed25519_dalek::{Signer, SigningKey};
+mod common;
+
+use common::{SignedPluginSpec, write_signed_plugin};
+use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 use rdlp_core::{ExtractionContext, InfoExtractor};
 use rdlp_http::HttpClientFactory;
@@ -19,7 +21,6 @@ use rdlp_plugin::PluginError;
 use rdlp_plugin::adapter::{HostResources, PluginExtractor};
 use rdlp_plugin::engine::{Engine, EngineConfig};
 use rdlp_plugin::loader::Loader;
-use rdlp_plugin::manifest::canonical_bytes;
 use rdlp_plugin::prompt::{AlwaysApprove, AlwaysDeny};
 use rdlp_plugin::trust_store::TrustStore;
 use rdlp_types::Config;
@@ -29,7 +30,12 @@ use tempfile::TempDir;
 
 const MINIMAL_COMPONENT_WAT: &str = r#"(component)"#;
 
-fn write_signed_plugin(
+/// This file's own tests all sign the same `(component)` WAT stub under the
+/// same fixed `version`/`wit_version`/`matches` — only `name`, `capabilities`,
+/// `priority`, and `claims_override` ever varied at these call sites, so this
+/// thin wrapper keeps that call shape while delegating the actual signing
+/// mechanism to the one shared `common::write_signed_plugin`.
+fn sign_stub_plugin(
     dir: &Path,
     name: &str,
     key: &SigningKey,
@@ -37,54 +43,21 @@ fn write_signed_plugin(
     priority: u32,
     claims_override: &[&str],
 ) {
-    std::fs::create_dir_all(dir).unwrap();
     let wasm = wat::parse_str(MINIMAL_COMPONENT_WAT).unwrap();
-    std::fs::write(dir.join("plugin.wasm"), &wasm).unwrap();
-
-    let pubkey_b64 = base64::Engine::encode(
-        &base64::engine::general_purpose::STANDARD,
-        key.verifying_key().as_bytes(),
+    write_signed_plugin(
+        dir,
+        key,
+        &SignedPluginSpec {
+            name,
+            version: "1.0.0",
+            wit_version: "0.5.0",
+            matches: &["https://example.com/*"],
+            priority,
+            claims_override,
+            capabilities,
+            wasm: &wasm,
+        },
     );
-    let cap_str = capabilities
-        .iter()
-        .map(|c| format!("\"{c}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let claims_str = claims_override
-        .iter()
-        .map(|c| format!("\"{c}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let toml_placeholder = format!(
-        r#"
-name = "{name}"
-version = "1.0.0"
-wit_version = "0.5.0"
-matches = ["https://example.com/*"]
-priority = {priority}
-claims_override = [{claims_str}]
-capabilities = [{cap_str}]
-
-[signature]
-type = "ed25519"
-pubkey = "{pubkey_b64}"
-signature = "PLACEHOLDER"
-"#,
-    );
-
-    let mut m = rdlp_plugin::manifest::parse_manifest_str(&toml_placeholder).unwrap();
-    let mut buf = canonical_bytes(&m);
-    buf.extend_from_slice(&wasm);
-    let sig = key.sign(&buf);
-    let sig_b64 =
-        base64::Engine::encode(&base64::engine::general_purpose::STANDARD, sig.to_bytes());
-
-    if let rdlp_plugin::manifest::Signature::Ed25519 { signature, .. } = &mut m.signature {
-        *signature = sig_b64.clone();
-    }
-
-    let final_toml = toml_placeholder.replace("PLACEHOLDER", &sig_b64);
-    std::fs::write(dir.join("plugin.toml"), final_toml).unwrap();
 }
 
 fn make_loader_args(
@@ -121,7 +94,7 @@ fn first_install_with_approval_loads_plugin() {
     let td = TempDir::new().unwrap();
     let plugins_dir = td.path().join("plugins");
     let key = SigningKey::generate(&mut OsRng);
-    write_signed_plugin(
+    sign_stub_plugin(
         &plugins_dir.join("youtube"),
         "youtube",
         &key,
@@ -145,7 +118,7 @@ fn first_install_denied_does_not_load() {
     let td = TempDir::new().unwrap();
     let plugins_dir = td.path().join("plugins");
     let key = SigningKey::generate(&mut OsRng);
-    write_signed_plugin(&plugins_dir.join("foo"), "foo", &key, &["log"], 150, &[]);
+    sign_stub_plugin(&plugins_dir.join("foo"), "foo", &key, &["log"], 150, &[]);
 
     let (engine, mut trust, prompter) = make_loader_args(&td, Arc::new(AlwaysDeny));
     let mut loader = Loader::new(&engine, &mut trust, prompter);
@@ -162,7 +135,7 @@ fn identity_mismatch_refuses_load() {
     let plugins_dir = td.path().join("plugins");
     let key1 = SigningKey::generate(&mut OsRng);
     let plugin_dir = plugins_dir.join("foo");
-    write_signed_plugin(&plugin_dir, "foo", &key1, &["log"], 150, &[]);
+    sign_stub_plugin(&plugin_dir, "foo", &key1, &["log"], 150, &[]);
 
     // First install — approved
     {
@@ -176,7 +149,7 @@ fn identity_mismatch_refuses_load() {
     // Re-sign with a different key — same name, different identity
     let key2 = SigningKey::generate(&mut OsRng);
     std::fs::remove_dir_all(&plugin_dir).unwrap();
-    write_signed_plugin(&plugin_dir, "foo", &key2, &["log"], 150, &[]);
+    sign_stub_plugin(&plugin_dir, "foo", &key2, &["log"], 150, &[]);
 
     let engine = Engine::new(EngineConfig::default()).unwrap();
     let mut trust = TrustStore::open(td.path().join("trust.toml")).unwrap();
@@ -252,7 +225,7 @@ fn capability_creep_approved_updates_trust_store() {
     let plugin_dir = plugins_dir.join("bar");
 
     // First install with only "log"
-    write_signed_plugin(&plugin_dir, "bar", &key, &["log"], 150, &[]);
+    sign_stub_plugin(&plugin_dir, "bar", &key, &["log"], 150, &[]);
     {
         let (engine, mut trust, prompter) = make_loader_args(&td, Arc::new(AlwaysApprove));
         let mut loader = Loader::new(&engine, &mut trust, prompter);
@@ -263,7 +236,7 @@ fn capability_creep_approved_updates_trust_store() {
 
     // Update requesting "log" + "fetch" (capability creep)
     std::fs::remove_dir_all(&plugin_dir).unwrap();
-    write_signed_plugin(&plugin_dir, "bar", &key, &["fetch", "log"], 150, &[]);
+    sign_stub_plugin(&plugin_dir, "bar", &key, &["fetch", "log"], 150, &[]);
 
     let (engine, mut trust, prompter) = make_loader_args(&td, Arc::new(AlwaysApprove));
     let mut loader = Loader::new(&engine, &mut trust, prompter);
@@ -287,7 +260,7 @@ fn capability_creep_denied_blocks_load() {
     let plugin_dir = plugins_dir.join("baz");
 
     // First install with only "log"
-    write_signed_plugin(&plugin_dir, "baz", &key, &["log"], 150, &[]);
+    sign_stub_plugin(&plugin_dir, "baz", &key, &["log"], 150, &[]);
     {
         let (engine, mut trust, prompter) = make_loader_args(&td, Arc::new(AlwaysApprove));
         let mut loader = Loader::new(&engine, &mut trust, prompter);
@@ -296,7 +269,7 @@ fn capability_creep_denied_blocks_load() {
 
     // Update requesting new capability, denied
     std::fs::remove_dir_all(&plugin_dir).unwrap();
-    write_signed_plugin(&plugin_dir, "baz", &key, &["fetch", "log"], 150, &[]);
+    sign_stub_plugin(&plugin_dir, "baz", &key, &["fetch", "log"], 150, &[]);
 
     let (engine, mut trust, prompter) = make_loader_args(&td, Arc::new(AlwaysDeny));
     let mut loader = Loader::new(&engine, &mut trust, prompter);
@@ -345,70 +318,20 @@ signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
     assert!(outcomes.is_empty());
 }
 
-/// A plugin to sign with a REAL compiled component (as opposed to
-/// `write_signed_plugin`'s `MINIMAL_COMPONENT_WAT` stub) under a
-/// caller-chosen `wit_version`. Grouped into one struct (not appended as a
-/// 7th positional parameter to `write_signed_plugin`) per
-/// `limit-function-arguments`: `wit_version` is the one axis this D1 compat
-/// test varies and none of the other tests in this file need it.
-struct RealComponentPluginSpec<'a> {
-    name: &'a str,
-    wasm: &'a [u8],
-    wit_version: &'a str,
-    matches: &'a [&'a str],
-    capabilities: &'a [&'a str],
-}
-
-/// Sign real component bytes (not the `(component)` WAT stub) into `dir`,
-/// declaring `spec.wit_version` verbatim — the D1 compat tests below sign
-/// the SAME `.wasm` under both an accepted and a rejected version to
-/// exercise `check_wit_version_against`'s patch boundary through the real
-/// loader, not just the unit-level helper.
-fn write_signed_real_component_plugin(dir: &Path, key: &SigningKey, spec: RealComponentPluginSpec) {
-    std::fs::create_dir_all(dir).unwrap();
-    std::fs::write(dir.join("plugin.wasm"), spec.wasm).unwrap();
-
-    let pubkey_b64 =
-        base64::engine::general_purpose::STANDARD.encode(key.verifying_key().as_bytes());
-    let cap_str = spec
-        .capabilities
-        .iter()
-        .map(|c| format!("\"{c}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let match_str = spec
-        .matches
-        .iter()
-        .map(|m| format!("\"{m}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let toml_placeholder = format!(
-        r#"
-name = "{name}"
-version = "1.0.0"
-wit_version = "{wit_version}"
-matches = [{match_str}]
-priority = 150
-claims_override = []
-capabilities = [{cap_str}]
-
-[signature]
-type = "ed25519"
-pubkey = "{pubkey_b64}"
-signature = "PLACEHOLDER"
-"#,
-        name = spec.name,
-        wit_version = spec.wit_version,
-    );
-
-    let m = rdlp_plugin::manifest::parse_manifest_str(&toml_placeholder).unwrap();
-    let mut buf = canonical_bytes(&m);
-    buf.extend_from_slice(spec.wasm);
-    let sig = key.sign(&buf);
-    let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
-
-    let final_toml = toml_placeholder.replace("PLACEHOLDER", &sig_b64);
-    std::fs::write(dir.join("plugin.toml"), final_toml).unwrap();
+/// Same construction as `make_loader_args`, but with the engine already
+/// `Arc`-wrapped: `PluginExtractor::new` takes `Arc<Engine>`, and both D1
+/// compat tests below need it, so this is the one path that produces it —
+/// neither test hand-rolls `Engine::new`/`TrustStore::open` itself.
+fn make_loader_args_arc(
+    td: &TempDir,
+    prompter: Arc<dyn rdlp_plugin::prompt::Prompter>,
+) -> (
+    Arc<Engine>,
+    TrustStore,
+    Arc<dyn rdlp_plugin::prompt::Prompter>,
+) {
+    let (engine, trust, prompter) = make_loader_args(td, prompter);
+    (Arc::new(engine), trust, prompter)
 }
 
 fn make_extraction_ctx() -> ExtractionContext {
@@ -430,23 +353,24 @@ async fn a_0_5_0_component_loads_on_the_0_5_1_host() {
     let plugins_dir = td.path().join("plugins");
     let key = SigningKey::generate(&mut OsRng);
 
-    write_signed_real_component_plugin(
+    write_signed_plugin(
         &plugins_dir.join("example"),
         &key,
-        RealComponentPluginSpec {
+        &SignedPluginSpec {
             name: "example",
-            wasm: &wasm,
+            version: "1.0.0",
             wit_version: "0.5.0",
             matches: &["https://example.com/*"],
+            priority: 150,
+            claims_override: &[],
             // example-extractor's plugin.toml.template declares no
             // capabilities — it is a pure, deterministic plugin.
             capabilities: &[],
+            wasm: &wasm,
         },
     );
 
-    let engine = Arc::new(Engine::new(EngineConfig::default()).unwrap());
-    let mut trust = TrustStore::open(td.path().join("trust.toml")).unwrap();
-    let prompter: Arc<dyn rdlp_plugin::prompt::Prompter> = Arc::new(AlwaysApprove);
+    let (engine, mut trust, prompter) = make_loader_args_arc(&td, Arc::new(AlwaysApprove));
     let mut loader = Loader::new(engine.as_ref(), &mut trust, prompter);
     let mut outcomes = loader.discover(&plugins_dir);
 
@@ -493,20 +417,23 @@ async fn a_component_declaring_a_newer_patch_is_rejected() {
     let plugins_dir = td.path().join("plugins");
     let key = SigningKey::generate(&mut OsRng);
 
-    write_signed_real_component_plugin(
+    write_signed_plugin(
         &plugins_dir.join("example"),
         &key,
-        RealComponentPluginSpec {
+        &SignedPluginSpec {
             name: "example",
-            wasm: &wasm,
+            version: "1.0.0",
             wit_version: "0.5.2",
             matches: &["https://example.com/*"],
+            priority: 150,
+            claims_override: &[],
             capabilities: &[],
+            wasm: &wasm,
         },
     );
 
-    let (engine, mut trust, prompter) = make_loader_args(&td, Arc::new(AlwaysApprove));
-    let mut loader = Loader::new(&engine, &mut trust, prompter);
+    let (engine, mut trust, prompter) = make_loader_args_arc(&td, Arc::new(AlwaysApprove));
+    let mut loader = Loader::new(engine.as_ref(), &mut trust, prompter);
     let outcomes = loader.discover(&plugins_dir);
 
     assert_eq!(outcomes.len(), 1);

@@ -78,6 +78,7 @@ interface types {
 
     /// Mirrors rdlp_types::SearchFilterDescriptor; allowed-values carries the
     /// values only (labels are host-rendered as the value).
+    @since(version = 0.5.1)
     record search-filter-descriptor {
         key: string,
         display-name: string,

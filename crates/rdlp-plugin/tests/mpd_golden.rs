@@ -32,11 +32,13 @@
 //!     .venv/bin/pip install -r requirements-dev.txt
 //!   cargo test -p rdlp-plugin --test mpd_golden -- --ignored --nocapture
 
-use std::path::{Path, PathBuf};
+mod common;
+
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use base64::Engine as _;
-use ed25519_dalek::{Signer, SigningKey};
+use common::{SignedPluginSpec, write_signed_plugin};
+use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 use rdlp_core::{ExtractionContext, InfoExtractor};
 use rdlp_http::HttpClientFactory;
@@ -45,7 +47,6 @@ use rdlp_plugin::adapter::{HostResources, PluginExtractor};
 use rdlp_plugin::engine::{Engine, EngineConfig};
 use rdlp_plugin::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
 use rdlp_plugin::loader::Loader;
-use rdlp_plugin::manifest::canonical_bytes;
 use rdlp_plugin::prompt::AlwaysApprove;
 use rdlp_plugin::trust_store::TrustStore;
 use rdlp_types::Config;
@@ -124,59 +125,6 @@ fn build_mpd_golden_plugin() -> PathBuf {
     wasm
 }
 
-/// Inline copy of the test signing helper (matches
-/// `python_plugin_smoke.rs::write_signed_plugin`). Writes a signed
-/// `plugin.toml` next to a `plugin.wasm` so `Loader::discover` accepts it.
-fn write_signed_plugin(
-    dir: &Path,
-    name: &str,
-    key: &SigningKey,
-    wasm: &[u8],
-    matches: &[&str],
-    capabilities: &[&str],
-) {
-    std::fs::create_dir_all(dir).unwrap();
-    std::fs::write(dir.join("plugin.wasm"), wasm).unwrap();
-
-    let pubkey_b64 =
-        base64::engine::general_purpose::STANDARD.encode(key.verifying_key().as_bytes());
-    let cap_str = capabilities
-        .iter()
-        .map(|c| format!("\"{c}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let match_str = matches
-        .iter()
-        .map(|m| format!("\"{m}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let toml_placeholder = format!(
-        r#"
-name = "{name}"
-version = "0.1.0"
-wit_version = "0.5.0"
-matches = [{match_str}]
-priority = 150
-claims_override = []
-capabilities = [{cap_str}]
-
-[signature]
-type = "ed25519"
-pubkey = "{pubkey_b64}"
-signature = "PLACEHOLDER"
-"#,
-    );
-
-    let m = rdlp_plugin::manifest::parse_manifest_str(&toml_placeholder).unwrap();
-    let mut buf = canonical_bytes(&m);
-    buf.extend_from_slice(wasm);
-    let sig = key.sign(&buf);
-    let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
-
-    let final_toml = toml_placeholder.replace("PLACEHOLDER", &sig_b64);
-    std::fs::write(dir.join("plugin.toml"), final_toml).unwrap();
-}
-
 /// Build the fixture map: page HTML at the test URL and the MPD body at
 /// the URL embedded in `data-mpd=`.
 fn build_mpd_fixtures() -> FetchFixtures {
@@ -211,22 +159,28 @@ async fn mpd_golden_extract_returns_formats_via_fixture() {
     let key = SigningKey::generate(&mut OsRng);
     write_signed_plugin(
         &plugins_dir.join("mpd-golden"),
-        "mpd-golden",
         &key,
-        &wasm,
-        &["https://mpd-test.example.com/*"],
-        // componentize-py emits IMPORTS for every interface in the WIT
-        // world (Phase-1 limitation). The manifest MUST declare all six
-        // caps so the linker wires every import the wasm references — the
-        // host still gates *use* at runtime via populate_capability_contexts.
-        &[
-            "fetch",
-            "cookie-jar",
-            "js-eval",
-            "html-select",
-            "log",
-            "store-kv",
-        ],
+        &SignedPluginSpec {
+            name: "mpd-golden",
+            version: "0.1.0",
+            wit_version: "0.5.0",
+            matches: &["https://mpd-test.example.com/*"],
+            priority: 150,
+            claims_override: &[],
+            // componentize-py emits IMPORTS for every interface in the WIT
+            // world (Phase-1 limitation). The manifest MUST declare all six
+            // caps so the linker wires every import the wasm references — the
+            // host still gates *use* at runtime via populate_capability_contexts.
+            capabilities: &[
+                "fetch",
+                "cookie-jar",
+                "js-eval",
+                "html-select",
+                "log",
+                "store-kv",
+            ],
+            wasm: &wasm,
+        },
     );
 
     let engine = Arc::new(Engine::new(EngineConfig::default()).unwrap());
