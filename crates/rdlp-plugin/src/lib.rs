@@ -95,6 +95,7 @@
 //!
 //! - Design spec: `docs/superpowers/specs/2026-04-28-plugin-system-mvp-design.md` (local)
 //! - Implementation plan: `docs/superpowers/plans/2026-04-28-plugin-system-mvp.md` (local)
+//! - Compatibility policy: `crates/rdlp-plugin/wit/COMPATIBILITY.md`
 //! - Tracking issue: <https://github.com/crippledgeek/rdlp/issues/213>
 //!
 //! [issue-213]: https://github.com/crippledgeek/rdlp/issues/213
