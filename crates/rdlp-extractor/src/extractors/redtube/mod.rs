@@ -34,6 +34,10 @@ use crate::hls::detect_format_sizes_lazy;
 use crate::utils::make_absolute_url;
 use patterns::REDTUBE_URL_PATTERN;
 
+/// The one spelling of this site's display name (#756); `name()`,
+/// `InfoDict::new`, log tags and filter errors all read it.
+pub(crate) const NAME: &str = "RedTube";
+
 /// The two distinct origins RedTube talks to: the JSON API host and the HTML
 /// (web) host. Grouped because they are one cohesive per-site concern.
 struct RedTubeSearchHosts {
@@ -86,7 +90,7 @@ impl RedTubeExtractor {
         let api_url = patterns::build_api_video_url(&self.hosts.api, video_id);
 
         debug!(
-            "[RedTube] Fetching API video info: {}",
+            "[{NAME}] Fetching API video info: {}",
             rdlp_redact::RedactedUrl::new(&api_url)
         );
 
@@ -104,7 +108,7 @@ impl RedTubeExtractor {
 
         let body = crate::base::common::fetch_capped_text(response, &api_url).await?;
 
-        BaseExtractor::log_content_if_verbose(ctx, "RedTube", "API video response", &body, 500);
+        BaseExtractor::log_content_if_verbose(ctx, NAME, "API video response", &body, 500);
 
         formats::parse_api_video_response(&body)
     }
@@ -239,7 +243,7 @@ impl Default for RedTubeExtractor {
 #[async_trait]
 impl InfoExtractor for RedTubeExtractor {
     fn name(&self) -> &str {
-        "RedTube"
+        NAME
     }
 
     fn valid_url(&self) -> &Regex {
@@ -312,10 +316,10 @@ impl InfoExtractor for RedTubeExtractor {
 
         // Build InfoDict — prefer API metadata, fall back to HTML scrape
         let info = if let Ok(api_meta) = api_metadata {
-            debug!("[RedTube] Using API metadata for video {video_id}");
+            debug!("[{NAME}] Using API metadata for video {video_id}");
             self.build_info_from_api(&video_id, url, api_meta, &webpage, formats, &hls_flags)
         } else {
-            debug!("[RedTube] API unavailable, using HTML metadata for video {video_id}");
+            debug!("[{NAME}] API unavailable, using HTML metadata for video {video_id}");
             self.build_info_from_html(&video_id, url, &webpage, formats, &hls_flags)?
         };
 
@@ -397,7 +401,7 @@ impl PagedSearch for RedTubeExtractor {
                             })
                         }
                         Err(html_err) => {
-                            warn!("[RedTube] HTML fallback also failed: {html_err}");
+                            warn!("[{NAME}] HTML fallback also failed: {html_err}");
                             Err(html_err)
                         }
                     }
@@ -433,7 +437,7 @@ impl PagedSearch for RedTubeExtractor {
             Ok(result) => result,
             Err(e) => {
                 if page == 1 {
-                    debug!("[RedTube] API search failed, falling back to HTML: {e}");
+                    debug!("[{NAME}] API search failed, falling back to HTML: {e}");
                     let html_url = patterns::build_html_search_url(&self.hosts.html, &query.query);
                     let results = self.fetch_html_search_page(&html_url, ctx).await?;
                     (results, None)
@@ -462,7 +466,7 @@ impl PagedSearch for RedTubeExtractor {
 #[async_trait]
 impl SearchExtractor for RedTubeExtractor {
     fn name(&self) -> &str {
-        "RedTube"
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {

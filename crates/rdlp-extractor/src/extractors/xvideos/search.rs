@@ -10,7 +10,7 @@ use rdlp_types::{
 };
 use scraper::Html;
 
-use super::XVideosExtractor;
+use super::{NAME, XVideosExtractor};
 use crate::base::common::{
     BaseExtractor, PagedSearch, SearchPage, SearchPageSpec, resolve_card_url, resolve_media_url,
 };
@@ -245,7 +245,7 @@ impl PagedSearch for XVideosExtractor {
 #[async_trait]
 impl SearchExtractor for XVideosExtractor {
     fn name(&self) -> &str {
-        "XVideos"
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {

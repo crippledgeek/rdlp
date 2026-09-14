@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use rdlp_core::{ExtractionContext, Result, SearchExtractor};
 use rdlp_types::{SearchPageResponse, SearchQuery, SearchResultPreview};
 
-use super::NineAnimeExtractor;
 use super::search_patterns;
+use super::{NAME, NineAnimeExtractor};
 use crate::base::common::{PagedSearch, SearchPage, SearchPageSpec};
 
 const BASE_URL: &str = "https://9animetv.to";
@@ -116,7 +116,7 @@ impl PagedSearch for NineAnimeExtractor {
 #[async_trait]
 impl SearchExtractor for NineAnimeExtractor {
     fn name(&self) -> &str {
-        "NineAnime"
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {

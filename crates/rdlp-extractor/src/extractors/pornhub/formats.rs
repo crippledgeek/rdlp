@@ -8,6 +8,7 @@ use rdlp_core::{ExtractionContext, RdlpError, Result};
 use rdlp_types::Format;
 use serde_json::Value;
 
+use super::NAME;
 use super::patterns::{
     DOWNLOAD_BTN_PATTERN, FLASHVARS_PATTERN, MEDIA_VAR_PATTERN, QUALITY_FROM_URL_PATTERN,
     QUALITY_ITEMS_PATTERN,
@@ -38,7 +39,7 @@ pub async fn extract_all_formats(webpage: &str, ctx: &ExtractionContext) -> Resu
     if let Ok(formats) = extract_from_flashvars(webpage, ctx).await {
         extend_deduped(&mut all_formats, &mut seen_urls, formats);
         if !all_formats.is_empty() {
-            debug!(count = all_formats.len(); "[PornHub] Extracted formats from flashvars");
+            debug!(count = all_formats.len(); "[{NAME}] Extracted formats from flashvars");
         }
     }
 
@@ -61,7 +62,7 @@ pub async fn extract_all_formats(webpage: &str, ctx: &ExtractionContext) -> Resu
 
     BaseExtractor::dedup_format_ids(&mut all_formats);
 
-    debug!(count = all_formats.len(); "[PornHub] Total unique formats");
+    debug!(count = all_formats.len(); "[{NAME}] Total unique formats");
 
     Ok(all_formats)
 }
@@ -132,12 +133,12 @@ async fn fetch_media_formats(
     idx: usize,
     ctx: &ExtractionContext,
 ) -> Option<Vec<Format>> {
-    debug!("[PornHub] Fetching formats from get_media endpoint...");
+    debug!("[{NAME}] Fetching formats from get_media endpoint...");
 
     let response = ctx.http_client.get(url).send().await.ok()?;
 
     if !response.status().is_success() {
-        debug!(status:? = response.status(); "[PornHub] get_media returned non-success");
+        debug!(status:? = response.status(); "[{NAME}] get_media returned non-success");
         return None;
     }
 
@@ -154,7 +155,7 @@ async fn fetch_media_formats(
 
         let format = build_format(real_url, quality, idx);
 
-        debug!(format_id:? = format.format_id; "[PornHub] Found format");
+        debug!(format_id:? = format.format_id; "[{NAME}] Found format");
 
         formats.push(format);
     }
@@ -219,7 +220,7 @@ fn parse_js_vars(webpage: &str) -> Vec<Format> {
                     let format = build_format(url, quality.parse().ok(), 0);
                     formats.push(format);
 
-                    debug!(quality; "[PornHub] Found format from qualityItems");
+                    debug!(quality; "[{NAME}] Found format from qualityItems");
                 }
             }
         }
@@ -238,7 +239,7 @@ fn parse_js_vars(webpage: &str) -> Vec<Format> {
 
             let format = build_format(url_str, quality, 0);
 
-            debug!(quality:? = quality_name; "[PornHub] Found format from JS var");
+            debug!(quality:? = quality_name; "[{NAME}] Found format from JS var");
 
             formats.push(format);
         }
@@ -259,7 +260,7 @@ fn extract_from_download_buttons(webpage: &str) -> Vec<Format> {
                 .unwrap_or_else(|| "download".to_string());
             let height = quality.map(|q| q as u32);
 
-            debug!(format_id:?; "[PornHub] Found format from download button");
+            debug!(format_id:?; "[{NAME}] Found format from download button");
 
             Some(BaseExtractor::build_format(
                 format_id,

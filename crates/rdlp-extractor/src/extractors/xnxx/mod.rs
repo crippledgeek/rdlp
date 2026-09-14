@@ -27,7 +27,9 @@ use rdlp_types::{DownloadProtocol, Format, InfoDict};
 use crate::base::common::BaseExtractor;
 use crate::base::wgcz_network::WgczNetworkBase;
 
-const XNXX_NAME: &str = "XNXX";
+/// The one spelling of this site's display name (#756); `name()`, `InfoDict::new`,
+/// log tags and filter errors all read it.
+pub(crate) const NAME: &str = "XNXX";
 const XNXX_PRIORITY: i32 = 100;
 
 /// XNXX site extractor.
@@ -98,7 +100,7 @@ fn build_formats(format_urls: &crate::base::wgcz_network::WgczFormatUrls) -> Vec
 #[async_trait]
 impl InfoExtractor for XNXXExtractor {
     fn name(&self) -> &str {
-        XNXX_NAME
+        NAME
     }
 
     fn valid_url(&self) -> &Regex {
@@ -122,7 +124,7 @@ impl InfoExtractor for XNXXExtractor {
             url: Some(url.to_string().into()),
         })?;
 
-        debug!("[xnxx] Fetching video page for id={video_id}");
+        debug!("[{NAME}] Fetching video page for id={video_id}");
         let webpage = BaseExtractor::fetch_webpage(url, ctx).await?;
 
         // --- formats ---
@@ -167,8 +169,8 @@ impl InfoExtractor for XNXXExtractor {
         let upload_date = ld.upload_date;
 
         // --- build InfoDict ---
-        let mut info = InfoDict::new(&video_id, &title, XNXX_NAME, url);
-        info.extractor = XNXX_NAME.to_string();
+        let mut info = InfoDict::new(&video_id, &title, NAME, url);
+        info.extractor = NAME.to_string();
         info.description = description;
         info.thumbnail = thumbnail;
         info.uploader = uploader;
@@ -229,10 +231,10 @@ mod tests {
         let mut info = InfoDict::new(
             video_id,
             &title,
-            XNXX_NAME,
+            NAME,
             "https://www.xnxx.com/video-14cco143/slug",
         );
-        info.extractor = XNXX_NAME.to_string();
+        info.extractor = NAME.to_string();
         info.actors = Vec::new();
         info.formats = formats;
 

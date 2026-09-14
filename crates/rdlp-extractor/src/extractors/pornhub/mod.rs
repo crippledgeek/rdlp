@@ -40,6 +40,10 @@ use crate::hls::detect_format_sizes_lazy;
 
 pub use patterns::{PORNHUB_PLAYLIST_URL_PATTERN, PORNHUB_VIDEO_URL_PATTERN};
 
+/// The one spelling of this site's display name (#756); `name()`,
+/// `InfoDict::new`, log tags and filter errors all read it.
+pub(crate) const NAME: &str = "PornHub";
+
 /// Expected number of results per API page. Used to detect the last page:
 /// if a page returns fewer than this, there are no more pages.
 const API_RESULTS_PER_PAGE: usize = 20;
@@ -162,7 +166,7 @@ impl PagedSearch for PornHubExtractor {
                             // Preserve the operator-visible WARN (never downgrade
                             // to the shared loop's DEBUG). Then propagate → the
                             // loop breaks with partial results, as today.
-                            warn!("[PornHub] API fallback also failed on page 1: {api_err}");
+                            warn!("[{NAME}] API fallback also failed on page 1: {api_err}");
                             Err(api_err)
                         }
                     }
@@ -201,7 +205,7 @@ impl PagedSearch for PornHubExtractor {
                     Err(e) => format!("{e}"),
                 };
                 debug!(
-                    "[PornHub] HTML search failed/empty on page {page}, falling back to API: {reason}"
+                    "[{NAME}] HTML search failed/empty on page {page}, falling back to API: {reason}"
                 );
                 let base_url = search_patterns::build_api_search_url(
                     &self.origin,
@@ -230,7 +234,7 @@ impl PagedSearch for PornHubExtractor {
 #[async_trait]
 impl SearchExtractor for PornHubExtractor {
     fn name(&self) -> &str {
-        "PornHub"
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
@@ -257,7 +261,7 @@ impl SearchExtractor for PornHubExtractor {
 #[async_trait]
 impl InfoExtractor for PornHubExtractor {
     fn name(&self) -> &str {
-        "PornHub"
+        NAME
     }
 
     fn valid_url(&self) -> &regex::Regex {

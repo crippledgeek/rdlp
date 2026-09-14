@@ -9,6 +9,7 @@ use log::debug;
 use rdlp_core::{ExtractionContext, RdlpError, Result};
 use rdlp_types::Format;
 
+use super::NAME;
 use crate::base::common::BaseExtractor;
 
 /// Pattern to extract MP4 source URLs from the embed page.
@@ -50,7 +51,7 @@ pub(crate) async fn resolve_formats(
     };
 
     let sanitized = rdlp_security::sanitize_for_logging(&full_url);
-    debug!("[HQPorner] Resolving mydaddy.cc embed: {sanitized}");
+    debug!("[{NAME}] Resolving mydaddy.cc embed: {sanitized}");
 
     // Build alt URL upfront for fallback on both fetch failure and empty formats
     let alt_url = if full_url.ends_with('/') {
@@ -64,7 +65,7 @@ pub(crate) async fn resolve_formats(
         Ok(h) => h,
         Err(e) => {
             debug!(
-                "[HQPorner] Primary embed fetch failed ({e}), trying alt player: {}",
+                "[{NAME}] Primary embed fetch failed ({e}), trying alt player: {}",
                 rdlp_security::sanitize_for_logging(&alt_url)
             );
             return resolve_from_html(&fetch_embed(&alt_url, ctx).await?);
@@ -84,7 +85,7 @@ pub(crate) async fn resolve_formats(
 
     if formats.is_empty() {
         debug!(
-            "[HQPorner] No formats found, trying alt player: {}",
+            "[{NAME}] No formats found, trying alt player: {}",
             rdlp_security::sanitize_for_logging(&alt_url)
         );
 

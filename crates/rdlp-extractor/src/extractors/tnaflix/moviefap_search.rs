@@ -10,6 +10,12 @@ use rdlp_core::{ExtractionContext, Result};
 use super::{moviefap_search_helpers, moviefap_search_patterns};
 use crate::base::common::{PagedSearch, SearchPage, Termination};
 
+/// The one spelling of this site's display name (#756); `name()`,
+/// `InfoDict::new`, log tags and filter errors all read it. Also read by
+/// `TNAFlixExtractor::moviefap()` in `info.rs` (the InfoExtractor side of
+/// this same site).
+pub(super) const NAME: &str = "MovieFap";
+
 /// MovieFap search extractor
 ///
 /// Parses MovieFap's distinct HTML search result structure.
@@ -39,7 +45,7 @@ impl PagedSearch for MovieFapSearchExtractor {
         ctx: &ExtractionContext,
     ) -> Result<SearchPage> {
         let page_url = moviefap_search_patterns::build_search_url(query, page as usize);
-        debug!(page; "[MovieFap] Fetching search page: {}", rdlp_security::sanitize_for_logging(&page_url));
+        debug!(page; "[{NAME}] Fetching search page: {}", rdlp_security::sanitize_for_logging(&page_url));
 
         let webpage = crate::base::common::BaseExtractor::fetch_webpage(&page_url, ctx).await?;
         let page_results = moviefap_search_helpers::parse_search_results(&webpage);
@@ -48,7 +54,7 @@ impl PagedSearch for MovieFapSearchExtractor {
         debug!(
             count = page_results.len(),
             max_pages;
-            "[MovieFap] Search page {page} returned {} results",
+            "[{NAME}] Search page {page} returned {} results",
             page_results.len()
         );
 
@@ -71,7 +77,7 @@ impl Default for MovieFapSearchExtractor {
 #[async_trait]
 impl rdlp_core::SearchExtractor for MovieFapSearchExtractor {
     fn name(&self) -> &str {
-        "MovieFap"
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {

@@ -26,7 +26,9 @@ use crate::base::common::BaseExtractor;
 use hash::calc_hash;
 
 /// Extractor name.
-const EPORNER_NAME: &str = "EPorner";
+/// The one spelling of this site's display name (#756); `name()`, `InfoDict::new`,
+/// log tags and filter errors all read it.
+const NAME: &str = "EPorner";
 /// Extractor priority (higher than generic fallback).
 const EPORNER_PRIORITY: i32 = 100;
 /// EPorner root URL.
@@ -334,36 +336,36 @@ async fn build_info(
     {
         if let Some(computed_hash) = calc_hash(&raw_hash) {
             let url = xhr_url(id, &computed_hash);
-            debug!("[eporner] XHR: {}", rdlp_redact::RedactedUrl::new(&url));
+            debug!("[{NAME}] XHR: {}", rdlp_redact::RedactedUrl::new(&url));
             match BaseExtractor::fetch_webpage(&url, ctx).await {
                 Ok(body) => match serde_json::from_str::<Value>(&body) {
                     Ok(json) => {
                         let fmts = parse_xhr_formats(&json);
-                        debug!("[eporner] XHR returned {} formats", fmts.len());
+                        debug!("[{NAME}] XHR returned {} formats", fmts.len());
                         fmts
                     }
                     Err(e) => {
-                        debug!("[eporner] XHR JSON parse error: {e}");
+                        debug!("[{NAME}] XHR JSON parse error: {e}");
                         vec![]
                     }
                 },
                 Err(e) => {
-                    debug!("[eporner] XHR fetch error: {e:#}");
+                    debug!("[{NAME}] XHR fetch error: {e:#}");
                     vec![]
                 }
             }
         } else {
-            debug!("[eporner] calc_hash failed for raw hash");
+            debug!("[{NAME}] calc_hash failed for raw hash");
             vec![]
         }
     } else {
-        debug!("[eporner] no page hash found, skipping XHR");
+        debug!("[{NAME}] no page hash found, skipping XHR");
         vec![]
     };
 
     // --- Fallback: /dload/ links ---
     let formats = if xhr_formats.is_empty() {
-        debug!("[eporner] falling back to /dload/ scraping");
+        debug!("[{NAME}] falling back to /dload/ scraping");
         let dload = parse_dload_formats(page_url, html);
         if dload.is_empty() {
             return Err(RdlpError::Extraction {
@@ -385,7 +387,7 @@ async fn build_info(
     // fallback to the legacy variant-URL path).
     let formats = crate::hls::expand_hls_in_place(formats, ctx.http_client.clone()).await;
 
-    let mut info = InfoDict::new(id, title, EPORNER_NAME, page_url);
+    let mut info = InfoDict::new(id, title, NAME, page_url);
     info.view_count = views;
     info.duration = duration_iso
         .as_deref()
@@ -405,7 +407,7 @@ async fn build_info(
 #[async_trait]
 impl InfoExtractor for EPornerExtractor {
     fn name(&self) -> &str {
-        EPORNER_NAME
+        NAME
     }
 
     fn valid_url(&self) -> &Regex {

@@ -12,7 +12,7 @@ use std::sync::LazyLock;
 
 use crate::base::common::{BaseExtractor, resolve_card_url};
 
-use super::patterns::VIDEO_CLOSED_PATTERN;
+use super::{NAME, patterns::VIDEO_CLOSED_PATTERN};
 
 /// Pattern to extract RTA age verification meta tag content.
 static RTA_PATTERN: Lazy<Regex> =
@@ -164,7 +164,7 @@ pub fn extract_metadata_from_json(
     info.age_limit = age_limit.or(Some(18));
 
     if let Some(display_id) = display_id {
-        debug!(display_id; "[XHamster] Display ID");
+        debug!(display_id; "[{NAME}] Display ID");
     }
 
     info
@@ -275,7 +275,7 @@ pub fn extract_metadata_from_html(
     info.age_limit = age_limit.or(Some(18));
 
     if let Some(display_id) = display_id {
-        debug!(display_id; "[XHamster] Legacy display ID");
+        debug!(display_id; "[{NAME}] Legacy display ID");
     }
 
     info

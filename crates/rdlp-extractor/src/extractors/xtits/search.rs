@@ -7,8 +7,8 @@ use async_trait::async_trait;
 use rdlp_core::{ExtractionContext, Result, SearchExtractor};
 use rdlp_types::{SearchPageResponse, SearchQuery, SearchResultPreview};
 
-use super::XTitsExtractor;
 use super::search_patterns;
+use super::{NAME, XTitsExtractor};
 use crate::base::common::{PagedSearch, SearchPage, SearchPageSpec};
 
 /// Maximum results cap for a full search (matches the pre-refactor
@@ -111,7 +111,7 @@ impl PagedSearch for XTitsExtractor {
 #[async_trait]
 impl SearchExtractor for XTitsExtractor {
     fn name(&self) -> &str {
-        "XTits"
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {

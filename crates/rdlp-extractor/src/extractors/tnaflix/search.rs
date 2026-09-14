@@ -10,6 +10,12 @@ use crate::base::common::{BaseExtractor, PagedSearch, SearchPage, Termination};
 use super::search_patterns;
 use super::tnaflix_search_helpers;
 
+/// The one spelling of this site's display name (#756); `name()`,
+/// `InfoDict::new`, log tags and filter errors all read it. Also read by
+/// `TNAFlixExtractor::tnaflix()` in `info.rs` (the InfoExtractor side of
+/// this same site).
+pub(super) const NAME: &str = "TNAFlix";
+
 /// TNAFlix search extractor
 ///
 /// Provides keyword search across TNAFlix with optional ordering filters.
@@ -59,7 +65,7 @@ impl PagedSearch for TNAFlixSearchExtractor {
         ctx: &ExtractionContext,
     ) -> Result<SearchPage> {
         let page_url = Self::build_page_url(query, page as usize);
-        debug!(page; "[TNAFlix] Fetching search page: {}", rdlp_security::sanitize_for_logging(&page_url));
+        debug!(page; "[{NAME}] Fetching search page: {}", rdlp_security::sanitize_for_logging(&page_url));
 
         let webpage = BaseExtractor::fetch_webpage(&page_url, ctx).await?;
         let page_results = tnaflix_search_helpers::parse_search_results(&webpage);
@@ -68,7 +74,7 @@ impl PagedSearch for TNAFlixSearchExtractor {
         debug!(
             count = page_results.len(),
             max_pages;
-            "[TNAFlix] Search page {page} returned {} results",
+            "[{NAME}] Search page {page} returned {} results",
             page_results.len()
         );
 
@@ -91,7 +97,7 @@ impl Default for TNAFlixSearchExtractor {
 #[async_trait]
 impl SearchExtractor for TNAFlixSearchExtractor {
     fn name(&self) -> &str {
-        "TNAFlix"
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {

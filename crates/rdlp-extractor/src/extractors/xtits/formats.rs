@@ -10,6 +10,7 @@
 use log::debug;
 use rdlp_types::Format;
 
+use super::NAME;
 use crate::base::common::BaseExtractor;
 use crate::base::kvs::{KvsFlashvars, parse_kvs_flashvars};
 
@@ -32,7 +33,7 @@ pub fn extract_formats(flashvars_content: &str) -> Vec<Format> {
             .expect("key confirmed present by has() check");
         let quality = flashvars.get("video_url_text").unwrap_or("default");
         let format = build_kvs_format(quality, url);
-        debug!(format_id = format.format_id.as_str(), url; "[XTits] Primary format");
+        debug!(format_id = format.format_id.as_str(), url; "[{NAME}] Primary format");
         formats.push(format);
     }
 
@@ -45,7 +46,7 @@ pub fn extract_formats(flashvars_content: &str) -> Vec<Format> {
             .expect("key confirmed present by has() check");
         let quality = flashvars.get("video_alt_url_text").unwrap_or("alt");
         let format = build_kvs_format(quality, url);
-        debug!(format_id = format.format_id.as_str(), url; "[XTits] Alt format");
+        debug!(format_id = format.format_id.as_str(), url; "[{NAME}] Alt format");
         formats.push(format);
     }
 
@@ -58,7 +59,7 @@ pub fn extract_formats(flashvars_content: &str) -> Vec<Format> {
             .expect("key confirmed present by has() check");
         let quality = flashvars.get("video_alt_url2_text").unwrap_or("alt2");
         let format = build_kvs_format(quality, url);
-        debug!(format_id = format.format_id.as_str(), url; "[XTits] Alt2 format");
+        debug!(format_id = format.format_id.as_str(), url; "[{NAME}] Alt2 format");
         formats.push(format);
     }
 

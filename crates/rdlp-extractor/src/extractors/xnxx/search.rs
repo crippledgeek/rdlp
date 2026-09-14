@@ -10,7 +10,7 @@ use rdlp_types::{
 };
 use scraper::Html;
 
-use super::XNXXExtractor;
+use super::{NAME, XNXXExtractor};
 use crate::base::common::BaseExtractor;
 use crate::base::common::{PagedSearch, SearchPage, SearchPageSpec};
 
@@ -241,7 +241,7 @@ impl PagedSearch for XNXXExtractor {
 #[async_trait]
 impl SearchExtractor for XNXXExtractor {
     fn name(&self) -> &str {
-        XNXX_NAME_STR
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
@@ -274,8 +274,6 @@ impl SearchExtractor for XNXXExtractor {
 }
 
 // The name string must match XNXXExtractor::name()
-const XNXX_NAME_STR: &str = "XNXX";
-
 #[cfg(test)]
 mod tests {
     use super::*;

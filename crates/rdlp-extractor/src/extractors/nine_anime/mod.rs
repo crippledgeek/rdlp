@@ -47,6 +47,10 @@ use std::collections::HashMap;
 use crate::base::common::BaseExtractor;
 use crate::hls::{HlsStreamFlags, detect_format_sizes_lazy};
 
+/// The one spelling of this site's display name (#756); `name()`,
+/// `InfoDict::new`, log tags and filter errors all read it.
+pub(crate) const NAME: &str = "NineAnime";
+
 /// 9anime episode extractor.
 ///
 /// Resolves anime episode video sources through 9anime's AJAX API chain
@@ -235,8 +239,7 @@ pub(crate) async fn resolve_episode_formats(
     let all_formats = crate::hls::expand_hls_in_place(all_formats, ctx.http_client.clone()).await;
 
     // Enrich HLS formats with resolution, codecs, duration, segments
-    let (mut all_formats, hls_flags) =
-        detect_format_sizes_lazy(all_formats, ctx, "NineAnime").await;
+    let (mut all_formats, hls_flags) = detect_format_sizes_lazy(all_formats, ctx, NAME).await;
 
     // Restore audio type label in format_note (enrichment overwrites it).
     // Must run AFTER detect_format_sizes_lazy because the helper sets
@@ -294,7 +297,7 @@ fn build_subtitle_map(
 #[async_trait]
 impl InfoExtractor for NineAnimeExtractor {
     fn name(&self) -> &str {
-        "NineAnime"
+        NAME
     }
 
     fn valid_url(&self) -> &regex::Regex {
@@ -360,7 +363,7 @@ impl InfoExtractor for NineAnimeExtractor {
             None => anime_metadata.title,
         };
 
-        let mut info = InfoDict::new(video_id, title, "NineAnime", url);
+        let mut info = InfoDict::new(video_id, title, NAME, url);
         info.formats = all_formats;
         info.thumbnail = anime_metadata.thumbnail;
         info.description = anime_metadata.description;
@@ -407,7 +410,7 @@ impl InfoExtractor for NineAnimeExtractor {
         let (formats, hls_flags, subtitle_tracks) =
             resolve_episode_formats(&episode_id, ctx).await?;
 
-        let mut info = InfoDict::new("", "", "NineAnime", url);
+        let mut info = InfoDict::new("", "", NAME, url);
         info.formats = formats;
         info.is_live = Some(hls_flags.is_live);
 

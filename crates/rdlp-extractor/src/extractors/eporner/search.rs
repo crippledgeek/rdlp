@@ -11,7 +11,7 @@ use rdlp_types::{
 use scraper::{Html, Selector};
 use std::sync::LazyLock;
 
-use super::EPornerExtractor;
+use super::{EPornerExtractor, NAME};
 use crate::base::common::{
     BaseExtractor, PagedSearch, SearchPage, SearchPageSpec, resolve_card_url, resolve_media_url,
 };
@@ -281,7 +281,7 @@ impl PagedSearch for EPornerExtractor {
 #[async_trait]
 impl SearchExtractor for EPornerExtractor {
     fn name(&self) -> &str {
-        "EPorner"
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {

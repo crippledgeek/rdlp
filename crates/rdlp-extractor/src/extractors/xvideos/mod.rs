@@ -25,6 +25,10 @@ use rdlp_types::{DownloadProtocol, Format, InfoDict};
 use crate::base::common::BaseExtractor;
 use crate::base::wgcz_network::WgczNetworkBase;
 
+/// The one spelling of this site's display name (#756); `name()`,
+/// `InfoDict::new`, log tags and filter errors all read it.
+pub(crate) const NAME: &str = "XVideos";
+
 /// Parse height (in pixels) from an XVideos MP4 URL.
 ///
 /// XVideos/XNXX (WGCZ) MP4 URLs tend to follow one of these patterns:
@@ -129,7 +133,7 @@ impl XVideosExtractor {
         // Thumbnail: prefer inline JS, fall back to JSON-LD
         let thumbnail = inline_meta.thumbnail_url.or(json_ld.thumbnail_url.clone());
 
-        let mut info = InfoDict::new(eid, title, "XVideos", url);
+        let mut info = InfoDict::new(eid, title, NAME, url);
         info.thumbnail = thumbnail;
         info.description = json_ld.description;
         info.duration = duration;
@@ -149,7 +153,7 @@ impl XVideosExtractor {
 #[async_trait]
 impl InfoExtractor for XVideosExtractor {
     fn name(&self) -> &str {
-        "XVideos"
+        NAME
     }
 
     fn valid_url(&self) -> &Regex {

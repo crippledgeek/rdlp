@@ -10,6 +10,9 @@ use scraper::Html;
 use crate::base::common::BaseExtractor;
 use crate::base::tnaflix_network::{TnaFlixNetworkBase, VideoMetadata};
 
+use super::empflix_search::NAME as EMPFLIX_NAME;
+use super::moviefap_search::NAME as MOVIEFAP_NAME;
+
 /// Parse EMPFlix AJAX JSON response to extract video sources
 ///
 /// EMPFlix uses an AJAX endpoint that returns JSON with embedded HTML
@@ -38,7 +41,7 @@ pub async fn parse_empflix_ajax(
 
     let json_text = crate::base::common::fetch_capped_text(response, &ajax_url).await?;
 
-    BaseExtractor::log_content_if_verbose(ctx, "EMPFlix", "AJAX Response", &json_text, 500);
+    BaseExtractor::log_content_if_verbose(ctx, EMPFLIX_NAME, "AJAX Response", &json_text, 500);
 
     // Parse JSON to extract HTML field
     let json: serde_json::Value =
@@ -95,7 +98,7 @@ pub async fn parse_moviefap_xml(
 
     let xml_text = crate::base::common::fetch_capped_text(response, cdn_url).await?;
 
-    BaseExtractor::log_content_if_verbose(ctx, "MovieFap", "XML Response", &xml_text, 1000);
+    BaseExtractor::log_content_if_verbose(ctx, MOVIEFAP_NAME, "XML Response", &xml_text, 1000);
 
     // Use base to parse XML
     let video_data = base.parse_moviefap_xml(&xml_text);

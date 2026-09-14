@@ -2,8 +2,8 @@
 //!
 //! Handles pagination and parallel video extraction from user and creator pages.
 
-use super::XHamsterExtractor;
 use super::patterns;
+use super::{NAME, XHamsterExtractor};
 use crate::base::common::{BaseExtractor, MAX_PLAYLIST_SIZE};
 use futures::stream::{self, StreamExt};
 use lazy_regex::{Lazy, Regex, lazy_regex};
@@ -34,7 +34,7 @@ impl XHamsterExtractor {
                 url: Some(url.to_string().into()),
             })?;
 
-        info!(user_id:?; "[XHamster] Extracting user playlist");
+        info!(user_id:?; "[{NAME}] Extracting user playlist");
 
         let mut all_video_urls: Vec<String> = Vec::new();
         let mut seen = HashSet::new();
@@ -47,7 +47,7 @@ impl XHamsterExtractor {
                 format!("{url}/{page}")
             };
 
-            debug!(page, url:? = rdlp_redact::RedactedUrl::new(&page_url); "[XHamster] Fetching user page");
+            debug!(page, url:? = rdlp_redact::RedactedUrl::new(&page_url); "[{NAME}] Fetching user page");
 
             let webpage = BaseExtractor::fetch_webpage_with_retry(&page_url, ctx).await?;
 
@@ -81,7 +81,7 @@ impl XHamsterExtractor {
         }
 
         let total = all_video_urls.len();
-        debug!(total; "[XHamster] Found videos in user playlist");
+        debug!(total; "[{NAME}] Found videos in user playlist");
 
         if total == 0 {
             return Err(RdlpError::Extraction {
@@ -101,50 +101,48 @@ impl XHamsterExtractor {
         }
 
         // Extract videos in parallel
-        debug!(total, concurrent = CONCURRENT_EXTRACTIONS; "[XHamster] Extracting videos");
+        debug!(total, concurrent = CONCURRENT_EXTRACTIONS; "[{NAME}] Extracting videos");
 
         let completed = Arc::new(AtomicUsize::new(0));
 
-        let extraction_futures =
-            all_video_urls
-                .into_iter()
-                .enumerate()
-                .map(|(index, video_url)| {
-                    let position = index + 1;
-                    let user_id = user_id.clone();
-                    let completed = Arc::clone(&completed);
+        let extraction_futures = all_video_urls.into_iter().enumerate().map(
+            |(index, video_url)| {
+                let position = index + 1;
+                let user_id = user_id.clone();
+                let completed = Arc::clone(&completed);
 
-                    async move {
-                        let result = timeout(
-                            VIDEO_EXTRACTION_TIMEOUT,
-                            self.extract_video(&video_url, ctx),
-                        )
-                        .await;
+                async move {
+                    let result = timeout(
+                        VIDEO_EXTRACTION_TIMEOUT,
+                        self.extract_video(&video_url, ctx),
+                    )
+                    .await;
 
-                        let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
+                    let done = completed.fetch_add(1, Ordering::Relaxed) + 1;
 
-                        match result {
-                            Ok(Ok(mut info)) => {
-                                info.playlist = Some(user_id);
-                                info.playlist_index = Some(position);
-                                info.playlist_count = Some(total);
+                    match result {
+                        Ok(Ok(mut info)) => {
+                            info.playlist = Some(user_id);
+                            info.playlist_index = Some(position);
+                            info.playlist_count = Some(total);
 
-                                debug!(done, total; "[XHamster] Extracted video");
-                                Some((position, info))
-                            }
-                            Ok(Err(e)) => {
-                                // Bumped from debug → warn so playlist users see
-                                // silent-pruning of items they expected to get.
-                                warn!(position, total; "[XHamster] Failed to extract playlist item: {e}");
-                                None
-                            }
-                            Err(_) => {
-                                warn!(position, total; "[XHamster] Timed out extracting playlist item");
-                                None
-                            }
+                            debug!(done, total; "[{NAME}] Extracted video");
+                            Some((position, info))
+                        }
+                        Ok(Err(e)) => {
+                            // Bumped from debug → warn so playlist users see
+                            // silent-pruning of items they expected to get.
+                            warn!(position, total; "[{NAME}] Failed to extract playlist item: {e}");
+                            None
+                        }
+                        Err(_) => {
+                            warn!(position, total; "[{NAME}] Timed out extracting playlist item");
+                            None
                         }
                     }
-                });
+                }
+            },
+        );
 
         let results: Vec<Option<(usize, InfoDict)>> = stream::iter(extraction_futures)
             .buffer_unordered(CONCURRENT_EXTRACTIONS)
@@ -167,14 +165,14 @@ impl XHamsterExtractor {
         }
 
         let extracted = results.len();
-        info!(extracted, total; "[XHamster] Successfully extracted videos");
+        info!(extracted, total; "[{NAME}] Successfully extracted videos");
         if extracted < total {
             // Loud aggregate so the user sees the prune count even when
             // they don't have RUST_LOG=warn on per-item lines.
             warn!(
                 extracted,
                 total;
-                "[XHamster] {} of {} playlist items could not be extracted",
+                "[{NAME}] {} of {} playlist items could not be extracted",
                 total - extracted,
                 total
             );

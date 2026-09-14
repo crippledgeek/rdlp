@@ -28,6 +28,10 @@ use rdlp_types::{
 use crate::base::common::BaseExtractor;
 use crate::base::common::{PagedSearch, SearchPage};
 
+/// The one spelling of this site's display name (#756); `name()`,
+/// `InfoDict::new`, log tags and filter errors all read it.
+const NAME: &str = "KoreanPornMovie";
+
 // ============================================================================
 // Selectors
 // ============================================================================
@@ -96,7 +100,7 @@ impl Default for KoreanPornMovieExtractor {
 #[async_trait]
 impl InfoExtractor for KoreanPornMovieExtractor {
     fn name(&self) -> &str {
-        "KoreanPornMovie"
+        NAME
     }
 
     fn valid_url(&self) -> &Regex {
@@ -118,7 +122,7 @@ impl InfoExtractor for KoreanPornMovieExtractor {
             )
         })?;
 
-        debug!("[KoreanPornMovie] Extracting: {slug}");
+        debug!("[{NAME}] Extracting: {slug}");
 
         let webpage = BaseExtractor::fetch_webpage(url, ctx).await?;
 
@@ -156,7 +160,7 @@ impl InfoExtractor for KoreanPornMovieExtractor {
             // Extract video formats from clean-tube-player iframe
             let formats = extract_formats_from_html(&html, url);
 
-            let mut info = InfoDict::new(&slug, &title, "KoreanPornMovie", url);
+            let mut info = InfoDict::new(&slug, &title, NAME, url);
             info.description = description;
             info.thumbnail = thumbnail;
             info.upload_date = upload_date;
@@ -194,7 +198,7 @@ impl InfoExtractor for KoreanPornMovieExtractor {
 #[async_trait]
 impl SearchExtractor for KoreanPornMovieExtractor {
     fn name(&self) -> &str {
-        "KoreanPornMovie"
+        NAME
     }
 
     fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
@@ -278,10 +282,7 @@ impl PagedSearch for KoreanPornMovieExtractor {
         let browse_mode =
             crate::base::common::filter_value(&query.filters, "browse").unwrap_or("search");
 
-        debug!(
-            "[KoreanPornMovie] {} '{}' (page {})",
-            browse_mode, query.query, page
-        );
+        debug!("[{NAME}] {} '{}' (page {})", browse_mode, query.query, page);
 
         match browse_mode {
             "actor" => self.search_api_taxonomy(query, ctx, "actors", page).await,
@@ -419,7 +420,7 @@ impl KoreanPornMovieExtractor {
         })?;
 
         debug!(
-            "[KoreanPornMovie] Resolved {taxonomy} '{slug}' → id={}, count={}",
+            "[{NAME}] Resolved {taxonomy} '{slug}' → id={}, count={}",
             term.id, term.count
         );
 

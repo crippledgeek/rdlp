@@ -3,6 +3,7 @@
 use rdlp_core::Result;
 use rdlp_types::{SearchFilter, SearchFilterDescriptor, SearchFilterValue};
 
+use super::NAME;
 use crate::base::common::{format_std_filter_error, validate_against_descriptors};
 
 /// The filters PornoXO accepts, and the only values it accepts for each.
@@ -98,7 +99,7 @@ pub(crate) const URL_FILTER_PARAMS: [(&str, &str); 3] = [
 /// unsorted query.
 pub(crate) fn validate(filters: &[SearchFilter]) -> Result<()> {
     validate_against_descriptors(filters, &supported_filters(), &[])
-        .map_err(|e| format_std_filter_error("PornoXO", e))
+        .map_err(|e| format_std_filter_error(NAME, e))
 }
 
 #[cfg(test)]

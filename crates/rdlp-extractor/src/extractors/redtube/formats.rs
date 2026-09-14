@@ -14,6 +14,7 @@ use serde_json::Value;
 use crate::base::common::BaseExtractor;
 use crate::utils::{extract_extension_from_url, make_absolute_url};
 
+use super::NAME;
 use super::patterns::{MEDIA_DEF_PATTERN, SOURCES_PATTERN};
 use super::search::parse_duration_string;
 
@@ -253,7 +254,7 @@ pub fn extract_from_sources(webpage: &str) -> Vec<Format> {
     if let Some(caps) = SOURCES_PATTERN.captures(webpage)
         && let Some(sources_str) = caps.get(1)
     {
-        debug!(sources:? = sources_str.as_str(); "[RedTube] Found sources object");
+        debug!(sources:? = sources_str.as_str(); "[{NAME}] Found sources object");
 
         // Try to parse as JSON
         match serde_json::from_str::<Value>(sources_str.as_str()) {
@@ -267,7 +268,7 @@ pub fn extract_from_sources(webpage: &str) -> Vec<Format> {
                             debug!(
                                 format_id:? = format.format_id,
                                 note:? = format.format_note.as_deref().unwrap_or("unknown");
-                                "[RedTube] Extracted format"
+                                "[{NAME}] Extracted format"
                             );
 
                             formats.push(format);
@@ -279,7 +280,7 @@ pub fn extract_from_sources(webpage: &str) -> Vec<Format> {
                 debug!(
                     line = e.line(),
                     column = e.column();
-                    "[RedTube] Failed to parse sources JSON: {e}"
+                    "[{NAME}] Failed to parse sources JSON: {e}"
                 );
             }
         }
@@ -302,7 +303,7 @@ pub async fn extract_from_media_definition(webpage: &str, ctx: &ExtractionContex
     {
         BaseExtractor::log_if_verbose(
             ctx,
-            "RedTube",
+            NAME,
             &format!(
                 "Found mediaDefinition array: {}",
                 media_def_str.as_str().chars().take(200).collect::<String>()
@@ -313,16 +314,12 @@ pub async fn extract_from_media_definition(webpage: &str, ctx: &ExtractionContex
         match serde_json::from_str::<Value>(media_def_str.as_str()) {
             Ok(media_def) => {
                 let Some(arr) = media_def.as_array() else {
-                    BaseExtractor::log_if_verbose(
-                        ctx,
-                        "RedTube",
-                        "mediaDefinition is not an array",
-                    );
+                    BaseExtractor::log_if_verbose(ctx, NAME, "mediaDefinition is not an array");
                     return formats;
                 };
                 BaseExtractor::log_if_verbose(
                     ctx,
-                    "RedTube",
+                    NAME,
                     &format!("Found {} media items", arr.len()),
                 );
 
@@ -332,7 +329,7 @@ pub async fn extract_from_media_definition(webpage: &str, ctx: &ExtractionContex
                 for (idx, item) in arr.iter().enumerate() {
                     BaseExtractor::log_if_verbose(
                         ctx,
-                        "RedTube",
+                        NAME,
                         &format!("Processing item {idx}: {item:?}"),
                     );
 
@@ -353,7 +350,7 @@ pub async fn extract_from_media_definition(webpage: &str, ctx: &ExtractionContex
 
                             BaseExtractor::log_if_verbose(
                                 ctx,
-                                "RedTube",
+                                NAME,
                                 &format!(
                                     "Extracted format: {} - {} ({}x{})",
                                     format.format_id,
@@ -377,7 +374,7 @@ pub async fn extract_from_media_definition(webpage: &str, ctx: &ExtractionContex
             Err(e) => {
                 BaseExtractor::log_if_verbose(
                     ctx,
-                    "RedTube",
+                    NAME,
                     &format!(
                         "Failed to parse mediaDefinition JSON at {}:{}: {}",
                         e.line(),
@@ -402,7 +399,7 @@ async fn fetch_formats_from_endpoint(
 
     BaseExtractor::log_if_verbose(
         ctx,
-        "RedTube",
+        NAME,
         &format!(
             "Fetching format JSON from: {}",
             rdlp_redact::RedactedUrl::new(&absolute_url)
@@ -414,11 +411,11 @@ async fn fetch_formats_from_endpoint(
         Ok(r) => r,
         Err(e) => {
             if e.is_timeout() {
-                debug!(url:? = rdlp_redact::RedactedUrl::new(&absolute_url); "[RedTube] Request timed out");
+                debug!(url:? = rdlp_redact::RedactedUrl::new(&absolute_url); "[{NAME}] Request timed out");
             } else if e.is_connect() {
-                debug!(url:? = rdlp_redact::RedactedUrl::new(&absolute_url); "[RedTube] Connection failed: {e}");
+                debug!(url:? = rdlp_redact::RedactedUrl::new(&absolute_url); "[{NAME}] Connection failed: {e}");
             } else {
-                debug!("[RedTube] Request failed: {e}");
+                debug!("[{NAME}] Request failed: {e}");
             }
             return None;
         }
@@ -428,7 +425,7 @@ async fn fetch_formats_from_endpoint(
     if !response.status().is_success() {
         BaseExtractor::log_if_verbose(
             ctx,
-            "RedTube",
+            NAME,
             &format!(
                 "HTTP {} for URL: {}",
                 response.status(),
@@ -441,16 +438,12 @@ async fn fetch_formats_from_endpoint(
     let json_text = match crate::base::common::fetch_capped_text(response, &absolute_url).await {
         Ok(t) => t,
         Err(e) => {
-            BaseExtractor::log_if_verbose(
-                ctx,
-                "RedTube",
-                &format!("Failed to read response body: {e}"),
-            );
+            BaseExtractor::log_if_verbose(ctx, NAME, &format!("Failed to read response body: {e}"));
             return None;
         }
     };
 
-    BaseExtractor::log_content_if_verbose(ctx, "RedTube", "JSON response", &json_text, 500);
+    BaseExtractor::log_content_if_verbose(ctx, NAME, "JSON response", &json_text, 500);
 
     // Parse JSON array of formats
     let more_media: Value = match serde_json::from_str(&json_text) {
@@ -458,7 +451,7 @@ async fn fetch_formats_from_endpoint(
         Err(e) => {
             BaseExtractor::log_if_verbose(
                 ctx,
-                "RedTube",
+                NAME,
                 &format!(
                     "Failed to parse formats JSON at {}:{}: {}",
                     e.line(),
@@ -485,7 +478,7 @@ async fn fetch_formats_from_endpoint(
 
             BaseExtractor::log_if_verbose(
                 ctx,
-                "RedTube",
+                NAME,
                 &format!(
                     "Extracted format from JSON: {} - {} ({}x{}) [{}]",
                     format.format_id,

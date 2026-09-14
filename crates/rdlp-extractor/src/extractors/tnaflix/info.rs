@@ -13,7 +13,10 @@ use crate::base::common::BaseExtractor;
 use crate::base::tnaflix_network::TnaFlixNetworkBase;
 
 use super::ajax;
+use super::empflix_search::NAME as EMPFLIX_NAME;
+use super::moviefap_search::NAME as MOVIEFAP_NAME;
 use super::patterns::{EMPFLIX_URL_PATTERN, MOVIEFAP_URL_PATTERN, TNAFLIX_URL_PATTERN};
+use super::search::NAME as TNAFLIX_NAME;
 
 /// TNAFlix network extractor (supports TNAFlix, EMPFlix, MovieFap)
 ///
@@ -29,7 +32,7 @@ impl TNAFlixExtractor {
     #[must_use]
     pub fn tnaflix() -> Self {
         Self {
-            name: "TNAFlix",
+            name: TNAFLIX_NAME,
             url_pattern: &TNAFLIX_URL_PATTERN,
             base: TnaFlixNetworkBase::new(),
         }
@@ -39,7 +42,7 @@ impl TNAFlixExtractor {
     #[must_use]
     pub fn empflix() -> Self {
         Self {
-            name: "EMPFlix",
+            name: EMPFLIX_NAME,
             url_pattern: &EMPFLIX_URL_PATTERN,
             base: TnaFlixNetworkBase::new(),
         }
@@ -49,7 +52,7 @@ impl TNAFlixExtractor {
     #[must_use]
     pub fn moviefap() -> Self {
         Self {
-            name: "MovieFap",
+            name: MOVIEFAP_NAME,
             url_pattern: &MOVIEFAP_URL_PATTERN,
             base: TnaFlixNetworkBase::new(),
         }
@@ -118,7 +121,7 @@ impl InfoExtractor for TNAFlixExtractor {
 
             BaseExtractor::log_if_verbose(
                 ctx,
-                "MovieFap",
+                MOVIEFAP_NAME,
                 &format!("cdn.php URL: {}", rdlp_redact::RedactedUrl::new(&cdn_url)),
             );
 
@@ -134,7 +137,7 @@ impl InfoExtractor for TNAFlixExtractor {
             let video_data = if video_data.is_empty() && url.contains("empflix.com") {
                 BaseExtractor::log_if_verbose(
                     ctx,
-                    "EMPFlix",
+                    EMPFLIX_NAME,
                     "No sources in HTML, trying AJAX endpoint...",
                 );
                 ajax::parse_empflix_ajax(&self.base, &video_id, url, ctx).await?

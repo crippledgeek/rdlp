@@ -14,6 +14,8 @@ use log::debug;
 use rdlp_core::JsEngine;
 use tokio::sync::OnceCell;
 
+use super::NAME;
+
 /// Bundled JS decryption code (port of rdlp-crypto PRNG algorithms).
 const BUNDLED_DECRYPT_JS: &str = include_str!("decrypt.js");
 
@@ -67,11 +69,11 @@ pub async fn extract_initials(
             // boa returns the JSON.stringify result as a JSON string value.
             let json_str = json_val.as_str()?;
             serde_json::from_str(json_str)
-                .inspect_err(|e| debug!("[XHamster] Boa initials JSON parse failed: {e}"))
+                .inspect_err(|e| debug!("[{NAME}] Boa initials JSON parse failed: {e}"))
                 .ok()
         }
         Err(e) => {
-            debug!("[XHamster] Boa eval fallback failed for window.initials: {e}");
+            debug!("[{NAME}] Boa eval fallback failed for window.initials: {e}");
             None
         }
     }
@@ -122,10 +124,10 @@ pub async fn decipher_url(
     // decrypt under any algorithm, so boa would only waste a bundle eval on them
     // (issue #514). Skipping them is behavior-preserving for the output.
     if !rdlp_crypto::xhamster::could_be_ciphertext(encrypted_url) {
-        debug!("[XHamster] Input too short to be ciphertext; skipping boa fallback");
+        debug!("[{NAME}] Input too short to be ciphertext; skipping boa fallback");
         return None;
     }
-    debug!("[XHamster] Native decrypt returned None; falling back to boa");
+    debug!("[{NAME}] Native decrypt returned None; falling back to boa");
     // Only here — the rare unknown/rotated algorithm — is the player bundle
     // actually needed, so this is where the lazy fetch is triggered (once).
     decipher_url_via_boa(encrypted_url, js_engine, player_js.get().await).await
@@ -200,7 +202,7 @@ pub(crate) async fn decipher_url_via_boa(
         if let Some(result) = try_player_decrypt(encrypted_url, js_engine, player_js).await {
             return Some(result);
         }
-        debug!("[XHamster] Player JS decryption failed, falling back to bundled JS");
+        debug!("[{NAME}] Player JS decryption failed, falling back to bundled JS");
     }
 
     // Fall back to bundled decrypt.js
@@ -249,7 +251,7 @@ pub(crate) async fn fetch_player_js(
                         || body.contains("charCodeAt")
                     {
                         debug!(
-                            "[XHamster] Found player JS with decrypt code: {}",
+                            "[{NAME}] Found player JS with decrypt code: {}",
                             rdlp_redact::RedactedUrl::new(&full_url)
                         );
                         return Some(body);
@@ -258,13 +260,13 @@ pub(crate) async fn fetch_player_js(
             }
             Ok(resp) => {
                 debug!(
-                    "[XHamster] Player JS fetch returned {}: {}",
+                    "[{NAME}] Player JS fetch returned {}: {}",
                     resp.status(),
                     rdlp_redact::RedactedUrl::new(&full_url)
                 );
             }
             Err(e) => {
-                debug!("[XHamster] Player JS fetch failed: {e}");
+                debug!("[{NAME}] Player JS fetch failed: {e}");
             }
         }
     }
@@ -294,7 +296,7 @@ async fn try_player_decrypt(
             }
         }
         Err(e) => {
-            debug!("[XHamster] Player decrypt eval failed: {e}");
+            debug!("[{NAME}] Player decrypt eval failed: {e}");
             None
         }
     }
@@ -316,7 +318,7 @@ pub(crate) async fn try_bundled_decrypt(
             }
         }
         Err(e) => {
-            debug!("[XHamster] Bundled decrypt eval failed: {e}");
+            debug!("[{NAME}] Bundled decrypt eval failed: {e}");
             None
         }
     }
