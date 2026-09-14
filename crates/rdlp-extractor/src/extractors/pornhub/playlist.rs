@@ -8,7 +8,7 @@
 //! multiple videos concurrently (default: 4). This significantly speeds up playlist
 //! extraction compared to sequential processing.
 
-use crate::base::common::MAX_PLAYLIST_SIZE;
+use crate::base::common::{MAX_PLAYLIST_SIZE, PAGE_RATE_LIMIT_MS};
 use futures::stream::{self, StreamExt};
 use log::{debug, info, warn};
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result, check_http_response};
@@ -22,9 +22,6 @@ use tokio::time::timeout;
 
 /// Timeout for extracting a single video (30 seconds)
 const VIDEO_EXTRACTION_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Rate limit delay between pages (500ms)
-const PAGE_RATE_LIMIT_MS: u64 = 500;
 
 /// Number of concurrent video extractions (balance speed vs rate limiting)
 const CONCURRENT_EXTRACTIONS: usize = 4;

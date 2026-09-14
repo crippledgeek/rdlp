@@ -6,6 +6,9 @@ use lazy_regex::{Lazy, Regex, lazy_regex};
 
 /// URL pattern for HQPorner video pages.
 ///
+/// Anchored to the URL start — a URL that merely contains an hqporner URL
+/// (e.g. embedded in a foreign query string) does not match (#722).
+///
 /// Matches:
 /// - `https://hqporner.com/hdporn/81203-full_body_massage.html`
 /// - `https://www.hqporner.com/hdporn/81203-slug.html`
@@ -14,7 +17,7 @@ use lazy_regex::{Lazy, Regex, lazy_regex};
 /// The slug is ignored by the server — only the numeric ID matters.
 pub static HQPORNER_VIDEO_PATTERN: Lazy<Regex> = lazy_regex!(
     r"(?x)
-        https?://
+        \Ahttps?://
         (?:(?:www|m)\.)?
         hqporner\.com
         /hdporn/(?P<id>\d+)-[\w-]+\.html
@@ -23,12 +26,15 @@ pub static HQPORNER_VIDEO_PATTERN: Lazy<Regex> = lazy_regex!(
 
 /// URL pattern for HQPorner category pages.
 ///
+/// Anchored to the URL start — a URL that merely contains an hqporner URL
+/// (e.g. embedded in a foreign query string) does not match (#722).
+///
 /// Matches:
 /// - `https://hqporner.com/category/amateur`
 /// - `https://hqporner.com/category/1080p-porn/3`
 pub static HQPORNER_CATEGORY_PATTERN: Lazy<Regex> = lazy_regex!(
     r"(?x)
-        https?://
+        \Ahttps?://
         (?:(?:www|m)\.)?
         hqporner\.com
         /category/(?P<name>[\w-]+)
@@ -38,12 +44,15 @@ pub static HQPORNER_CATEGORY_PATTERN: Lazy<Regex> = lazy_regex!(
 
 /// URL pattern for HQPorner actress pages.
 ///
+/// Anchored to the URL start — a URL that merely contains an hqporner URL
+/// (e.g. embedded in a foreign query string) does not match (#722).
+///
 /// Matches:
 /// - `https://hqporner.com/actress/emily-bloom`
 /// - `https://hqporner.com/actress/emily-bloom/2`
 pub static HQPORNER_ACTRESS_PATTERN: Lazy<Regex> = lazy_regex!(
     r"(?x)
-        https?://
+        \Ahttps?://
         (?:(?:www|m)\.)?
         hqporner\.com
         /actress/(?P<name>[\w-]+)
@@ -53,12 +62,15 @@ pub static HQPORNER_ACTRESS_PATTERN: Lazy<Regex> = lazy_regex!(
 
 /// URL pattern for HQPorner search pages.
 ///
+/// Anchored to the URL start — a URL that merely contains an hqporner URL
+/// (e.g. embedded in a foreign query string) does not match (#722).
+///
 /// Matches:
 /// - `https://hqporner.com/?q=massage`
 /// - `https://hqporner.com/?q=massage&p=2`
 pub static HQPORNER_SEARCH_PATTERN: Lazy<Regex> = lazy_regex!(
     r"(?x)
-        https?://
+        \Ahttps?://
         (?:(?:www|m)\.)?
         hqporner\.com
         /\?q=
@@ -185,5 +197,59 @@ mod tests {
             caps.get(1).unwrap().as_str(),
             "/hdporn/81203-full_body_massage.html"
         );
+    }
+
+    /// #722: every pattern used to be a substring test, so a URL that merely
+    /// *contains* an hqporner URL (here in a `?r=` query) was routed here.
+    const EMBEDDED: [&str; 4] = [
+        "https://evil.test/?r=https://hqporner.com/hdporn/81203-slug.html",
+        "https://evil.test/?r=https://hqporner.com/category/amateur",
+        "https://evil.test/?r=https://hqporner.com/actress/emily-bloom",
+        "https://evil.test/?r=https://hqporner.com/?q=massage",
+    ];
+
+    #[test]
+    fn patterns_reject_hqporner_url_embedded_in_foreign_authority() {
+        assert!(
+            !HQPORNER_VIDEO_PATTERN.is_match(EMBEDDED[0]),
+            "{}",
+            EMBEDDED[0]
+        );
+        assert!(
+            !HQPORNER_CATEGORY_PATTERN.is_match(EMBEDDED[1]),
+            "{}",
+            EMBEDDED[1]
+        );
+        assert!(
+            !HQPORNER_ACTRESS_PATTERN.is_match(EMBEDDED[2]),
+            "{}",
+            EMBEDDED[2]
+        );
+        assert!(
+            !HQPORNER_SEARCH_PATTERN.is_match(EMBEDDED[3]),
+            "{}",
+            EMBEDDED[3]
+        );
+    }
+
+    #[test]
+    fn is_suitable_rejects_every_embedded_form() {
+        for url in EMBEDDED {
+            assert!(!is_suitable(url), "{url}");
+        }
+    }
+
+    #[test]
+    fn extract_video_id_rejects_embedded_video_url() {
+        assert_eq!(extract_video_id(EMBEDDED[0]), None);
+    }
+
+    #[test]
+    fn patterns_reject_leading_whitespace_and_lookalike_host() {
+        assert!(!is_suitable(" https://hqporner.com/category/amateur"));
+        assert!(!is_suitable("https://nothqporner.com/category/amateur"));
+        assert!(!is_suitable(
+            "https://hqporner.com.evil.test/category/amateur"
+        ));
     }
 }

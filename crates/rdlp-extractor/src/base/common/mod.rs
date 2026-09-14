@@ -61,9 +61,9 @@ use regex::Regex;
 pub(crate) use protocol::protocol_for_url;
 pub(crate) use search::SearchOrigin;
 pub(crate) use search::{
-    FilterValidationError, KeyValidation, PagedSearch, SearchPage, SearchPageSpec, Termination,
-    append_search_filters, filter_value, format_std_filter_error, resolve_card_url,
-    resolve_media_url, validate_against_descriptors,
+    FilterValidationError, KeyValidation, PAGE_RATE_LIMIT_MS, PagedSearch, SearchPage,
+    SearchPageSpec, Termination, append_search_filters, filter_value, format_std_filter_error,
+    resolve_card_url, resolve_media_url, validate_against_descriptors,
 };
 pub(crate) use selectors::*;
 

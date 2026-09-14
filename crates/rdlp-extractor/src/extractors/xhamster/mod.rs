@@ -32,17 +32,15 @@ use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result, SearchExtra
 use rdlp_types::{InfoDict, SearchPageResponse};
 use std::time::Duration;
 
-use crate::base::common::{BaseExtractor, PagedSearch, SearchPage, Termination};
+use crate::base::common::{
+    BaseExtractor, PAGE_RATE_LIMIT_MS, PagedSearch, SearchPage, Termination,
+};
 use crate::hls::detect_format_sizes_lazy;
 
 pub use patterns::{XHAMSTER_EMBED_PATTERN, XHAMSTER_VIDEO_PATTERN};
 
 /// Timeout for extracting a single video in playlist mode (30 seconds)
 const VIDEO_EXTRACTION_TIMEOUT: Duration = Duration::from_secs(30);
-
-/// Rate limit delay between playlist page fetches (500ms). Search pagination
-/// uses the shared `PagedSearch` default instead.
-const PAGE_RATE_LIMIT_MS: u64 = 500;
 
 /// Number of concurrent video extractions
 const CONCURRENT_EXTRACTIONS: usize = 4;
