@@ -36,17 +36,17 @@ pub enum RdlpApiError {
 
     /// Extraction failed (metadata retrieval).
     ///
-    /// `source_url` is stored as [`RedactedUrlBuf`] so that
-    /// `#[error("…{source_url}")]` Display automatically strips credentials —
-    /// the type system enforces this at every construction site.
-    #[error("Extraction failed for {source_url}: {}", redact(message))]
+    /// `source_url` is `Some` only when a single URL names what was being
+    /// extracted. Search and filter-validation errors have none, and the
+    /// rendered frame omits the ` for <url>` clause for them (#669) — an
+    /// empty sentinel used to render `Extraction failed for : …`.
+    /// [`RedactedUrlBuf`] keeps credentials out of every Display / Debug.
+    #[error("{}", extract_error_frame(source_url.as_ref(), &redact(message)))]
     ExtractError {
         /// What went wrong.
         message: String,
-        /// The URL being extracted. Credentials are redacted in all
-        /// Display / Debug output. Use `RedactedUrlBuf::from("")`
-        /// when no URL is available.
-        source_url: RedactedUrlBuf,
+        /// The URL being extracted, when there is one.
+        source_url: Option<RedactedUrlBuf>,
     },
 
     /// Network or HTTP failure.
@@ -123,6 +123,19 @@ pub enum RdlpApiError {
 /// Redact free text on its way to an operator. See
 /// `rdlp_core::error`'s import of the same function for the why.
 use rdlp_redact::redact_str as redact;
+
+/// The one place the `ExtractError` frame is rendered: with the URL clause
+/// when a URL exists, without it otherwise (#669). `redacted_message` MUST
+/// already be the output of `redact(...)` — the `#[error(...)]` attribute
+/// passes `&redact(message)` so `scripts/check-error-attr-redaction.sh` can
+/// see the `redact(` call textually in its argument list; this helper does
+/// not call `redact` itself, so a caller that skips it would leak.
+fn extract_error_frame(source_url: Option<&RedactedUrlBuf>, redacted_message: &str) -> String {
+    source_url.map_or_else(
+        || format!("Extraction failed: {redacted_message}"),
+        |url| format!("Extraction failed for {url}: {redacted_message}"),
+    )
+}
 
 /// Debug redacts the free text while keeping the structure.
 ///
@@ -265,11 +278,12 @@ impl From<RdlpError> for RdlpApiError {
     /// Convert an internal [`RdlpError`] to a stable API error.
     ///
     /// **Note:** For [`RdlpError::Extraction`], the source URL IS propagated
-    /// into [`RdlpApiError::ExtractError::source_url`] via the redacted
-    /// [`rdlp_redact::RedactedUrlBuf`] Display (credentials stripped). For
-    /// [`RdlpError::Network`] and [`RdlpError::Download`], the URL is not
-    /// surfaced in the API error — call sites that need it should construct
-    /// `RdlpApiError::NetworkError` directly.
+    /// into [`RdlpApiError::ExtractError::source_url`] as `Option`; other
+    /// variants carry `None`. [`RedactedUrlBuf`]'s Display strips
+    /// credentials wherever a URL is present. For [`RdlpError::Network`] and
+    /// [`RdlpError::Download`], the URL is not surfaced in the API error —
+    /// call sites that need it should construct `RdlpApiError::NetworkError`
+    /// directly.
     fn from(err: RdlpError) -> Self {
         match err {
             RdlpError::Network { message, .. } | RdlpError::Download { message, .. } => {
@@ -284,7 +298,7 @@ impl From<RdlpError> for RdlpApiError {
             },
             RdlpError::Extraction { message, url } => Self::ExtractError {
                 message,
-                source_url: url.unwrap_or_else(|| RedactedUrlBuf::from("")),
+                source_url: url,
             },
             RdlpError::NoExtractor(url) => Self::UnsupportedUrl {
                 url: RedactedUrlBuf::from(url),
@@ -297,7 +311,7 @@ impl From<RdlpError> for RdlpApiError {
             }
             RdlpError::JavaScript(msg) => Self::ExtractError {
                 message: format!("JavaScript error: {msg}"),
-                source_url: RedactedUrlBuf::from(""),
+                source_url: None,
             },
             RdlpError::Cookie(msg) => Self::IoError {
                 message: format!("Cookie error: {msg}"),
@@ -314,11 +328,11 @@ impl From<RdlpError> for RdlpApiError {
             },
             RdlpError::Json(err) => Self::ExtractError {
                 message: format!("JSON parse error: {err}"),
-                source_url: RedactedUrlBuf::from(""),
+                source_url: None,
             },
             RdlpError::Regex(err) => Self::ExtractError {
                 message: format!("Regex error: {err}"),
-                source_url: RedactedUrlBuf::from(""),
+                source_url: None,
             },
             RdlpError::Unsupported(msg) => Self::UnsupportedPlatform { feature: msg },
             RdlpError::Other(msg) => Self::Soft { message: msg },
@@ -497,7 +511,7 @@ mod tests {
         assert!(
             RdlpApiError::ExtractError {
                 message: "invalid M3U8 playlist".into(),
-                source_url: RedactedUrlBuf::from(""),
+                source_url: None,
             }
             .is_retryable()
         );
@@ -530,7 +544,7 @@ mod tests {
         assert!(
             RdlpApiError::ExtractError {
                 message: "invalid M3U8 playlist".into(),
-                source_url: RedactedUrlBuf::from(""),
+                source_url: None,
             }
             .is_reextractable()
         );
@@ -601,7 +615,10 @@ mod tests {
         match err {
             RdlpApiError::ExtractError { source_url, .. } => {
                 // Use `.expose()` to check the raw (unredacted) propagated value.
-                assert_eq!(source_url.expose(), "https://example.com/video");
+                assert_eq!(
+                    source_url.as_ref().map(RedactedUrlBuf::expose),
+                    Some("https://example.com/video")
+                );
             }
             other => panic!("Expected ExtractError, got: {other:?}"),
         }
@@ -616,7 +633,7 @@ mod tests {
         .into();
         match err {
             RdlpApiError::ExtractError { source_url, .. } => {
-                assert!(source_url.expose().is_empty());
+                assert!(source_url.is_none());
             }
             other => panic!("Expected ExtractError, got: {other:?}"),
         }
@@ -659,7 +676,7 @@ mod tests {
         let err = RdlpError::extraction("nope", "https://x/v?token=SECRET");
         let api: RdlpApiError = err.into();
         if let RdlpApiError::ExtractError { source_url, .. } = api {
-            let displayed = source_url.to_string();
+            let displayed = source_url.expect("URL present").to_string();
             assert!(
                 !displayed.contains("SECRET"),
                 "raw token must not leak: {displayed}"
@@ -682,7 +699,7 @@ mod tests {
         // `From<RdlpError>` path cannot accidentally store a raw credential.
         let err = RdlpApiError::ExtractError {
             message: "direct construction".into(),
-            source_url: RedactedUrlBuf::from("https://x.com/v?token=SECRET"),
+            source_url: Some(RedactedUrlBuf::from("https://x.com/v?token=SECRET")),
         };
         let displayed = err.to_string();
         assert!(
@@ -910,5 +927,63 @@ mod tests {
             matches!(converted, RdlpApiError::OutputUnclaimable { .. }),
             "OutputUnclaimable must map to RdlpApiError::OutputUnclaimable, got: {converted:?}"
         );
+    }
+
+    #[test]
+    fn extract_error_without_url_has_no_dangling_for_clause() {
+        // #669: search-path errors have no single URL; the frame must not
+        // render its own scaffolding around nothing.
+        let err = RdlpApiError::ExtractError {
+            message: "Invalid value 'bogus' for filter 'ordering'".into(),
+            source_url: None,
+        };
+        assert_eq!(
+            err.to_string(),
+            "Extraction failed: Invalid value 'bogus' for filter 'ordering'"
+        );
+    }
+
+    #[test]
+    fn extract_error_with_url_names_it() {
+        let err = RdlpApiError::ExtractError {
+            message: "page gone".into(),
+            source_url: Some(RedactedUrlBuf::from("https://example.com/videos/123/x/")),
+        };
+        assert_eq!(
+            err.to_string(),
+            "Extraction failed for https://example.com/videos/123/x/: page gone"
+        );
+    }
+
+    #[test]
+    fn extract_error_from_rdlp_error_without_url_is_none() {
+        // The From path must carry "no URL" as None, not as an empty sentinel.
+        let api: RdlpApiError = RdlpError::Extraction {
+            message: "no url".into(),
+            url: None,
+        }
+        .into();
+        match api {
+            RdlpApiError::ExtractError { source_url, .. } => assert!(source_url.is_none()),
+            other => panic!("expected ExtractError, got {other:?}"),
+        }
+        assert_eq!(api_display_of_no_url(), "Extraction failed: no url");
+    }
+
+    fn api_display_of_no_url() -> String {
+        RdlpApiError::from(RdlpError::Extraction {
+            message: "no url".into(),
+            url: None,
+        })
+        .to_string()
+    }
+
+    #[test]
+    fn extract_error_debug_without_url_prints_none() {
+        let err = RdlpApiError::ExtractError {
+            message: "m".into(),
+            source_url: None,
+        };
+        assert!(format!("{err:?}").contains("source_url: None"), "{err:?}");
     }
 }
