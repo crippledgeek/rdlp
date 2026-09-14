@@ -38,8 +38,9 @@ urlencoding = "2"
 # `base/common/manifest_url.rs` to non-test builds of THIS crate, so a
 # sibling crate's own tests (rdlp-plugin, rdlp-api) can drive
 # expand_hls_in_place / expand_missing_hls_fragments against a mockito
-# server. Enabled only as a dev-dependency feature in those sibling crates —
-# never by a production binary; see
+# server. Intended to be enabled ONLY as a dev-dependency feature in those
+# sibling crates, added when the plugin host's own tests need it — nothing
+# references it yet. Must never reach a production binary; see
 # scripts/check-loopback-feature-not-in-release.sh.
 loopback-test-exemption = []
 

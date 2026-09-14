@@ -208,7 +208,9 @@ pub async fn detect_format_sizes_lazy_in(
 /// Everything `detect_format_sizes_inner` reads from an `ExtractionContext`.
 /// A parameter object so the plugin host (which has a client and a `Config`
 /// but no `ExtractionContext`) can drive the same probe without a stub
-/// context — one mechanism, two callers.
+/// context — one mechanism shared by the in-tree extractor callers
+/// (`detect_format_sizes`, `detect_format_sizes_lazy`) and the plugin-host
+/// caller (`detect_format_sizes_lazy_in`).
 pub struct SizeProbeEnv<'a> {
     /// HTTP client the probe issues its HEAD/GET requests on.
     pub http_client: Arc<wreq::Client>,
@@ -229,6 +231,11 @@ impl<'a> SizeProbeEnv<'a> {
         }
     }
 
+    /// Resolve the HEAD-probe timeout from `self.config`. Lives on the env
+    /// (rather than each caller calling `resolve_hls_head_probe_timeout`
+    /// directly) so both `detect_format_sizes_inner` and this struct's own
+    /// tests read the timeout the same way a real probe would — through the
+    /// env, not by reaching around it at the `Config` field.
     pub(crate) fn head_timeout(&self) -> std::time::Duration {
         resolve_hls_head_probe_timeout(self.config)
     }
@@ -720,13 +727,22 @@ mod size_probe_env_tests {
     /// The plugin host has a client and a `Config` but no `ExtractionContext`.
     /// `SizeProbeEnv` must drive the exact same probe `detect_format_sizes_lazy`
     /// does — same expansion, same dedup, same flags — over the same fixture.
+    ///
+    /// Pins the fixture SHAPE (2 variants, master fetched once per call) rather
+    /// than only comparing the two outputs to each other: an equality-only
+    /// assertion stays green even if both sides collapsed to an empty `Vec`
+    /// identically, which would prove nothing about the probe actually driving
+    /// expansion. `.expect(2)` on the master mock proves both calls fetch it —
+    /// one per `detect_format_sizes_lazy` / `detect_format_sizes_lazy_in` — and
+    /// `via_probe.len() == 2` proves the probe-driven call expanded both master
+    /// variants, not merely "whatever `via_ctx` also produced".
     #[tokio::test]
     async fn detect_format_sizes_lazy_in_matches_ctx_driven_call() {
         let mut server = mockito::Server::new_async().await;
-        let _master = server
+        let master = server
             .mock("GET", "/master.m3u8")
             .with_body(MASTER_TWO_VARIANTS)
-            .expect_at_least(1)
+            .expect(2)
             .create_async()
             .await;
         let _v720 = server
@@ -750,6 +766,11 @@ mod size_probe_env_tests {
         let (via_probe, probe_flags) = detect_format_sizes_lazy_in(vec![f], &probe).await;
 
         assert_eq!(
+            via_probe.len(),
+            2,
+            "the probe-driven call must expand both master variants"
+        );
+        assert_eq!(
             via_ctx
                 .iter()
                 .map(|fmt| fmt.format_id.as_str())
@@ -761,6 +782,7 @@ mod size_probe_env_tests {
         );
         assert_eq!(ctx_flags.is_live, probe_flags.is_live);
         assert_eq!(ctx_flags.has_any_drm, probe_flags.has_any_drm);
+        master.assert_async().await;
     }
 
     /// The probe's `head_timeout()` must reach `resolve_hls_head_probe_timeout`

@@ -16,14 +16,19 @@
 /// Test behavior: allows `http`/`https` on `127.0.0.1` / `localhost` / `[::1]`
 /// so mockito-driven unit tests can drive expansion against loopback fixtures.
 /// Every other host — including all other private ranges — and every non-HTTP
-/// scheme still goes through the real validator. The bypass is `cfg(test)`-
-/// gated, so production builds compile with no loopback exemption at all.
+/// scheme still goes through the real validator. The bypass is gated by
+/// `cfg(test)` OR the `loopback-test-exemption` cargo feature (below), so an
+/// ordinary production build — which has neither `cfg(test)` nor that feature
+/// enabled — compiles with no loopback exemption at all.
 ///
-/// Also enabled by the `loopback-test-exemption` cargo feature, which exists
-/// ONLY so sibling crates' tests (`rdlp-plugin`, `rdlp-api`) can drive this
-/// expander against mockito; it is a dev-dependency feature in those crates
-/// and never enabled by a production binary —
-/// `scripts/check-loopback-feature-not-in-release.sh` proves it.
+/// The `loopback-test-exemption` feature widens the same bypass to non-test
+/// builds of THIS crate, so a sibling crate's own test suite (`rdlp-plugin`,
+/// `rdlp-api`) can drive this expander against mockito without depending on
+/// rdlp-extractor's `#[cfg(test)]` code. It is intended to be enabled ONLY as
+/// a dev-dependency feature in those sibling crates, added when their own
+/// tests need it — nothing references it yet. It must never be enabled by a
+/// production binary — `scripts/check-loopback-feature-not-in-release.sh`
+/// proves that.
 ///
 /// Returns `rdlp_security`'s own error so each protocol can map it into its
 /// own error type without this gate having to know about any of them.
