@@ -923,3 +923,41 @@ fn test_validate_rejects_retry_multiplier_that_saturates_to_infinity() {
         }
     ));
 }
+
+#[test]
+fn show_progress_derives_from_quiet_when_unset() {
+    let mut c = Config::default();
+    assert!(c.show_progress(), "default is neither quiet nor disabled");
+    c.quiet = true;
+    assert!(!c.show_progress(), "unset progress follows !quiet");
+}
+
+#[test]
+fn show_progress_explicit_value_wins_over_quiet() {
+    let c = Config {
+        quiet: true,
+        progress: Some(true),
+        ..Config::default()
+    };
+    assert!(
+        c.show_progress(),
+        "explicit progress = true overrides quiet"
+    );
+    let c = Config {
+        quiet: false,
+        progress: Some(false),
+        ..Config::default()
+    };
+    assert!(
+        !c.show_progress(),
+        "explicit progress = false without quiet"
+    );
+}
+
+#[test]
+fn progress_key_deserializes_and_is_absent_by_default() {
+    let c: Config = toml::from_str("progress = false").expect("valid toml");
+    assert_eq!(c.progress, Some(false));
+    let c: Config = toml::from_str("").expect("valid toml");
+    assert_eq!(c.progress, None);
+}

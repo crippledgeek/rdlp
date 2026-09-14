@@ -203,6 +203,14 @@ pub struct Args {
     #[arg(short, long, help_heading = HELP_HEADING_GENERAL)]
     pub quiet: bool,
 
+    /// Show the progress bar even when a config file disabled it
+    #[arg(long, overrides_with = "no_progress", help_heading = HELP_HEADING_GENERAL, hide = true)]
+    pub progress: bool,
+
+    /// Disable the progress bar while keeping normal log output
+    #[arg(long, overrides_with = "progress", help_heading = HELP_HEADING_GENERAL)]
+    pub no_progress: bool,
+
     /// Verbose mode (detailed output)
     #[arg(short, long, help_heading = HELP_HEADING_GENERAL)]
     pub verbose: bool,

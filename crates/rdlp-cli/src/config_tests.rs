@@ -123,6 +123,66 @@ fn positive_embed_subtitles_flag_still_sets_true() {
     );
 }
 
+/// #587: the flag is the top layer — both directions over a config value.
+#[test]
+fn test_merge_config_no_progress_flag_wins_over_config_true() {
+    let mut args = default_args();
+    args.no_progress = true;
+    let file = Config {
+        progress: Some(true),
+        ..Config::default()
+    };
+    let config = merge_config(&args, file, no_interactive()).expect("merge");
+    assert_eq!(config.progress, Some(false));
+    assert!(!config.show_progress());
+}
+
+#[test]
+fn test_merge_config_progress_flag_wins_over_config_false() {
+    let mut args = default_args();
+    args.progress = true;
+    let file = Config {
+        progress: Some(false),
+        ..Config::default()
+    };
+    let config = merge_config(&args, file, no_interactive()).expect("merge");
+    assert_eq!(config.progress, Some(true));
+}
+
+/// The #583 direction: an omitted flag must not clobber the config key.
+#[test]
+fn test_merge_config_file_progress_survives_when_flag_omitted() {
+    let file = Config {
+        progress: Some(false),
+        ..Config::default()
+    };
+    let config = merge_config(&default_args(), file, no_interactive()).expect("merge");
+    assert_eq!(config.progress, Some(false));
+}
+
+#[test]
+fn test_merge_config_progress_unset_stays_unset() {
+    let config = merge_config(&default_args(), Config::default(), no_interactive()).expect("merge");
+    assert_eq!(config.progress, None);
+    assert!(config.show_progress());
+}
+
+/// `-o -` streams bytes to stdout; a bar would corrupt the stream, so it is
+/// forced off even against an explicit `progress = true` / `--progress`.
+#[test]
+fn test_merge_config_stdout_forces_progress_off_against_explicit_true() {
+    let mut args = default_args();
+    args.output = Some("-".to_string());
+    args.progress = true;
+    let file = Config {
+        progress: Some(true),
+        ..Config::default()
+    };
+    let config = merge_config(&args, file, no_interactive()).expect("merge");
+    assert_eq!(config.progress, Some(false));
+    assert!(!config.show_progress());
+}
+
 /// Helper: create default Args for testing (all fields at defaults).
 fn default_args() -> Args {
     Args {
@@ -132,6 +192,8 @@ fn default_args() -> Args {
         format: None,
         audio_multistreams: false,
         quiet: false,
+        progress: false,
+        no_progress: false,
         verbose: false,
         list_extractors: false,
         list_downloaders: false,
@@ -1317,6 +1379,7 @@ fn every_config_field_is_classified() {
         verify_sub_urls: _,
         retry_subs: _,
         quiet: _,
+        progress: _,
         verbose: _,
         simulate: _,
         skip_download: _,
