@@ -39,12 +39,14 @@ search adapter in Task 11 of this slice, not yet implemented.
 
 ## 4. `@since` toolchain acceptance (measured 2026-09-15)
 
-`cargo-component 0.21.1`: accepted — builds cleanly once the new export is
-implemented, no warning. `componentize-py 0.17.2`: accepted — bindings and
-componentize steps both exit 0, no warning. Full transcripts:
-`docs/superpowers/reports/2026-09-15-since-annotation-acceptance.md`. Same
-`@since` pattern wasi-http used across `wasi:http@0.2.1…0.2.8` (spec's D1
-research note).
+`cargo-component 0.21.1` and `componentize-py 0.17.2` both accepted `@since`
+and `include` and built a plugin against this layout with no warning; a
+0.5.0-built component instantiated on `extractor-plugin-host` and failed on
+`extractor-plugin` with `no function export `search-filters` found` — the
+proof the host/full-world split is load-bearing. See the committed fixture
+README: `crates/rdlp-plugin/tests/fixtures/example-extractor-0.5.0/README.md`.
+Same `@since` pattern wasi-http used across `wasi:http@0.2.1…0.2.8` (spec's
+D1 research note).
 
 ## 5. What does NOT belong in the host surface
 
