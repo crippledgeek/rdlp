@@ -7,8 +7,11 @@
 # rdlp-extractor, so a sibling crate's own test suite (rdlp-plugin, rdlp-api)
 # can drive HLS expansion against a mockito server. It must never reach a
 # binary a user actually runs -- that would reintroduce a loopback SSRF hole
-# in production. This gate checks each of rdlp-cli/rdlp-desktop/rdlp-probe's
-# non-dev dependency graph for the feature; a binary that does not depend on
+# in production. This gate derives the workspace's binary crates from `cargo
+# metadata` (never a hardcoded list -- the same drift class CLAUDE.md calls
+# out for check-all.sh: a new binary crate added later must be checked
+# automatically, not silently skipped) and checks each one's non-dev
+# dependency graph for the feature; a binary that does not depend on
 # rdlp-extractor at all is reported as such, not silently skipped.
 #
 # Fix when this fails: move the feature dependency out of the offending
@@ -19,7 +22,11 @@
 #   --self-test: prove the grep this gate relies on actually matches the
 #                real `cargo tree -e features` line shape, against canned
 #                lines rather than a live feature flip (flipping the feature
-#                on a scratch copy of the workspace is too heavy for a canary).
+#                on a scratch copy of the workspace is too heavy for a canary);
+#                also prove the binary-list derivation itself is non-empty and
+#                includes a binary known to exist on this tree, so a `jq`
+#                filter that silently stopped matching anything is caught here
+#                rather than by every binary quietly going unchecked.
 
 set -euo pipefail
 
@@ -29,12 +36,25 @@ set -euo pipefail
 # literals with no range expressions today.
 export LC_ALL=C
 
-# Anchor to the repo root: `cargo tree -p` below assumes it is invoked from
-# inside the workspace. `|| exit 2` distinguishes "cannot run" from "gate
-# failed" (exit 1).
+# Anchor to the repo root: `cargo tree -p` / `cargo metadata` below assume
+# they are invoked from inside the workspace. `|| exit 2` distinguishes
+# "cannot run" from "gate failed" (exit 1).
 cd "$(git rev-parse --show-toplevel)" || exit 2
 
+command -v cargo >/dev/null 2>&1 || { echo "ERROR: cargo not found -- cannot run this gate." >&2; exit 2; }
+command -v jq >/dev/null 2>&1 || { echo "ERROR: jq not found -- cannot run this gate." >&2; exit 2; }
+
 FEATURE='loopback-test-exemption'
+
+# Every workspace package with at least one `bin` target -- the set of crates
+# whose dependency graph is a real release build a user runs, as opposed to a
+# library crate nothing ships standalone. Read from `cargo metadata` rather
+# than named in this script, so a new binary crate is picked up the moment it
+# exists instead of needing this file edited.
+list_workspace_binaries() {
+    cargo metadata --no-deps --format-version 1 \
+        | jq -r '.packages[] | select(any(.targets[]; .kind[] == "bin")) | .name'
+}
 
 if [ "${1:-}" = "--self-test" ]; then
     # `cargo tree -e features` prints one feature per line as
@@ -52,11 +72,35 @@ if [ "${1:-}" = "--self-test" ]; then
         echo "SELF-TEST FAILED: the gate's matcher fires on an unrelated feature line."
         exit 1
     fi
-    echo "SELF-TEST OK: the gate's matcher fires on the real feature line and only that line."
+
+    # The derivation itself must not be able to silently return nothing: a
+    # `jq` filter that stopped matching (a metadata schema change, a typo'd
+    # rewrite) would otherwise make the main loop iterate zero times and
+    # print "ok" having checked no binary at all -- the exact fail-open class
+    # Important-1 fixed for the per-binary `cargo tree` call, now asserted
+    # for the list that feeds it.
+    bins=$(list_workspace_binaries)
+    if [ -z "$bins" ]; then
+        echo "SELF-TEST FAILED: the binary-crate derivation returned nothing."
+        exit 1
+    fi
+    if ! printf '%s\n' "$bins" | grep -qx 'rdlp-cli'; then
+        echo "SELF-TEST FAILED: the derivation did not include the known binary 'rdlp-cli'."
+        exit 1
+    fi
+
+    echo "SELF-TEST OK: the gate's matcher fires on the real feature line and only that line, and the binary-crate derivation is non-empty and includes rdlp-cli."
     exit 0
 fi
 
-for bin in rdlp-cli rdlp-desktop rdlp-probe; do
+bins=$(list_workspace_binaries)
+if [ -z "$bins" ]; then
+    echo "ERROR: cargo metadata + jq derived no workspace binary crates -- cannot run this gate." >&2
+    exit 2
+fi
+mapfile -t bin_list <<< "$bins"
+
+for bin in "${bin_list[@]}"; do
     # A `-p` that names a non-member silently falls through to cargo's
     # default query and reports on the wrong package with exit 0 -- confirm
     # the binary actually exists in this workspace first, or a typo'd name
