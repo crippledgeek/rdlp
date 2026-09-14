@@ -1,6 +1,6 @@
-package rdlp:plugin@0.5.0;
+package rdlp:plugin@0.5.1;
 
-world extractor-plugin {
+world extractor-plugin-host {
     import host-fetch;
     import host-cookie-jar;
     import host-js-eval;
@@ -14,4 +14,13 @@ world extractor-plugin {
     export metadata: func() -> plugin-info;
     export extract: func(url: string) -> result<info-dict, extract-error>;
     export search: func(query: search-query) -> result<search-page, search-error>;
+}
+
+world extractor-plugin {
+    include extractor-plugin-host;
+
+    use types.{search-filter-descriptor};
+
+    @since(version = 0.5.1)
+    export search-filters: func() -> list<search-filter-descriptor>;
 }

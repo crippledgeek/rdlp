@@ -359,12 +359,13 @@ async fn call_plugin_extract(
     url: &str,
     plugin_name: &str,
 ) -> Result<InfoDict, PluginError> {
-    let inst = crate::bindings::ExtractorPlugin::instantiate_async(&mut *store, component, linker)
-        .await
-        .map_err(|e| PluginError::Trapped {
-            plugin: plugin_name.to_string(),
-            reason: format!("instantiate: {e}"),
-        })?;
+    let inst =
+        crate::bindings::ExtractorPluginHost::instantiate_async(&mut *store, component, linker)
+            .await
+            .map_err(|e| PluginError::Trapped {
+                plugin: plugin_name.to_string(),
+                reason: format!("instantiate: {e}"),
+            })?;
 
     let wit_result =
         inst.call_extract(&mut *store, url)

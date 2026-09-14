@@ -2,12 +2,39 @@
 //!
 //! Pure deterministic plugin with no host capabilities — used by the manual
 //! smoke test to verify dispatch end-to-end.
+//!
+//! ## Building a component the production host can actually load
+//!
+//! `cargo component build --release` (the usual guest-toolchain path) proves
+//! the WIT contract compiles, but its `wasm32-wasip1` output always carries
+//! WASI 0.2 imports (the wasip1→preview2 adapter, fused in regardless of
+//! whether this crate calls anything WASI-backed) — and `rdlp-plugin`'s host
+//! wires only its six `rdlp:plugin/host-*` capability interfaces, never WASI
+//! (see `crates/rdlp-plugin/src/lib.rs`, "Known limitations"). Such a
+//! component traps at instantiation with `component imports instance
+//! 'wasi:cli/environment@0.2.3' ... not found in the linker`. The
+//! WASI-free, host-loadable recipe (measured rdlp#762 slice B, Task 1):
+//!
+//! ```sh
+//! rustup target add wasm32-unknown-unknown   # once
+//! cargo build --release --target wasm32-unknown-unknown
+//! wasm-tools component new \
+//!     target/wasm32-unknown-unknown/release/example_extractor.wasm \
+//!     -o plugin.wasm
+//! ```
+//!
+//! Plain `cargo build` against `wasm32-unknown-unknown` already emits the
+//! component-type custom section `wit-bindgen-rt` needs, so no
+//! `cargo-component` fallback or `--adapt` step is required; `wasm-tools
+//! component wit plugin.wasm` on the result shows only
+//! `rdlp:plugin/types@…` imported.
 
 #[allow(warnings)]
 mod bindings;
 
 use bindings::rdlp::plugin::types::{
-    ExtractError, Format, InfoDict, PluginInfo, SearchError, SearchPage, SearchQuery,
+    ExtractError, Format, InfoDict, PluginInfo, SearchError, SearchFilterDescriptor, SearchPage,
+    SearchQuery,
 };
 use bindings::Guest;
 
@@ -20,7 +47,7 @@ impl Guest for Component {
         PluginInfo {
             name: "example".into(),
             version: "0.1.0".into(),
-            wit_version: "0.5.0".into(),
+            wit_version: "0.5.1".into(),
             matches: vec!["https://example.com/video/*".into()],
             url_regex: Some(r"^https://example\.com/video/(?P<id>\d+)".into()),
             priority: 150,
@@ -75,6 +102,10 @@ impl Guest for Component {
 
     fn search(_q: SearchQuery) -> Result<SearchPage, SearchError> {
         Err(SearchError::Unsupported)
+    }
+
+    fn search_filters() -> Vec<SearchFilterDescriptor> {
+        Vec::new()
     }
 }
 

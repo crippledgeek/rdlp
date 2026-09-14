@@ -114,14 +114,25 @@ pub mod priority;
 pub mod prompt;
 pub mod signature;
 pub mod trust_store;
+pub mod wit_version;
 
 pub use error::PluginError;
 
-/// Generated Rust bindings from the `extractor-plugin` WIT world.
+/// Generated Rust bindings from the `extractor-plugin-host` WIT world.
 ///
 /// This module is regenerated at compile time by `wasmtime::component::bindgen!`.
+/// Two worlds live in `wit/extractor.wit`: `extractor-plugin` is the guest
+/// contract plugin authors build against; `extractor-plugin-host` is what the
+/// host binds here. Exports added to `extractor-plugin` after 0.5.0 (such as
+/// `search-filters`) are optional to the host and looked up manually
+/// (`search_adapter::call_search_filters`) rather than bound at instantiation,
+/// because generated bindings require every world-level export to be present
+/// at instantiate time (wasmtime-wit-bindgen 30, `no function export … found`)
+/// — binding the smaller host world is what lets a 0.5.0-built component,
+/// which never declared `search-filters`, still instantiate on a 0.5.1 host.
+///
 /// It exposes:
-/// - `bindings::ExtractorPlugin` — the generated host-side instance type
+/// - `bindings::ExtractorPluginHost` — the generated host-side instance type
 /// - `bindings::types::*` — record/variant types from `wit/types.wit`
 /// - `bindings::host_*::Host` traits — one per imported interface, implemented
 ///   by the host on `PluginStoreData` (Task 11+).
@@ -144,7 +155,7 @@ pub use error::PluginError;
 pub mod bindings {
     wasmtime::component::bindgen!({
         path: "wit",
-        world: "extractor-plugin",
+        world: "extractor-plugin-host",
         async: {
             only_imports: [
                 "fetch",

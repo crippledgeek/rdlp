@@ -1,4 +1,4 @@
-package rdlp:plugin@0.5.0;
+package rdlp:plugin@0.5.1;
 
 interface types {
     record plugin-info {
@@ -74,6 +74,15 @@ interface types {
         page: u32,
         has-more: bool,
         total-estimate: option<u64>,
+    }
+
+    /// Mirrors rdlp_types::SearchFilterDescriptor; allowed-values carries the
+    /// values only (labels are host-rendered as the value).
+    record search-filter-descriptor {
+        key: string,
+        display-name: string,
+        allowed-values: list<string>,
+        default: option<string>,
     }
 
     variant extract-error {

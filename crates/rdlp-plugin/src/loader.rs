@@ -20,14 +20,12 @@ use std::sync::Arc;
 
 /// WIT contract version this host accepts.
 ///
-/// Must match the `package rdlp:plugin@X.Y.Z` directive in
-/// `crates/rdlp-plugin/wit/*.wit` (extractor.wit / host.wit / types.wit).
-/// Plugin manifests advertise their target via `Manifest.wit_version`;
-/// loading rejects any plugin whose `major.minor` differs from this constant
-/// (patch differences are considered backward-compatible within the same
-/// minor).
-// TODO(#327): derive from WIT file at build time
-pub const HOST_WIT_VERSION: &str = "0.5.0";
+/// Derived at compile time from `wit/types.wit`'s
+/// `package rdlp:plugin@X.Y.Z;` directive (#327), so the constant cannot lag
+/// the contract. `host_constant_matches_current_contract` proves all three
+/// `.wit` files agree.
+pub const HOST_WIT_VERSION: &str =
+    crate::wit_version::package_version(include_str!("../wit/types.wit"));
 
 /// Compare a plugin's declared WIT version against the host's `HOST_WIT_VERSION`.
 /// Thin 2-arg wrapper around [`check_wit_version_against`] that bakes the host
@@ -37,9 +35,12 @@ fn check_wit_version(plugin_name: &str, plugin_version: &str) -> Result<(), Plug
 }
 
 /// Compare a plugin's declared WIT version against an explicit host version.
-/// Returns `Err(PluginError::WitVersionMismatch)` when the major or minor
-/// differ, or when either version fails to parse as semver. Patch differences
-/// within a matching `major.minor` pair are accepted.
+///
+/// Accepts when `major.minor` match and `plugin.patch <= host.patch`.
+/// Component Model canonical names fold `0.x.y` to `0.x`, so any 0.5.y links;
+/// the patch bound exists because a plugin declaring a newer patch may
+/// import a host function this host does not yet define — refuse it here
+/// with a readable error instead of a linker failure at instantiate.
 ///
 /// Unparseable plugin or host versions are mapped to `WitVersionMismatch`
 /// (raw string preserved in `got` / `host`). This is intentional: malformed
@@ -59,7 +60,7 @@ pub(crate) fn check_wit_version_against(
     };
     let plugin = semver::Version::parse(plugin_version).map_err(|_| mismatch())?;
     let host = semver::Version::parse(host_version).map_err(|_| mismatch())?;
-    if plugin.major != host.major || plugin.minor != host.minor {
+    if plugin.major != host.major || plugin.minor != host.minor || plugin.patch > host.patch {
         return Err(mismatch());
     }
     Ok(())
@@ -354,9 +355,18 @@ mod tests {
                     || panic!("{file} must declare wit_version"),
                     |v| v.trim_matches('"'),
                 );
+            // A template may lag the host by patch (D1's accepted range) and
+            // still load — checked via the production 2-arg wrapper, not a
+            // hand-rolled comparison.
+            check_wit_version("template", declared).unwrap_or_else(|e| {
+                panic!("{file} declares a WIT version the loader would reject: {e}")
+            });
+            // Templates ship the CURRENT contract, though: this is a stronger
+            // claim than "loadable" and catches a template left one release
+            // behind even though patch-below would still pass the loader.
             assert_eq!(
                 declared, HOST_WIT_VERSION,
-                "{file} declares a WIT version the loader would reject"
+                "{file} should declare the current WIT contract version"
             );
         }
     }
@@ -374,12 +384,49 @@ mod tests {
         check_wit_version_against("p", "0.1.0", "0.1.0").expect("identical version must accept");
     }
 
+    /// D1: same major.minor and `plugin.patch <= host.patch`. The canonical
+    /// Component Model name of `0.x.y` is `0.x`, so 0.5.0 and 0.5.1 link;
+    /// a plugin that declares a NEWER patch may call an import this host
+    /// does not define, so it is refused here with a clear error rather
+    /// than at instantiate.
     #[test]
-    fn patch_compatible_accepts() {
-        check_wit_version_against("p", "0.1.5", "0.1.0")
-            .expect("higher patch within same minor must accept");
-        check_wit_version_against("p", "0.1.0", "0.1.5")
-            .expect("lower patch within same minor must accept");
+    fn patch_at_or_below_host_accepts() {
+        check_wit_version_against("p", "0.5.0", "0.5.1").expect("0.5.0 plugin on 0.5.1 host");
+        check_wit_version_against("p", "0.5.1", "0.5.1").expect("0.5.1 plugin on 0.5.1 host");
+    }
+
+    #[test]
+    fn patch_above_host_rejects() {
+        let err = check_wit_version_against("p", "0.5.2", "0.5.1")
+            .expect_err("0.5.2 plugin must be refused by a 0.5.1 host");
+        assert!(
+            matches!(err, PluginError::WitVersionMismatch { .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn minor_above_host_rejects() {
+        assert!(check_wit_version_against("p", "0.6.0", "0.5.1").is_err());
+    }
+
+    #[test]
+    fn minor_below_host_rejects() {
+        assert!(check_wit_version_against("p", "0.4.9", "0.5.1").is_err());
+    }
+
+    #[test]
+    fn major_differs_rejects_even_with_same_minor_patch() {
+        assert!(check_wit_version_against("p", "1.5.1", "0.5.1").is_err());
+    }
+
+    #[test]
+    fn host_constant_is_derived_from_types_wit() {
+        assert_eq!(HOST_WIT_VERSION, "0.5.1");
+        assert_eq!(
+            crate::wit_version::package_version(include_str!("../wit/types.wit")),
+            "0.5.1"
+        );
     }
 
     #[test]

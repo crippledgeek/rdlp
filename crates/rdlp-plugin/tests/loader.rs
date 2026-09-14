@@ -9,14 +9,20 @@
     missing_docs
 )]
 
+use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey};
 use rand::rngs::OsRng;
+use rdlp_core::{ExtractionContext, InfoExtractor};
+use rdlp_http::HttpClientFactory;
+use rdlp_jsinterp::BoaJsEngine;
 use rdlp_plugin::PluginError;
+use rdlp_plugin::adapter::{HostResources, PluginExtractor};
 use rdlp_plugin::engine::{Engine, EngineConfig};
 use rdlp_plugin::loader::Loader;
 use rdlp_plugin::manifest::canonical_bytes;
 use rdlp_plugin::prompt::{AlwaysApprove, AlwaysDeny};
 use rdlp_plugin::trust_store::TrustStore;
+use rdlp_types::Config;
 use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -337,4 +343,178 @@ signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
     let outcomes = loader.discover(&plugins_dir);
     // Incomplete directories are silently skipped.
     assert!(outcomes.is_empty());
+}
+
+/// A plugin to sign with a REAL compiled component (as opposed to
+/// `write_signed_plugin`'s `MINIMAL_COMPONENT_WAT` stub) under a
+/// caller-chosen `wit_version`. Grouped into one struct (not appended as a
+/// 7th positional parameter to `write_signed_plugin`) per
+/// `limit-function-arguments`: `wit_version` is the one axis this D1 compat
+/// test varies and none of the other tests in this file need it.
+struct RealComponentPluginSpec<'a> {
+    name: &'a str,
+    wasm: &'a [u8],
+    wit_version: &'a str,
+    matches: &'a [&'a str],
+    capabilities: &'a [&'a str],
+}
+
+/// Sign real component bytes (not the `(component)` WAT stub) into `dir`,
+/// declaring `spec.wit_version` verbatim — the D1 compat tests below sign
+/// the SAME `.wasm` under both an accepted and a rejected version to
+/// exercise `check_wit_version_against`'s patch boundary through the real
+/// loader, not just the unit-level helper.
+fn write_signed_real_component_plugin(dir: &Path, key: &SigningKey, spec: RealComponentPluginSpec) {
+    std::fs::create_dir_all(dir).unwrap();
+    std::fs::write(dir.join("plugin.wasm"), spec.wasm).unwrap();
+
+    let pubkey_b64 =
+        base64::engine::general_purpose::STANDARD.encode(key.verifying_key().as_bytes());
+    let cap_str = spec
+        .capabilities
+        .iter()
+        .map(|c| format!("\"{c}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let match_str = spec
+        .matches
+        .iter()
+        .map(|m| format!("\"{m}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let toml_placeholder = format!(
+        r#"
+name = "{name}"
+version = "1.0.0"
+wit_version = "{wit_version}"
+matches = [{match_str}]
+priority = 150
+claims_override = []
+capabilities = [{cap_str}]
+
+[signature]
+type = "ed25519"
+pubkey = "{pubkey_b64}"
+signature = "PLACEHOLDER"
+"#,
+        name = spec.name,
+        wit_version = spec.wit_version,
+    );
+
+    let m = rdlp_plugin::manifest::parse_manifest_str(&toml_placeholder).unwrap();
+    let mut buf = canonical_bytes(&m);
+    buf.extend_from_slice(spec.wasm);
+    let sig = key.sign(&buf);
+    let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
+
+    let final_toml = toml_placeholder.replace("PLACEHOLDER", &sig_b64);
+    std::fs::write(dir.join("plugin.toml"), final_toml).unwrap();
+}
+
+fn make_extraction_ctx() -> ExtractionContext {
+    let http = Arc::new(HttpClientFactory::default().build());
+    let js = Arc::new(BoaJsEngine::new());
+    let cookies = Arc::new(rdlp_cookies::SimpleCookieJar::new());
+    let cfg = Arc::new(Config::default());
+    ExtractionContext::new(http, js, cookies, cfg)
+}
+
+/// D1 positive compat test: a component built against 0.5.0 (Task 1
+/// fixture) loads through the real loader on this 0.5.1 host and answers
+/// `metadata` + `extract`. `wit_version = "0.5.0"` in its manifest takes
+/// the patch-below path of `check_wit_version_against`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_0_5_0_component_loads_on_the_0_5_1_host() {
+    let wasm = std::fs::read("tests/fixtures/example-extractor-0.5.0/plugin.wasm").unwrap();
+    let td = TempDir::new().unwrap();
+    let plugins_dir = td.path().join("plugins");
+    let key = SigningKey::generate(&mut OsRng);
+
+    write_signed_real_component_plugin(
+        &plugins_dir.join("example"),
+        &key,
+        RealComponentPluginSpec {
+            name: "example",
+            wasm: &wasm,
+            wit_version: "0.5.0",
+            matches: &["https://example.com/*"],
+            // example-extractor's plugin.toml.template declares no
+            // capabilities — it is a pure, deterministic plugin.
+            capabilities: &[],
+        },
+    );
+
+    let engine = Arc::new(Engine::new(EngineConfig::default()).unwrap());
+    let mut trust = TrustStore::open(td.path().join("trust.toml")).unwrap();
+    let prompter: Arc<dyn rdlp_plugin::prompt::Prompter> = Arc::new(AlwaysApprove);
+    let mut loader = Loader::new(engine.as_ref(), &mut trust, prompter);
+    let mut outcomes = loader.discover(&plugins_dir);
+
+    assert_eq!(outcomes.len(), 1, "expected exactly one discover outcome");
+    let loaded = outcomes.remove(0).unwrap_or_else(|(path, err)| {
+        panic!("0.5.0 component must load on the 0.5.1 host: {path:?}: {err:?}")
+    });
+    assert_eq!(loaded.manifest.wit_version, "0.5.0");
+
+    let host_resources = HostResources {
+        fetch_client: None,
+        cookie_jar: None,
+        kv_db: None,
+        fetch_fixtures: None,
+    };
+    let adapter = PluginExtractor::new(loaded, engine.clone(), host_resources)
+        .expect("adapter construction must succeed");
+
+    let ctx = make_extraction_ctx();
+    let result = adapter.extract("https://example.com/video/1", &ctx).await;
+    match result {
+        Ok(info) => assert_eq!(info.id, "1"),
+        Err(err) => {
+            // Any failure here must be a domain error the plugin itself
+            // returned (e.g. a future ExtractError variant), never an
+            // instantiate/trap fault — the 3-strike trap counter stays at
+            // zero for domain errors (see adapter.rs's `extract`).
+            assert_eq!(
+                adapter.test_trap_count(),
+                0,
+                "expected a domain error, got a trap/instantiate fault: {err}"
+            );
+        }
+    }
+}
+
+/// D1 negative compat test: the SAME 0.5.0 component, but the manifest
+/// claims a NEWER patch (`0.5.2`) than this 0.5.1 host accepts. Rejected at
+/// `discover` — before the component is even compiled for instantiation.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_component_declaring_a_newer_patch_is_rejected() {
+    let wasm = std::fs::read("tests/fixtures/example-extractor-0.5.0/plugin.wasm").unwrap();
+    let td = TempDir::new().unwrap();
+    let plugins_dir = td.path().join("plugins");
+    let key = SigningKey::generate(&mut OsRng);
+
+    write_signed_real_component_plugin(
+        &plugins_dir.join("example"),
+        &key,
+        RealComponentPluginSpec {
+            name: "example",
+            wasm: &wasm,
+            wit_version: "0.5.2",
+            matches: &["https://example.com/*"],
+            capabilities: &[],
+        },
+    );
+
+    let (engine, mut trust, prompter) = make_loader_args(&td, Arc::new(AlwaysApprove));
+    let mut loader = Loader::new(&engine, &mut trust, prompter);
+    let outcomes = loader.discover(&plugins_dir);
+
+    assert_eq!(outcomes.len(), 1);
+    match &outcomes[0] {
+        Ok(_) => panic!("expected WitVersionMismatch, got Ok"),
+        Err((_, err)) => assert!(
+            matches!(err, PluginError::WitVersionMismatch { .. }),
+            "expected WitVersionMismatch, got {err:?}"
+        ),
+    }
 }
