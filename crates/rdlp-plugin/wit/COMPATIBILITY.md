@@ -29,19 +29,22 @@ patch bump must not touch their fields.
 `instantiate` time — Task 1's measurement reproduced the exact failure
 against a 0.5.0-built component bound to the full `extractor-plugin` world:
 `no function export `search-filters` found`. `extractor.wit` splits the
-contract in two: `extractor-plugin-host` (the frozen 0.5.0 exports, which
-`lib.rs` binds) and `extractor-plugin` (`include`s the host world, adds
-`@since(version = 0.5.1) search-filters`). The host binds only the smaller
-world at compile time and looks up later exports by name at call time,
-falling back to a stub (`search-filters` → `[]`) when absent — this is what
-lets a 0.5.0 component instantiate on a 0.5.1 host at all.
+contract in two: `extractor-plugin-host` (the frozen 0.5.0 exports) and
+`extractor-plugin` (`include`s the host world, adds
+`@since(version = 0.5.1) search-filters`). `lib.rs` binds only the smaller
+host world at compile time — this is what lets a 0.5.0 component instantiate
+on a 0.5.1 host at all. Looking up `search-filters` by name at call time and
+falling back to a stub (`[]`) when a plugin never declared it is added by the
+search adapter in Task 11 of this slice, not yet implemented.
 
 ## 4. `@since` toolchain acceptance (measured 2026-09-15)
 
 `cargo-component 0.21.1`: accepted — builds cleanly once the new export is
 implemented, no warning. `componentize-py 0.17.2`: accepted — bindings and
 componentize steps both exit 0, no warning. Full transcripts:
-`docs/superpowers/reports/2026-09-15-since-annotation-acceptance.md`.
+`docs/superpowers/reports/2026-09-15-since-annotation-acceptance.md`. Same
+`@since` pattern wasi-http used across `wasi:http@0.2.1…0.2.8` (spec's D1
+research note).
 
 ## 5. What does NOT belong in the host surface
 
