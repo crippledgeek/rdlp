@@ -8,7 +8,15 @@ Compiled component for the ABI compat test suite (rdlp#762 slice B).
   `wasm-tools component new` (no `--adapt`) — see "Fix round 1" below for why.
 - **Target**: `wasm32-unknown-unknown`, `--release`
 - **WIT world targeted**: `example:extractor@0.1.0` (`example`), which `include`s
-  `rdlp:plugin/extractor-plugin@0.5.0`
+  `rdlp:plugin/extractor-plugin@0.5.0` — this is the world declared in
+  `wit/world.wit`, but `wasm-tools component new` (this build path) does NOT
+  preserve that package/world name in the composed artifact: running
+  `wasm-tools component wit plugin.wasm` on the checked-in file reports
+  `package root:component; world root { ... }` instead. The imports/exports
+  are identical either way (only `rdlp:plugin/types@0.5.0` imported, the
+  three `metadata`/`extract`/`search` exports) — only the name is renamed to
+  the generic `root:component`/`root`, so don't expect the live dump to echo
+  `example:extractor@0.1.0`/`example` back.
 - **Size**: 39394 bytes (38.5 KiB)
 - **sha256**: `8faa4a92aad481e38479d7ba5f672cad7ebaf8397533d27a116a4949f78fcf47`
 - **No WASI imports** — loadable by the production loader
