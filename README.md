@@ -22,7 +22,7 @@ post-processes with FFmpeg library bindings. Inspired by
 
 ## Supported Sites
 
-PornHub, XHamster, RedTube, HQPorner, XTits, TNAFlix, EMPFlix, MovieFap, NineAnime, KoreanPornMovie, XVideos, XNXX, EPorner, ABXXX, SpankBang, PornoXO, plus a generic fallback extractor.
+PornHub, XHamster, RedTube, HQPorner, XTits, TNAFlix, EMPFlix, MovieFap, 9anime, KoreanPornMovie, XVideos, XNXX, EPorner, ABXXX, SpankBang, PornoXO, plus a generic fallback extractor.
 
 See `rdlp --list-extractors` for the current list.
 

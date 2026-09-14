@@ -28,7 +28,7 @@ SELF_TEST=0
 # with the `const NAME` declarations; the parity test in
 # rdlp-extractor/src/lib.rs guards the InfoExtractor/SearchExtractor pair,
 # this list guards the literals.
-NAMES='ABXXX|EMPFlix|EPorner|HQPorner|KoreanPornMovie|MovieFap|NineAnime|PornHub|PornoXO|RedTube|SpankBang|TNAFlix|XHamster|XNXX|XTits|XVideos'
+NAMES='ABXXX|EMPFlix|EPorner|HQPorner|KoreanPornMovie|MovieFap|9anime|PornHub|PornoXO|RedTube|SpankBang|TNAFlix|XHamster|XNXX|XTits|XVideos'
 
 BRACKETED='"\[[A-Za-z0-9]+\]'
 BARE="\"(${NAMES})\""

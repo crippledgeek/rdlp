@@ -307,7 +307,7 @@ mod tests {
     #[test]
     fn test_search_name() {
         let ext = NineAnimeExtractor::new();
-        assert_eq!(SearchExtractor::name(&ext), "NineAnime");
+        assert_eq!(SearchExtractor::name(&ext), "9anime");
     }
 
     #[test]

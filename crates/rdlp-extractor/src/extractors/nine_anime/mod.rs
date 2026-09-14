@@ -49,7 +49,7 @@ use crate::hls::{HlsStreamFlags, detect_format_sizes_lazy};
 
 /// The one spelling of this site's display name (#756); `name()`,
 /// `InfoDict::new`, log tags and filter errors all read it.
-pub(crate) const NAME: &str = "NineAnime";
+pub(crate) const NAME: &str = "9anime";
 
 /// 9anime episode extractor.
 ///
@@ -431,7 +431,7 @@ mod tests {
     #[test]
     fn test_name() {
         let extractor = NineAnimeExtractor::new();
-        assert_eq!(extractor.name(), "NineAnime");
+        assert_eq!(extractor.name(), "9anime");
     }
 
     #[test]
@@ -595,8 +595,7 @@ mod tests {
         let http: Arc<wreq::Client> = ctx.http_client.clone();
 
         let formats = crate::hls::expand_hls_in_place(vec![f], http).await;
-        let (formats, _flags) =
-            crate::hls::detect_format_sizes_lazy(formats, &ctx, "NineAnime").await;
+        let (formats, _flags) = crate::hls::detect_format_sizes_lazy(formats, &ctx, "9anime").await;
 
         assert!(
             formats.iter().all(|fmt| fmt.fragments.is_some()),

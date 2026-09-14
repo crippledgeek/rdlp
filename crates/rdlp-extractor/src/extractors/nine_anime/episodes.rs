@@ -332,7 +332,7 @@ mod tests {
         );
 
         let mut dict =
-            rdlp_types::InfoDict::new("40198", composed, "NineAnime", "https://9animetv.to/x");
+            rdlp_types::InfoDict::new("40198", composed, "9anime", "https://9animetv.to/x");
         dict.decode_text_fields();
 
         assert_eq!(dict.title, "Sailor Moon - Episode 15 - Usagi's Disaster");
