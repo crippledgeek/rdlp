@@ -5,8 +5,10 @@
 
 //! Shared signer for the crate's plugin integration tests.
 //!
-//! `write_signed_plugin` used to exist as five near-identical copies
-//! (`loader.rs`, `svt_golden.rs`, `mpd_golden.rs`, `xxxymovies_golden.rs`,
+//! `write_signed_plugin` used to exist as six near-identical copies across
+//! five test files (`loader.rs` had two — the WAT-stub signer plus the D1
+//! compat tests' `write_signed_real_component_plugin` — alongside one each
+//! in `svt_golden.rs`, `mpd_golden.rs`, `xxxymovies_golden.rs`, and
 //! `python_plugin_smoke.rs`), each hardcoding a different subset of the
 //! manifest fields and passing the rest as parameters. Per
 //! `limit-function-arguments` / `extract-before-you-duplicate`: the
