@@ -806,10 +806,10 @@ mod tests {
         }
         async fn search(
             &self,
-            _query: &SearchQuery,
-            _ctx: &ExtractionContext,
+            query: &SearchQuery,
+            ctx: &ExtractionContext,
         ) -> Result<Vec<SearchResultPreview>> {
-            unimplemented!("MockSearch exercises PagedSearch directly, not SearchExtractor::search")
+            self.search_all_pages(query, ctx).await
         }
     }
 

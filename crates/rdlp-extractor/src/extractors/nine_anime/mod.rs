@@ -595,7 +595,7 @@ mod tests {
         let http: Arc<wreq::Client> = ctx.http_client.clone();
 
         let formats = crate::hls::expand_hls_in_place(vec![f], http).await;
-        let (formats, _flags) = crate::hls::detect_format_sizes_lazy(formats, &ctx, "9anime").await;
+        let (formats, _flags) = crate::hls::detect_format_sizes_lazy(formats, &ctx, NAME).await;
 
         assert!(
             formats.iter().all(|fmt| fmt.fragments.is_some()),

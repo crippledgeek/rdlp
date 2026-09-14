@@ -52,6 +52,13 @@ scan() {
         # file. Stripping from the first `#[cfg(test)]` would find none and
         # scan the whole file as production, false-flagging pinned literals
         # like `assert_eq!(e.name(), "PornHub")`. Skip such files outright.
+        # This trusts the DIRECTORY NAME, not file content: a production
+        # `.rs` placed under such a `tests/` directory would go unscanned. No
+        # such file exists today (verify with `find
+        # crates/rdlp-extractor/src/extractors -path '*/tests/*' -name
+        # '*.rs'`); the self-test below asserts every file the trust applies
+        # to actually holds a test, so a future production file placed there
+        # trips the self-test instead of silently going unscanned.
         case "$file" in
         */tests/*) continue ;;
         esac
@@ -75,12 +82,35 @@ if [ "$SELF_TEST" -eq 1 ]; then
     printf 'fn name(&self) -> &str { "RedTube" }\nconst T: &str = "[RedTube]";\n' > "$tmp/x.rs"
     hits=$(scan "$tmp")
     count=$(printf '%s\n' "$hits" | grep -c . || true)
-    if [ "$count" -eq 2 ]; then
-        echo "SELF-TEST OK"
-        exit 0
+    if [ "$count" -ne 2 ]; then
+        echo "SELF-TEST FAILED: gate did not flag both literal shapes (got $count, want 2)"
+        exit 1
     fi
-    echo "SELF-TEST FAILED: gate did not flag both literal shapes (got $count, want 2)"
-    exit 1
+
+    # The `*/tests/*` skip in scan() trusts the directory NAME, not file
+    # content (see the comment at its case statement). Assert the trust is
+    # currently sound: every real `.rs` file it would skip must be either an
+    # actual test file, or a pure `mod` re-export file (e.g. pornhub's
+    # `tests/mod.rs`, which only lists `#[cfg(test)] mod extractor;` etc. and
+    # carries no string literal of its own to hide). A file that is neither —
+    # any other production code — would go unscanned by the real run AND
+    # fail this assertion, so the failure is loud here rather than a silent
+    # scan gap there.
+    while IFS= read -r f; do
+        if grep -qE '#\[(tokio::)?test\]' "$f"; then
+            continue
+        fi
+        # Pure declaration file: after stripping comments, blank lines,
+        # `#[cfg(test)]` attributes, and `mod <ident>;` lines, nothing remains.
+        remainder=$(grep -vE '^\s*(//|#\[cfg\(test\)\]|mod [A-Za-z_][A-Za-z0-9_]*;|\s*$)' "$f" || true)
+        if [ -n "$remainder" ]; then
+            echo "SELF-TEST FAILED: $f is under a trusted 'tests/' directory but is neither a test file (#[test]/#[tokio::test]) nor a pure mod-declaration file — the */tests/* skip in scan() would silently exempt production code"
+            exit 1
+        fi
+    done < <(find "${SCAN_ROOTS[@]}" -path '*/tests/*' -name '*.rs' -type f)
+
+    echo "SELF-TEST OK"
+    exit 0
 fi
 
 file_count=$(find "${SCAN_ROOTS[@]}" -name '*.rs' -type f | wc -l)
