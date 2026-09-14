@@ -59,6 +59,34 @@ pub async fn expand_hls_in_place(formats: Vec<Format>, http: Arc<wreq::Client>) 
     expanded
 }
 
+/// Expand only the M3u8 / M3u8Native rows that do NOT yet carry `fragments`,
+/// leaving every other row (already-expanded HLS, progressive, DASH) exactly
+/// where it was. The orchestrator's downloader guarantee (rdlp-api
+/// `extract_video`) uses this so an extractor that skipped expansion — a
+/// plugin cannot return fragments through the WIT `format` record — still
+/// yields downloadable HLS rows, while in-tree rows (already expanded by
+/// the extractor itself) are never re-fetched. Order is preserved because
+/// expansion is per-row in place.
+pub async fn expand_missing_hls_fragments(
+    formats: Vec<Format>,
+    http: Arc<wreq::Client>,
+) -> Vec<Format> {
+    let mut out = Vec::with_capacity(formats.len());
+    for f in formats {
+        let needs_expansion = f.fragments.is_none()
+            && matches!(
+                f.protocol,
+                DownloadProtocol::M3u8 | DownloadProtocol::M3u8Native
+            );
+        if needs_expansion {
+            out.extend(expand_hls_in_place(vec![f], Arc::clone(&http)).await);
+        } else {
+            out.push(f);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,6 +330,68 @@ mod tests {
             "every expanded format must carry pre-resolved fragments"
         );
         master.assert_async().await;
+    }
+
+    /// The orchestrator-level guarantee (Task 7) must not re-fetch a row
+    /// that already carries fragments: in-tree extractors expanded it, and a
+    /// second expansion would re-fetch the playlist and could clobber
+    /// per-variant labels. Only fragments-less M3u8/M3u8Native rows are sent
+    /// through `expand_hls_in_place`.
+    #[tokio::test]
+    async fn expand_missing_skips_rows_that_already_carry_fragments() {
+        let mut server = mockito::Server::new_async().await;
+        let never = server
+            .mock("GET", "/has.m3u8")
+            .expect(0)
+            .create_async()
+            .await;
+        let mut f = Format::new(
+            "hls",
+            format!("{}/has.m3u8", server.url()),
+            "m3u8",
+            DownloadProtocol::M3u8,
+        );
+        f.fragments = Some(vec![rdlp_types::Fragment {
+            url: "https://cdn.example/1.ts".into(),
+            byte_range: None,
+            init_url: None,
+            init_byte_range: None,
+            duration: Some(6.0),
+            filesize: None,
+        }]);
+        let out = expand_missing_hls_fragments(vec![f], Arc::new(wreq::Client::new())).await;
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].fragments.as_ref().unwrap().len(), 1);
+        never.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn expand_missing_expands_only_the_fragmentless_rows_and_keeps_order() {
+        let mut server = mockito::Server::new_async().await;
+        let _m = server
+            .mock("GET", "/v.m3u8")
+            .with_body(crate::hls::test_support::VARIANT_MEDIA)
+            .create_async()
+            .await;
+        let mp4 = Format::new(
+            "1080p",
+            "https://h.com/x.mp4",
+            "mp4",
+            DownloadProtocol::Https,
+        );
+        let hls = Format::new(
+            "hls",
+            format!("{}/v.m3u8", server.url()),
+            "m3u8",
+            DownloadProtocol::M3u8Native,
+        );
+        let out = expand_missing_hls_fragments(vec![mp4, hls], Arc::new(wreq::Client::new())).await;
+        assert_eq!(
+            out.iter().map(|f| f.format_id.as_str()).collect::<Vec<_>>(),
+            ["1080p", "hls"]
+        );
+        assert!(out[0].fragments.is_none());
+        assert_eq!(out[1].fragments.as_ref().unwrap().len(), 2);
     }
 
     /// Static regression guard for issue #279.

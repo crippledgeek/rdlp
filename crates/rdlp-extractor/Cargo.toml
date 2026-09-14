@@ -33,6 +33,16 @@ m3u8-rs = { workspace = true }
 futures = { workspace = true }
 urlencoding = "2"
 
+[features]
+# Widens the `#[cfg(test)]` mockito-loopback exemption in
+# `base/common/manifest_url.rs` to non-test builds of THIS crate, so a
+# sibling crate's own tests (rdlp-plugin, rdlp-api) can drive
+# expand_hls_in_place / expand_missing_hls_fragments against a mockito
+# server. Enabled only as a dev-dependency feature in those sibling crates —
+# never by a production binary; see
+# scripts/check-loopback-feature-not-in-release.sh.
+loopback-test-exemption = []
+
 [dev-dependencies]
 hex = { workspace = true }
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }

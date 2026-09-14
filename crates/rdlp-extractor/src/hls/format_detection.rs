@@ -8,6 +8,7 @@ use super::types::HlsStreamFlags;
 use crate::base::common::BaseExtractor;
 use log::debug;
 use rdlp_types::Codec;
+use std::sync::Arc;
 
 /// Default cap on the single-HEAD probe for non-HLS file size detection
 /// when `Config::hls_head_probe_timeout` is unset. Matches the legacy
@@ -171,7 +172,12 @@ pub async fn detect_format_sizes(
     ctx: &rdlp_core::ExtractionContext,
     extractor_name: &str,
 ) -> (Vec<rdlp_types::Format>, HlsStreamFlags) {
-    detect_format_sizes_inner(formats, ctx, extractor_name, true).await
+    detect_format_sizes_inner(
+        formats,
+        &SizeProbeEnv::from_context(ctx, extractor_name),
+        true,
+    )
+    .await
 }
 
 /// Like [`detect_format_sizes`] but skips HEAD requests for non-HLS formats
@@ -181,7 +187,51 @@ pub async fn detect_format_sizes_lazy(
     ctx: &rdlp_core::ExtractionContext,
     extractor_name: &str,
 ) -> (Vec<rdlp_types::Format>, HlsStreamFlags) {
-    detect_format_sizes_inner(formats, ctx, extractor_name, false).await
+    detect_format_sizes_inner(
+        formats,
+        &SizeProbeEnv::from_context(ctx, extractor_name),
+        false,
+    )
+    .await
+}
+
+/// [`detect_format_sizes_lazy`] for a caller that has no `ExtractionContext` —
+/// the plugin host, which holds an HTTP client and a `Config` but never
+/// constructs the full extractor context.
+pub async fn detect_format_sizes_lazy_in(
+    formats: Vec<rdlp_types::Format>,
+    probe: &SizeProbeEnv<'_>,
+) -> (Vec<rdlp_types::Format>, HlsStreamFlags) {
+    detect_format_sizes_inner(formats, probe, false).await
+}
+
+/// Everything `detect_format_sizes_inner` reads from an `ExtractionContext`.
+/// A parameter object so the plugin host (which has a client and a `Config`
+/// but no `ExtractionContext`) can drive the same probe without a stub
+/// context — one mechanism, two callers.
+pub struct SizeProbeEnv<'a> {
+    /// HTTP client the probe issues its HEAD/GET requests on.
+    pub http_client: Arc<wreq::Client>,
+    /// Configuration the probe reads its head-probe timeout from.
+    pub config: &'a rdlp_types::Config,
+    /// Name of the extractor driving this probe, for logging.
+    pub extractor_name: &'a str,
+}
+
+impl<'a> SizeProbeEnv<'a> {
+    /// Build a [`SizeProbeEnv`] from an in-tree extractor's `ExtractionContext`.
+    #[must_use]
+    pub fn from_context(ctx: &'a rdlp_core::ExtractionContext, extractor_name: &'a str) -> Self {
+        Self {
+            http_client: Arc::clone(&ctx.http_client),
+            config: ctx.config.as_ref(),
+            extractor_name,
+        }
+    }
+
+    pub(crate) fn head_timeout(&self) -> std::time::Duration {
+        resolve_hls_head_probe_timeout(self.config)
+    }
 }
 
 /// Captured environment for a single per-format detection future.
@@ -532,15 +582,14 @@ fn aggregate_results(
 
 async fn detect_format_sizes_inner(
     formats: Vec<rdlp_types::Format>,
-    ctx: &rdlp_core::ExtractionContext,
-    extractor_name: &str,
+    probe: &SizeProbeEnv<'_>,
     detect_sizes: bool,
 ) -> (Vec<rdlp_types::Format>, HlsStreamFlags) {
     use futures::future::join_all;
 
-    let verbose = ctx.config.verbose;
-    let head_timeout = resolve_hls_head_probe_timeout(&ctx.config);
-    let mut hls_detector = HlsSizeDetector::new(ctx.http_client.clone(), verbose);
+    let verbose = probe.config.verbose;
+    let head_timeout = probe.head_timeout();
+    let mut hls_detector = HlsSizeDetector::new(Arc::clone(&probe.http_client), verbose);
 
     // Propagate HTTP headers from formats (e.g., Referer) to the HLS detector.
     // Many CDNs (Megacloud/douvid.xyz) require a Referer to serve M3U8 content.
@@ -559,8 +608,8 @@ async fn detect_format_sizes_inner(
         }
     }
 
-    let http_client = ctx.http_client.clone();
-    let extractor_name = extractor_name.to_string();
+    let http_client = Arc::clone(&probe.http_client);
+    let extractor_name = probe.extractor_name.to_string();
 
     let detection_futures: Vec<_> = formats
         .into_iter()
@@ -657,5 +706,78 @@ mod resolve_timeout_tests {
             ..Config::default()
         };
         assert_eq!(resolve_hls_head_probe_timeout(&c), Duration::from_secs(2));
+    }
+}
+
+#[cfg(test)]
+mod size_probe_env_tests {
+    use super::{SizeProbeEnv, detect_format_sizes_lazy, detect_format_sizes_lazy_in};
+    use crate::hls::test_support::{MASTER_TWO_VARIANTS, test_ctx};
+    use rdlp_types::{Config, DownloadProtocol, Format};
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    /// The plugin host has a client and a `Config` but no `ExtractionContext`.
+    /// `SizeProbeEnv` must drive the exact same probe `detect_format_sizes_lazy`
+    /// does — same expansion, same dedup, same flags — over the same fixture.
+    #[tokio::test]
+    async fn detect_format_sizes_lazy_in_matches_ctx_driven_call() {
+        let mut server = mockito::Server::new_async().await;
+        let _master = server
+            .mock("GET", "/master.m3u8")
+            .with_body(MASTER_TWO_VARIANTS)
+            .expect_at_least(1)
+            .create_async()
+            .await;
+        let _v720 = server
+            .mock("GET", "/v720.m3u8")
+            .with_body(crate::hls::test_support::VARIANT_MEDIA)
+            .create_async()
+            .await;
+        let _v360 = server
+            .mock("GET", "/v360.m3u8")
+            .with_body(crate::hls::test_support::VARIANT_MEDIA)
+            .create_async()
+            .await;
+
+        let master_url = format!("{}/master.m3u8", server.url());
+        let f = Format::new("hls", &master_url, "m3u8", DownloadProtocol::M3u8);
+
+        let ctx = test_ctx();
+        let (via_ctx, ctx_flags) = detect_format_sizes_lazy(vec![f.clone()], &ctx, "test").await;
+
+        let probe = SizeProbeEnv::from_context(&ctx, "test");
+        let (via_probe, probe_flags) = detect_format_sizes_lazy_in(vec![f], &probe).await;
+
+        assert_eq!(
+            via_ctx
+                .iter()
+                .map(|fmt| fmt.format_id.as_str())
+                .collect::<Vec<_>>(),
+            via_probe
+                .iter()
+                .map(|fmt| fmt.format_id.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(ctx_flags.is_live, probe_flags.is_live);
+        assert_eq!(ctx_flags.has_any_drm, probe_flags.has_any_drm);
+    }
+
+    /// The probe's `head_timeout()` must reach `resolve_hls_head_probe_timeout`
+    /// through `SizeProbeEnv`, not read a hardcoded default — the negative
+    /// half of the parity test above.
+    #[test]
+    fn head_timeout_reaches_config_override() {
+        let config = Config {
+            hls_head_probe_timeout: Some(1),
+            ..Config::default()
+        };
+        let client = Arc::new(wreq::Client::new());
+        let probe = SizeProbeEnv {
+            http_client: client,
+            config: &config,
+            extractor_name: "test",
+        };
+        assert_eq!(probe.head_timeout(), Duration::from_secs(1));
     }
 }

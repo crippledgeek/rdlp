@@ -19,10 +19,16 @@
 /// scheme still goes through the real validator. The bypass is `cfg(test)`-
 /// gated, so production builds compile with no loopback exemption at all.
 ///
+/// Also enabled by the `loopback-test-exemption` cargo feature, which exists
+/// ONLY so sibling crates' tests (`rdlp-plugin`, `rdlp-api`) can drive this
+/// expander against mockito; it is a dev-dependency feature in those crates
+/// and never enabled by a production binary —
+/// `scripts/check-loopback-feature-not-in-release.sh` proves it.
+///
 /// Returns `rdlp_security`'s own error so each protocol can map it into its
 /// own error type without this gate having to know about any of them.
 pub(crate) fn validate_manifest_sourced_url(url: &str) -> rdlp_security::Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "loopback-test-exemption"))]
     if is_loopback_origin(url) {
         return Ok(());
     }
@@ -44,8 +50,10 @@ pub(crate) fn validate_manifest_sourced_url(url: &str) -> rdlp_security::Result<
 /// over `file://` is not a loopback *origin*, so no caller can inherit the
 /// exemption by forgetting its own scheme check.
 ///
-/// `cfg(test)`-only: production builds carry no loopback concept at all.
-#[cfg(test)]
+/// `cfg(test)`-only (plus the `loopback-test-exemption` feature — see
+/// [`validate_manifest_sourced_url`]): production builds carry no loopback
+/// concept at all.
+#[cfg(any(test, feature = "loopback-test-exemption"))]
 pub(crate) fn is_loopback_origin(url: &str) -> bool {
     let Ok(parsed) = url::Url::parse(url) else {
         return false;
