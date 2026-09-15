@@ -79,12 +79,24 @@ const MAX_VARIANTS: usize = 50;
 /// but bounded so a 50-variant master cannot open 50 simultaneous connections.
 /// 4 matches the project's existing per-host extraction concurrency defaults
 /// (e.g. `CONCURRENT_EXTRACTIONS` in the pornhub/xhamster playlist modules).
-const MAX_CONCURRENT_VARIANT_FETCHES: usize = 4;
+/// Shared with `format_detection::detect_format_sizes_inner`, whose
+/// per-format probes fan out to the same origins and are bounded by the same
+/// number for the same reason.
+pub(crate) const MAX_CONCURRENT_VARIANT_FETCHES: usize = 4;
 /// Cap on distinct EXT-X-MAP URIs in a single media playlist.
 /// Mitigates interleaved-init-URI fetch amplification (`A,B,A,B,...`).
 const MAX_INIT_SEGMENTS: usize = 50;
 /// Cap on raw playlist body size (master or media).
 const MAX_PLAYLIST_BYTES: usize = 8 * 1024 * 1024;
+/// `MAX_PLAYLIST_BYTES` as the validated cap `rdlp_http::read_body_capped`
+/// takes; the same const-`match` shape `rdlp-plugin`'s `host::fetch` uses
+/// for its own cap, so a zero cap is a compile error rather than a runtime
+/// refusal of every body.
+const MAX_PLAYLIST_CAP: rdlp_http::BodyCap =
+    match rdlp_http::BodyCap::new(MAX_PLAYLIST_BYTES as u64) {
+        Some(cap) => cap,
+        None => panic!("MAX_PLAYLIST_BYTES must be nonzero"),
+    };
 
 /// Validate a URL that came out of attacker-influenceable content before it is
 /// fetched, as an [`HlsExpandError`].
@@ -260,24 +272,23 @@ async fn fetch_playlist_bytes(
             resp.status()
         )));
     }
-    if let Some(len) = resp.content_length()
-        && len > MAX_PLAYLIST_BYTES as u64
-    {
-        return Err(HlsExpandError::Network(format!(
-            "playlist body too large: {len} bytes (max {MAX_PLAYLIST_BYTES})"
-        )));
-    }
-    let bytes = resp
-        .bytes()
+    // `read_body_capped` (rdlp-http, #569) is the single streaming
+    // implementation: a declared `Content-Length` past the cap is refused
+    // before any byte is read, and a chunked body is aborted the moment it
+    // would exceed the cap rather than buffered whole and then measured.
+    rdlp_http::read_body_capped(resp, MAX_PLAYLIST_CAP)
         .await
-        .map_err(|e| HlsExpandError::Network(format!("read {safe_url}: {e}")))?;
-    if bytes.len() > MAX_PLAYLIST_BYTES {
-        return Err(HlsExpandError::Network(format!(
-            "playlist body too large: {} bytes (max {MAX_PLAYLIST_BYTES})",
-            bytes.len()
-        )));
-    }
-    Ok(bytes.to_vec())
+        .map_err(|e| match e {
+            rdlp_http::BodyCapError::Oversized {
+                limit,
+                seen_at_least,
+            } => HlsExpandError::Network(format!(
+                "playlist body too large: at least {seen_at_least} bytes (max {limit})"
+            )),
+            rdlp_http::BodyCapError::Transport(e) => {
+                HlsExpandError::Network(format!("read {safe_url}: {e}"))
+            }
+        })
 }
 
 /// Build per-media-playlist `Format` from parsed bytes + media-playlist URL.
@@ -1500,5 +1511,89 @@ seg-1.m4s
             .await
             .expect_err("master fetch must fail without Referer");
         assert!(matches!(err, HlsExpandError::Network(_)));
+    }
+
+    /// An over-cap playlist body with no `Content-Length` (chunked framing)
+    /// is refused while it streams, not after it has been buffered whole:
+    /// the server keeps writing past the cap and counts what it managed to
+    /// send; a reader that buffers first would drain every byte before
+    /// checking, so the count would reach the full size.
+    #[tokio::test]
+    async fn oversized_chunked_playlist_is_refused_mid_stream() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // 64 KiB per chunk, four caps' worth in total: enough past the cap
+        // that a buffer-then-check reader visibly drains it all, and small
+        // per-chunk so the abort lands well before the end.
+        const CHUNK: usize = 64 * 1024;
+        const TOTAL: usize = MAX_PLAYLIST_BYTES * 4;
+
+        let written = Arc::new(AtomicUsize::new(0));
+        let sink = Arc::clone(&written);
+        let mut server = mockito::Server::new_async().await;
+        let _big = server
+            .mock("GET", "/huge.m3u8")
+            .with_chunked_body(move |w| {
+                let chunk = vec![b'#'; CHUNK];
+                let mut sent = 0;
+                while sent < TOTAL {
+                    if w.write_all(&chunk).is_err() {
+                        break;
+                    }
+                    sent += CHUNK;
+                    sink.store(sent, Ordering::SeqCst);
+                }
+                Ok(())
+            })
+            .create_async()
+            .await;
+
+        let mut s = seed();
+        s.url = format!("{}/huge.m3u8", server.url());
+        let http = std::sync::Arc::new(wreq::Client::new());
+        let err = expand_hls_url(&s, http)
+            .await
+            .expect_err("a body past the cap must be refused");
+        match &err {
+            HlsExpandError::Network(msg) => {
+                assert!(msg.contains("too large"), "got: {msg}");
+            }
+            other => panic!("expected Network(too large), got {other:?}"),
+        }
+        let sent = written.load(Ordering::SeqCst);
+        assert!(
+            sent < TOTAL,
+            "the reader must abort mid-stream; the server sent all {sent} bytes"
+        );
+        drop(server);
+    }
+
+    /// The cap is inclusive: a body of exactly `MAX_PLAYLIST_BYTES` is read
+    /// (and then fails as a playlist, not as "too large"); one byte more is
+    /// refused on its declared `Content-Length` before any byte is read.
+    #[tokio::test]
+    async fn playlist_body_cap_is_inclusive_at_the_boundary() {
+        for (len, expect_too_large) in [(MAX_PLAYLIST_BYTES, false), (MAX_PLAYLIST_BYTES + 1, true)]
+        {
+            let mut server = mockito::Server::new_async().await;
+            let _m = server
+                .mock("GET", "/edge.m3u8")
+                .with_body(vec![b'#'; len])
+                .create_async()
+                .await;
+            let mut s = seed();
+            s.url = format!("{}/edge.m3u8", server.url());
+            let http = std::sync::Arc::new(wreq::Client::new());
+            let err = expand_hls_url(&s, http)
+                .await
+                .expect_err("a body of `#` bytes is never a valid playlist");
+            let too_large = matches!(&err, HlsExpandError::Network(m) if m.contains("too large"));
+            assert_eq!(
+                too_large, expect_too_large,
+                "body of {len} bytes: got {err:?}"
+            );
+            drop(server);
+        }
     }
 }

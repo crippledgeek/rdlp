@@ -271,7 +271,7 @@ impl SearchExtractor for AbxxxExtractor {
         NAME.as_str()
     }
 
-    fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
+    async fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
         vec![SearchFilterDescriptor {
             key: "sort".to_string(),
             display_name: "Sort by".to_string(),
@@ -478,9 +478,9 @@ mod tests {
         assert!(previews.is_empty());
     }
 
-    #[test]
-    fn supported_filters_lists_sort() {
-        let f = AbxxxExtractor::new().supported_filters();
+    #[tokio::test]
+    async fn supported_filters_lists_sort() {
+        let f = AbxxxExtractor::new().supported_filters().await;
         assert_eq!(f.len(), 1);
         assert_eq!(f[0].key, "sort");
         assert_eq!(f[0].default.as_deref(), Some("relevance"));

@@ -1365,6 +1365,7 @@ fn every_config_field_is_classified() {
         download_timeout: _,
         merge_timeout: _,
         hls_head_probe_timeout: _,
+        hls_expansion_timeout: _,
         parallel_threshold: _,
         max_fragment_bytes: _,
         source_address: _,

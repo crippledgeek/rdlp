@@ -249,7 +249,36 @@ Plugins implement the `extractor-plugin` WIT world declared at `crates/rdlp-plug
 
 Plugins must be signed (Sigstore keyless via GitHub Actions OIDC, or Ed25519 fallback) and dropped into the user's plugin directory (defaults to `~/.config/rdlp/plugins/<name>/`). On first run, rdlp shows the plugin's declared capabilities and asks the user to confirm trust.
 
-Reference plugin example (in Rust + cargo-component) and full plugin author guide are tracked in [issue #213](https://github.com/crippledgeek/rdlp/issues/213) — pending Task 28. For the design rationale and security model, see `docs/superpowers/specs/2026-04-28-plugin-system-mvp-design.md` (local).
+The reference plugin lives at `examples/plugins/example-extractor` (Rust + cargo-component); the full plugin author guide is tracked in [issue #213](https://github.com/crippledgeek/rdlp/issues/213). For the design rationale and security model, see `crates/rdlp-plugin/wit/COMPATIBILITY.md` (WIT versioning policy) and the module doc on `crates/rdlp-plugin/src/lib.rs` (trust model).
+
+### WIT 0.5.1 additions
+
+`rdlp:plugin@0.5.1` is additive over `@0.5.0` — see
+`crates/rdlp-plugin/wit/COMPATIBILITY.md` for the version policy (what
+"additive" means, and why an 0.5.0-built plugin still loads on a 0.5.1 host).
+It adds:
+
+- **`expand-hls` / `probe-format-sizes` host imports** — extract-time helpers
+  a plugin can call without reimplementing HTTP fetch logic itself:
+  `expand-hls` expands an HLS master playlist into per-variant formats
+  carrying pre-resolved fragments; `probe-format-sizes` is the lazy
+  enrichment pass — it fetches each HLS row's own playlist to fill in labels
+  (resolution, codecs, duration, an estimated size from bitrate × duration)
+  and reports the stream-level live/DRM flags. It does not probe byte sizes
+  over HEAD or ranged GET; non-HLS rows pass through untouched.
+- **`search-filters` export (optional)** — a search-capable plugin may declare
+  its supported `--search-filter` keys/values; the host resolves this export
+  by name rather than through the generated bindings, so a plugin built
+  before 0.5.1 still instantiates and is treated as declaring no filters.
+- **`supports_extract` / `search_site` / `search_claims_override` manifest
+  fields** — `supports_extract` lets a search-only plugin opt out of extract
+  dispatch (defaults `true`); `search_site` names the site a search-capable
+  plugin serves for `--search-site` routing, defaulting to the plugin's own
+  name; `search_claims_override` is the search counterpart of
+  `claims_override` — a plugin may list its own `search_site` here to shadow
+  rdlp's built-in search for that site (any other entry is rejected at load).
+  The claim is signed, shown at first install, and re-confirmed if a later
+  version changes it.
 
 ## Policy: yt-dlp-ported plugins stay byte-identical
 

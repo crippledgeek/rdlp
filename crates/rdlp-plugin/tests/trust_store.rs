@@ -11,6 +11,7 @@
 
 // Lints suppressed for test code — panicking on unexpected errors is intentional here.
 
+use rdlp_plugin::manifest::SearchClaims;
 use rdlp_plugin::trust_store::{CapabilityCheck, IdentityCheck, TrustEntry, TrustStore};
 use std::collections::BTreeSet;
 use tempfile::TempDir;
@@ -29,6 +30,7 @@ fn first_install_records_identity() {
         name: "youtube".into(),
         identity: "sigstore:github:johndoe/yt".into(),
         approved_capabilities: caps(&["fetch", "log"]),
+        search: SearchClaims::default(),
     })
     .unwrap();
 
@@ -47,6 +49,7 @@ fn round_trip_through_disk() {
             name: "x".into(),
             identity: "ed25519:abcd1234".into(),
             approved_capabilities: caps(&["fetch"]),
+            search: SearchClaims::default(),
         })
         .unwrap();
     }
@@ -74,6 +77,7 @@ fn identity_check_detects_match() {
         name: "x".into(),
         identity: "sigstore:github:alice/x".into(),
         approved_capabilities: caps(&["log"]),
+        search: SearchClaims::default(),
     })
     .unwrap();
     assert!(matches!(
@@ -90,6 +94,7 @@ fn identity_check_detects_mismatch() {
         name: "x".into(),
         identity: "sigstore:github:alice/x".into(),
         approved_capabilities: caps(&["log"]),
+        search: SearchClaims::default(),
     })
     .unwrap();
     let result = ts.check_identity_match("x", "sigstore:github:bob/x");
@@ -113,6 +118,7 @@ fn capability_check_all_approved_when_subset() {
         name: "x".into(),
         identity: "ed25519:aabbccdd".into(),
         approved_capabilities: caps(&["fetch", "log", "cookie-jar"]),
+        search: SearchClaims::default(),
     })
     .unwrap();
     let requested = caps(&["fetch", "log"]);
@@ -130,6 +136,7 @@ fn capability_check_flags_new_capabilities() {
         name: "x".into(),
         identity: "ed25519:aabbccdd".into(),
         approved_capabilities: caps(&["fetch"]),
+        search: SearchClaims::default(),
     })
     .unwrap();
     let requested = caps(&["fetch", "log", "cookie-jar"]);
@@ -164,9 +171,63 @@ fn forget_removes_entry() {
         name: "x".into(),
         identity: "ed25519:aabbccdd".into(),
         approved_capabilities: caps(&["log"]),
+        search: SearchClaims::default(),
     })
     .unwrap();
     assert!(ts.lookup("x").is_some());
     ts.forget("x").unwrap();
     assert!(ts.lookup("x").is_none());
+}
+
+/// A trust file written before the search-claim fields existed parses, with
+/// the claim defaulting to "no site, no override" — so an upgrade never
+/// refuses an existing store, and such an entry re-prompts once for any
+/// plugin that now declares either field.
+#[test]
+fn a_pre_search_claim_trust_file_parses_with_default_claims() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("trust.toml");
+    std::fs::write(
+        &path,
+        r#"
+[entries.legacy]
+name = "legacy"
+identity = "ed25519:abcd"
+approved_capabilities = ["fetch"]
+"#,
+    )
+    .unwrap();
+    let ts = TrustStore::open(&path).unwrap();
+    let entry = ts.lookup("legacy").expect("parsed");
+    assert_eq!(entry.approved_capabilities, caps(&["fetch"]));
+    assert_eq!(entry.search, SearchClaims::default());
+}
+
+/// The claim round-trips through disk under its own two keys.
+#[test]
+fn search_claims_round_trip_through_disk() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("trust.toml");
+    let claim = SearchClaims {
+        search_site: Some("pornhub".into()),
+        search_claims_override: vec!["pornhub".into()],
+    };
+    {
+        let mut ts = TrustStore::open(&path).unwrap();
+        ts.record(TrustEntry {
+            name: "ph-search".into(),
+            identity: "ed25519:abcd".into(),
+            approved_capabilities: caps(&[]),
+            search: claim.clone(),
+        })
+        .unwrap();
+    }
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("search_site = \"pornhub\""), "{written}");
+    assert!(
+        written.contains("search_claims_override = [\"pornhub\"]"),
+        "{written}"
+    );
+    let ts = TrustStore::open(&path).unwrap();
+    assert_eq!(ts.lookup("ph-search").unwrap().search, claim);
 }

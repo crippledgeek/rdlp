@@ -20,23 +20,20 @@
 //!   examples/plugins/ytdlp-hello-world/build.sh   # produces out/plugin.wasm
 //!   cargo test -p rdlp-plugin --test python_plugin_smoke -- --ignored --nocapture
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use base64::Engine as _;
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
-use rdlp_core::{ExtractionContext, InfoExtractor};
+use rdlp_core::InfoExtractor;
 use rdlp_http::HttpClientFactory;
-use rdlp_jsinterp::BoaJsEngine;
 use rdlp_plugin::adapter::{HostResources, PluginExtractor};
 use rdlp_plugin::engine::{Engine, EngineConfig};
 use rdlp_plugin::loader::Loader;
-use rdlp_plugin::manifest::canonical_bytes;
 use rdlp_plugin::prompt::AlwaysApprove;
+use rdlp_plugin::test_support::{SignedPluginSpec, extraction_ctx, write_signed_plugin};
 use rdlp_plugin::trust_store::TrustStore;
-use rdlp_types::Config;
 use tempfile::TempDir;
 
 const WASM_PATH: &str = concat!(
@@ -44,62 +41,8 @@ const WASM_PATH: &str = concat!(
     "/../../examples/plugins/ytdlp-hello-world/out/plugin.wasm"
 );
 
-/// Inline copy of `tests/loader.rs::write_signed_plugin`, adapted to take a
-/// pre-built wasm payload (instead of a WAT stub) and a richer capability set.
-fn write_signed_plugin(
-    dir: &Path,
-    name: &str,
-    key: &SigningKey,
-    wasm: &[u8],
-    capabilities: &[&str],
-) {
-    std::fs::create_dir_all(dir).unwrap();
-    std::fs::write(dir.join("plugin.wasm"), wasm).unwrap();
-
-    let pubkey_b64 =
-        base64::engine::general_purpose::STANDARD.encode(key.verifying_key().as_bytes());
-    let cap_str = capabilities
-        .iter()
-        .map(|c| format!("\"{c}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let toml_placeholder = format!(
-        r#"
-name = "{name}"
-version = "0.1.0"
-wit_version = "0.5.0"
-matches = ["https://example.com/*"]
-priority = 150
-claims_override = []
-capabilities = [{cap_str}]
-
-[signature]
-type = "ed25519"
-pubkey = "{pubkey_b64}"
-signature = "PLACEHOLDER"
-"#,
-    );
-
-    let m = rdlp_plugin::manifest::parse_manifest_str(&toml_placeholder).unwrap();
-    let mut buf = canonical_bytes(&m);
-    buf.extend_from_slice(wasm);
-    let sig = key.sign(&buf);
-    let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
-
-    let final_toml = toml_placeholder.replace("PLACEHOLDER", &sig_b64);
-    std::fs::write(dir.join("plugin.toml"), final_toml).unwrap();
-}
-
-fn make_extraction_ctx() -> ExtractionContext {
-    let http = Arc::new(HttpClientFactory::default().build());
-    let js = Arc::new(BoaJsEngine::new());
-    let cookies = Arc::new(rdlp_cookies::SimpleCookieJar::new());
-    let cfg = Arc::new(Config::default());
-    ExtractionContext::new(http, js, cookies, cfg)
-}
-
-/// Measures cold-start (load+sign+discover) — the load-bearing deliverable for
-/// Task 2. Does not call `extract`; that path hits Phase 1 host limits
+/// Measures cold-start (load+sign+discover) for a componentize-py-built
+/// component. Does not call `extract`; that path hits Phase 1 host limits
 /// documented inline in the second test below.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires examples/plugins/ytdlp-hello-world/build.sh to have run"]
@@ -112,17 +55,29 @@ async fn python_hello_world_loads_and_signs() {
     let load_start = Instant::now();
     write_signed_plugin(
         &plugins_dir.join("hello-world"),
-        "hello-world",
         &key,
-        &wasm,
-        &[
-            "fetch",
-            "cookie-jar",
-            "js-eval",
-            "html-select",
-            "log",
-            "store-kv",
-        ],
+        &SignedPluginSpec {
+            name: "hello-world",
+            version: "0.1.0",
+            wit_version: "0.5.0",
+            matches: &["https://example.com/*"],
+            url_regex: None,
+            priority: 150,
+            claims_override: &[],
+            supports_extract: true,
+            supports_search: false,
+            search_site: None,
+            search_claims_override: &[],
+            capabilities: &[
+                "fetch",
+                "cookie-jar",
+                "js-eval",
+                "html-select",
+                "log",
+                "store-kv",
+            ],
+            wasm: &wasm,
+        },
     );
     let engine = Arc::new(Engine::new(EngineConfig::default()).unwrap());
     let mut trust = TrustStore::open(td.path().join("trust.toml")).unwrap();
@@ -186,23 +141,35 @@ async fn python_hello_world_extract_succeeds() {
     let load_start = Instant::now();
     write_signed_plugin(
         &plugins_dir.join("hello-world"),
-        "hello-world",
         &key,
-        &wasm,
-        // componentize-py emits IMPORTS for every interface in the WIT world,
-        // so the host must link all six. The Manifest still gates *use*: if the
-        // plugin calls a capability whose context isn't populated (see
-        // populate_capability_contexts), the host returns "denied" at runtime.
-        // Phase 1 of the plugin system documents this trade-off in
-        // crates/rdlp-plugin/src/lib.rs § "Known limitations".
-        &[
-            "fetch",
-            "cookie-jar",
-            "js-eval",
-            "html-select",
-            "log",
-            "store-kv",
-        ],
+        &SignedPluginSpec {
+            name: "hello-world",
+            version: "0.1.0",
+            wit_version: "0.5.0",
+            matches: &["https://example.com/*"],
+            url_regex: None,
+            priority: 150,
+            claims_override: &[],
+            supports_extract: true,
+            supports_search: false,
+            search_site: None,
+            search_claims_override: &[],
+            // componentize-py emits IMPORTS for every interface in the WIT world,
+            // so the host must link all six. The Manifest still gates *use*: if the
+            // plugin calls a capability whose context isn't populated (see
+            // populate_capability_contexts), the host returns "denied" at runtime.
+            // Phase 1 of the plugin system documents this trade-off in
+            // crates/rdlp-plugin/src/lib.rs § "Known limitations".
+            capabilities: &[
+                "fetch",
+                "cookie-jar",
+                "js-eval",
+                "html-select",
+                "log",
+                "store-kv",
+            ],
+            wasm: &wasm,
+        },
     );
 
     let engine = Arc::new(Engine::new(EngineConfig::default()).unwrap());
@@ -231,7 +198,7 @@ async fn python_hello_world_extract_succeeds() {
     let adapter = PluginExtractor::new(loaded, engine.clone(), host_resources)
         .expect("adapter construction must succeed");
 
-    let ctx = make_extraction_ctx();
+    let ctx = extraction_ctx();
 
     let extract_start = Instant::now();
     let result = adapter.extract("https://example.com/foo", &ctx).await;
@@ -260,4 +227,14 @@ async fn python_hello_world_extract_succeeds() {
         "format url mismatch: {:?}",
         info.formats[0]
     );
+
+    // `search_filters` (the stub in entry.py) returns `[]` — the
+    // present-export path for a real componentize-py-built component,
+    // sibling to `example_search_e2e.rs`'s absent-export (0.5.0 fixture)
+    // and present-export (Rust example) coverage.
+    let filters = adapter
+        .call_search_filters()
+        .await
+        .expect("search-filters export must resolve on a 0.5.1 component");
+    assert!(filters.is_empty(), "got {filters:?}");
 }

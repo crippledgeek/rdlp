@@ -80,7 +80,7 @@ impl rdlp_core::SearchExtractor for MovieFapSearchExtractor {
         NAME.as_str()
     }
 
-    fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
+    async fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
         moviefap_search_patterns::search_filter_descriptors()
     }
 

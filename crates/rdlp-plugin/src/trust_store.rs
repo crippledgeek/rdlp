@@ -8,6 +8,9 @@
 //!   different publisher (vector A2 mitigation).
 //! - Detect capability creep when a plugin update requests capabilities that
 //!   were not previously approved (vector A1 mitigation).
+//! - Detect a changed search-site claim (`search_site` /
+//!   `search_claims_override`) so a plugin that starts claiming a built-in's
+//!   search after it was trusted is re-confirmed like capability creep.
 //! - Track first-install vs subsequent-install state so the prompt fires only
 //!   when needed.
 
@@ -16,6 +19,7 @@
 #![allow(clippy::missing_errors_doc)]
 
 use crate::PluginError;
+use crate::manifest::SearchClaims;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -26,10 +30,17 @@ pub struct TrustEntry {
     /// Plugin name (key).
     pub name: String,
     /// Stable identity string (e.g. `sigstore:github:user/repo` or
-    /// `ed25519:<8-byte-hex>` from `Signature::identity_string()`).
+    /// `ed25519:<hex of the full 32-byte SHA-256 over the base64-encoded
+    /// pubkey>` from `Signature::identity_string()`).
     pub identity: String,
     /// Capabilities the user approved at first install or last re-confirm.
     pub approved_capabilities: BTreeSet<String>,
+    /// The search-site claim approved alongside them (`search_site` +
+    /// `search_claims_override`, flattened into the entry). Defaults so a
+    /// trust file written before these fields existed still parses; such an
+    /// entry re-prompts once for a plugin that declares either field.
+    #[serde(default, flatten)]
+    pub search: SearchClaims,
 }
 
 /// On-disk shape of the trust file.

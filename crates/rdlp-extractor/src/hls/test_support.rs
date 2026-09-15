@@ -71,20 +71,8 @@ pub fn test_ctx() -> ExtractionContext {
     )
 }
 
-/// Master playlist with two video variants. Used by probe-order regression tests.
-pub const MASTER_TWO_VARIANTS: &str = "#EXTM3U\n\
-#EXT-X-VERSION:3\n\
-#EXT-X-STREAM-INF:BANDWIDTH=1280000,RESOLUTION=1280x720\n\
-v720.m3u8\n\
-#EXT-X-STREAM-INF:BANDWIDTH=640000,RESOLUTION=640x360\n\
-v360.m3u8\n";
-
-/// Variant media playlist body — two segments, ENDLIST'd.
-pub const VARIANT_MEDIA: &str = "#EXTM3U\n\
-#EXT-X-VERSION:3\n\
-#EXT-X-TARGETDURATION:6\n\
-#EXTINF:6.0,\n\
-seg-1.ts\n\
-#EXTINF:6.0,\n\
-seg-2.ts\n\
-#EXT-X-ENDLIST\n";
+// The two playlist fixtures live in `test_fixtures` (also reachable from
+// `rdlp-plugin` via the `loopback-test-exemption` feature) and are
+// re-exported here so every existing `test_support::{MASTER_TWO_VARIANTS,
+// VARIANT_MEDIA}` import in this crate keeps working unchanged.
+pub use super::test_fixtures::{MASTER_TWO_VARIANTS, VARIANT_MEDIA};

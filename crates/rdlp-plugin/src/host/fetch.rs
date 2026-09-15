@@ -32,6 +32,13 @@ const MAX_BODY_CAP: rdlp_http::BodyCap = match rdlp_http::BodyCap::new(MAX_BODY_
 };
 const MAX_TIMEOUT_MS: u64 = 60_000;
 
+/// Shared refusal message for every host import that needs the plugin's
+/// granted `host:fetch` client and finds none: `fetch` itself, and the HLS
+/// helpers (`expand-hls` / `probe-format-sizes` in `extract_helpers.rs`)
+/// that borrow the same client directly rather than going through `fetch`.
+/// One string so both call sites report identically instead of drifting.
+pub(crate) const FETCH_NOT_GRANTED: &str = "fetch capability not granted";
+
 /// Per-plugin fetch context. Owns a clone of the shared `wreq::Client`
 /// plus an optional fixture-replay map for golden tests.
 #[derive(Clone)]
@@ -77,7 +84,7 @@ impl crate::bindings::rdlp::plugin::host_fetch::Host for PluginStoreData {
         use crate::bindings::rdlp::plugin::host_fetch::{FetchError, Response};
 
         let Some(ctx) = self.fetch.as_ref() else {
-            return Err(FetchError::Network("fetch capability not granted".into()));
+            return Err(FetchError::Network(FETCH_NOT_GRANTED.into()));
         };
 
         // Fixture-replay: in tests, an injected URL → canned-response

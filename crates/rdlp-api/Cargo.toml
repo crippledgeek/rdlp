@@ -48,16 +48,27 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
-temp-env = { workspace = true }
+# temp-env itself is no longer a direct dependency: the isolation wrapper
+# it backs (`with_isolated_config_dir`) now lives once in
+# `rdlp_plugin::test_support`, which depends on it instead.
 tempfile = { workspace = true }
+# rdlp-plugin is already a [dependencies] entry (plugin_bootstrap.rs needs
+# it for real); this dev-only second entry unifies in the `test-support`
+# feature for this crate's own tests/*.rs binaries, without ever reaching
+# a release build (which excludes dev-dependencies) — see
+# scripts/check-test-only-features-not-in-release.sh.
+rdlp-plugin = { path = "../rdlp-plugin", features = ["test-support"] }
 proptest = "1.4"
 mockito = "1.7"
-# For plugin-dispatch regression test (signs a manifest + wasm in setup).
-ed25519-dalek = { version = "2", features = ["std", "rand_core"] }
-rand = "0.8"
-base64 = { workspace = true }
-sha2 = "0.10"
-hex = { workspace = true }
+regex = { workspace = true }
+# Widens rdlp-extractor's mockito-loopback SSRF-gate bypass to this crate's
+# own (non-#[cfg(test)]-visible) test suite — see
+# `rdlp_extractor::base::common::manifest_url` for the full rationale.
+# `scripts/check-test-only-features-not-in-release.sh` proves no release binary
+# ever enables it; this is a dev-only dependency so it never can.
+rdlp-extractor = { path = "../rdlp-extractor", features = [
+    "loopback-test-exemption",
+] }
 # Captures span/event output to assert the instrument level and redaction
 # (Task 8: the tracing->log bridge is not exercised by a plain log capture).
 tracing-subscriber = { workspace = true }

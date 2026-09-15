@@ -265,7 +265,7 @@ impl SearchExtractor for SpankBangExtractor {
         NAME.as_str()
     }
 
-    fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
+    async fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
         vec![SearchFilterDescriptor {
             key: "ordering".to_string(),
             display_name: "Ordering".to_string(),
@@ -591,10 +591,10 @@ mod tests {
         assert_eq!(parse_duration_label("nope"), None);
     }
 
-    #[test]
-    fn supported_filters_advertises_ordering() {
+    #[tokio::test]
+    async fn supported_filters_advertises_ordering() {
         let ext = SpankBangExtractor::new();
-        let filters = ext.supported_filters();
+        let filters = ext.supported_filters().await;
         assert_eq!(filters.len(), 1);
         let ordering = &filters[0];
         assert_eq!(ordering.key, "ordering");

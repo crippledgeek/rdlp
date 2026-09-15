@@ -93,15 +93,27 @@
 //!
 //! ## See also
 //!
-//! - Design spec: `docs/superpowers/specs/2026-04-28-plugin-system-mvp-design.md` (local)
-//! - Implementation plan: `docs/superpowers/plans/2026-04-28-plugin-system-mvp.md` (local)
+//! - Plugin author guide: `EXTRACTORS.md` (repository root), "Writing a WASM plugin"
+//! - Compatibility policy: `crates/rdlp-plugin/wit/COMPATIBILITY.md`
 //! - Tracking issue: <https://github.com/crippledgeek/rdlp/issues/213>
 //!
 //! [issue-213]: https://github.com/crippledgeek/rdlp/issues/213
 
 #![warn(missing_docs)]
 
+// `test-support` compiles the signer/fixture helpers (and their
+// `tempfile`/`temp-env`/`rand` dependencies) into the library for sibling
+// crates' tests. Same guard as rdlp-extractor's `loopback-test-exemption`:
+// a release build (no `debug_assertions`) that somehow enables it fails to
+// compile instead of shipping test-only code. `cargo test --release` is
+// not used anywhere in this repository (see BUILDING.md).
+#[cfg(all(feature = "test-support", not(any(test, debug_assertions))))]
+compile_error!(
+    "the `test-support` feature is test-only and must not be enabled in a release build"
+);
+
 pub mod adapter;
+pub mod convert;
 pub mod disabled_list;
 pub mod dispatch;
 pub mod engine;
@@ -112,19 +124,36 @@ pub mod loader;
 pub mod manifest;
 pub mod priority;
 pub mod prompt;
+pub mod search_adapter;
 pub mod signature;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod test_support;
 pub mod trust_store;
+pub(crate) mod wit_version;
 
 pub use error::PluginError;
 
-/// Generated Rust bindings from the `extractor-plugin` WIT world.
+/// Generated Rust bindings from the `extractor-plugin-host` WIT world.
 ///
 /// This module is regenerated at compile time by `wasmtime::component::bindgen!`.
+/// Two worlds live in `wit/extractor.wit`: `extractor-plugin` is the guest
+/// contract plugin authors build against; `extractor-plugin-host` is what the
+/// host binds here. Exports added to `extractor-plugin` after 0.5.0 (such as
+/// `search-filters`) are optional to the host and looked up by name on the
+/// live instance by [`adapter::PluginExtractor::call_search_filters`]
+/// (in [`search_adapter`]), rather than
+/// bound at instantiation, because generated bindings require every
+/// world-level export to be present at instantiate time
+/// (wasmtime-wit-bindgen 30, `no function export … found`) — binding the
+/// smaller host world is what lets a 0.5.0-built component, which never
+/// declared `search-filters`, still instantiate on a 0.5.1 host.
+///
 /// It exposes:
-/// - `bindings::ExtractorPlugin` — the generated host-side instance type
+/// - `bindings::ExtractorPluginHost` — the generated host-side instance type
 /// - `bindings::types::*` — record/variant types from `wit/types.wit`
 /// - `bindings::host_*::Host` traits — one per imported interface, implemented
-///   by the host on `PluginStoreData` (Task 11+).
+///   by the host on `PluginStoreData`.
 ///
 /// Async support is enabled (matching the engine's `async_support(true)`),
 /// but only for the imports that actually await — the network fetch, the JS
@@ -144,7 +173,7 @@ pub use error::PluginError;
 pub mod bindings {
     wasmtime::component::bindgen!({
         path: "wit",
-        world: "extractor-plugin",
+        world: "extractor-plugin-host",
         async: {
             only_imports: [
                 "fetch",
@@ -153,6 +182,8 @@ pub mod bindings {
                 "set-cookie",
                 "extract-m3u8",
                 "extract-mpd",
+                "expand-hls",
+                "probe-format-sizes",
             ],
         },
     });

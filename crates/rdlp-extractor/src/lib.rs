@@ -42,6 +42,20 @@
 
 #![warn(missing_docs)]
 
+// `loopback-test-exemption` widens the HLS seed gate's loopback bypass
+// (`base::common::manifest_url`) and exists only so sibling crates' tests
+// can drive expansion against mockito. It is enabled from dev-dependencies,
+// and Cargo unifies features per profile, so `--all-features` or a stray
+// non-dev dependency could carry it into a release build. A release build
+// runs without `debug_assertions`; a test build (any profile Cargo uses for
+// `cargo test` without `--release`) has them on, so this fires exactly on
+// the combination that would ship the bypass. `cargo test --release` is
+// not used anywhere in this repository (see BUILDING.md).
+#[cfg(all(feature = "loopback-test-exemption", not(any(test, debug_assertions))))]
+compile_error!(
+    "the `loopback-test-exemption` feature is test-only and must not be enabled in a release build"
+);
+
 /// Base extraction utilities and network-specific base extractors
 pub mod base;
 /// Site-specific extractor implementations
@@ -136,9 +150,7 @@ impl ExtractorRegistry {
 
         // Register ABXXX extractor (KVS site with JSON XHR player config)
         registry.register(Arc::new(AbxxxExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(AbxxxExtractor::new()));
+        registry.register_search(Arc::new(AbxxxExtractor::new()));
 
         // Register SpankBang extractor
         registry.register(Arc::new(SpankBangExtractor::new()));
@@ -153,54 +165,22 @@ impl ExtractorRegistry {
         registry.register(Arc::new(GenericExtractor::new()));
 
         // Register search extractors
-        registry
-            .search_extractors
-            .push(Arc::new(XHamsterExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(RedTubeExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(TNAFlixSearchExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(PornHubExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(HQPornerExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(EMPFlixSearchExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(MovieFapSearchExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(XTitsExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(NineAnimeExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(KoreanPornMovieExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(XVideosExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(XNXXExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(EPornerExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(SpankBangExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(PornoxoExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(PornoneExtractor::new()));
+        registry.register_search(Arc::new(XHamsterExtractor::new()));
+        registry.register_search(Arc::new(RedTubeExtractor::new()));
+        registry.register_search(Arc::new(TNAFlixSearchExtractor::new()));
+        registry.register_search(Arc::new(PornHubExtractor::new()));
+        registry.register_search(Arc::new(HQPornerExtractor::new()));
+        registry.register_search(Arc::new(EMPFlixSearchExtractor::new()));
+        registry.register_search(Arc::new(MovieFapSearchExtractor::new()));
+        registry.register_search(Arc::new(XTitsExtractor::new()));
+        registry.register_search(Arc::new(NineAnimeExtractor::new()));
+        registry.register_search(Arc::new(KoreanPornMovieExtractor::new()));
+        registry.register_search(Arc::new(XVideosExtractor::new()));
+        registry.register_search(Arc::new(XNXXExtractor::new()));
+        registry.register_search(Arc::new(EPornerExtractor::new()));
+        registry.register_search(Arc::new(SpankBangExtractor::new()));
+        registry.register_search(Arc::new(PornoxoExtractor::new()));
+        registry.register_search(Arc::new(PornoneExtractor::new()));
 
         registry
     }
@@ -211,6 +191,14 @@ impl ExtractorRegistry {
     /// * `extractor` - Arc-wrapped extractor implementing InfoExtractor trait
     pub fn register(&mut self, extractor: Arc<dyn InfoExtractor>) {
         self.extractors.push(extractor);
+    }
+
+    /// Register a new search extractor
+    ///
+    /// # Arguments
+    /// * `extractor` - Arc-wrapped extractor implementing `SearchExtractor` trait
+    pub fn register_search(&mut self, extractor: Arc<dyn SearchExtractor>) {
+        self.search_extractors.push(extractor);
     }
 
     /// Find a suitable extractor for the given URL
@@ -255,7 +243,19 @@ impl ExtractorRegistry {
         self.extractors.iter().map(|e| e.name()).collect()
     }
 
-    /// Find a search extractor by site name (case-insensitive).
+    /// Find a search extractor by site name (case-insensitive), applying
+    /// this policy on a name collision: a built-in wins its own site name
+    /// unless a plugin's signed manifest declared `claims_override`
+    /// (surfaced here via [`SearchExtractor::overrides_builtin`]) — and
+    /// when a built-in IS present, only override-claiming plugins are
+    /// even eligible to compete for the name, so a bystander plugin's
+    /// priority can never hijack a site it never claimed the right to
+    /// shadow. Among the eligible plugins the highest
+    /// [`SearchExtractor::search_priority`] wins; a tie resolves to
+    /// whichever plugin registered first. This tie policy is a
+    /// **deliberate divergence** from [`Self::find_extractor`], whose
+    /// plain `max_by_key` over URL candidates resolves ties to whichever
+    /// extractor registered LAST — the two are not "the same policy".
     ///
     /// # Arguments
     /// * `name` - Site name to look up (e.g., "xhamster", "XHamster")
@@ -264,19 +264,58 @@ impl ExtractorRegistry {
     /// An `Arc<dyn SearchExtractor>` if found, `None` otherwise
     #[must_use]
     pub fn find_search_extractor(&self, name: &str) -> Option<Arc<dyn SearchExtractor>> {
-        self.search_extractors
+        let candidates: Vec<&Arc<dyn SearchExtractor>> = self
+            .search_extractors
             .iter()
-            .find(|e| e.name().eq_ignore_ascii_case(name))
+            .filter(|e| e.name().eq_ignore_ascii_case(name))
+            .collect();
+
+        let builtin = candidates.iter().copied().find(|e| !e.is_plugin());
+
+        // When a built-in exists, only plugins that claim `overrides_builtin`
+        // are eligible to contest its site name at all — a non-overriding
+        // plugin's priority must never matter against a built-in it did not
+        // claim the right to shadow. Without a built-in, every plugin is
+        // eligible and competes on priority alone.
+        let eligible_plugins: Vec<&Arc<dyn SearchExtractor>> = candidates
+            .iter()
+            .copied()
+            .filter(|e| e.is_plugin() && (builtin.is_none() || e.overrides_builtin()))
+            .collect();
+
+        if let Some(builtin) = builtin
+            && eligible_plugins.is_empty()
+        {
+            return Some(Arc::clone(builtin));
+        }
+
+        // `max_by_key` returns the LAST maximum on ties; reverse the
+        // registration order first so a tie instead resolves to whichever
+        // eligible plugin registered first.
+        eligible_plugins
+            .into_iter()
+            .rev()
+            .max_by_key(|e| e.search_priority())
             .cloned()
     }
 
-    /// List all registered search extractor names.
+    /// List all registered search extractor names, deduplicated
+    /// case-insensitively so a name shared by a built-in and a plugin is
+    /// listed once (keeping the casing and position of whichever
+    /// registered first).
     ///
     /// # Returns
     /// A vector of site names that support search
     #[must_use]
     pub fn list_search_extractors(&self) -> Vec<&str> {
-        self.search_extractors.iter().map(|e| e.name()).collect()
+        let mut names: Vec<&str> = Vec::with_capacity(self.search_extractors.len());
+        for extractor in &self.search_extractors {
+            let name = extractor.name();
+            if !names.iter().any(|seen| seen.eq_ignore_ascii_case(name)) {
+                names.push(name);
+            }
+        }
+        names
     }
 }
 
@@ -305,235 +344,4 @@ impl ExtractorRegistryTrait for ExtractorRegistry {
 }
 
 #[cfg(test)]
-mod registry_c4a_tests {
-    use super::*;
-
-    #[test]
-    fn registers_all_c4a_extractors() {
-        let reg = ExtractorRegistry::new();
-        let names = reg.list_extractors();
-        for expected in ["xvideos", "xnxx", "eporner"] {
-            assert!(
-                names.iter().any(|n| n.eq_ignore_ascii_case(expected)),
-                "expected {expected} in list_extractors, got {names:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn registers_all_c4a_search_extractors() {
-        let reg = ExtractorRegistry::new();
-        let names = reg.list_search_extractors();
-        for expected in ["xvideos", "xnxx", "eporner"] {
-            assert!(
-                names.iter().any(|n| n.eq_ignore_ascii_case(expected)),
-                "expected {expected} in search extractors, got {names:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn find_extractor_by_url_returns_correct_impl() {
-        let reg = ExtractorRegistry::new();
-        assert_eq!(
-            reg.find_extractor("https://www.xvideos.com/video.ooumovia9b7/")
-                .map(|e| e.name().to_string()),
-            Some("XVideos".to_string())
-        );
-        assert_eq!(
-            reg.find_extractor("https://www.xnxx.com/video-14cco143/slug")
-                .map(|e| e.name().to_string()),
-            Some("XNXX".to_string())
-        );
-        assert_eq!(
-            reg.find_extractor("https://www.eporner.com/video-svXh0Ne27Ig/slug/")
-                .map(|e| e.name().to_string()),
-            Some("EPorner".to_string())
-        );
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_registry_creation() {
-        let registry = ExtractorRegistry::new();
-        let extractors = registry.list_extractors();
-        assert!(extractors.contains(&"TNAFlix"));
-        assert!(extractors.contains(&"EMPFlix"));
-        assert!(extractors.contains(&"MovieFap"));
-        assert!(extractors.contains(&"RedTube"));
-        assert!(extractors.contains(&"PornHub"));
-        assert!(extractors.contains(&"XTits"));
-        assert!(extractors.contains(&"XHamster"));
-        assert!(extractors.contains(&"9anime"));
-        assert!(extractors.contains(&"HQPorner"));
-        assert!(extractors.contains(&"SpankBang"));
-    }
-
-    #[test]
-    fn test_find_search_extractor_xhamster() {
-        let registry = ExtractorRegistry::new();
-        let extractor = registry.find_search_extractor("xhamster");
-        assert!(extractor.is_some());
-        assert_eq!(extractor.unwrap().name(), "XHamster");
-    }
-
-    #[test]
-    fn test_find_search_extractor_case_insensitive() {
-        let registry = ExtractorRegistry::new();
-        assert!(registry.find_search_extractor("XHamster").is_some());
-        assert!(registry.find_search_extractor("XHAMSTER").is_some());
-    }
-
-    #[test]
-    fn test_find_search_extractor_tnaflix() {
-        let registry = ExtractorRegistry::new();
-        let extractor = registry.find_search_extractor("tnaflix");
-        assert!(extractor.is_some());
-        assert_eq!(extractor.unwrap().name(), "TNAFlix");
-    }
-
-    #[test]
-    fn test_find_search_extractor_pornhub() {
-        let registry = ExtractorRegistry::new();
-        let extractor = registry.find_search_extractor("pornhub");
-        assert!(extractor.is_some());
-        assert_eq!(extractor.unwrap().name(), "PornHub");
-    }
-
-    #[test]
-    fn test_find_search_extractor_unknown() {
-        let registry = ExtractorRegistry::new();
-        assert!(registry.find_search_extractor("nonexistent").is_none());
-    }
-
-    #[test]
-    fn registry_routes_pornoxo_video_urls_to_the_dedicated_extractor() {
-        let registry = ExtractorRegistry::new();
-        let e = registry
-            .find_extractor("https://www.pornoxo.com/videos/2928541/slug/")
-            .expect("a PornoXO video URL must find an extractor");
-        assert_eq!(e.name(), "PornoXO", "must not fall through to Generic");
-    }
-
-    #[test]
-    fn registry_exposes_pornoxo_as_a_search_extractor() {
-        let registry = ExtractorRegistry::new();
-        assert!(
-            registry.find_search_extractor("pornoxo").is_some(),
-            "--search-site pornoxo must resolve"
-        );
-    }
-
-    #[test]
-    fn test_list_search_extractors() {
-        let registry = ExtractorRegistry::new();
-        let sites = registry.list_search_extractors();
-        assert!(
-            sites
-                .iter()
-                .any(|name| name.eq_ignore_ascii_case("xhamster"))
-        );
-    }
-
-    #[test]
-    fn test_find_extractor() {
-        let registry = ExtractorRegistry::new();
-
-        let tnaflix = registry.find_extractor("https://www.tnaflix.com/hd-videos/test/video123");
-        assert!(tnaflix.is_some());
-        assert_eq!(tnaflix.unwrap().name(), "TNAFlix");
-
-        let empflix = registry.find_extractor("https://www.empflix.com/videos/test-123");
-        assert!(empflix.is_some());
-        assert_eq!(empflix.unwrap().name(), "EMPFlix");
-
-        let redtube = registry.find_extractor("https://www.redtube.com/123456");
-        assert!(redtube.is_some());
-        assert_eq!(redtube.unwrap().name(), "RedTube");
-
-        let xtits = registry.find_extractor("https://www.xtits.xxx/videos/183207/spicy-lesbians/");
-        assert!(xtits.is_some());
-        assert_eq!(xtits.unwrap().name(), "XTits");
-
-        let xhamster = registry.find_extractor("https://xhamster.com/videos/test-video-1509445");
-        assert!(xhamster.is_some());
-        assert_eq!(xhamster.unwrap().name(), "XHamster");
-
-        let nine_anime =
-            registry.find_extractor("https://9animetv.to/watch/sword-art-online-2274?ep=26565");
-        assert!(nine_anime.is_some());
-        assert_eq!(nine_anime.unwrap().name(), "9anime");
-
-        let hqporner =
-            registry.find_extractor("https://hqporner.com/hdporn/81203-full_body_massage.html");
-        assert!(hqporner.is_some());
-        assert_eq!(hqporner.unwrap().name(), "HQPorner");
-
-        let spankbang = registry.find_extractor("https://spankbang.com/56b3d/video/the+slut+maker");
-        assert!(spankbang.is_some());
-        assert_eq!(spankbang.unwrap().name(), "SpankBang");
-
-        // Generic fallback extractor matches all HTTP URLs, so a YouTube URL
-        // now returns the Generic extractor instead of None.
-        let generic = registry.find_extractor("https://youtube.com/watch?v=test");
-        assert!(generic.is_some());
-        assert_eq!(generic.unwrap().name(), "Generic");
-
-        // Non-HTTP URLs still return None
-        let ftp = registry.find_extractor("ftp://example.com/file");
-        assert!(ftp.is_none());
-    }
-
-    #[test]
-    fn test_find_search_extractor_hqporner() {
-        let registry = ExtractorRegistry::new();
-        let extractor = registry.find_search_extractor("hqporner");
-        assert!(extractor.is_some());
-        assert_eq!(extractor.unwrap().name(), "HQPorner");
-    }
-
-    /// #756/#(this task): `SearchExtractor::name` is documented as "should
-    /// match the corresponding `InfoExtractor::name()`", and nothing checked
-    /// it. Every search-capable site must be registered under the same name
-    /// as an `InfoExtractor`, so `--search-site <name>` and
-    /// `"extractor": "<name>"` in `--dump-json` agree.
-    ///
-    /// When the two sides disagree (nine_anime: `"9anime"` vs `"NineAnime"`,
-    /// caught by this test's predecessor), resolve toward
-    /// `InfoExtractor::name()`, never the other way. `InfoExtractor::name()`
-    /// is the one written to disk — `record_in_archive` persists it into
-    /// `--download-archive` files, `%(extractor)s` names output
-    /// directories/files from it, and `--dump-json` emits it — so changing it
-    /// invalidates every existing archive entry and renames users' folders.
-    /// `SearchExtractor::name()` only feeds the case-insensitive
-    /// `--search-site` lookup and has no on-disk footprint; it is the side
-    /// that moves.
-    ///
-    /// Now exhaustive in both directions: the registry's registered set must
-    /// equal `ExtractorName`'s declared set exactly (a registry addition with
-    /// no matching variant, or a variant with nothing registered, both fail),
-    /// in addition to the original search-vs-info direction.
-    #[test]
-    fn built_in_extractor_names_and_the_enum_are_the_same_set() {
-        use rdlp_types::ExtractorName;
-        use strum::IntoEnumIterator as _;
-
-        let registry = ExtractorRegistry::new();
-        let registered: std::collections::BTreeSet<&str> =
-            registry.list_extractors().into_iter().collect();
-        let declared: std::collections::BTreeSet<&str> =
-            ExtractorName::iter().map(|n| n.as_str()).collect();
-        assert_eq!(registered, declared, "registry vs ExtractorName drift");
-
-        for name in registry.list_search_extractors() {
-            assert!(
-                registered.contains(name) && name.parse::<ExtractorName>().is_ok(),
-                "search extractor {name:?} is not a registered ExtractorName"
-            );
-        }
-    }
-}
+mod registry_tests;

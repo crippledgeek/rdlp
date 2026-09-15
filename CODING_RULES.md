@@ -473,7 +473,7 @@ format.vcodec = Some("h264".to_string());
 
 **Test placement.** Default to inline `#[cfg(test)] mod tests {}` co-located with the code under test. When the inline test module exceeds ~300 LOC and dominates production readability, extract to a child-module sibling file via `#[cfg(test)] mod tests;` + `foo/tests.rs`. This is a per-file judgment; the child-module form preserves private-item access without `pub(crate)` escalation.
 
-**Workspace empirical context (2026-05-22).** rdlp's production median is 248 LOC, p90 557 LOC — tighter than the Rust community median (300–500). The thresholds above are calibrated as tail-outlier hardening, not workspace-wide compression. See docs/superpowers/specs/2026-05-22-file-cohesion-policy-design.md for the research record. **Caveat**: workspace lints (including `too_many_lines`) only fire on crates with `[lints] workspace = true` in their `Cargo.toml` — currently 4 of 19 crates (rdlp-cli, rdlp-cookies, rdlp-extractor, rdlp-plugin-manifest). Broadening lint inheritance to additional crates requires upfront migration of their `unwrap_used`/`expect_used` posture, which is out of scope here.
+**Workspace empirical context (2026-05-22).** rdlp's production median is 248 LOC, p90 557 LOC — tighter than the Rust community median (300–500). The thresholds above are calibrated as tail-outlier hardening, not workspace-wide compression. **Caveat**: workspace lints (including `too_many_lines`) only fire on crates with `[lints] workspace = true` in their `Cargo.toml` — currently 4 of 19 crates (rdlp-cli, rdlp-cookies, rdlp-extractor, rdlp-plugin-manifest). Broadening lint inheritance to additional crates requires upfront migration of their `unwrap_used`/`expect_used` posture, which is out of scope here.
 
 ## API Design
 

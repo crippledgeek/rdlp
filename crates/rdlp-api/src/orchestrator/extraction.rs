@@ -7,7 +7,21 @@ use super::{
 use log::{debug, info};
 use rdlp_redact::RedactedUrlBuf;
 use rdlp_types::{SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchResultPreview};
+use std::sync::Arc;
+use std::time::Duration;
 use tracing::instrument;
+
+/// Wall-clock budget for `Orchestrator::finish_extracted_formats`'s HLS
+/// expansion pass when `Config::hls_expansion_timeout` is unset.
+///
+/// 60 s equals the largest per-call budget a plugin itself gets
+/// (`rdlp_plugin::adapter::SEARCH_TIMEOUT`, the `plugin_timeout_search_s`
+/// default): this pass is host work a plugin's rows trigger after its own
+/// call has returned, so it is held to the same ceiling rather than left
+/// open-ended. Comfortably above a healthy ladder — each row is one
+/// playlist round trip, and the rows are capped at the WIT boundary
+/// (`rdlp_plugin::convert::MAX_PLUGIN_FORMATS`).
+const DEFAULT_HLS_EXPANSION_TIMEOUT_SECS: u64 = 60;
 
 /// Apply the decode boundary to a page of search previews.
 ///
@@ -22,6 +36,68 @@ fn decode_previews(previews: &mut [SearchResultPreview]) {
 }
 
 impl Orchestrator {
+    /// Finish an extractor's raw result before it is usable by anything
+    /// downstream: stamp a `Referer` on rows that don't have one, then
+    /// expand any HLS row that still lacks pre-resolved fragments.
+    ///
+    /// **Order matters.** The `Referer` stamp MUST run first:
+    /// `expand_missing_hls_fragments` fetches the HLS master playlist using
+    /// each row's OWN `http_headers`
+    /// (`rdlp_extractor::hls::expand::fetch_playlist_bytes` forwards them),
+    /// and a plugin cannot set that header itself — the WIT `format` record
+    /// has no headers field. Run the two steps in the other order and a
+    /// plugin's HLS row on a Referer-gated CDN 403s at the master fetch and
+    /// is silently dropped, which is the exact defect this boundary exists
+    /// to close.
+    ///
+    /// Shared by every path an `InfoDict`'s formats can reach the downloader
+    /// through without another pass through this boundary: `extract_video`
+    /// (single-video downloads), `extract_lazy_formats` (a playlist episode
+    /// resolved at download time), and `extract_playlist` (an episode an
+    /// extractor populated with formats eagerly, which then skips
+    /// `extract_lazy_formats`'s `info.formats.is_empty()` re-resolution
+    /// entirely — see `playlist/episode.rs`). One helper so the three cannot
+    /// drift the way the `#698` decode boundary once did (`PornoXO` skipped
+    /// it while every sibling ran it) — and the way the `Referer` stamp
+    /// itself already had, duplicated verbatim across two of the three
+    /// functions and absent from the third.
+    async fn finish_extracted_formats(&self, info: &mut rdlp_types::InfoDict) {
+        // (a) Referer stamp. Many CDNs (PornHub, XHamster, etc.) require one
+        // to serve content; rows that already carry a Referer (an extractor
+        // that set one deliberately) are left alone.
+        if !info.webpage_url.is_empty() {
+            let referer = info.webpage_url.clone();
+            for fmt in &mut info.formats {
+                let headers = fmt
+                    .http_headers
+                    .get_or_insert_with(std::collections::HashMap::new);
+                headers
+                    .entry("Referer".to_string())
+                    .or_insert_with(|| referer.clone());
+            }
+        }
+
+        // (b) HLS fragments expansion — see this method's doc for why it
+        // MUST run after (a).
+        info.formats = rdlp_extractor::hls::expand_missing_hls_fragments(
+            std::mem::take(&mut info.formats),
+            Arc::clone(&self.extraction_context.http_client),
+            self.hls_expansion_budget(),
+        )
+        .await;
+    }
+
+    /// `Config::hls_expansion_timeout`, or [`DEFAULT_HLS_EXPANSION_TIMEOUT_SECS`]
+    /// when unset.
+    fn hls_expansion_budget(&self) -> Duration {
+        Duration::from_secs(
+            self.extraction_context
+                .config
+                .hls_expansion_timeout
+                .unwrap_or(DEFAULT_HLS_EXPANSION_TIMEOUT_SECS),
+        )
+    }
+
     /// Extract video information from URL
     ///
     /// Finds the appropriate extractor for the given URL and extracts metadata
@@ -48,6 +124,9 @@ impl Orchestrator {
             .extract(url, &self.extraction_context)
             .await
             .map_err(OrchestratorError::ExtractionFailed)?;
+
+        // See `Self::finish_extracted_formats` for why this runs here.
+        self.finish_extracted_formats(&mut info).await;
 
         // The single decode boundary (#698). Sites serve display text
         // entity-encoded — in markup, in JSON-LD and `window.*` script blobs,
@@ -111,28 +190,15 @@ impl Orchestrator {
 
         debug!("Found {} formats", info.formats.len());
 
-        // Auto-set Referer header on all formats that don't already have one.
-        // Many CDNs (PornHub, XHamster, etc.) require a Referer to serve content.
-        if !info.webpage_url.is_empty() {
-            let referer = info.webpage_url.clone();
-            for fmt in &mut info.formats {
-                let headers = fmt
-                    .http_headers
-                    .get_or_insert_with(std::collections::HashMap::new);
-                headers
-                    .entry("Referer".to_string())
-                    .or_insert_with(|| referer.clone());
-            }
-        }
-
         Ok(info)
     }
 
     /// Lightweight format extraction for lazily-resolved playlist entries.
     ///
     /// Uses `extract_lazy()` instead of `extract()` to skip expensive
-    /// operations like re-fetching the watch page. Auto-sets `Referer`
-    /// headers on all resolved formats.
+    /// operations like re-fetching the watch page. Runs the same
+    /// `finish_extracted_formats` boundary as `extract_video` (Referer stamp,
+    /// then HLS expansion) on the resolved formats.
     pub(super) async fn extract_lazy_formats(&self, url: &str) -> Result<rdlp_types::InfoDict> {
         let extractor = self.extractor_registry.find_extractor(url).ok_or_else(|| {
             OrchestratorError::NoExtractor {
@@ -145,25 +211,17 @@ impl Orchestrator {
             .await
             .map_err(OrchestratorError::ExtractionFailed)?;
 
+        // See `Self::finish_extracted_formats`: this is the resolution point
+        // for a playlist episode's formats, so it needs the same guarantee
+        // `extract_video` gives a single-video download.
+        self.finish_extracted_formats(&mut info).await;
+
         // Same boundary as `extract_video` — see there. Every path that
         // returns an InfoDict decodes, or the boundary is not one. This path
         // additionally needs the echo guard; see the function's own docs.
         decode_lazy_result(&mut info, url);
 
         debug!(formats = info.formats.len(); "Lazily resolved formats");
-
-        // Auto-set Referer header on all formats
-        if !info.webpage_url.is_empty() {
-            let referer = info.webpage_url.clone();
-            for fmt in &mut info.formats {
-                let headers = fmt
-                    .http_headers
-                    .get_or_insert_with(std::collections::HashMap::new);
-                headers
-                    .entry("Referer".to_string())
-                    .or_insert_with(|| referer.clone());
-            }
-        }
 
         Ok(info)
     }
@@ -199,13 +257,23 @@ impl Orchestrator {
             .await
             .map_err(OrchestratorError::ExtractionFailed)?;
 
-        // Same boundary as `extract_video`. This path is NOT niche: it backs
+        // See `Self::finish_extracted_formats`. An episode an extractor
+        // populated with formats here skips `extract_lazy_formats`'s own
+        // `info.formats.is_empty()` re-resolution entirely
+        // (`playlist/episode.rs`), so eagerly-populated formats can reach the
+        // downloader having only ever passed through this loop — and, before
+        // this loop existed at all, having never had a Referer stamped
+        // either.
+        //
+        // Same decode boundary as `extract_video`, run right after, in the
+        // same per-item pass. This path is NOT niche: it backs
         // `extract_info`, so it serves `--dump-json`, `--print`, `--simulate`,
         // `--list-formats`, the desktop's analyze view, and match-filter
         // evaluation — and it wraps single videos too, not only playlists.
-        // Missing it meant a filter matched a raw title while the file it
-        // named was decoded.
+        // Missing the decode meant a filter matched a raw title while the
+        // file it named was decoded.
         for info in &mut infos {
+            self.finish_extracted_formats(info).await;
             info.decode_text_fields();
         }
 
@@ -365,14 +433,17 @@ impl Orchestrator {
     ///
     /// # Errors
     /// Returns an error if the site name is unknown.
-    pub fn search_filters(&self, extractor_name: &str) -> Result<Vec<SearchFilterDescriptor>> {
+    pub async fn search_filters(
+        &self,
+        extractor_name: &str,
+    ) -> Result<Vec<SearchFilterDescriptor>> {
         let extractor = self
             .extractor_registry
             .find_search_extractor(extractor_name)
             .ok_or_else(|| {
                 OrchestratorError::Configuration(format!("Unknown search site: '{extractor_name}'"))
             })?;
-        Ok(extractor.supported_filters())
+        Ok(extractor.supported_filters().await)
     }
 }
 

@@ -8,6 +8,7 @@
 
 use anyhow::Context as _;
 use rdlp_cookies::SimpleCookieJar;
+use rdlp_core::InfoExtractor;
 use rdlp_extractor::ExtractorRegistry;
 use rdlp_http::HttpClientFactory;
 use rdlp_plugin::{
@@ -17,6 +18,7 @@ use rdlp_plugin::{
     host::store_kv::open_host_db,
     loader::Loader,
     prompt::{AlwaysDeny, PreTrustedIdentities, Prompter},
+    search_adapter::PluginSearchExtractor,
     trust_store::TrustStore,
 };
 use rdlp_types::Config;
@@ -127,8 +129,28 @@ fn bootstrap_plugins(
                     match PluginExtractor::new(plugin, Arc::clone(&engine), host_resources.clone())
                     {
                         Ok(extractor) => {
-                            log::debug!("plugin bootstrap: registered plugin '{plugin_name}'");
-                            registry.register(Arc::new(extractor));
+                            // Extract and search are independent capabilities
+                            // (D5): a search-only plugin sets
+                            // `supports_extract = false` and must not appear
+                            // as an `InfoExtractor` at all, so URL routing
+                            // never dispatches to it. Both registrations
+                            // share one `Arc<PluginExtractor>` rather than
+                            // constructing the adapter twice.
+                            let supports_extract = extractor.manifest.supports_extract;
+                            let supports_search = extractor.manifest.supports_search;
+                            let adapter = Arc::new(extractor);
+                            if supports_extract {
+                                registry.register(Arc::clone(&adapter) as Arc<dyn InfoExtractor>);
+                            }
+                            if supports_search {
+                                registry.register_search(Arc::new(PluginSearchExtractor::new(
+                                    Arc::clone(&adapter),
+                                )));
+                            }
+                            log::debug!(
+                                "plugin bootstrap: registered plugin '{plugin_name}' \
+                                 (extract={supports_extract}, search={supports_search})"
+                            );
                             loaded_count += 1;
                         }
                         Err(e) => {
@@ -200,4 +222,103 @@ fn config_dir() -> anyhow::Result<std::path::PathBuf> {
     }
     let home = std::env::var("HOME").context("HOME not set and no config dir available")?;
     Ok(std::path::PathBuf::from(home).join(".config"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rdlp_plugin::test_support::{
+        SignedPluginSpec, signed_fixture_config, with_isolated_config_dir,
+    };
+
+    /// Which of the plugin's two independent capabilities (D5) a test
+    /// manifest declares. A bare `(bool, bool)` positional pair is exactly
+    /// the ambiguous-call-site shape `limit-function-arguments` flags —
+    /// `config_with_signed_plugin(false, true)` reads no better here than
+    /// it would with the arguments swapped.
+    struct Capabilities {
+        extract: bool,
+        search: bool,
+    }
+
+    /// Sign the committed 0.5.0 example component (a real, WASI-free
+    /// component implementing `extract` and `search`, so the manifest's
+    /// `supports_extract`/`supports_search` flags are the only thing under
+    /// test) under the given capability flags into a fresh temp plugin
+    /// directory, and a `Config` pre-trusting the signer so
+    /// `bootstrap_plugins` loads it without an interactive prompt. Returns
+    /// the `TempDir` guard alongside the `Config` so the caller keeps the
+    /// plugin directory alive for the duration of the test.
+    fn config_with_signed_plugin(capabilities: &Capabilities) -> (Config, tempfile::TempDir) {
+        let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let config = signed_fixture_config(
+            tempdir.path(),
+            &SignedPluginSpec {
+                supports_extract: capabilities.extract,
+                supports_search: capabilities.search,
+                ..SignedPluginSpec::example()
+            },
+        );
+        (config, tempdir)
+    }
+
+    #[test]
+    fn search_only_plugin_registers_only_as_a_search_extractor() {
+        with_isolated_config_dir(|_config_dir| {
+            let (config, _tempdir) = config_with_signed_plugin(&Capabilities {
+                extract: false,
+                search: true,
+            });
+            let registry = build_registry_with_plugins(&config);
+            assert!(
+                !registry.list_extractors().contains(&"example"),
+                "supports_extract = false must not register as an InfoExtractor"
+            );
+            assert!(
+                registry.list_search_extractors().contains(&"example"),
+                "supports_search = true must register as a SearchExtractor"
+            );
+        });
+    }
+
+    #[test]
+    fn plugin_supporting_both_registers_in_both_lists() {
+        with_isolated_config_dir(|_config_dir| {
+            let (config, _tempdir) = config_with_signed_plugin(&Capabilities {
+                extract: true,
+                search: true,
+            });
+            let registry = build_registry_with_plugins(&config);
+            assert!(
+                registry.list_extractors().contains(&"example"),
+                "supports_extract = true must register as an InfoExtractor"
+            );
+            assert!(
+                registry.list_search_extractors().contains(&"example"),
+                "supports_search = true must register as a SearchExtractor"
+            );
+        });
+    }
+
+    /// The extract-only negative: a plugin that does not declare
+    /// `supports_search` must not appear in `list_search_extractors()`,
+    /// mirroring the search-only test's own negative assertion.
+    #[test]
+    fn extract_only_plugin_is_absent_from_search_extractors() {
+        with_isolated_config_dir(|_config_dir| {
+            let (config, _tempdir) = config_with_signed_plugin(&Capabilities {
+                extract: true,
+                search: false,
+            });
+            let registry = build_registry_with_plugins(&config);
+            assert!(
+                registry.list_extractors().contains(&"example"),
+                "supports_extract = true must register as an InfoExtractor"
+            );
+            assert!(
+                !registry.list_search_extractors().contains(&"example"),
+                "supports_search = false must not register as a SearchExtractor"
+            );
+        });
+    }
 }

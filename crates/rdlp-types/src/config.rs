@@ -242,6 +242,16 @@ pub struct Config {
     /// Validated post-load by `Config::validate()`: must be 1..=300 seconds.
     pub hls_head_probe_timeout: Option<u64>,
 
+    /// Wall-clock budget, in seconds, for the orchestrator's HLS-expansion
+    /// pass over one extractor result: every HLS row that arrives without
+    /// pre-resolved fragments (a plugin's rows always do — the WIT `format`
+    /// record has no fragments field) is expanded within this budget, and
+    /// rows still unexpanded when it runs out are dropped with one warning.
+    /// Unset keeps rdlp-api's default (`DEFAULT_HLS_EXPANSION_TIMEOUT_SECS`).
+    /// Validated post-load by `Config::validate()`: must be 1..=600 seconds.
+    #[serde(default)]
+    pub hls_expansion_timeout: Option<u64>,
+
     /// Minimum file size in bytes at which the HTTP downloader switches from
     /// sequential to parallel chunked download. Below this, parallel fan-out
     /// overhead (HEAD probes, chunk-merge step) outweighs the throughput gain.
@@ -463,6 +473,7 @@ impl Default for Config {
             download_timeout: None,
             merge_timeout: None,
             hls_head_probe_timeout: Some(5),
+            hls_expansion_timeout: None,
             parallel_threshold: Some(10 * 1024 * 1024),
             max_fragment_bytes: Some(DEFAULT_MAX_FRAGMENT_BYTES),
             source_address: None,
@@ -747,6 +758,14 @@ impl Config {
             return Err(ConfigValidationError::OutOfRange {
                 field: "hls_head_probe_timeout",
                 reason: "must be 1..=300 seconds",
+            });
+        }
+        if let Some(t) = self.hls_expansion_timeout
+            && !(1..=600).contains(&t)
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "hls_expansion_timeout",
+                reason: "must be 1..=600 seconds",
             });
         }
         if let Some(t) = self.parallel_threshold

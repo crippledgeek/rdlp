@@ -40,6 +40,8 @@ mod expand;
 mod expand_in_place;
 mod format_detection;
 mod segments;
+#[cfg(any(test, feature = "loopback-test-exemption"))]
+pub mod test_fixtures;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod types;
@@ -49,8 +51,10 @@ mod variants;
 pub use detector::HlsSizeDetector;
 pub(crate) use expand::validate_resolved_url;
 pub use expand::{HlsExpandError, expand_hls_url};
-pub use expand_in_place::expand_hls_in_place;
-pub use format_detection::{detect_format_sizes, detect_format_sizes_lazy};
+pub use expand_in_place::{expand_hls_in_place, expand_missing_hls_fragments};
+pub use format_detection::{
+    SizeProbeEnv, detect_format_sizes, detect_format_sizes_lazy, detect_format_sizes_lazy_in,
+};
 pub use types::{HlsInfo, HlsStreamFlags, HlsVariantInfo};
 
 use rdlp_types::Rfc6381Codec;

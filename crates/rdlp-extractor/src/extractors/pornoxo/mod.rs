@@ -237,7 +237,9 @@ impl PagedSearch for PornoxoExtractor {
             results: listing.results,
             // `?page=999` returning HTTP 200 with page 1's content means an
             // empty-grid stop condition never fires; the `Next` anchor is the
-            // only signal that terminates.
+            // only per-site signal — the shared scaffold's duplicate-page
+            // termination (`search_all_pages`) is the backstop for exactly
+            // that case (page 999 repeating page 1's rows).
             has_more: listing.has_next,
             // The site publishes no result count on either route.
             total_estimate: None,
@@ -251,7 +253,7 @@ impl SearchExtractor for PornoxoExtractor {
         NAME.as_str()
     }
 
-    fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
+    async fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
         search_patterns::supported_filters()
     }
 
@@ -745,14 +747,31 @@ mod paged_search_tests {
     /// — compiles, and both the 403-guidance delegation tests above still pass
     /// (a first-page failure propagates identically through either path), but
     /// it silently caps `search()` at one page, discarding pagination and the
-    /// `max_results` aggregation loop entirely. `TAG_PAGE` serves the same
-    /// 52-row grid regardless of the requested page (`Matcher::Any`) with
-    /// `has_next: true` (37-page pager), so requesting `max_results: Some(60)`
-    /// forces a second fetch to satisfy the cap — a single-page adapter can
-    /// never clear 52 results, only the aggregating loop can reach 60.
+    /// `max_results` aggregation loop entirely. `has_next: true` (37-page
+    /// pager) on page 1 forces a second fetch to satisfy `max_results:
+    /// Some(60)` — a single-page adapter can never clear 52 results, only the
+    /// aggregating loop can reach 60. Page 2 must serve URLs distinct from
+    /// page 1's (every id here shares a `29` prefix, shifted to `39`): the
+    /// shared `search_all_pages` scaffold now stops pagination the moment a
+    /// page repeats only URLs already seen, and identical pages is exactly
+    /// what this test must NOT be — that scenario belongs to the scaffold's
+    /// own duplicate-page tests, not this aggregation pin.
     #[tokio::test]
     async fn search_extractor_search_aggregates_results_across_pages_not_just_one() {
-        let (server, _m) = serving(200, TAG_PAGE).await;
+        let mut server = mockito::Server::new_async().await;
+        let _page1 = server
+            .mock("GET", mockito::Matcher::Regex(r"page=1$".into()))
+            .with_status(200)
+            .with_body(TAG_PAGE)
+            .create_async()
+            .await;
+        let page2_body = TAG_PAGE.replace("/videos/29", "/videos/39");
+        let _page2 = server
+            .mock("GET", mockito::Matcher::Regex(r"page=2$".into()))
+            .with_status(200)
+            .with_body(page2_body)
+            .create_async()
+            .await;
         let origin = SearchOrigin::new(&server.url()).expect("mockito origin is well formed");
 
         let mut q = query("creampie", &[]);

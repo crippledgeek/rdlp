@@ -11,7 +11,7 @@
 
 // Lints suppressed for test code — panicking on unexpected errors is intentional here.
 
-use rdlp_plugin::manifest::{Signature, parse_manifest_str};
+use rdlp_plugin::manifest::{ManifestError, Signature, parse_manifest_str};
 
 const VALID_TOML: &str = r#"
 name = "youtube"
@@ -137,4 +137,106 @@ fn bare_any_scheme_wildcard_requires_claim_all_urls() {
     );
     let err = parse_manifest_str(&toml).unwrap_err();
     assert!(err.to_string().to_lowercase().contains("claim-all-urls"));
+}
+
+#[test]
+fn a_plugin_with_neither_capability_is_rejected() {
+    let toml = VALID_TOML
+        .replace("supports_search = true", "supports_search = false")
+        .replace(
+            "capabilities = [\"fetch\", \"log\"]",
+            "supports_extract = false\ncapabilities = [\"fetch\", \"log\"]",
+        );
+    let err = parse_manifest_str(&toml).unwrap_err();
+    match err {
+        ManifestError::InvalidManifest { reason, .. } => {
+            assert!(reason.contains("supports_extract"));
+            assert!(reason.contains("supports_search"));
+        }
+        other => panic!("expected InvalidManifest, got {other:?}"),
+    }
+}
+
+#[test]
+fn search_only_plugin_is_accepted() {
+    let toml = VALID_TOML.replace(
+        "capabilities = [\"fetch\", \"log\"]",
+        "supports_extract = false\ncapabilities = [\"fetch\", \"log\"]",
+    );
+    let m = parse_manifest_str(&toml).expect("supports_search=true covers the composition rule");
+    assert!(!m.supports_extract);
+}
+
+#[test]
+fn search_site_must_be_a_valid_plugin_name_shape() {
+    let toml = VALID_TOML.replace(
+        "capabilities = [\"fetch\", \"log\"]",
+        "search_site = \"../x\"\ncapabilities = [\"fetch\", \"log\"]",
+    );
+    let err = parse_manifest_str(&toml).unwrap_err();
+    assert!(matches!(err, ManifestError::InvalidPluginName { .. }));
+}
+
+/// Rewrites `VALID_TOML`'s capabilities line to carry `extra` lines above
+/// it, so a test states only the fields it is about.
+fn valid_with(extra: &str) -> String {
+    VALID_TOML.replace(
+        "capabilities = [\"fetch\", \"log\"]",
+        &format!("{extra}\ncapabilities = [\"fetch\", \"log\"]"),
+    )
+}
+
+// ── search_claims_override (security M3) ─────────────────────────────────
+
+#[test]
+fn search_claims_override_naming_the_plugins_own_search_site_is_accepted() {
+    let m = parse_manifest_str(&valid_with(
+        "search_site = \"pornhub\"\nsearch_claims_override = [\"pornhub\"]",
+    ))
+    .expect("the claim names the site this plugin serves");
+    assert_eq!(m.search_claims_override, vec!["pornhub"]);
+    assert_eq!(m.search_site_name(), "pornhub");
+}
+
+#[test]
+fn search_claims_override_defaults_to_name_when_search_site_is_unset() {
+    // `youtube` is VALID_TOML's `name`, so it is also the search site.
+    let m = parse_manifest_str(&valid_with("search_claims_override = [\"youtube\"]"))
+        .expect("the claim names the plugin's own name");
+    assert_eq!(m.search_claims_override, vec!["youtube"]);
+}
+
+#[test]
+fn search_claims_override_for_a_site_this_plugin_does_not_serve_is_rejected() {
+    // A plugin serves exactly one search site, so an override claim for
+    // any other site is a manifest authoring error — and the shape of a
+    // shadowing attempt.
+    let err = parse_manifest_str(&valid_with(
+        "search_site = \"xhamster\"\nsearch_claims_override = [\"pornhub\"]",
+    ))
+    .unwrap_err();
+    assert!(
+        matches!(err, ManifestError::InvalidManifest { ref reason, .. } if reason.contains("search_claims_override")),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn search_claims_override_entries_are_held_to_the_plugin_name_shape() {
+    let err = parse_manifest_str(&valid_with("search_claims_override = [\"../x\"]")).unwrap_err();
+    assert!(
+        matches!(err, ManifestError::InvalidPluginName { .. }),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn search_claims_override_requires_supports_search() {
+    let toml = valid_with("search_claims_override = [\"youtube\"]")
+        .replace("supports_search = true", "supports_search = false");
+    let err = parse_manifest_str(&toml).unwrap_err();
+    assert!(
+        matches!(err, ManifestError::InvalidManifest { ref reason, .. } if reason.contains("supports_search")),
+        "got {err:?}"
+    );
 }

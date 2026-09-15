@@ -211,6 +211,7 @@ pub async fn search_filters(
     state
         .client
         .search_filters(&site)
+        .await
         .map_err(|e| AppError::invalid_input(Action::new("search_filters"), "site", e))
 }
 

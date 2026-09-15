@@ -20,9 +20,17 @@
 //! `crates/rdlp-downloader/tests/dash_e2e.rs`.
 
 // Test scope: large fixture-driven happy-path test exceeds the workspace's
-// strict per-fn line cap and holds a `mockito::Server` across the body so
-// `expect(0)` mocks fire on drop at end of scope.
-#![allow(clippy::too_many_lines, clippy::significant_drop_tightening)]
+// strict per-fn line cap.
+#![allow(clippy::too_many_lines)]
+
+// The test below holds a `mockito::ServerGuard` for its full body and drops
+// it explicitly as the LAST statement, after its assertions run. Same
+// convention, same reason, as `orchestrator/tests/hls_e2e.rs`: dropping a
+// `ServerGuard` recycles the underlying `Server` back to mockito's server
+// pool, and that recycle step calls `reset()`, which clears every mock the
+// server had registered — dropping it any earlier (clippy's early-drop
+// suggestion) would clear them before the awaited request and the
+// `.expect(N)` mock-drop assertions run.
 
 use crate::events::Event;
 use crate::handle::DownloadId;
@@ -286,4 +294,5 @@ async fn test_bv_star_plus_ba_selects_1080p_and_downloads_both_streams() {
     // Assertions B and C are enforced by mockito's `.expect(N)` guards: the
     // mock objects drop at end of scope and panic if the call count doesn't
     // match.
+    drop(server);
 }

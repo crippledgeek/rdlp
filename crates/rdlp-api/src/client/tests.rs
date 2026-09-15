@@ -201,20 +201,20 @@ fn test_list_search_sites() {
     assert!(sites.iter().any(|s| s.name == "xhamster"));
 }
 
-#[test]
-fn test_search_filters() {
+#[tokio::test]
+async fn test_search_filters() {
     let client = RdlpClient::new(Config::default()).unwrap();
-    let filters = client.search_filters("xhamster").unwrap();
+    let filters = client.search_filters("xhamster").await.unwrap();
     assert!(!filters.is_empty());
     let keys: Vec<&str> = filters.iter().map(|f| f.key.as_str()).collect();
     assert!(keys.contains(&"quality"));
     assert!(keys.contains(&"sort"));
 }
 
-#[test]
-fn test_search_filters_unknown_site() {
+#[tokio::test]
+async fn test_search_filters_unknown_site() {
     let client = RdlpClient::new(Config::default()).unwrap();
-    assert!(client.search_filters("nonexistent").is_err());
+    assert!(client.search_filters("nonexistent").await.is_err());
 }
 
 /// A request-level `cookies_from_browser` reaches the merged config.

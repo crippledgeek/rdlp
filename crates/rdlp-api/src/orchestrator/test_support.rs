@@ -10,8 +10,12 @@ use crate::events::Event;
 use crate::handle::DownloadId;
 use crate::orchestrator::Orchestrator;
 use crate::orchestrator::pipeline_availability::PipelineAvailability;
+use rdlp_core::{ExtractionContext, InfoExtractor};
+use rdlp_extractor::ExtractorRegistryTrait;
 use rdlp_types::{Codec, Config, DownloadProtocol, Format, InfoDict};
+use regex::Regex;
 use std::sync::Arc;
+use std::sync::LazyLock;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -87,4 +91,93 @@ pub(super) fn test_info_with_formats(formats: Vec<Format>) -> InfoDict {
     );
     info.formats = formats;
     info
+}
+
+/// Matches any URL — `FakeRegistry` has exactly one extractor, so routing
+/// never needs to discriminate.
+static MATCH_ANY_URL: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r".").expect("static pattern is valid"));
+
+/// An [`InfoExtractor`] that ignores its input and hands back a fixed
+/// `InfoDict`, so a test can drive any of the orchestrator's three
+/// extraction boundaries (`extract_video`, `extract_lazy_formats`,
+/// `extract_playlist` — see `Orchestrator::finish_extracted_formats` in
+/// `extraction.rs`), as `tests/hls_expansion_guarantee.rs` does, without a
+/// real site.
+pub(super) struct FakeExtractor {
+    pub(super) info: InfoDict,
+}
+
+#[async_trait::async_trait]
+impl InfoExtractor for FakeExtractor {
+    fn name(&self) -> &'static str {
+        "FakeExtractor"
+    }
+
+    fn valid_url(&self) -> &Regex {
+        &MATCH_ANY_URL
+    }
+
+    async fn extract(&self, _url: &str, _ctx: &ExtractionContext) -> rdlp_core::Result<InfoDict> {
+        Ok(self.info.clone())
+    }
+}
+
+/// An [`ExtractorRegistryTrait`] that always routes to its one
+/// [`FakeExtractor`], regardless of URL.
+pub(super) struct FakeRegistry {
+    pub(super) extractor: Arc<dyn InfoExtractor>,
+}
+
+impl ExtractorRegistryTrait for FakeRegistry {
+    fn find_extractor(&self, _url: &str) -> Option<Arc<dyn InfoExtractor>> {
+        Some(Arc::clone(&self.extractor))
+    }
+
+    fn list_extractors(&self) -> Vec<&str> {
+        vec!["FakeExtractor"]
+    }
+}
+
+/// A row this fake extractor hands back can be seeded at an address the SSRF
+/// gate is supposed to reject before any fetch is attempted (see
+/// `rdlp_extractor::hls::expand::tests::seed_link_local_metadata_address_rejected`
+/// for the gate's own guarantee). If a caller-side regression ever let such a
+/// row reach a real fetch anyway, this bounds how long a test can hang
+/// waiting for it, rather than the default 30s connect timeout a real
+/// download needs.
+const HOSTILE_FETCH_BOUND_SECS: u64 = 2;
+
+/// An orchestrator whose extractor is `info` regardless of the URL passed to
+/// `extract_video`/`extract_lazy_formats`/`extract_playlist`, and whose HTTP
+/// client times out quickly — so a test exercising any of the three
+/// `finish_extracted_formats` boundaries against mockito, alongside a
+/// deliberately unresolvable URL, fails fast instead of hanging on a real
+/// network round trip if that URL is ever mistakenly reached.
+pub(super) fn orchestrator_with_fake_extractor(info: InfoDict) -> Orchestrator {
+    orchestrator_with_fake_extractor_and_config(info, fast_failing_config())
+}
+
+/// The `Config` [`orchestrator_with_fake_extractor`] uses: fast-failing
+/// HTTP timeouts, everything else default. A test that needs one more
+/// field set (e.g. `hls_expansion_timeout`) starts from this and hands the
+/// result to [`orchestrator_with_fake_extractor_and_config`].
+pub(super) fn fast_failing_config() -> Config {
+    Config {
+        socket_timeout: Some(HOSTILE_FETCH_BOUND_SECS),
+        read_timeout: Some(HOSTILE_FETCH_BOUND_SECS),
+        ..Config::default()
+    }
+}
+
+/// [`orchestrator_with_fake_extractor`] with the caller's `config`.
+pub(super) fn orchestrator_with_fake_extractor_and_config(
+    info: InfoDict,
+    config: Config,
+) -> Orchestrator {
+    let mut orchestrator = orchestrator_with_config(config);
+    orchestrator.extractor_registry = Arc::new(FakeRegistry {
+        extractor: Arc::new(FakeExtractor { info }),
+    });
+    orchestrator
 }

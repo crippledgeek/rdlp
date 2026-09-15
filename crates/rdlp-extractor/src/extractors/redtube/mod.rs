@@ -469,7 +469,7 @@ impl SearchExtractor for RedTubeExtractor {
         NAME.as_str()
     }
 
-    fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
+    async fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
         patterns::search_filter_descriptors()
     }
 
@@ -538,11 +538,11 @@ mod tests {
         assert_eq!(extractor.priority(), 0);
     }
 
-    #[test]
-    fn test_redtube_implements_search_extractor() {
+    #[tokio::test]
+    async fn test_redtube_implements_search_extractor() {
         let extractor = &*TEST_REDTUBE;
         let filters =
-            <RedTubeExtractor as rdlp_core::SearchExtractor>::supported_filters(extractor);
+            <RedTubeExtractor as rdlp_core::SearchExtractor>::supported_filters(extractor).await;
         assert!(!filters.is_empty());
         assert_eq!(
             <RedTubeExtractor as rdlp_core::SearchExtractor>::name(extractor),
@@ -550,21 +550,21 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_search_filters_have_ordering() {
+    #[tokio::test]
+    async fn test_search_filters_have_ordering() {
         let extractor = &*TEST_REDTUBE;
         let filters =
-            <RedTubeExtractor as rdlp_core::SearchExtractor>::supported_filters(extractor);
+            <RedTubeExtractor as rdlp_core::SearchExtractor>::supported_filters(extractor).await;
         let ordering = filters.iter().find(|f| f.key == "ordering");
         assert!(ordering.is_some());
         assert_eq!(ordering.unwrap().allowed_values.len(), 5);
     }
 
-    #[test]
-    fn test_search_filters_have_period() {
+    #[tokio::test]
+    async fn test_search_filters_have_period() {
         let extractor = &*TEST_REDTUBE;
         let filters =
-            <RedTubeExtractor as rdlp_core::SearchExtractor>::supported_filters(extractor);
+            <RedTubeExtractor as rdlp_core::SearchExtractor>::supported_filters(extractor).await;
         let period = filters.iter().find(|f| f.key == "period");
         assert!(period.is_some());
         assert_eq!(period.unwrap().allowed_values.len(), 3);

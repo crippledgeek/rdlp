@@ -17,7 +17,9 @@
     clippy::needless_pass_by_value
 )]
 
-use rdlp_redact::RedactedUrlBuf;
+use rdlp_redact::{RedactedUrl, RedactedUrlBuf};
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::Duration;
@@ -26,6 +28,7 @@ use async_trait::async_trait;
 use regex::Regex;
 
 use crate::PluginError;
+use crate::bindings::ExtractorPluginHost;
 use crate::engine::Engine;
 use crate::host::cookie_jar::CookieJarCtx;
 use crate::host::fetch::FetchCtx;
@@ -37,10 +40,53 @@ use crate::loader::LoadedPlugin;
 use crate::manifest::Manifest;
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError};
 use rdlp_http::wreq;
-use rdlp_types::{DownloadProtocol, InfoDict};
+use rdlp_types::InfoDict;
 
 /// Number of traps before a plugin is automatically disabled for the session.
-const TRAP_DISABLE_THRESHOLD: u32 = 3;
+pub(crate) const TRAP_DISABLE_THRESHOLD: u32 = 3;
+
+/// Wall-clock cap on one `extract` call — the "30 s extract" default the
+/// crate doc (`lib.rs`, "Per-call execution") promises. Bounds the
+/// per-call epoch deadline AND the host-side `tokio::time::timeout`, so a
+/// plugin looping in `host:fetch` (host time, which the epoch never sees)
+/// is still stopped.
+pub(crate) const EXTRACT_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Wall-clock cap on one `search` / `search-filters` call — the "60 s
+/// search" default the crate doc promises. Twice the extract cap because a
+/// search page typically fans out to several upstream requests where an
+/// extract makes one.
+pub(crate) const SEARCH_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Per-call parameters for [`PluginExtractor::run_in_fresh_store`]: the
+/// wall-clock cap and what the call was about, for the strike log line.
+pub(crate) struct CallSpec<'a> {
+    /// What the call was handling, named in the strike log line: the URL
+    /// for `extract`, the search-site name for search calls. Rendered
+    /// through [`RedactedUrl`] regardless, since only `extract` can prove
+    /// the value carries no credentials.
+    pub subject_for_errors: &'a str,
+    /// Wall-clock cap for the whole call, instantiation included.
+    pub timeout: Duration,
+}
+
+/// A freshly instantiated component, handed to the per-call closure.
+///
+/// `host` is the generated `extractor-plugin-host` bindings (the frozen
+/// 0.5.0 exports); `raw` is the underlying instance for exports the host
+/// world deliberately omits and resolves by name instead — see
+/// `search_adapter::call_search_filters` and `wit/COMPATIBILITY.md` §3.
+pub(crate) struct FreshInstance {
+    /// The wasmtime instance, for by-name export lookup.
+    pub raw: wasmtime::component::Instance,
+    /// Typed bindings over the same instance.
+    pub host: ExtractorPluginHost,
+}
+
+/// The future a per-call closure returns to the runner: borrows the store
+/// and instance for exactly the call's duration.
+pub(crate) type CallFuture<'s, T> =
+    Pin<Box<dyn Future<Output = Result<T, PluginError>> + Send + 's>>;
 
 /// Shared host resources cloned into each plugin invocation's
 /// capability contexts. Built once at bootstrap; populated only for the
@@ -83,8 +129,6 @@ pub struct PluginExtractor {
     trap_count: AtomicU32,
     /// Set to `true` after `TRAP_DISABLE_THRESHOLD` traps.
     disabled: AtomicBool,
-    /// Wall-clock cap on a single `extract` call.
-    extract_timeout: Duration,
 }
 
 impl PluginExtractor {
@@ -129,15 +173,14 @@ impl PluginExtractor {
             host_resources,
             trap_count: AtomicU32::new(0),
             disabled: AtomicBool::new(false),
-            extract_timeout: Duration::from_secs(30),
         })
     }
 
     /// Test-only accessors for the trap counter / disabled flag. Integration
-    /// tests in this crate's `tests/` dir exercise `record_trap` directly
-    /// (the regular path requires a real component + wasmtime store, which
-    /// is too heavy for an invariant test). Hidden from rustdoc so consumers
-    /// don't accidentally rely on them.
+    /// tests in this crate's `tests/` dir exercise `record_trap` directly and
+    /// read the counter after real calls; the unit tests in this file drive
+    /// the regular path through the committed 0.5.0 fixture component.
+    /// Hidden from rustdoc so consumers don't accidentally rely on them.
     #[doc(hidden)]
     pub fn test_record_trap(&self) {
         self.record_trap();
@@ -233,75 +276,103 @@ impl InfoExtractor for PluginExtractor {
     }
 
     async fn extract(&self, url: &str, _ctx: &ExtractionContext) -> rdlp_core::Result<InfoDict> {
-        if self.disabled.load(Ordering::Relaxed) {
-            return Err(RdlpError::Extraction {
-                message: format!(
-                    "plugin {} is disabled (3-strike trap rule)",
-                    self.manifest.name
-                ),
-                url: Some(RedactedUrlBuf::from(url)),
-            });
-        }
-
-        // A fresh cancel token per call; the tokio timeout below trips it
-        // when the wall-clock deadline elapses, so host-side futures that
-        // are racing it via `run_with_cancel` (e.g., host:fetch) abort
-        // promptly even if the wasmtime epoch hasn't fired yet.
-        let cancel = tokio_util::sync::CancellationToken::new();
-        let ticks = deadline_ticks(self.extract_timeout, Duration::from_millis(100));
-        let mut store = build_store(&self.engine, &self.manifest.name, cancel.clone(), ticks);
-        self.populate_capability_contexts(store.data_mut())
-            .map_err(|e| RdlpError::Extraction {
-                message: format!("{e:#}"),
-                url: Some(RedactedUrlBuf::from(url)),
-            })?;
-
-        // Wrap the call in a wall-clock timeout. Without it, a CPU-bound
-        // plugin with no host calls only stops on the wasmtime epoch trap,
-        // and a plugin doing host:fetch in a long retry loop never trips
-        // the epoch (host time isn't WASM time).
-        let plugin_name = self.manifest.name.clone();
-        let component = &self.component;
-        let linker = &self.linker;
-        let timeout = self.extract_timeout;
-        let cancel_for_timeout = cancel.clone();
-        let result = match tokio::time::timeout(timeout, async move {
-            call_plugin_extract(&mut store, linker, component, url, &plugin_name).await
+        let spec = CallSpec {
+            subject_for_errors: url,
+            timeout: EXTRACT_TIMEOUT,
+        };
+        // An owned copy moves into the future: the runner's closure is
+        // higher-ranked over the store borrow, so it cannot return a future
+        // that also borrows `url` from this frame.
+        let owned_url = url.to_string();
+        self.run_in_fresh_store(spec, move |store, inst| {
+            Box::pin(async move { call_plugin_extract(store, inst, &owned_url).await })
         })
         .await
-        {
-            Ok(inner) => inner,
-            Err(_) => {
-                cancel_for_timeout.cancel();
-                Err(PluginError::Timeout {
-                    plugin: self.manifest.name.clone(),
-                })
-            }
-        };
-
-        match result {
-            Ok(info) => Ok(info),
-            Err(e) => {
-                // Count traps / timeouts / internal errors against the 3-strike
-                // rule. Domain-level extraction errors (UnsupportedUrl,
-                // NotFound, RateLimited, AuthRequired, …) are surfaced as
-                // dedicated typed variants and do NOT penalise the plugin.
-                if matches!(
-                    e,
-                    PluginError::Trapped { .. }
-                        | PluginError::Timeout { .. }
-                        | PluginError::Internal(_)
-                        | PluginError::LinkerWire { .. }
-                ) {
-                    self.record_trap();
-                }
-                Err(plugin_error_to_rdlp(e, url))
-            }
-        }
+        .map_err(|e| plugin_error_to_rdlp(e, Some(url)))
     }
 }
 
 impl PluginExtractor {
+    /// Run one plugin call in a fresh store: refuse if disabled, build the
+    /// store with the capability contexts, instantiate, run `f` under
+    /// `spec.timeout`, and apply the 3-strike accounting to the outcome.
+    /// `extract` and every search call go through here so the timeout and
+    /// strike policy exist exactly once.
+    ///
+    /// The tokio timeout is needed in addition to the epoch deadline:
+    /// a plugin doing `host:fetch` in a long retry loop never advances
+    /// WASM time, so only host time can stop it. On expiry the per-call
+    /// cancel token is tripped so host futures racing it via
+    /// `run_with_cancel` abort promptly.
+    ///
+    /// # Errors
+    ///
+    /// [`PluginError::Disabled`] when the plugin has struck out;
+    /// [`PluginError::Timeout`] when `spec.timeout` elapses;
+    /// [`PluginError::Trapped`] when instantiation fails; otherwise
+    /// whatever `f` returns. Traps, timeouts, internal and linker errors
+    /// count as strikes — domain outcomes do not (see `counts_as_strike`).
+    pub(crate) async fn run_in_fresh_store<T, F>(
+        &self,
+        spec: CallSpec<'_>,
+        f: F,
+    ) -> Result<T, PluginError>
+    where
+        F: for<'s> FnOnce(
+                &'s mut wasmtime::Store<PluginStoreData>,
+                &'s FreshInstance,
+            ) -> CallFuture<'s, T>
+            + Send,
+    {
+        let plugin = self.manifest.name.clone();
+        if self.disabled.load(Ordering::Relaxed) {
+            return Err(PluginError::Disabled { plugin });
+        }
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let ticks = deadline_ticks(spec.timeout, self.engine.tick_period());
+        let mut store = build_store(&self.engine, &plugin, cancel.clone(), ticks);
+        self.populate_capability_contexts(store.data_mut())?;
+
+        let call = async {
+            let raw = self
+                .linker
+                .instantiate_async(&mut store, &self.component)
+                .await
+                .map_err(|e| PluginError::Trapped {
+                    plugin: plugin.clone(),
+                    reason: format!("instantiate: {e}"),
+                })?;
+            let host =
+                ExtractorPluginHost::new(&mut store, &raw).map_err(|e| PluginError::Trapped {
+                    plugin: plugin.clone(),
+                    reason: format!("bind host-world exports: {e}"),
+                })?;
+            let inst = FreshInstance { raw, host };
+            f(&mut store, &inst).await
+        };
+        let result = match tokio::time::timeout(spec.timeout, call).await {
+            Ok(inner) => inner,
+            Err(_) => {
+                cancel.cancel();
+                Err(PluginError::Timeout {
+                    plugin: plugin.clone(),
+                })
+            }
+        };
+
+        if let Err(e) = &result
+            && counts_as_strike(e)
+        {
+            log::warn!(
+                "plugin {plugin} strike ({e}) while handling {}",
+                RedactedUrl::new(spec.subject_for_errors)
+            );
+            self.record_trap();
+        }
+        result
+    }
+
     /// Populate the per-call capability contexts on the store data based on
     /// the manifest's declared capabilities AND the host resources we have.
     /// A capability declared in the manifest with no matching host resource
@@ -342,41 +413,84 @@ impl PluginExtractor {
 /// Convert a `PluginError` into an `RdlpError` for the orchestrator.
 /// Domain errors carry the same trapping/non-trapping flag at the call
 /// site; this conversion only shapes the user-facing message.
-fn plugin_error_to_rdlp(e: PluginError, url: &str) -> RdlpError {
+/// `url` is the subject URL of an `extract`; a search call has none.
+pub(crate) fn plugin_error_to_rdlp(e: PluginError, url: Option<&str>) -> RdlpError {
     RdlpError::Extraction {
         message: format!("{e:#}"),
-        url: Some(RedactedUrlBuf::from(url)),
+        url: url.map(RedactedUrlBuf::from),
     }
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────
 
-/// Instantiate the WASM component, call `extract`, and convert the result.
-async fn call_plugin_extract(
+/// Whether an error counts against the 3-strike rule: runtime faults do,
+/// domain outcomes the plugin reported on purpose (UnsupportedUrl,
+/// NotFound, RateLimited, SearchUnsupported, …) do not.
+pub(crate) const fn counts_as_strike(e: &PluginError) -> bool {
+    matches!(
+        e,
+        PluginError::Trapped { .. }
+            | PluginError::Timeout { .. }
+            | PluginError::Internal(_)
+            | PluginError::LinkerWire { .. }
+    )
+}
+
+/// Call `extract` on an already-instantiated component and convert the
+/// result. The plugin name comes from the store data the runner built.
+pub(crate) async fn call_plugin_extract(
     store: &mut wasmtime::Store<PluginStoreData>,
-    linker: &wasmtime::component::Linker<PluginStoreData>,
-    component: &wasmtime::component::Component,
+    inst: &FreshInstance,
     url: &str,
-    plugin_name: &str,
 ) -> Result<InfoDict, PluginError> {
-    let inst = crate::bindings::ExtractorPlugin::instantiate_async(&mut *store, component, linker)
+    let plugin_name = store.data().plugin_name.clone();
+    let wit_result = inst
+        .host
+        .call_extract(&mut *store, url)
         .await
         .map_err(|e| PluginError::Trapped {
-            plugin: plugin_name.to_string(),
-            reason: format!("instantiate: {e}"),
+            plugin: plugin_name.clone(),
+            reason: format!("call_extract: {e}"),
         })?;
 
-    let wit_result =
-        inst.call_extract(&mut *store, url)
-            .await
-            .map_err(|e| PluginError::Trapped {
-                plugin: plugin_name.to_string(),
-                reason: format!("call_extract: {e}"),
-            })?;
-
     match wit_result {
-        Ok(info) => Ok(convert_info_dict(info, url, plugin_name)),
-        Err(extract_err) => Err(extract_error_to_plugin_error(plugin_name, extract_err)),
+        Ok(info) => Ok(crate::convert::info_dict_from_wit(
+            info,
+            url,
+            &store.data().origin(),
+        )),
+        Err(extract_err) => Err(extract_error_to_plugin_error(&plugin_name, extract_err)),
+    }
+}
+
+/// The error cases `extract-error` and `search-error` share, so both WIT
+/// mappers produce the same `PluginError` variants for them.
+pub(crate) enum CommonPluginErr {
+    /// Upstream rate limit, with the plugin-suggested retry delay in seconds.
+    RateLimited(Option<u32>),
+    /// Upstream network failure.
+    Network(String),
+    /// Upstream content did not parse.
+    Parse(String),
+    /// The plugin observed the host's cancellation.
+    Cancelled,
+    /// A genuine plugin-internal failure — the only shared case that strikes.
+    Internal(String),
+}
+
+/// Map a shared WIT error case to its `PluginError` variant.
+pub(crate) fn common_plugin_error(plugin: String, kind: CommonPluginErr) -> PluginError {
+    match kind {
+        CommonPluginErr::RateLimited(retry_after) => PluginError::RateLimited {
+            plugin,
+            retry_after,
+        },
+        CommonPluginErr::Network(detail) => PluginError::ExtractNetwork { plugin, detail },
+        CommonPluginErr::Parse(detail) => PluginError::ExtractParse { plugin, detail },
+        CommonPluginErr::Cancelled => PluginError::Cancelled { plugin },
+        CommonPluginErr::Internal(detail) => {
+            PluginError::Internal(format!("plugin {plugin}: {detail}"))
+        }
     }
 }
 
@@ -384,202 +498,27 @@ async fn call_plugin_extract(
 ///
 /// Domain-level errors (UnsupportedUrl, NotFound, RateLimited, AuthRequired)
 /// map to dedicated `PluginError` variants — they are NOT `Internal` — so the
-/// 3-strike trap rule in `extract` does not penalise plugins that legitimately
-/// reject a URL. Only `W::Internal(_)` (genuine plugin-internal failures) maps
-/// to `PluginError::Internal`.
+/// 3-strike rule in `run_in_fresh_store` does not penalise plugins that
+/// legitimately reject a URL. Only `W::Internal(_)` maps to
+/// `PluginError::Internal`.
 fn extract_error_to_plugin_error(
     plugin: &str,
     err: crate::bindings::rdlp::plugin::types::ExtractError,
 ) -> PluginError {
     use crate::bindings::rdlp::plugin::types::ExtractError as W;
     let plugin = plugin.to_string();
-    match err {
-        W::UnsupportedUrl(detail) => PluginError::UnsupportedUrl { plugin, detail },
-        W::NotFound(detail) => PluginError::NotFound { plugin, detail },
-        W::RateLimited(retry_after) => PluginError::RateLimited {
-            plugin,
-            retry_after,
-        },
-        W::AuthRequired(detail) => PluginError::AuthRequired { plugin, detail },
-        W::Network(detail) => PluginError::ExtractNetwork { plugin, detail },
-        W::Parse(detail) => PluginError::ExtractParse { plugin, detail },
-        W::Cancelled => PluginError::Cancelled { plugin },
-        W::Internal(detail) => PluginError::Internal(format!("plugin {plugin}: {detail}")),
-    }
-}
-
-/// Convert a bindgen-generated `InfoDict` to the rdlp-types `InfoDict`.
-///
-/// The WIT `InfoDict` does not carry `extractor` or `webpage_url` — those are
-/// filled in from the call context (`plugin_name` and `url`).
-fn convert_info_dict(
-    w: crate::bindings::rdlp::plugin::types::InfoDict,
-    url: &str,
-    plugin_name: &str,
-) -> InfoDict {
-    let mut out = InfoDict::new(
-        w.id,
-        w.title,
-        plugin_name,
-        // Prefer the URL the plugin returned; fall back to the request URL.
-        w.url.as_deref().unwrap_or(url),
-    );
-    out.thumbnail = w.thumbnail;
-    out.description = w.description;
-    out.uploader = w.uploader;
-    out.uploader_id = w.uploader_id;
-    out.upload_date = w.upload_date;
-    // WIT duration is Option<u32> (whole seconds); rdlp-types uses Option<f64>.
-    out.duration = w.duration.map(f64::from);
-    out.view_count = w.view_count;
-    out.like_count = w.like_count;
-    out.tags = if w.tags.is_empty() {
-        None
-    } else {
-        Some(w.tags)
+    let common = match err {
+        W::UnsupportedUrl(detail) => return PluginError::UnsupportedUrl { plugin, detail },
+        W::NotFound(detail) => return PluginError::NotFound { plugin, detail },
+        W::AuthRequired(detail) => return PluginError::AuthRequired { plugin, detail },
+        W::RateLimited(retry_after) => CommonPluginErr::RateLimited(retry_after),
+        W::Network(detail) => CommonPluginErr::Network(detail),
+        W::Parse(detail) => CommonPluginErr::Parse(detail),
+        W::Cancelled => CommonPluginErr::Cancelled,
+        W::Internal(detail) => CommonPluginErr::Internal(detail),
     };
-    out.categories = if w.categories.is_empty() {
-        None
-    } else {
-        Some(w.categories)
-    };
-    out.formats = w.formats.into_iter().map(convert_format).collect();
-    // Convert subtitle list → InfoDict's `HashMap<lang, Vec<Subtitle>>` format.
-    if !w.subtitles.is_empty() {
-        use rdlp_types::info_dict::Subtitle;
-        use std::collections::HashMap;
-        let mut map: HashMap<String, Vec<Subtitle>> = HashMap::new();
-        for s in w.subtitles {
-            map.entry(s.language).or_default().push(Subtitle {
-                url: s.url,
-                ext: s.ext,
-                name: None,
-            });
-        }
-        out.subtitles = Some(map);
-    }
-    out
-}
-
-/// Sanitise a plugin-supplied string before it enters a filesystem path.
-///
-/// Plugin output is untrusted: a malicious extractor could return
-/// `format_id = "/etc/cron.d/evil"` or `ext = "../../../home/user/.bashrc"`
-/// to escape the configured output directory via downstream
-/// `PathBuf::join` (which on POSIX *replaces* the buffer when the joined
-/// segment is absolute — exactly the path-injection vector security review
-/// M1 of PR #221 flagged).
-///
-/// Strip:
-/// - Path separators (`/`, `\`) — neutralises both POSIX and Windows
-///   traversal.
-/// - Drive-letter prefix (`C:` etc) and namespace prefix (`\\?\`) — Windows
-///   absolute-path forms.
-/// - Null bytes — defensive against C-string truncation in any FFI path.
-/// - Leading dots and whitespace — collapse `..`, `.foo`, ` foo` to safe
-///   forms before joining.
-///
-/// Empty results collapse to a single underscore so downstream filename
-/// formatters never receive a zero-length component.
-///
-/// This mirrors yt-dlp's `sanitize_filename` semantics conservatively
-/// (strict-only mode; no Unicode look-alike substitution) since these
-/// strings flow into rdlp's archive identity, not into user-visible
-/// titles.
-fn sanitise_for_path(s: String) -> String {
-    if s.is_empty() {
-        return "_".to_string();
-    }
-    let cleaned: String = s
-        .chars()
-        .filter(|c| !matches!(*c, '/' | '\\' | '\0' | ':'))
-        .collect();
-    let trimmed = cleaned.trim_matches(|c: char| c.is_whitespace() || c == '.');
-    if trimmed.is_empty() {
-        "_".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-/// Convert a WIT `Format` to `rdlp_types::Format`.
-///
-/// Numeric widening: WIT uses `f32` for `fps`/`tbr`/`vbr`/`abr`; rdlp-types
-/// uses `f64`. `format_id` and `ext` are sanitised before they enter the
-/// type — they're consumed by downstream filename formatters and must not
-/// carry path separators or drive-letter prefixes (security review M1).
-fn convert_format(w: crate::bindings::rdlp::plugin::types::Format) -> rdlp_types::Format {
-    let protocol = w
-        .protocol
-        .parse::<DownloadProtocol>()
-        .unwrap_or(DownloadProtocol::Https);
-    let format_id = sanitise_for_path(w.format_id);
-    let ext = sanitise_for_path(w.ext);
-    let mut f = rdlp_types::Format::new(format_id, w.url, ext, protocol);
-    f.width = w.width;
-    f.height = w.height;
-    f.fps = w.fps.map(f64::from);
-    f.tbr = w.tbr.map(f64::from);
-    f.vbr = w.vbr.map(f64::from);
-    f.abr = w.abr.map(f64::from);
-    f.vcodec = rdlp_types::Codec::from(w.vcodec);
-    f.acodec = rdlp_types::Codec::from(w.acodec);
-    f.container = w.container.map(sanitise_for_path);
-    f.filesize = w.filesize;
-    f.format_note = w.format_note;
-    f
+    common_plugin_error(plugin, common)
 }
 
 #[cfg(test)]
-mod sanitise_for_path_tests {
-    use super::sanitise_for_path;
-
-    #[test]
-    fn empty_collapses_to_underscore() {
-        assert_eq!(sanitise_for_path(String::new()), "_");
-    }
-
-    #[test]
-    fn pure_dots_or_whitespace_collapse_to_underscore() {
-        assert_eq!(sanitise_for_path("...".into()), "_");
-        assert_eq!(sanitise_for_path("   ".into()), "_");
-        assert_eq!(sanitise_for_path(". . . ".into()), "_");
-    }
-
-    #[test]
-    fn leading_slash_stripped_blocks_absolute_path_injection() {
-        // The motivating M1 attack: malicious format_id = "/etc/passwd".
-        // After sanitisation, downstream PathBuf::join cannot escape.
-        assert_eq!(sanitise_for_path("/etc/passwd".into()), "etcpasswd");
-        assert_eq!(sanitise_for_path("/".into()), "_");
-    }
-
-    #[test]
-    fn windows_drive_letter_neutralised() {
-        // `C:\Windows\System32` would PathBuf::join as an absolute Windows
-        // path. Stripping `:` plus separators reduces it to a relative segment.
-        assert_eq!(
-            sanitise_for_path("C:\\Windows\\System32".into()),
-            "CWindowsSystem32"
-        );
-    }
-
-    #[test]
-    fn null_bytes_stripped() {
-        assert_eq!(sanitise_for_path("foo\0bar".into()), "foobar");
-    }
-
-    #[test]
-    fn parent_directory_traversal_neutralised() {
-        // "../../etc/passwd" — separators removed, leading dots stripped.
-        assert_eq!(sanitise_for_path("../../etc/passwd".into()), "etcpasswd");
-    }
-
-    #[test]
-    fn legitimate_format_ids_unchanged() {
-        assert_eq!(sanitise_for_path("hls-1280".into()), "hls-1280");
-        assert_eq!(sanitise_for_path("video-720p".into()), "video-720p");
-        assert_eq!(sanitise_for_path("dash-fragments".into()), "dash-fragments");
-        assert_eq!(sanitise_for_path("h264_aac_128k".into()), "h264_aac_128k");
-    }
-}
+mod tests;

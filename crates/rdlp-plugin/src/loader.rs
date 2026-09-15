@@ -20,14 +20,12 @@ use std::sync::Arc;
 
 /// WIT contract version this host accepts.
 ///
-/// Must match the `package rdlp:plugin@X.Y.Z` directive in
-/// `crates/rdlp-plugin/wit/*.wit` (extractor.wit / host.wit / types.wit).
-/// Plugin manifests advertise their target via `Manifest.wit_version`;
-/// loading rejects any plugin whose `major.minor` differs from this constant
-/// (patch differences are considered backward-compatible within the same
-/// minor).
-// TODO(#327): derive from WIT file at build time
-pub const HOST_WIT_VERSION: &str = "0.5.0";
+/// Derived at compile time from `wit/types.wit`'s
+/// `package rdlp:plugin@X.Y.Z;` directive (#327), so the constant cannot lag
+/// the contract. `host_constant_matches_current_contract` proves all three
+/// `.wit` files agree.
+pub const HOST_WIT_VERSION: &str =
+    crate::wit_version::package_version(include_str!("../wit/types.wit"));
 
 /// Compare a plugin's declared WIT version against the host's `HOST_WIT_VERSION`.
 /// Thin 2-arg wrapper around [`check_wit_version_against`] that bakes the host
@@ -37,9 +35,12 @@ fn check_wit_version(plugin_name: &str, plugin_version: &str) -> Result<(), Plug
 }
 
 /// Compare a plugin's declared WIT version against an explicit host version.
-/// Returns `Err(PluginError::WitVersionMismatch)` when the major or minor
-/// differ, or when either version fails to parse as semver. Patch differences
-/// within a matching `major.minor` pair are accepted.
+///
+/// Accepts when `major.minor` match and `plugin.patch <= host.patch`.
+/// Component Model canonical names fold `0.x.y` to `0.x`, so any 0.5.y links;
+/// the patch bound exists because a plugin declaring a newer patch may
+/// import a host function this host does not yet define — refuse it here
+/// with a readable error instead of a linker failure at instantiate.
 ///
 /// Unparseable plugin or host versions are mapped to `WitVersionMismatch`
 /// (raw string preserved in `got` / `host`). This is intentional: malformed
@@ -59,7 +60,7 @@ pub(crate) fn check_wit_version_against(
     };
     let plugin = semver::Version::parse(plugin_version).map_err(|_| mismatch())?;
     let host = semver::Version::parse(host_version).map_err(|_| mismatch())?;
-    if plugin.major != host.major || plugin.minor != host.minor {
+    if plugin.major != host.major || plugin.minor != host.minor || plugin.patch > host.patch {
         return Err(mismatch());
     }
     Ok(())
@@ -109,9 +110,12 @@ impl<'a> Loader<'a> {
     /// Scan `root` for plugin subdirectories and load each. Errors are
     /// per-plugin and do not block siblings.
     ///
-    /// Returns one `DiscoverOutcome` per plugin directory found. Directories
-    /// missing `plugin.toml` or `plugin.wasm` are silently skipped; only
-    /// directories containing both files are processed.
+    /// Returns one `DiscoverOutcome` per plugin directory found, in path
+    /// order — `read_dir` yields entries in filesystem order, which differs
+    /// between filesystems, and the registry's "first registered wins"
+    /// tie-break downstream must not depend on it. Directories missing
+    /// `plugin.toml` or `plugin.wasm` are silently skipped; only directories
+    /// containing both files are processed.
     pub fn discover(&mut self, root: &Path) -> Vec<DiscoverOutcome> {
         let mut out = Vec::new();
         #[allow(clippy::disallowed_methods)] // startup/load-time sync I/O
@@ -122,8 +126,9 @@ impl<'a> Loader<'a> {
                 return out;
             }
         };
-        for entry in entries.flatten() {
-            let dir = entry.path();
+        let mut dirs: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+        dirs.sort();
+        for dir in dirs {
             if !dir.is_dir() {
                 continue;
             }
@@ -163,8 +168,10 @@ impl<'a> Loader<'a> {
         let identity = manifest.signature.identity_string();
 
         // Step 6: trust-store checks
-        let requested: BTreeSet<String> = manifest.capabilities.iter().cloned().collect();
-        self.check_trust(&manifest, &identity, &requested)?;
+        self.check_trust(&TrustSubject {
+            manifest: &manifest,
+            identity: &identity,
+        })?;
 
         // Step 7: compile component
         let component = wasmtime::component::Component::new(self.engine.raw(), &wasm)
@@ -180,57 +187,68 @@ impl<'a> Loader<'a> {
 
     /// Run the full trust-store / prompt workflow for one plugin. Mutates the
     /// trust store on `ApprovePersist`; session-only on `ApproveOnce`.
-    fn check_trust(
-        &mut self,
-        manifest: &Manifest,
-        identity: &str,
-        requested: &BTreeSet<String>,
-    ) -> Result<(), PluginError> {
+    ///
+    /// A known publisher is re-confirmed for two kinds of change, each
+    /// through its own prompt: capabilities not previously approved
+    /// (`CapabilityCreep`), and a search-site claim that differs from the
+    /// approved one (`SearchClaimsChange`) — a plugin must not be able to
+    /// start shadowing a built-in's search on an update the user never saw.
+    ///
+    /// The store is written ONCE, after every prompt the load needed has
+    /// approved: an entry always describes the whole manifest, so writing
+    /// it on the first approval would also record whatever a later prompt
+    /// then denied, and the next startup would load that denied claim
+    /// without asking. It is persisted only when every prompt answered
+    /// `ApprovePersist`; one `ApproveOnce` keeps the whole load session-only.
+    fn check_trust(&mut self, subject: &TrustSubject<'_>) -> Result<(), PluginError> {
+        let TrustSubject { manifest, identity } = *subject;
+        let mut decisions = Decisions::default();
         match self
             .trust_store
             .check_identity_match(&manifest.name, identity)
         {
             IdentityCheck::Match => {
-                // Known publisher — check for capability creep.
+                // Snapshot the approved entry ONCE, before either prompt,
+                // so both comparisons judge the update against what was
+                // actually approved last time.
+                let prior = self.trust_store.lookup(&manifest.name).cloned();
                 if let CapabilityCheck::NewCapabilitiesRequested(new_caps) = self
                     .trust_store
-                    .check_capabilities(&manifest.name, requested)
+                    .check_capabilities(&manifest.name, &subject.requested_capabilities())
                 {
-                    let previously_approved: Vec<String> = self
-                        .trust_store
-                        .lookup(&manifest.name)
+                    let previously_approved: Vec<String> = prior
+                        .as_ref()
                         .map(|e| e.approved_capabilities.iter().cloned().collect())
                         .unwrap_or_default();
-
                     let resp = self.prompter.confirm(ConfirmRequest::CapabilityCreep {
                         plugin_name: manifest.name.clone(),
                         new_version: manifest.version.clone(),
                         previously_approved,
                         new_capabilities: new_caps.clone(),
                     });
+                    decisions.record(resp, || PluginError::CapabilityCreep {
+                        plugin: manifest.name.clone(),
+                        cap: new_caps.join(", "),
+                    })?;
+                }
 
-                    match resp {
-                        ConfirmResponse::Deny => {
-                            return Err(PluginError::CapabilityCreep {
-                                plugin: manifest.name.clone(),
-                                cap: new_caps.join(", "),
-                            });
-                        }
-                        ConfirmResponse::ApprovePersist => {
-                            // Persist the expanded capability set so subsequent
-                            // loads of the same version don't prompt again.
-                            self.trust_store.record(TrustEntry {
-                                name: manifest.name.clone(),
-                                identity: identity.to_string(),
-                                approved_capabilities: requested.clone(),
-                            })?;
-                        }
-                        ConfirmResponse::ApproveOnce => {
-                            // Allow the current load but do NOT update the
-                            // trust store — user will be prompted again on the
-                            // next startup.
-                        }
-                    }
+                let approved_claims = prior.map(|e| e.search).unwrap_or_default();
+                let requested_claims = manifest.search_claims();
+                if approved_claims != requested_claims {
+                    let resp = self.prompter.confirm(ConfirmRequest::SearchClaimsChange {
+                        plugin_name: manifest.name.clone(),
+                        new_version: manifest.version.clone(),
+                        previously_approved: approved_claims,
+                        requested: requested_claims.clone(),
+                    });
+                    decisions.record(resp, || PluginError::SearchClaimsChange {
+                        plugin: manifest.name.clone(),
+                        detail: format!(
+                            "search_site = {:?}, search_claims_override = {:?}",
+                            manifest.search_site_name(),
+                            requested_claims.search_claims_override
+                        ),
+                    })?;
                 }
             }
             IdentityCheck::Mismatch {
@@ -244,38 +262,91 @@ impl<'a> Loader<'a> {
                 });
             }
             IdentityCheck::NewName => {
-                // First install — require explicit approval.
                 let resp = self.prompter.confirm(ConfirmRequest::FirstInstall {
                     plugin_name: manifest.name.clone(),
                     version: manifest.version.clone(),
                     identity: identity.to_string(),
                     capabilities: manifest.capabilities.clone(),
                     claims_override: manifest.claims_override.clone(),
+                    search: manifest.search_claims(),
                 });
-
-                match resp {
-                    ConfirmResponse::Deny => {
-                        return Err(PluginError::Internal(format!(
-                            "user declined trust for plugin {}",
-                            manifest.name
-                        )));
-                    }
-                    ConfirmResponse::ApprovePersist => {
-                        self.trust_store.record(TrustEntry {
-                            name: manifest.name.clone(),
-                            identity: identity.to_string(),
-                            approved_capabilities: requested.clone(),
-                        })?;
-                    }
-                    ConfirmResponse::ApproveOnce => {
-                        // Allow this session load but do NOT record in trust
-                        // store — user will be prompted again next startup.
-                    }
-                }
+                decisions.record(resp, || {
+                    PluginError::Internal(format!(
+                        "user declined trust for plugin {}",
+                        manifest.name
+                    ))
+                })?;
             }
         }
 
+        if decisions.persist() {
+            self.trust_store.record(subject.entry())?;
+        }
         Ok(())
+    }
+}
+
+/// The prompt answers one load collected, folded into whether the trust
+/// store gets written at the end. A `Deny` short-circuits the load at the
+/// prompt that produced it; the store is never touched before the fold.
+#[derive(Debug, Default)]
+struct Decisions {
+    prompted: bool,
+    every_answer_persists: bool,
+}
+
+impl Decisions {
+    /// Fold one answer in: `Deny` is `denied()`; `ApproveOnce` makes the
+    /// whole load session-only; `ApprovePersist` keeps persistence on the
+    /// table.
+    fn record(
+        &mut self,
+        resp: ConfirmResponse,
+        denied: impl FnOnce() -> PluginError,
+    ) -> Result<(), PluginError> {
+        let persists = match resp {
+            ConfirmResponse::Deny => return Err(denied()),
+            ConfirmResponse::ApprovePersist => true,
+            ConfirmResponse::ApproveOnce => false,
+        };
+        self.every_answer_persists = if self.prompted {
+            self.every_answer_persists && persists
+        } else {
+            persists
+        };
+        self.prompted = true;
+        Ok(())
+    }
+
+    /// Whether the entry is written: at least one prompt fired and every
+    /// one of them asked to persist.
+    const fn persist(&self) -> bool {
+        self.prompted && self.every_answer_persists
+    }
+}
+
+/// What the trust store judges one load by: the manifest being loaded and
+/// the identity its signature proved.
+struct TrustSubject<'a> {
+    manifest: &'a Manifest,
+    identity: &'a str,
+}
+
+impl TrustSubject<'_> {
+    /// The capability set the manifest asks for.
+    fn requested_capabilities(&self) -> BTreeSet<String> {
+        self.manifest.capabilities.iter().cloned().collect()
+    }
+
+    /// The entry an `ApprovePersist` writes: everything this version asks
+    /// for, so the same version never prompts again.
+    fn entry(&self) -> TrustEntry {
+        TrustEntry {
+            name: self.manifest.name.clone(),
+            identity: self.identity.to_string(),
+            approved_capabilities: self.requested_capabilities(),
+            search: self.manifest.search_claims(),
+        }
     }
 }
 
@@ -284,8 +355,11 @@ mod tests {
     use super::{HOST_WIT_VERSION, check_wit_version, check_wit_version_against};
     use crate::PluginError;
 
-    /// Pull the version out of a `package rdlp:plugin@X.Y.Z;` directive.
-    fn package_version(wit_source: &str, file: &str) -> String {
+    /// Pull the version out of a `package rdlp:plugin@X.Y.Z;` directive by
+    /// scanning lines — an oracle independent of the `const fn` byte walk
+    /// in `crate::wit_version::package_version` that produces
+    /// `HOST_WIT_VERSION`, so the two can disagree and be caught.
+    fn package_version_by_lines(wit_source: &str, file: &str) -> String {
         wit_source
             .lines()
             .find_map(|line| {
@@ -315,7 +389,7 @@ mod tests {
             ("extractor.wit", include_str!("../wit/extractor.wit")),
         ] {
             assert_eq!(
-                package_version(source, file),
+                package_version_by_lines(source, file),
                 HOST_WIT_VERSION,
                 "HOST_WIT_VERSION must track `package rdlp:plugin@X.Y.Z` in crates/rdlp-plugin/wit/{file}"
             );
@@ -354,9 +428,18 @@ mod tests {
                     || panic!("{file} must declare wit_version"),
                     |v| v.trim_matches('"'),
                 );
+            // A template may lag the host by patch (D1's accepted range) and
+            // still load — checked via the production 2-arg wrapper, not a
+            // hand-rolled comparison.
+            check_wit_version("template", declared).unwrap_or_else(|e| {
+                panic!("{file} declares a WIT version the loader would reject: {e}")
+            });
+            // Templates ship the CURRENT contract, though: this is a stronger
+            // claim than "loadable" and catches a template left one release
+            // behind even though patch-below would still pass the loader.
             assert_eq!(
                 declared, HOST_WIT_VERSION,
-                "{file} declares a WIT version the loader would reject"
+                "{file} should declare the current WIT contract version"
             );
         }
     }
@@ -374,12 +457,49 @@ mod tests {
         check_wit_version_against("p", "0.1.0", "0.1.0").expect("identical version must accept");
     }
 
+    /// D1: same major.minor and `plugin.patch <= host.patch`. The canonical
+    /// Component Model name of `0.x.y` is `0.x`, so 0.5.0 and 0.5.1 link;
+    /// a plugin that declares a NEWER patch may call an import this host
+    /// does not define, so it is refused here with a clear error rather
+    /// than at instantiate.
     #[test]
-    fn patch_compatible_accepts() {
-        check_wit_version_against("p", "0.1.5", "0.1.0")
-            .expect("higher patch within same minor must accept");
-        check_wit_version_against("p", "0.1.0", "0.1.5")
-            .expect("lower patch within same minor must accept");
+    fn patch_at_or_below_host_accepts() {
+        check_wit_version_against("p", "0.5.0", "0.5.1").expect("0.5.0 plugin on 0.5.1 host");
+        check_wit_version_against("p", "0.5.1", "0.5.1").expect("0.5.1 plugin on 0.5.1 host");
+    }
+
+    #[test]
+    fn patch_above_host_rejects() {
+        let err = check_wit_version_against("p", "0.5.2", "0.5.1")
+            .expect_err("0.5.2 plugin must be refused by a 0.5.1 host");
+        assert!(
+            matches!(err, PluginError::WitVersionMismatch { .. }),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn minor_above_host_rejects() {
+        assert!(check_wit_version_against("p", "0.6.0", "0.5.1").is_err());
+    }
+
+    #[test]
+    fn minor_below_host_rejects() {
+        assert!(check_wit_version_against("p", "0.4.9", "0.5.1").is_err());
+    }
+
+    #[test]
+    fn major_differs_rejects_even_with_same_minor_patch() {
+        assert!(check_wit_version_against("p", "1.5.1", "0.5.1").is_err());
+    }
+
+    #[test]
+    fn host_constant_is_derived_from_types_wit() {
+        assert_eq!(HOST_WIT_VERSION, "0.5.1");
+        assert_eq!(
+            crate::wit_version::package_version(include_str!("../wit/types.wit")),
+            "0.5.1"
+        );
     }
 
     #[test]

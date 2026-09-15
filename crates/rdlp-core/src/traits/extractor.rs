@@ -147,9 +147,12 @@ pub trait SearchExtractor: Send + Sync {
 
     /// Describe the available search filters for this site.
     ///
+    /// Async because a plugin extractor answers this by a wasm call on an
+    /// `async_support(true)` Wasmtime engine; a sync method cannot host it.
+    ///
     /// # Returns
     /// A list of filter descriptors that frontends use to build filter UI.
-    fn supported_filters(&self) -> Vec<SearchFilterDescriptor>;
+    async fn supported_filters(&self) -> Vec<SearchFilterDescriptor>;
 
     /// Execute a search and return lightweight result previews.
     ///
@@ -211,6 +214,45 @@ pub trait SearchExtractor: Send + Sync {
         _ctx: &ExtractionContext,
     ) -> Result<SearchResultPreview> {
         Ok(preview)
+    }
+
+    /// Whether this search extractor is a third-party WASM plugin rather
+    /// than a first-party built-in.
+    ///
+    /// Search sites are keyed by [`name`](Self::name), and a plugin may
+    /// declare the same site name as a built-in. The registry needs to know
+    /// which side of that collision each candidate is on to apply the
+    /// built-in shadowing policy, and `name` alone cannot say. Defaults to
+    /// `false`; the plugin host overrides it.
+    fn is_plugin(&self) -> bool {
+        false
+    }
+
+    /// Priority for name-keyed search-site arbitration (higher wins).
+    ///
+    /// Separate from `InfoExtractor::priority` because a search-only
+    /// plugin has no `InfoExtractor` at all, and a site's search ranking
+    /// need not match its URL-routing ranking. Built-ins default to `0`;
+    /// the plugin host reports the manifest's declared priority.
+    fn search_priority(&self) -> i32 {
+        0
+    }
+
+    /// Whether this extractor's signed manifest explicitly claims the
+    /// right to shadow a built-in for the same search site.
+    ///
+    /// Search-site arbitration is name-keyed and exclusionary, unlike
+    /// `InfoExtractor`'s URL routing (which clamps a plugin's priority):
+    /// when a built-in serves the requested site name, only plugins
+    /// answering `true` here are eligible to contest it at all, and a
+    /// plugin answering `false` is excluded whatever its priority. A search
+    /// has no URL for `claims_override` to bind to, so the plugin host
+    /// reads the manifest's site-bound `search_claims_override` instead —
+    /// the claim must name the very site the plugin serves. This exposes
+    /// it so the registry can honour it without reading manifests.
+    /// Built-ins never override anything, so the default is `false`.
+    fn overrides_builtin(&self) -> bool {
+        false
     }
 }
 
@@ -391,4 +433,44 @@ pub trait CookieJar: Send + Sync {
     /// # Returns
     /// Number of cookies loaded
     async fn load_from_file(&self, path: &std::path::Path) -> Result<usize>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A built-in with only the required methods: the arbitration defaults
+    /// must describe a first-party extractor that neither out-ranks nor
+    /// claims to override anything.
+    struct Builtin {
+        name: String,
+    }
+
+    #[async_trait]
+    impl SearchExtractor for Builtin {
+        fn name(&self) -> &str {
+            &self.name
+        }
+        async fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
+            vec![]
+        }
+        async fn search(
+            &self,
+            _query: &SearchQuery,
+            _ctx: &ExtractionContext,
+        ) -> Result<Vec<SearchResultPreview>> {
+            Ok(vec![])
+        }
+    }
+
+    #[test]
+    fn search_extractor_arbitration_defaults_describe_a_built_in() {
+        let b = Builtin {
+            name: "Builtin".into(),
+        };
+        assert_eq!(b.name(), "Builtin");
+        assert!(!b.is_plugin());
+        assert_eq!(b.search_priority(), 0);
+        assert!(!b.overrides_builtin());
+    }
 }

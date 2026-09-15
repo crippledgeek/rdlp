@@ -26,7 +26,7 @@ pub struct OptionEntry {
     pub gui: Gui,
 }
 
-/// The registry. One entry per `Config`/`PostProcess` leaf field (98 total).
+/// The registry. One entry per `Config`/`PostProcess` leaf field (99 total).
 pub const OPTION_REGISTRY: &[OptionEntry] = &[
     OptionEntry {
         field: "output_to_stdout",
@@ -123,6 +123,10 @@ pub const OPTION_REGISTRY: &[OptionEntry] = &[
     OptionEntry {
         field: "hls_head_probe_timeout",
         gui: Gui::Control("hls_head_probe_timeout"),
+    },
+    OptionEntry {
+        field: "hls_expansion_timeout",
+        gui: Gui::Missing("#602"),
     },
     OptionEntry {
         field: "parallel_threshold",
@@ -432,7 +436,7 @@ mod tests {
     /// so a new Config/PostProcess field is E0027 here until it gets a registry entry.
     /// DO NOT ADD `..` — the correct fix for E0027 is a new `OPTION_REGISTRY` entry.
     #[test]
-    // Exhaustively destructuring `Config` + `PostProcess` (96 fields total) plus the
+    // Exhaustively destructuring `Config` + `PostProcess` (99 fields total) plus the
     // 1:1 `EXPECTED` mirror is the forcing function this test exists for — splitting it
     // would break the single-canary property. `items_after_statements`: `EXPECTED` sits
     // next to the destructures it mirrors, which is the readable order here.
@@ -463,6 +467,7 @@ mod tests {
             download_timeout: _,
             merge_timeout: _,
             hls_head_probe_timeout: _,
+            hls_expansion_timeout: _,
             parallel_threshold: _,
             max_fragment_bytes: _,
             source_address: _,
@@ -569,6 +574,7 @@ mod tests {
             "download_timeout",
             "merge_timeout",
             "hls_head_probe_timeout",
+            "hls_expansion_timeout",
             "parallel_threshold",
             "max_fragment_bytes",
             "source_address",
@@ -654,11 +660,11 @@ mod tests {
         );
         assert_eq!(
             OPTION_REGISTRY.len(),
-            98,
-            "registry must have exactly 98 entries"
+            99,
+            "registry must have exactly 99 entries"
         );
         let expected: HashSet<&str> = EXPECTED.iter().copied().collect();
-        assert_eq!(expected.len(), 98, "EXPECTED drifted from 98");
+        assert_eq!(expected.len(), 99, "EXPECTED drifted from 99");
         assert_eq!(
             registry, expected,
             "OPTION_REGISTRY fields must exactly match Config+PostProcess"
@@ -677,7 +683,7 @@ mod tests {
         }
         assert_eq!(control, 40, "Control count drifted");
         assert_eq!(na, 6, "NotApplicable count drifted");
-        assert_eq!(missing, 52, "Missing count drifted");
+        assert_eq!(missing, 53, "Missing count drifted");
     }
 
     #[test]

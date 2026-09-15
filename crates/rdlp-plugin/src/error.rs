@@ -48,6 +48,20 @@ pub enum PluginError {
         cap: String,
     },
 
+    /// A known plugin's search-site claim changed and the prompter declined
+    /// it. Like [`Self::CapabilityCreep`], this is a hard refusal under a
+    /// non-interactive prompter (`AlwaysDeny`, `PreTrustedIdentities`):
+    /// the plugin stays unloaded until the operator re-trusts it.
+    #[error(
+        "plugin '{plugin}' changed its search-site claim ({detail}) since it was approved. Run `rdlp plugin retrust {plugin}` to re-confirm."
+    )]
+    SearchClaimsChange {
+        /// Plugin name as declared in its manifest.
+        plugin: String,
+        /// The claim the new version makes, rendered for the operator.
+        detail: String,
+    },
+
     /// A different plugin is already trusted under this name.
     #[error(
         "plugin name '{plugin}' already trusted under different identity '{existing}'. Run `rdlp plugin uninstall {plugin}` first."
@@ -179,6 +193,15 @@ pub enum PluginError {
         plugin: String,
         /// Plugin-supplied detail.
         detail: String,
+    },
+
+    /// The plugin's `search` export answered `unsupported`: it implements
+    /// the export only to satisfy the world and serves no search site.
+    /// Counted as a normal search outcome, NOT as a trap.
+    #[error("plugin '{plugin}' does not support search")]
+    SearchUnsupported {
+        /// Plugin name as declared in its manifest.
+        plugin: String,
     },
 
     /// Wiring host capability imports into the wasmtime linker failed

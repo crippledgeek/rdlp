@@ -100,7 +100,7 @@ impl SearchExtractor for TNAFlixSearchExtractor {
         NAME.as_str()
     }
 
-    fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
+    async fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
         search_patterns::search_filter_descriptors()
     }
 

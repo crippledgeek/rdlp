@@ -250,6 +250,17 @@ Single crate:
 cargo test -p rdlp-extractor
 ```
 
+Two cargo features exist only for tests — `rdlp-extractor`'s
+`loopback-test-exemption` and `rdlp-plugin`'s `test-support` — and are
+enabled from dev-dependencies, so `cargo test --release` (and `--all-features`
+release builds) fail to compile by design: both crates carry a
+`compile_error!` for that combination. Run tests in the default (debug)
+profile; `scripts/check-test-only-features-not-in-release.sh` proves no
+binary enables either feature. Note also that `cargo test --workspace`
+unifies `loopback-test-exemption` into rdlp-extractor's own test build, so
+the loopback-rejection tests only run in isolation — `scripts/check-hls-seed-gate.sh`
+runs exactly that.
+
 Lint and format checks:
 
 ```bash

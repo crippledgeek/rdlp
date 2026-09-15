@@ -16,13 +16,26 @@
 /// Test behavior: allows `http`/`https` on `127.0.0.1` / `localhost` / `[::1]`
 /// so mockito-driven unit tests can drive expansion against loopback fixtures.
 /// Every other host — including all other private ranges — and every non-HTTP
-/// scheme still goes through the real validator. The bypass is `cfg(test)`-
-/// gated, so production builds compile with no loopback exemption at all.
+/// scheme still goes through the real validator. The bypass is gated by
+/// `cfg(test)` OR the `loopback-test-exemption` cargo feature (below), so an
+/// ordinary production build — which has neither `cfg(test)` nor that feature
+/// enabled — compiles with no loopback exemption at all.
+///
+/// The `loopback-test-exemption` feature widens the same bypass to non-test
+/// builds of THIS crate, so a sibling crate's own test suite (`rdlp-plugin`,
+/// `rdlp-api`) can drive this expander against mockito without depending on
+/// rdlp-extractor's `#[cfg(test)]` code. It is intended to be enabled ONLY as
+/// a dev-dependency feature in those sibling crates, added when their own
+/// tests need it — both `rdlp-plugin`'s `[dev-dependencies]` (for its
+/// `expand-hls`/`probe-format-sizes` host-import tests) and `rdlp-api`'s
+/// `[dev-dependencies]` (for its own mockito-backed extraction tests) enable
+/// it today. It must never be enabled by a production binary —
+/// `scripts/check-test-only-features-not-in-release.sh` proves that.
 ///
 /// Returns `rdlp_security`'s own error so each protocol can map it into its
 /// own error type without this gate having to know about any of them.
 pub(crate) fn validate_manifest_sourced_url(url: &str) -> rdlp_security::Result<()> {
-    #[cfg(test)]
+    #[cfg(any(test, feature = "loopback-test-exemption"))]
     if is_loopback_origin(url) {
         return Ok(());
     }
@@ -44,8 +57,10 @@ pub(crate) fn validate_manifest_sourced_url(url: &str) -> rdlp_security::Result<
 /// over `file://` is not a loopback *origin*, so no caller can inherit the
 /// exemption by forgetting its own scheme check.
 ///
-/// `cfg(test)`-only: production builds carry no loopback concept at all.
-#[cfg(test)]
+/// `cfg(test)`-only (plus the `loopback-test-exemption` feature — see
+/// [`validate_manifest_sourced_url`]): production builds carry no loopback
+/// concept at all.
+#[cfg(any(test, feature = "loopback-test-exemption"))]
 pub(crate) fn is_loopback_origin(url: &str) -> bool {
     let Ok(parsed) = url::Url::parse(url) else {
         return false;

@@ -201,7 +201,7 @@ impl SearchExtractor for KoreanPornMovieExtractor {
         NAME.as_str()
     }
 
-    fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
+    async fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
         vec![
             SearchFilterDescriptor {
                 key: "browse".to_string(),

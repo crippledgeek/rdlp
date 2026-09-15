@@ -483,7 +483,7 @@ impl RdlpClient {
     ///
     /// # Errors
     /// Returns error if the site name is not recognized.
-    pub fn search_filters(
+    pub async fn search_filters(
         &self,
         site: &str,
     ) -> Result<Vec<rdlp_types::SearchFilterDescriptor>, RdlpApiError> {
@@ -502,6 +502,7 @@ impl RdlpClient {
         );
         orchestrator
             .search_filters(site)
+            .await
             .map_err(|e| RdlpApiError::InvalidInput {
                 message: e.to_string(),
             })

@@ -244,7 +244,7 @@ impl SearchExtractor for XNXXExtractor {
         NAME.as_str()
     }
 
-    fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
+    async fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
         vec![SearchFilterDescriptor {
             key: "sort".to_string(),
             display_name: "Sort order".to_string(),

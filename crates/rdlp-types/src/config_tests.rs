@@ -536,6 +536,44 @@ fn hls_head_probe_timeout_above_max_rejected() {
 }
 
 #[test]
+fn hls_expansion_timeout_default_is_none() {
+    // Unset keeps rdlp-api's `DEFAULT_HLS_EXPANSION_TIMEOUT_SECS`, the same
+    // "None = consumer default" shape `download_timeout`/`merge_timeout` use.
+    assert_eq!(Config::default().hls_expansion_timeout, None);
+}
+
+#[test]
+fn hls_expansion_timeout_boundaries() {
+    // Inclusive at both ends: 1 and 600 pass, 0 and 601 are rejected.
+    for accepted in [1, 600] {
+        Config {
+            hls_expansion_timeout: Some(accepted),
+            ..Config::default()
+        }
+        .validate()
+        .unwrap_or_else(|e| panic!("{accepted} must be accepted: {e}"));
+    }
+    for rejected in [0, 601] {
+        let err = Config {
+            hls_expansion_timeout: Some(rejected),
+            ..Config::default()
+        }
+        .validate()
+        .expect_err("out of range must reject");
+        assert!(
+            matches!(
+                err,
+                ConfigValidationError::OutOfRange {
+                    field: "hls_expansion_timeout",
+                    ..
+                }
+            ),
+            "{rejected}: got {err:?}"
+        );
+    }
+}
+
+#[test]
 fn hls_timeouts_partial_json_inherits_struct_default() {
     // Struct-level `#[serde(default)]` means an empty/partial JSON deserializes
     // to `Config::default()`-overlaid values. Pin the documented default

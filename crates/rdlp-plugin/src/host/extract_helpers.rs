@@ -4,7 +4,11 @@
 //! 2-line passthroughs over them.
 //!
 //! All functions sync (pure CPU) except `extract_m3u8` and `extract_mpd`,
-//! which fetch via the `host:fetch` wreq client.
+//! which fetch via the `host:fetch` wreq client, and `expand_hls` /
+//! `probe_format_sizes` (@since 0.5.1), which wrap the in-tree
+//! `rdlp_extractor::hls` helpers over the plugin's granted `wreq::Client`
+//! directly (those helpers take an `Arc<wreq::Client>`, not a `host:fetch`
+//! request/response pair).
 
 // Lints below are from the new per-crate pedantic/nursery config; these
 // pre-existing patterns are accepted for now — addressed in a separate pass.
@@ -18,11 +22,16 @@
     clippy::missing_errors_doc
 )]
 
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock};
 
-use crate::bindings::rdlp::plugin::host_extract_helpers::{FetchOptions, RegexFlags};
+use crate::bindings::rdlp::plugin::host_extract_helpers::{
+    FetchOptions, HlsFormat, HlsStreamFlags, RegexFlags, SizeProbe,
+};
 use crate::bindings::rdlp::plugin::host_fetch::{FetchError, Host as FetchHost, Request};
+use crate::bindings::rdlp::plugin::types::Format as WitFormat;
+use crate::host::fetch::FETCH_NOT_GRANTED;
 use crate::instance::PluginStoreData;
+use rdlp_http::wreq;
 use wasmtime::component::Linker;
 
 static RE_WHITESPACE: LazyLock<regex::Regex> =
@@ -170,6 +179,83 @@ impl PluginStoreData {
         let resp = self.fetch(req).await?;
         let body = String::from_utf8(resp.body).map_err(|e| FetchError::Network(e.to_string()))?;
         Ok((url, body))
+    }
+
+    /// The plugin's granted fetch client as the `Arc<wreq::Client>` the HLS
+    /// helpers take. Mirrors `fetch`'s "capability not granted" refusal so a
+    /// plugin without `fetch` gets the same error from every I/O helper.
+    fn hls_http_client(&self) -> Result<Arc<wreq::Client>, FetchError> {
+        self.fetch
+            .as_ref()
+            .map(|c| Arc::new(c.client.clone()))
+            .ok_or_else(|| FetchError::Network(FETCH_NOT_GRANTED.into()))
+    }
+
+    /// The prologue `expand-hls` and `probe-format-sizes` share: the granted
+    /// client, and the plugin's rows — capped at
+    /// [`crate::convert::MAX_PLUGIN_FORMATS`] before any of them costs a
+    /// fetch — converted and stamped with `fetch`. `import` names the
+    /// caller in the cap's warning.
+    fn hls_seeds(
+        &self,
+        formats: Vec<WitFormat>,
+        fetch: &FetchOptions,
+        import: &str,
+    ) -> Result<(Arc<wreq::Client>, Vec<rdlp_types::Format>), FetchError> {
+        let http = self.hls_http_client()?;
+        let seeds = crate::convert::cap_plugin_formats(formats, import, &self.origin())
+            .into_iter()
+            .map(|w| apply_fetch_headers(crate::convert::format_from_wit(w), fetch))
+            .collect();
+        Ok((http, seeds))
+    }
+}
+
+/// Apply `fetch-options` to one `expand-hls` / `probe-format-sizes` seed
+/// before it reaches `rdlp_extractor::hls`.
+///
+/// `query` is appended to the seed's `url` via the same
+/// [`build_url_with_query`] `extract_m3u8`/`extract_mpd` use. `headers`
+/// become the row's `http_headers` so the expander (and later the
+/// downloader) send them on every playlist/segment request — the same
+/// channel in-tree extractors use for a required `Referer`. Two divergences
+/// from `extract_m3u8`/`extract_mpd`'s use of the same `fetch-options`
+/// record, both because these two imports never issue a request of their
+/// own (they hand the URL to `rdlp_extractor::hls`, which always GETs it):
+/// `body` is IGNORED — there is no POST here for a body to attach to — and
+/// duplicate header keys COLLAPSE (last one wins), because
+/// `Format::http_headers` is a `HashMap`, not the ordered
+/// `Vec<(String, String)>` `host:fetch`'s `Request` uses, so duplicates
+/// cannot be preserved verbatim across this boundary the way they can there.
+fn apply_fetch_headers(mut f: rdlp_types::Format, fetch: &FetchOptions) -> rdlp_types::Format {
+    if !fetch.query.is_empty() {
+        f.url = build_url_with_query(f.url, &fetch.query);
+    }
+    if !fetch.headers.is_empty() {
+        f.http_headers
+            .get_or_insert_with(std::collections::HashMap::new)
+            .extend(fetch.headers.iter().cloned());
+    }
+    f
+}
+
+/// Convert an expanded `rdlp_types::Format` (post `expand_hls_in_place`) to
+/// the WIT `hls-format` record. Only called on rows that already carry
+/// `fragments` — the caller filters those out first.
+fn hls_format_to_wit(f: &rdlp_types::Format) -> HlsFormat {
+    let fragments = f
+        .fragments
+        .clone()
+        .unwrap_or_default()
+        .into_iter()
+        .map(crate::convert::fragment_to_wit)
+        .collect();
+    HlsFormat {
+        duration: f.duration,
+        filesize_approx: f.filesize_approx,
+        language: f.language.clone(),
+        fragments,
+        format: crate::convert::format_to_wit(f),
     }
 }
 
@@ -403,7 +489,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
     ) -> Result<crate::bindings::rdlp::plugin::host_extract_helpers::MpdExtraction, FetchError>
     {
         use crate::bindings::rdlp::plugin::host_extract_helpers::{
-            ExtractHelpersSubtitle, MpdExtraction, MpdFormat, MpdFragment,
+            ExtractHelpersSubtitle, MpdExtraction, MpdFormat,
         };
         use rdlp_extractor::base::common::dash::{DashExpansion, expand_dash_representations};
         use url::Url;
@@ -422,10 +508,10 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
                     ext: f.ext.clone(),
                     vcodec: f.vcodec.as_str().map(str::to_owned),
                     acodec: f.acodec.as_str().map(str::to_owned),
-                    tbr: f.tbr.map(|v| v as f32),
+                    tbr: f.tbr.map(crate::convert::narrow_f64),
                     width: f.width,
                     height: f.height,
-                    fps: f.fps.map(|v| v as f32),
+                    fps: f.fps.map(crate::convert::narrow_f64),
                     asr: f.asr,
                     language: f.language,
                     container: f.container,
@@ -435,19 +521,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
                         .fragments
                         .unwrap_or_default()
                         .into_iter()
-                        .map(|fr| MpdFragment {
-                            url: fr.url,
-                            duration: fr.duration,
-                            // `(start, end_exclusive)` convention mirrors
-                            // `rdlp_types::Fragment.byte_range` exactly — both
-                            // tuples are passed through verbatim. Plugins see
-                            // the same end-exclusive semantics as the host's
-                            // downloader (see WIT doc-comments on
-                            // `mpd-fragment.byte-range` / `.init-byte-range`).
-                            byte_range: fr.byte_range,
-                            init_url: fr.init_url,
-                            init_byte_range: fr.init_byte_range,
-                        })
+                        .map(crate::convert::fragment_to_wit)
                         .collect(),
                 })
                 .collect();
@@ -510,6 +584,63 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
             tags: rdlp_extractor::base::common::json_ld::extract_tags(&v).unwrap_or_default(),
             categories: rdlp_extractor::base::common::json_ld::extract_categories(&v)
                 .unwrap_or_default(),
+        })
+    }
+
+    // See the WIT doc comment on `expand-hls` for the contract this wraps
+    // unchanged (`expand_hls_in_place`): drop-not-fail per row, SSRF-gated,
+    // capped. The only `FetchError` this can return is
+    // `Network(FETCH_NOT_GRANTED)` from `hls_http_client` above — nothing
+    // downstream of it is fallible at this boundary.
+    async fn expand_hls(
+        &mut self,
+        formats: Vec<WitFormat>,
+        fetch: FetchOptions,
+    ) -> Result<Vec<HlsFormat>, FetchError> {
+        let (http, seeds) = self.hls_seeds(formats, &fetch, "expand-hls")?;
+        let expanded = rdlp_extractor::hls::expand_hls_in_place(seeds, http).await;
+        Ok(expanded
+            .iter()
+            .filter(|f| f.fragments.is_some())
+            .map(hls_format_to_wit)
+            .collect())
+    }
+
+    // See the WIT doc comment on `probe-format-sizes`. The WIT `format`
+    // record carries no `fragments` field, so `format_from_wit` always
+    // produces `rdlp_types::Format { fragments: None, .. }` here — the
+    // in-tree fragment-reuse short-circuit inside
+    // `detect_format_sizes_inner` (fragments already present → skip
+    // re-expansion) can NEVER trigger from this import. Every call re-fetches
+    // and re-parses each row's own playlist URL.
+    async fn probe_format_sizes(
+        &mut self,
+        formats: Vec<WitFormat>,
+        fetch: FetchOptions,
+    ) -> Result<SizeProbe, FetchError> {
+        let (http, seeds) = self.hls_seeds(formats, &fetch, "probe-format-sizes")?;
+        // The plugin host has no operator `Config` on this path (the store
+        // carries a client and capability contexts, not the orchestrator's
+        // configuration), so `SizeProbeEnv` gets `Config::default()`. That
+        // is sound because nothing this lazy probe does reads it:
+        // `detect_sizes` is hardcoded `false` by
+        // `detect_format_sizes_lazy_in`, so the non-HLS HEAD-probe branch
+        // (the only reader of `hls_head_probe_timeout`) never runs. The only
+        // `Config` field this path is sensitive to is `verbose` (debug-log
+        // detail), which defaults to `false` either way.
+        let config = rdlp_types::Config::default();
+        let probe = rdlp_extractor::hls::SizeProbeEnv {
+            http_client: http,
+            config: &config,
+            extractor_name: &self.plugin_name,
+        };
+        let (out, flags) = rdlp_extractor::hls::detect_format_sizes_lazy_in(seeds, &probe).await;
+        Ok(SizeProbe {
+            formats: out.iter().map(crate::convert::format_to_wit).collect(),
+            stream_flags: HlsStreamFlags {
+                is_live: flags.is_live,
+                has_any_drm: flags.has_any_drm,
+            },
         })
     }
 }

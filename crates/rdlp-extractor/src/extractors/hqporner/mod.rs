@@ -385,7 +385,7 @@ impl SearchExtractor for HQPornerExtractor {
         NAME.as_str()
     }
 
-    fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
+    async fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
         // HQPorner search has no sort/filter options
         vec![]
     }
@@ -492,11 +492,11 @@ full body massage</h1></body></html>"#;
         assert_eq!(extract_iframe_url("<html>no iframe here</html>"), None);
     }
 
-    #[test]
-    fn test_hqporner_implements_search_extractor() {
+    #[tokio::test]
+    async fn test_hqporner_implements_search_extractor() {
         let extractor = HQPornerExtractor::new();
         let filters =
-            <HQPornerExtractor as rdlp_core::SearchExtractor>::supported_filters(&extractor);
+            <HQPornerExtractor as rdlp_core::SearchExtractor>::supported_filters(&extractor).await;
         assert!(filters.is_empty(), "HQPorner has no search filters");
         assert_eq!(
             <HQPornerExtractor as rdlp_core::SearchExtractor>::name(&extractor),

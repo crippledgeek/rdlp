@@ -119,7 +119,7 @@ impl SearchExtractor for NineAnimeExtractor {
         NAME.as_str()
     }
 
-    fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
+    async fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
         search_patterns::search_filter_descriptors()
     }
 
@@ -310,10 +310,10 @@ mod tests {
         assert_eq!(SearchExtractor::name(&ext), "9anime");
     }
 
-    #[test]
-    fn test_supported_filters() {
+    #[tokio::test]
+    async fn test_supported_filters() {
         let ext = NineAnimeExtractor::new();
-        let filters = SearchExtractor::supported_filters(&ext);
+        let filters = SearchExtractor::supported_filters(&ext).await;
         assert_eq!(filters.len(), 1);
         assert_eq!(filters[0].key, "ordering");
         assert_eq!(filters[0].allowed_values.len(), 7);
