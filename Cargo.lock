@@ -6575,6 +6575,7 @@ dependencies = [
  "rdlp-extractor",
  "rdlp-http",
  "rdlp-jsinterp",
+ "rdlp-plugin",
  "rdlp-plugin-manifest",
  "rdlp-redact",
  "rdlp-security",

@@ -50,12 +50,26 @@ url = { workspace = true }
 percent-encoding = "2"
 rdlp-extractor = { version = "0.1.0", path = "../rdlp-extractor" }
 rdlp-redact = { workspace = true }
-# Regular (not dev-)dependency: `test_support` is compiled into the lib
-# (not `cfg(test)`) so `rdlp-api`'s integration tests can share the
-# isolated-config-dir helper too — see that module's doc. `tempfile` moves
-# here for the same reason (that helper creates its own tempdir).
-temp-env = { workspace = true }
-tempfile = { workspace = true }
+# Optional: only pulled in by the `test-support` feature below. `pub mod
+# test_support` (not `cfg(test)`) needs these at compile time even though
+# it exists purely for tests — see that module's doc and
+# scripts/check-test-only-features-not-in-release.sh.
+temp-env = { workspace = true, optional = true }
+tempfile = { workspace = true, optional = true }
+
+[features]
+# Gates `test_support`'s signer/identity/config-dir-isolation helpers,
+# which need `temp-env`/`tempfile` at compile time despite existing purely
+# for tests (an integration test in ANOTHER crate links this lib as a
+# regular dependency and can't see `cfg(test)` items — see
+# `src/test_support.rs`'s module doc). Enabled from this crate's own
+# `[dev-dependencies]` below (the standard self-dev-dep trick) and from
+# `rdlp-api`'s dev-dependency on this crate. MUST NEVER be enabled by a
+# release binary's non-dev dependency graph — that would link two
+# test-only crates into every user's `rdlp`/`rdlp-desktop` binary for no
+# runtime purpose; enforced by
+# scripts/check-test-only-features-not-in-release.sh.
+test-support = ["dep:temp-env", "dep:tempfile"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
@@ -63,6 +77,11 @@ wat = "1"
 rand = "0.8.5"
 mockito = { workspace = true }
 rdlp-extractor = { path = "../rdlp-extractor", features = ["loopback-test-exemption"] }
+# Self-dev-dependency: this crate's OWN tests/*.rs binaries link the lib as
+# an external crate (same reason `test_support` isn't `cfg(test)`), so they
+# need the feature enabled too, exactly like `rdlp-api`'s dev-dep on this
+# crate below does.
+rdlp-plugin = { path = ".", features = ["test-support"] }
 
 [lints.rust]
 missing_docs = "warn"

@@ -30,7 +30,7 @@
 /// `expand-hls`/`probe-format-sizes` host-import tests) and `rdlp-api`'s
 /// `[dev-dependencies]` (for its own mockito-backed extraction tests) enable
 /// it today. It must never be enabled by a production binary —
-/// `scripts/check-loopback-feature-not-in-release.sh` proves that.
+/// `scripts/check-test-only-features-not-in-release.sh` proves that.
 ///
 /// Returns `rdlp_security`'s own error so each protocol can map it into its
 /// own error type without this gate having to know about any of them.

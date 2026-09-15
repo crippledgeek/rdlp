@@ -26,7 +26,8 @@ pub struct TrustEntry {
     /// Plugin name (key).
     pub name: String,
     /// Stable identity string (e.g. `sigstore:github:user/repo` or
-    /// `ed25519:<8-byte-hex>` from `Signature::identity_string()`).
+    /// `ed25519:<hex of the full 32-byte SHA-256 over the base64-encoded
+    /// pubkey>` from `Signature::identity_string()`).
     pub identity: String,
     /// Capabilities the user approved at first install or last re-confirm.
     pub approved_capabilities: BTreeSet<String>,

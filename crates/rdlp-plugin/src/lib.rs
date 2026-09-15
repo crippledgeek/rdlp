@@ -116,6 +116,7 @@ pub mod priority;
 pub mod prompt;
 pub mod search_adapter;
 pub mod signature;
+#[cfg(feature = "test-support")]
 #[doc(hidden)]
 pub mod test_support;
 pub mod trust_store;

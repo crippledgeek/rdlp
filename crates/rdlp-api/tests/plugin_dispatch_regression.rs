@@ -21,6 +21,17 @@
 //! constructs an `RdlpClient` with `plugin_directories` set, and asserts that
 //! `list_extractors()` includes the plugin's name. Without the fix this
 //! assertion fails because `list_extractors()` consults the built-in registry.
+//!
+//! Uses the Task 1 fixture (`crates/rdlp-plugin/tests/fixtures/
+//! example-extractor-0.5.0/plugin.wasm`) — a real, WASI-free, committed
+//! component loadable by the production loader — rather than a wasm
+//! artefact built on demand from `examples/plugins/example-extractor`.
+//! The earlier version of this test silently `return`ed (exit 0, no
+//! failure) when that on-demand artefact wasn't present, which is the same
+//! self-skip defect class as the deleted `adapter_trap_disable.rs`: a test
+//! that can pass without ever running its assertion is not a regression
+//! guard. The committed fixture is always present, so there is nothing
+//! left to skip.
 
 use std::path::PathBuf;
 
@@ -32,8 +43,7 @@ use rdlp_plugin::test_support::{
 };
 use rdlp_types::Config;
 
-const EXAMPLE_WASM: &str =
-    "../../examples/plugins/example-extractor/target/wasm32-wasip1/release/example_extractor.wasm";
+const FIXTURE_0_5_0: &str = "../rdlp-plugin/tests/fixtures/example-extractor-0.5.0/plugin.wasm";
 
 fn workspace_relative(path: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(path)
@@ -41,15 +51,7 @@ fn workspace_relative(path: &str) -> PathBuf {
 
 #[test]
 fn list_extractors_includes_loaded_plugin() {
-    let wasm_src = workspace_relative(EXAMPLE_WASM);
-    if !wasm_src.exists() {
-        eprintln!(
-            "skipping: example-extractor wasm not built at {}\n\
-             run `cd examples/plugins/example-extractor && cargo component build --release` first",
-            wasm_src.display()
-        );
-        return;
-    }
+    let wasm_src = workspace_relative(FIXTURE_0_5_0);
 
     with_isolated_config_dir(|_config_dir| {
         let tempdir = tempfile::tempdir().expect("tempdir");

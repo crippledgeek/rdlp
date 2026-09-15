@@ -95,13 +95,13 @@ pub fn write_signed_plugin(dir: &Path, key: &SigningKey, spec: &SignedPluginSpec
         .map(|c| format!("\"{c}\""))
         .collect::<Vec<_>>()
         .join(", ");
-    // TOML basic strings interpret `\`, so a caller's regex (written with
-    // ordinary single backslashes, e.g. `r"(?P<id>\d+)"`) needs its
-    // backslashes doubled here to round-trip — the caller should not have
-    // to pre-escape for TOML.
+    // A hand-rolled `\`-only escape would mishandle a `"` in the regex
+    // (producing an invalid manifest); `toml::Value::String`'s `Display`
+    // emits a properly TOML-escaped string literal — quotes included — for
+    // any Rust `&str`, so the caller never has to pre-escape for TOML.
     let url_regex_line = spec
         .url_regex
-        .map(|r| format!("url_regex = \"{}\"\n", r.replace('\\', "\\\\")))
+        .map(|r| format!("url_regex = {}\n", toml::Value::String(r.to_string())))
         .unwrap_or_default();
     let toml_placeholder = format!(
         r#"
@@ -195,4 +195,52 @@ pub fn with_isolated_config_dir<R>(f: impl FnOnce(&Path) -> R) -> R {
         ],
         || f(tempdir.path()),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A `"` in the regex would break a hand-rolled `\`-only escape (it
+    /// terminates the TOML string early, producing either a parse error or
+    /// a silently truncated `url_regex`); this pins the round-trip through
+    /// `toml::Value::String` for a pattern carrying both a literal `"` and
+    /// a `\`, S1-style — the manifest that comes back out must equal the
+    /// regex that went in, not merely "parse without panicking".
+    // Test fixture — sync I/O is acceptable per clippy.toml's
+    // disallowed-methods carve-out (c).
+    #[allow(clippy::disallowed_methods)]
+    #[test]
+    fn url_regex_with_quote_and_backslash_round_trips() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let regex_with_quote_and_backslash = r#"^https://example\.com/"(?P<id>\d+)"$"#;
+        let key = SigningKey::generate(&mut rand::rngs::OsRng);
+        write_signed_plugin(
+            dir.path(),
+            &key,
+            &SignedPluginSpec {
+                name: "quote-test",
+                version: "0.1.0",
+                wit_version: "0.5.0",
+                matches: &["https://example.com/*"],
+                url_regex: Some(regex_with_quote_and_backslash),
+                priority: 150,
+                claims_override: &[],
+                capabilities: &[],
+                supports_extract: true,
+                supports_search: false,
+                wasm: b"not real wasm",
+            },
+        );
+
+        let written = std::fs::read_to_string(dir.path().join("plugin.toml"))
+            .unwrap_or_else(|e| panic!("read back plugin.toml: {e}"));
+        let manifest = crate::manifest::parse_manifest_str(&written)
+            .unwrap_or_else(|e| panic!("parse the manifest write_signed_plugin just wrote: {e}"));
+        assert_eq!(
+            manifest.url_regex.as_deref(),
+            Some(regex_with_quote_and_backslash),
+            "the regex must round-trip through TOML unchanged, quote and all"
+        );
+    }
 }

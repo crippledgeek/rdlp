@@ -52,13 +52,19 @@ tokio = { workspace = true, features = ["test-util"] }
 # it backs (`with_isolated_config_dir`) now lives once in
 # `rdlp_plugin::test_support`, which depends on it instead.
 tempfile = { workspace = true }
+# rdlp-plugin is already a [dependencies] entry (plugin_bootstrap.rs needs
+# it for real); this dev-only second entry unifies in the `test-support`
+# feature for this crate's own tests/*.rs binaries, without ever reaching
+# a release build (which excludes dev-dependencies) — see
+# scripts/check-test-only-features-not-in-release.sh.
+rdlp-plugin = { path = "../rdlp-plugin", features = ["test-support"] }
 proptest = "1.4"
 mockito = "1.7"
 regex = { workspace = true }
 # Widens rdlp-extractor's mockito-loopback SSRF-gate bypass to this crate's
 # own (non-#[cfg(test)]-visible) test suite — see
 # `rdlp_extractor::base::common::manifest_url` for the full rationale.
-# `scripts/check-loopback-feature-not-in-release.sh` proves no release binary
+# `scripts/check-test-only-features-not-in-release.sh` proves no release binary
 # ever enables it; this is a dev-only dependency so it never can.
 rdlp-extractor = { path = "../rdlp-extractor", features = [
     "loopback-test-exemption",

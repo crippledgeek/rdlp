@@ -39,7 +39,7 @@
 //! fires in an integration build unconditionally, feature on or off.
 //!
 //! The actual production guarantee — that no binary a user runs ever carries
-//! `loopback-test-exemption` — is `scripts/check-loopback-feature-not-in-release.sh`,
+//! `loopback-test-exemption` — is `scripts/check-test-only-features-not-in-release.sh`,
 //! which derives every workspace binary crate from `cargo metadata` and checks
 //! its non-dev dependency graph for the feature. That script, not this file,
 //! is what a future refactor widening the exemption's scope would need to

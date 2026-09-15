@@ -41,7 +41,7 @@ urlencoding = "2"
 # server. Intended to be enabled ONLY as a dev-dependency feature in those
 # sibling crates, added when the plugin host's own tests need it — nothing
 # references it yet. Must never reach a production binary; see
-# scripts/check-loopback-feature-not-in-release.sh.
+# scripts/check-test-only-features-not-in-release.sh.
 loopback-test-exemption = []
 
 [dev-dependencies]
