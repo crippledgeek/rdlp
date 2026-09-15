@@ -106,10 +106,40 @@ pub struct Manifest {
     /// Whether the plugin implements the `search` export.
     #[serde(default)]
     pub supports_search: bool,
+    /// Whether the plugin implements `extract` for real (default `true`). A
+    /// search-only plugin sets this `false` and MUST set `supports_search`.
+    /// TOML-only — `plugin-info` in the WIT is a shipped record and is not
+    /// extended (COMPATIBILITY.md).
+    #[serde(default = "default_true")]
+    pub supports_extract: bool,
+    /// Site name this plugin's `search` serves (the `--search-site` value).
+    /// Defaults to `name`; set it when the search plugin's own name differs
+    /// from the site (an extract-only `xhamster` plugin and a search-only
+    /// `xhamster-search` plugin both routing `--search-site xhamster`).
+    #[serde(default)]
+    pub search_site: Option<String>,
     /// Host capabilities the plugin requests (subset of `KNOWN_CAPABILITIES`).
     pub capabilities: Vec<String>,
     /// Signature backing the manifest + plugin.wasm (Sigstore or Ed25519).
     pub signature: Signature,
+}
+
+impl Manifest {
+    /// Site name this plugin's `search` export serves — the `search_site`
+    /// override when set, else `name`. Callers route `--search-site <value>`
+    /// against this, not `name` directly, so a search-only plugin can be
+    /// named independently of the site it searches.
+    #[must_use]
+    pub fn search_site_name(&self) -> &str {
+        self.search_site.as_deref().unwrap_or(&self.name)
+    }
+}
+
+/// Serde default for `Manifest::supports_extract` — `true`, matching every
+/// manifest written before the field existed (all of which implement
+/// `extract`).
+const fn default_true() -> bool {
+    true
 }
 
 /// Plugin signature variants.
@@ -326,6 +356,32 @@ fn validate(m: &Manifest) -> Result<(), ManifestError> {
         }
     }
 
+    validate_capability_composition(m)?;
+    validate_search_site(m)?;
+
+    Ok(())
+}
+
+/// A plugin must implement at least one of `extract` or `search` — one with
+/// neither would be dispatched to and always fail, so it is rejected at load
+/// time rather than at first use.
+fn validate_capability_composition(m: &Manifest) -> Result<(), ManifestError> {
+    if !m.supports_extract && !m.supports_search {
+        return invalid(
+            "supports_extract = false requires supports_search = true \
+             (a plugin must provide at least one capability)",
+        );
+    }
+    Ok(())
+}
+
+/// `search_site` is used as a `--search-site` routing key and in trust-store
+/// display, so it is held to the same path-traversal-safe shape as `name`
+/// (see `validate_plugin_name`).
+fn validate_search_site(m: &Manifest) -> Result<(), ManifestError> {
+    if let Some(site) = &m.search_site {
+        validate_plugin_name(site)?;
+    }
     Ok(())
 }
 
@@ -372,6 +428,15 @@ pub fn canonical_bytes(m: &Manifest) -> Vec<u8> {
     top.insert("wit_version", quote_str(&m.wit_version));
     if let Some(rx) = &m.url_regex {
         top.insert("url_regex", quote_str(rx));
+    }
+    // Conditional so every pre-0.5.1 manifest keeps its exact canonical bytes
+    // and signature (see the forward-compatibility note above): both fields
+    // are new, so only a non-default value can appear here.
+    if !m.supports_extract {
+        top.insert("supports_extract", "false".to_string());
+    }
+    if let Some(site) = &m.search_site {
+        top.insert("search_site", quote_str(site));
     }
 
     let mut out = String::new();

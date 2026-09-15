@@ -11,7 +11,7 @@
 
 // Lints suppressed for test code — panicking on unexpected errors is intentional here.
 
-use rdlp_plugin::manifest::{Signature, parse_manifest_str};
+use rdlp_plugin::manifest::{ManifestError, Signature, parse_manifest_str};
 
 const VALID_TOML: &str = r#"
 name = "youtube"
@@ -137,4 +137,42 @@ fn bare_any_scheme_wildcard_requires_claim_all_urls() {
     );
     let err = parse_manifest_str(&toml).unwrap_err();
     assert!(err.to_string().to_lowercase().contains("claim-all-urls"));
+}
+
+#[test]
+fn a_plugin_with_neither_capability_is_rejected() {
+    let toml = VALID_TOML
+        .replace("supports_search = true", "supports_search = false")
+        .replace(
+            "capabilities = [\"fetch\", \"log\"]",
+            "supports_extract = false\ncapabilities = [\"fetch\", \"log\"]",
+        );
+    let err = parse_manifest_str(&toml).unwrap_err();
+    match err {
+        ManifestError::InvalidManifest { reason, .. } => {
+            assert!(reason.contains("supports_extract"));
+            assert!(reason.contains("supports_search"));
+        }
+        other => panic!("expected InvalidManifest, got {other:?}"),
+    }
+}
+
+#[test]
+fn search_only_plugin_is_accepted() {
+    let toml = VALID_TOML.replace(
+        "capabilities = [\"fetch\", \"log\"]",
+        "supports_extract = false\ncapabilities = [\"fetch\", \"log\"]",
+    );
+    let m = parse_manifest_str(&toml).expect("supports_search=true covers the composition rule");
+    assert!(!m.supports_extract);
+}
+
+#[test]
+fn search_site_must_be_a_valid_plugin_name_shape() {
+    let toml = VALID_TOML.replace(
+        "capabilities = [\"fetch\", \"log\"]",
+        "search_site = \"../x\"\ncapabilities = [\"fetch\", \"log\"]",
+    );
+    let err = parse_manifest_str(&toml).unwrap_err();
+    assert!(matches!(err, ManifestError::InvalidPluginName { .. }));
 }
