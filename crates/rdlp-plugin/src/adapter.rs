@@ -275,7 +275,7 @@ impl InfoExtractor for PluginExtractor {
         p as i32
     }
 
-    async fn extract(&self, url: &str, _ctx: &ExtractionContext) -> rdlp_core::Result<InfoDict> {
+    async fn extract(&self, url: &str, ctx: &ExtractionContext) -> rdlp_core::Result<InfoDict> {
         let spec = CallSpec {
             subject_for_errors: url,
             timeout: EXTRACT_TIMEOUT,
@@ -284,7 +284,14 @@ impl InfoExtractor for PluginExtractor {
         // higher-ranked over the store borrow, so it cannot return a future
         // that also borrows `url` from this frame.
         let owned_url = url.to_string();
+        // The caps ride on the store data rather than as a fourth
+        // `call_plugin_extract` parameter: only `extract` has a `Config`
+        // to derive them from, so the runner (shared with search and
+        // playlist calls) leaves the store at `Default` and this closure
+        // sets them before the export runs.
+        let metadata_caps = crate::metadata_adapter::MetadataCaps::from(&*ctx.config);
         self.run_in_fresh_store(spec, move |store, inst| {
+            store.data_mut().metadata_caps = metadata_caps;
             Box::pin(async move { call_plugin_extract(store, inst, &owned_url).await })
         })
         .await
@@ -544,9 +551,8 @@ fn route_metadata_extraction(
 /// Tries the 0.5.2 `extract-with-metadata` export first
 /// (`metadata_adapter::call_extract_with_metadata`); [`route_metadata_extraction`]
 /// decides whether to short-circuit on it or fall back to the frozen 0.5.0
-/// `extract` unchanged. `metadata_caps` is `MetadataCaps::default()` for
-/// now — Task 7 threads it from `PluginStoreData` (populated from `Config`
-/// at store-build time) instead.
+/// `extract` unchanged. The extras caps come from the store data, where
+/// `PluginExtractor::extract` put the call's `Config`-derived values.
 pub(crate) async fn call_plugin_extract(
     store: &mut wasmtime::Store<PluginStoreData>,
     inst: &FreshInstance,
@@ -554,7 +560,7 @@ pub(crate) async fn call_plugin_extract(
 ) -> Result<InfoDict, PluginError> {
     let plugin_name = store.data().plugin_name.clone();
 
-    let metadata_caps = crate::metadata_adapter::MetadataCaps::default();
+    let metadata_caps = store.data().metadata_caps;
     let r = crate::metadata_adapter::call_extract_with_metadata(store, &inst.raw, url).await?;
     if let Some(routed) = route_metadata_extraction(
         r,

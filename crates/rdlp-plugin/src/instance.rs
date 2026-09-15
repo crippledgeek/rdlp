@@ -46,6 +46,11 @@ pub struct PluginStoreData {
     pub fetch: Option<crate::host::fetch::FetchCtx>,
     /// Granted `host:html-select` capability state, or `None` if not requested.
     pub html_select: Option<crate::host::html_select::HtmlSelectCtx>,
+    /// Bounds on a 0.5.2 `extract-with-metadata` result's `extras`.
+    /// `Default` from [`Self::new`]; `PluginExtractor::extract` overrides
+    /// it from the call's `Config` before the export runs, the same way
+    /// the capability fields above are filled after construction.
+    pub(crate) metadata_caps: crate::metadata_adapter::MetadataCaps,
 }
 
 impl PluginStoreData {
@@ -113,6 +118,7 @@ impl PluginStoreData {
             cookie_jar: None,
             fetch: None,
             html_select: None,
+            metadata_caps: crate::metadata_adapter::MetadataCaps::default(),
         }
     }
 }

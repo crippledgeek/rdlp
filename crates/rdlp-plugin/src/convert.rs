@@ -10,6 +10,7 @@
 
 use crate::bindings::rdlp::plugin::host_extract_helpers::MpdFragment;
 use crate::bindings::rdlp::plugin::types::Format as WitFormat;
+use crate::metadata_adapter::{MetadataCaps, extras_from_wit};
 use rdlp_types::DownloadProtocol;
 
 /// Upper bound on the `format` rows one WIT call may carry across the
@@ -200,21 +201,17 @@ pub(crate) fn info_dict_from_wit(
 /// The per-call context [`info_dict_from_extraction`] needs beyond the
 /// `extraction` payload: the request URL and diagnostics origin
 /// [`info_dict_from_wit`] already takes, plus the metadata caps
-/// `extras_from_wit` bounds `WitInfoDictExtra::extras` with (Task 7, refs
-/// #768). Grouped into one value so the function stays at two positional
-/// parameters instead of growing a fourth — see
+/// [`extras_from_wit`] bounds `WitInfoDictExtra::extras` with. Grouped
+/// into one value so the function stays at two positional parameters
+/// instead of growing a fourth — see
 /// `~/.claude/rules/limit-function-arguments.md`.
 pub(crate) struct ExtractionSite<'a> {
     /// The request URL, passed through to [`info_dict_from_wit`].
     pub url: &'a str,
     /// The calling plugin's diagnostics origin.
     pub origin: PluginOrigin<'a>,
-    /// Bounds for the not-yet-wired `extras` mapping (Task 7).
-    #[expect(
-        dead_code,
-        reason = "read by extras_from_wit, added in Task 7 of this slice (refs #768)"
-    )]
-    pub caps: &'a crate::metadata_adapter::MetadataCaps,
+    /// Bounds for the `extras` mapping, from the call's `Config`.
+    pub caps: &'a MetadataCaps,
 }
 
 /// Convert a bindgen-generated `WitThumbnail` (0.5.2 `extract-with-metadata`
@@ -238,8 +235,10 @@ fn thumbnail_from_wit(t: crate::metadata_adapter::WitThumbnail) -> rdlp_types::T
 /// onto the result directly. `actors` is a bare `Vec` on both sides;
 /// `thumbnails` collapses an empty list to `None`, matching
 /// [`info_dict_from_wit`]'s existing `tags`/`categories` convention. The
-/// open `extras` key/value tail is validated and capped by Task 7's
-/// `extras_from_wit`; this function does not touch it.
+/// open `extras` key/value tail goes through [`extras_from_wit`] under
+/// `site.caps`, landing in `InfoDict::extra` — which is
+/// `#[serde(flatten)]`, so each kept key is a top-level key of the dict's
+/// JSON.
 pub(crate) fn info_dict_from_extraction(
     w: crate::metadata_adapter::WitExtraction,
     site: &ExtractionSite<'_>,
@@ -260,6 +259,7 @@ pub(crate) fn info_dict_from_extraction(
                 .collect(),
         )
     };
+    out.extra = extras_from_wit(w.extra.extras, site.caps, &site.origin);
     out
 }
 
