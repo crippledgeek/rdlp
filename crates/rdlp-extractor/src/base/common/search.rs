@@ -527,12 +527,12 @@ pub(crate) fn append_search_filters(url: &mut String, filters: &[SearchFilter]) 
 /// message; a later-page error returns the results gathered so far.
 /// Implementors supply only the per-site pieces (a single
 /// [`fetch_page`](Self::fetch_page), filter validation); the log tag is
-/// derived from `SearchExtractor::name` (see [`log_tag`]);
+/// derived from `SearchExtractor::name` (see `log_tag`);
 /// [`search_all_pages`](Self::search_all_pages) is the shared default and
 /// should not be overridden.
 ///
 /// Each `fetch_page` computes its own `has_more` (from a site page count via
-/// the [`Termination`] helper, or from result-emptiness). Per-page
+/// the `Termination` helper, or from result-emptiness). Per-page
 /// primary↔fallback fetching is a private concern of each site's `fetch_page`.
 pub trait PagedSearch: SearchExtractor {
     // `search_log_tag` removed (#756) — the log tag is derived from
@@ -616,7 +616,7 @@ pub trait PagedSearch: SearchExtractor {
     }
 
     /// The `max_results` cap when the query does not specify one. Defaults to
-    /// [`MAX_PLAYLIST_SIZE`]; #440 single-GET sites override to their file-local 500.
+    /// `MAX_PLAYLIST_SIZE`; #440 single-GET sites override to their file-local 500.
     fn max_results_default(&self) -> usize {
         MAX_PLAYLIST_SIZE
     }
