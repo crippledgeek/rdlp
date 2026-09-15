@@ -56,10 +56,11 @@ rdlp-redact = { workspace = true }
 # scripts/check-test-only-features-not-in-release.sh.
 temp-env = { workspace = true, optional = true }
 tempfile = { workspace = true, optional = true }
+rand = { version = "0.8.5", optional = true }
 
 [features]
 # Gates `test_support`'s signer/identity/config-dir-isolation helpers,
-# which need `temp-env`/`tempfile` at compile time despite existing purely
+# which need `temp-env`/`tempfile`/`rand` at compile time despite existing purely
 # for tests (an integration test in ANOTHER crate links this lib as a
 # regular dependency and can't see `cfg(test)` items — see
 # `src/test_support.rs`'s module doc). Enabled from this crate's own
@@ -69,7 +70,7 @@ tempfile = { workspace = true, optional = true }
 # test-only crates into every user's `rdlp`/`rdlp-desktop` binary for no
 # runtime purpose; enforced by
 # scripts/check-test-only-features-not-in-release.sh.
-test-support = ["dep:temp-env", "dep:tempfile"]
+test-support = ["dep:temp-env", "dep:tempfile", "dep:rand"]
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

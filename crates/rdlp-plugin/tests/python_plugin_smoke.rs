@@ -20,13 +20,10 @@
 //!   examples/plugins/ytdlp-hello-world/build.sh   # produces out/plugin.wasm
 //!   cargo test -p rdlp-plugin --test python_plugin_smoke -- --ignored --nocapture
 
-mod common;
-
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use common::{SignedPluginSpec, extraction_ctx, write_signed_plugin};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 use rdlp_core::InfoExtractor;
@@ -35,6 +32,7 @@ use rdlp_plugin::adapter::{HostResources, PluginExtractor};
 use rdlp_plugin::engine::{Engine, EngineConfig};
 use rdlp_plugin::loader::Loader;
 use rdlp_plugin::prompt::AlwaysApprove;
+use rdlp_plugin::test_support::{SignedPluginSpec, extraction_ctx, write_signed_plugin};
 use rdlp_plugin::trust_store::TrustStore;
 use tempfile::TempDir;
 
@@ -68,6 +66,8 @@ async fn python_hello_world_loads_and_signs() {
             claims_override: &[],
             supports_extract: true,
             supports_search: false,
+            search_site: None,
+            search_claims_override: &[],
             capabilities: &[
                 "fetch",
                 "cookie-jar",
@@ -152,6 +152,8 @@ async fn python_hello_world_extract_succeeds() {
             claims_override: &[],
             supports_extract: true,
             supports_search: false,
+            search_site: None,
+            search_claims_override: &[],
             // componentize-py emits IMPORTS for every interface in the WIT world,
             // so the host must link all six. The Manifest still gates *use*: if the
             // plugin calls a capability whose context isn't populated (see

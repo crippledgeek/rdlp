@@ -118,6 +118,16 @@ pub struct Manifest {
     /// `xhamster-search` plugin both routing `--search-site xhamster`).
     #[serde(default)]
     pub search_site: Option<String>,
+    /// Search sites this plugin claims the right to shadow from a built-in
+    /// (the `--search-site` counterpart of `claims_override`, which binds
+    /// URL routing to hosts). A search has no URL, so the claim is bound
+    /// to the site name instead: every entry must equal
+    /// [`Manifest::search_site_name`] — a plugin serves one site — and the
+    /// registry lets a plugin contest a built-in's site only when it is
+    /// listed here. TOML-only, signed (in the canonical bytes when
+    /// non-empty), surfaced at first-install and re-confirmed on change.
+    #[serde(default)]
+    pub search_claims_override: Vec<String>,
     /// Host capabilities the plugin requests (subset of `KNOWN_CAPABILITIES`).
     pub capabilities: Vec<String>,
     /// Signature backing the manifest + plugin.wasm (Sigstore or Ed25519).
@@ -133,6 +143,45 @@ impl Manifest {
     pub fn search_site_name(&self) -> &str {
         self.search_site.as_deref().unwrap_or(&self.name)
     }
+
+    /// Whether this manifest claims the right to shadow the built-in
+    /// search for the site it serves: `search_claims_override` names
+    /// [`Self::search_site_name`]. Validation already rejects any other
+    /// entry, so a non-empty list implies `true`; the membership test keeps
+    /// the rule readable at the one place the registry asks.
+    #[must_use]
+    pub fn overrides_builtin_search(&self) -> bool {
+        let site = self.search_site_name();
+        self.search_claims_override.iter().any(|s| s == site)
+    }
+
+    /// The search-site claim this manifest makes, as the trust store
+    /// records it and the prompts display it.
+    #[must_use]
+    pub fn search_claims(&self) -> SearchClaims {
+        SearchClaims {
+            search_site: self.search_site.clone(),
+            search_claims_override: self.search_claims_override.clone(),
+        }
+    }
+}
+
+/// The search-site claim a manifest makes.
+///
+/// Which site its `search` serves, and whether it claims to shadow the
+/// built-in for that site. Recorded in the trust store beside the approved
+/// capabilities and compared on every load, so a plugin that starts
+/// claiming a built-in's site after it was trusted is re-confirmed the way
+/// capability creep is. Both fields default so a trust store written before
+/// they existed still parses.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SearchClaims {
+    /// `Manifest::search_site` as declared (`None` = the plugin's name).
+    #[serde(default)]
+    pub search_site: Option<String>,
+    /// `Manifest::search_claims_override` as declared.
+    #[serde(default)]
+    pub search_claims_override: Vec<String>,
 }
 
 /// Serde default for `Manifest::supports_extract` — `true`, matching every
@@ -377,10 +426,24 @@ fn validate_capability_composition(m: &Manifest) -> Result<(), ManifestError> {
 
 /// `search_site` is used as a `--search-site` routing key and in trust-store
 /// display, so it is held to the same path-traversal-safe shape as `name`
-/// (see `validate_plugin_name`).
+/// (see `validate_plugin_name`). `search_claims_override` entries are held
+/// to the same shape, must name the one site this plugin serves, and only
+/// make sense on a plugin that searches at all.
 fn validate_search_site(m: &Manifest) -> Result<(), ManifestError> {
     if let Some(site) = &m.search_site {
         validate_plugin_name(site)?;
+    }
+    if !m.search_claims_override.is_empty() && !m.supports_search {
+        return invalid("search_claims_override requires supports_search = true");
+    }
+    for claim in &m.search_claims_override {
+        validate_plugin_name(claim)?;
+        if claim != m.search_site_name() {
+            return invalid(&format!(
+                "search_claims_override entry '{claim}' is not the site this plugin serves ('{}')",
+                m.search_site_name()
+            ));
+        }
     }
     Ok(())
 }
@@ -400,9 +463,10 @@ fn invalid(reason: &str) -> Result<(), ManifestError> {
 /// - `signature` block excluded (the signature signs everything except itself)
 /// - LF line endings, single space around `=`
 /// - optional fields included only when present
-/// - fields introduced after 0.5.0 (`supports_extract`, `search_site`)
-///   appear only when non-default (`false` / present respectively), so every
-///   pre-0.5.1 manifest keeps its exact bytes and signature
+/// - fields introduced after 0.5.0 (`supports_extract`, `search_site`,
+///   `search_claims_override`) appear only when non-default (`false` /
+///   present / non-empty respectively), so every pre-0.5.1 manifest keeps
+///   its exact bytes and signature
 ///
 /// Reference implementation in another language must produce identical bytes
 /// for an equivalent manifest. Test fixtures live in
@@ -433,13 +497,19 @@ pub fn canonical_bytes(m: &Manifest) -> Vec<u8> {
         top.insert("url_regex", quote_str(rx));
     }
     // Conditional so every pre-0.5.1 manifest keeps its exact canonical bytes
-    // and signature (see the forward-compatibility note above): both fields
-    // are new, so only a non-default value can appear here.
+    // and signature (see the forward-compatibility note above): all three
+    // fields are new, so only a non-default value can appear here.
     if !m.supports_extract {
         top.insert("supports_extract", "false".to_string());
     }
     if let Some(site) = &m.search_site {
         top.insert("search_site", quote_str(site));
+    }
+    if !m.search_claims_override.is_empty() {
+        top.insert(
+            "search_claims_override",
+            string_list(&m.search_claims_override),
+        );
     }
 
     let mut out = String::new();

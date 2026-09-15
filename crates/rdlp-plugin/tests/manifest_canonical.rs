@@ -291,3 +291,59 @@ signature = "ZA"
     sorted.sort();
     assert_eq!(first_keys, sorted, "keys must be in lexicographic order");
 }
+
+#[test]
+fn search_claims_override_is_canonical_only_when_non_empty() {
+    let without = r#"
+name = "x"
+version = "1.0.0"
+wit_version = "0.5.0"
+matches = ["https://x.com/*"]
+priority = 150
+supports_search = true
+search_claims_override = []
+capabilities = ["log"]
+
+[signature]
+type = "ed25519"
+pubkey = "ZA"
+signature = "ZA"
+"#;
+    let m = parse_manifest_str(without).unwrap();
+    let s = String::from_utf8(canonical_bytes(&m)).unwrap();
+    assert!(
+        !s.contains("search_claims_override"),
+        "an empty (default) claim must leave pre-0.5.1 bytes untouched: {s}"
+    );
+}
+
+/// Exact-bytes golden for a manifest carrying every 0.5.1 field at a
+/// non-default value — the shape a third-party signer must reproduce
+/// byte-for-byte. Keys sorted, new keys interleaved in that order,
+/// `supports_extract` present only because it is `false`.
+#[test]
+fn canonical_bytes_of_a_full_0_5_1_manifest_are_pinned() {
+    let toml = r#"
+name = "ph-search"
+version = "1.0.0"
+wit_version = "0.5.1"
+matches = ["https://x.com/*"]
+priority = 150
+supports_search = true
+supports_extract = false
+search_site = "pornhub"
+search_claims_override = ["pornhub"]
+capabilities = ["log"]
+
+[signature]
+type = "ed25519"
+pubkey = "ZA"
+signature = "ZA"
+"#;
+    let m = parse_manifest_str(toml).unwrap();
+    let s = String::from_utf8(canonical_bytes(&m)).unwrap();
+    assert_eq!(
+        s,
+        "capabilities = [\"log\"]\nclaims_override = []\nmatches = [\"https://x.com/*\"]\nname = \"ph-search\"\npriority = 150\nsearch_claims_override = [\"pornhub\"]\nsearch_site = \"pornhub\"\nsupports_extract = false\nsupports_search = true\nversion = \"1.0.0\"\nwit_version = \"0.5.1\"\n"
+    );
+}

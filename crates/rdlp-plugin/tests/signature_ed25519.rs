@@ -12,11 +12,14 @@
 // Lints suppressed for test code — panicking on unexpected errors is intentional here.
 
 use base64::Engine as _;
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
-use rdlp_plugin::manifest::{Manifest, Signature, canonical_bytes, parse_manifest_str};
+use rdlp_plugin::manifest::{Manifest, Signature, parse_manifest_str};
 use rdlp_plugin::signature::ed25519::verify_ed25519;
+use rdlp_plugin::test_support::sign_manifest;
 
+/// An in-memory manifest signed over `wasm_bytes` by a fresh key, through
+/// the same `sign_manifest` every on-disk fixture goes through.
 fn build_signed_manifest(wasm_bytes: &[u8]) -> (Manifest, SigningKey) {
     let mut csprng = OsRng;
     let key = SigningKey::generate(&mut csprng);
@@ -35,18 +38,12 @@ capabilities = ["log"]
 [signature]
 type = "ed25519"
 pubkey = "{pubkey_b64}"
-signature = "PLACEHOLDER"
+signature = ""
 "#
     );
 
     let mut m = parse_manifest_str(&toml).unwrap();
-    let mut buf = canonical_bytes(&m);
-    buf.extend_from_slice(wasm_bytes);
-    let sig = key.sign(&buf);
-
-    if let Signature::Ed25519 { signature, .. } = &mut m.signature {
-        *signature = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
-    }
+    sign_manifest(&mut m, &key, wasm_bytes);
     (m, key)
 }
 

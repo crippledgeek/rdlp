@@ -13,8 +13,8 @@
 use crate::error::PluginError;
 
 pub use rdlp_plugin_manifest::{
-    KNOWN_CAPABILITIES, Manifest, ManifestError, Signature, canonical_bytes, parse_manifest_file,
-    parse_manifest_str, validate_plugin_name,
+    KNOWN_CAPABILITIES, Manifest, ManifestError, SearchClaims, Signature, canonical_bytes,
+    parse_manifest_file, parse_manifest_str, validate_plugin_name,
 };
 
 impl From<ManifestError> for PluginError {

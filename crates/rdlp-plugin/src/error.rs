@@ -48,6 +48,17 @@ pub enum PluginError {
         cap: String,
     },
 
+    /// A known plugin's search-site claim changed and the user declined it.
+    #[error(
+        "plugin '{plugin}' changed its search-site claim ({detail}) since it was approved. Re-confirm to update."
+    )]
+    SearchClaimsChange {
+        /// Plugin name as declared in its manifest.
+        plugin: String,
+        /// The claim the new version makes, rendered for the operator.
+        detail: String,
+    },
+
     /// A different plugin is already trusted under this name.
     #[error(
         "plugin name '{plugin}' already trusted under different identity '{existing}'. Run `rdlp plugin uninstall {plugin}` first."

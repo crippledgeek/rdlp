@@ -440,7 +440,7 @@ impl SearchExtractor for PluginSearchExtractor {
     }
 
     fn overrides_builtin(&self) -> bool {
-        !self.inner.manifest.claims_override.is_empty()
+        self.inner.manifest.overrides_builtin_search()
     }
 }
 
@@ -758,14 +758,73 @@ mod tests {
         assert!(!plain.overrides_builtin());
         assert_eq!(plain.first_page_index(), 1);
 
-        let overriding = FIXTURE_MANIFEST.replace(
-            "capabilities = []",
-            "capabilities = []\nclaims_override = [\"example.com\"]\nsearch_site = \"examplesite\"",
-        );
-        let ext =
-            PluginSearchExtractor::new(Arc::new(fixture_extractor_with_manifest(&overriding)));
-        assert_eq!(SearchExtractor::name(&ext), "examplesite");
+        let ext = PluginSearchExtractor::new(Arc::new(fixture_extractor_with_manifest(
+            &manifest_claiming("pornhub", "search_claims_override = [\"pornhub\"]"),
+        )));
+        assert_eq!(SearchExtractor::name(&ext), "pornhub");
         assert!(ext.overrides_builtin());
+    }
+
+    // ── search override binding (security M3) ─────────────────────────────
+
+    /// The fixture manifest serving `site` for search, with `claim` lines
+    /// appended verbatim.
+    fn manifest_claiming(site: &str, claim: &str) -> String {
+        FIXTURE_MANIFEST.replace(
+            "capabilities = []",
+            &format!(
+                "capabilities = []\nsupports_search = true\nsearch_site = \"{site}\"\n{claim}"
+            ),
+        )
+    }
+
+    /// The shadowing attempt: a plugin naming a built-in's site with only a
+    /// URL-routing `claims_override` (for a host it does match) claims
+    /// nothing about search — the override must be the explicit,
+    /// site-bound `search_claims_override`.
+    #[test]
+    fn a_url_claims_override_alone_does_not_override_builtin_search() {
+        let ext = PluginSearchExtractor::new(Arc::new(fixture_extractor_with_manifest(
+            &manifest_claiming("pornhub", "claims_override = [\"example.com\"]"),
+        )));
+        assert_eq!(SearchExtractor::name(&ext), "pornhub");
+        assert!(!ext.overrides_builtin());
+    }
+
+    /// End to end through the real registry: against the built-in
+    /// `pornhub`, the URL-only claimant LOSES and the site-bound claimant
+    /// WINS — the registry consults exactly `overrides_builtin`.
+    #[test]
+    fn registry_arbitration_honours_only_the_site_bound_claim() {
+        use rdlp_extractor::ExtractorRegistry;
+
+        let mut reg = ExtractorRegistry::new();
+        reg.register_search(Arc::new(PluginSearchExtractor::new(Arc::new(
+            fixture_extractor_with_manifest(&manifest_claiming(
+                "pornhub",
+                "claims_override = [\"example.com\"]",
+            )),
+        ))));
+        let found = reg
+            .find_search_extractor("pornhub")
+            .expect("the built-in exists");
+        assert!(
+            !found.is_plugin(),
+            "a URL-only claimant must lose to the built-in"
+        );
+
+        let mut reg = ExtractorRegistry::new();
+        reg.register_search(Arc::new(PluginSearchExtractor::new(Arc::new(
+            fixture_extractor_with_manifest(&manifest_claiming(
+                "pornhub",
+                "search_claims_override = [\"pornhub\"]",
+            )),
+        ))));
+        let found = reg.find_search_extractor("pornhub").expect("a match");
+        assert!(
+            found.is_plugin(),
+            "the site-bound claimant must shadow the built-in"
+        );
     }
 
     /// A plugin the runner refuses (here: disabled by the 3-strike rule)

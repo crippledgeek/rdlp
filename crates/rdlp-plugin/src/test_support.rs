@@ -17,7 +17,9 @@ use std::sync::Arc;
 use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey};
 use rdlp_core::ExtractionContext;
-use sha2::{Digest, Sha256};
+
+use crate::manifest::{Manifest, Signature, canonical_bytes};
+use crate::prompt::{ConfirmRequest, ConfirmResponse, Prompter};
 
 /// The committed 0.5.0 example component (`tests/fixtures/example-extractor-0.5.0`):
 /// WASI-free, no capabilities, implements `extract` and `search`, instantiates
@@ -46,7 +48,12 @@ pub fn extraction_ctx() -> ExtractionContext {
 /// vary across their signed-plugin fixtures. `dir` and `key` stay as
 /// [`write_signed_plugin`]'s own parameters (they answer "where" and "who
 /// signs", not "what manifest").
+///
+/// Start from [`SignedPluginSpec::stub`] / [`SignedPluginSpec::example`]
+/// and override the fields a test is about with struct-update syntax, so a
+/// call site names only what it varies.
 #[doc(hidden)]
+#[derive(Debug, Clone, Copy)]
 pub struct SignedPluginSpec<'a> {
     /// Plugin name — always varies (one per plugin fixture).
     pub name: &'a str,
@@ -72,79 +79,112 @@ pub struct SignedPluginSpec<'a> {
     pub supports_extract: bool,
     /// Whether the manifest declares `supports_search`.
     pub supports_search: bool,
+    /// The manifest's `search_site` (`None` = the plugin's own name).
+    pub search_site: Option<&'a str>,
+    /// The manifest's `search_claims_override`.
+    pub search_claims_override: &'a [&'a str],
     /// The compiled component bytes to sign and write.
     pub wasm: &'a [u8],
 }
 
+impl<'a> SignedPluginSpec<'a> {
+    /// A stub plugin: `wasm` is whatever bytes the caller supplies (a
+    /// `(component)` WAT stub, or bytes that need not be a component at
+    /// all when only signing is under test), one `example.com` match
+    /// pattern, priority 150, no capabilities, extract-only.
+    #[must_use]
+    pub const fn stub(name: &'a str, wasm: &'a [u8]) -> Self {
+        Self {
+            name,
+            version: "1.0.0",
+            wit_version: "0.5.0",
+            matches: &["https://example.com/*"],
+            url_regex: None,
+            priority: 150,
+            claims_override: &[],
+            capabilities: &[],
+            supports_extract: true,
+            supports_search: false,
+            search_site: None,
+            search_claims_override: &[],
+            wasm,
+        }
+    }
+
+    /// The committed 0.5.0 example component under its template's name
+    /// and match pattern — a pure, deterministic plugin with no
+    /// capabilities, as `examples/plugins/example-extractor`'s
+    /// `plugin.toml.template` declares it.
+    #[must_use]
+    pub const fn example() -> Self {
+        Self {
+            version: "0.1.0",
+            ..Self::stub("example", EXAMPLE_0_5_0_WASM)
+        }
+    }
+}
+
+/// Base64 of the key's 32-byte public key, as the manifest carries it.
+fn pubkey_b64(key: &SigningKey) -> String {
+    base64::engine::general_purpose::STANDARD.encode(key.verifying_key().as_bytes())
+}
+
+/// Sign `manifest` (whose signature block must already carry `key`'s
+/// public key) over `canonical_bytes(manifest) || wasm`, writing the
+/// signature into it. The one signing mechanism every plugin test across
+/// the workspace shares — [`write_signed_plugin`] here and
+/// `tests/signature_ed25519.rs`'s in-memory manifests alike.
+///
+/// # Panics
+///
+/// If `manifest.signature` is not `Ed25519`.
+#[doc(hidden)]
+pub fn sign_manifest(manifest: &mut Manifest, key: &SigningKey, wasm: &[u8]) {
+    let mut buf = canonical_bytes(manifest);
+    buf.extend_from_slice(wasm);
+    let sig = key.sign(&buf);
+    match &mut manifest.signature {
+        Signature::Ed25519 { signature, .. } => {
+            *signature = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
+        }
+        Signature::Sigstore { .. } => panic!("sign_manifest signs Ed25519 manifests only"),
+    }
+}
+
 /// Write a signed `plugin.toml` + `plugin.wasm` into `dir` so
-/// `Loader::discover` accepts it. The one signing mechanism every plugin
-/// integration test across the workspace shares.
+/// `Loader::discover` accepts it. Builds the [`Manifest`] directly from
+/// `spec`, signs it with [`sign_manifest`], serialises it with `toml`
+/// (so any `url_regex` is escaped correctly), and re-parses the written
+/// text so the fixture is validated exactly as the loader will validate it.
 #[doc(hidden)]
 pub fn write_signed_plugin(dir: &Path, key: &SigningKey, spec: &SignedPluginSpec<'_>) {
     write_fixture_file(dir, "plugin.wasm", spec.wasm);
 
-    let pubkey_b64 =
-        base64::engine::general_purpose::STANDARD.encode(key.verifying_key().as_bytes());
-    let cap_str = spec
-        .capabilities
-        .iter()
-        .map(|c| format!("\"{c}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let match_str = spec
-        .matches
-        .iter()
-        .map(|m| format!("\"{m}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let claims_str = spec
-        .claims_override
-        .iter()
-        .map(|c| format!("\"{c}\""))
-        .collect::<Vec<_>>()
-        .join(", ");
-    // A hand-rolled `\`-only escape would mishandle a `"` in the regex
-    // (producing an invalid manifest); `toml::Value::String`'s `Display`
-    // emits a properly TOML-escaped string literal — quotes included — for
-    // any Rust `&str`, so the caller never has to pre-escape for TOML.
-    let url_regex_line = spec
-        .url_regex
-        .map(|r| format!("url_regex = {}\n", toml::Value::String(r.to_string())))
-        .unwrap_or_default();
-    let toml_placeholder = format!(
-        r#"
-name = "{name}"
-version = "{version}"
-wit_version = "{wit_version}"
-matches = [{match_str}]
-{url_regex_line}priority = {priority}
-claims_override = [{claims_str}]
-supports_search = {supports_search}
-supports_extract = {supports_extract}
-capabilities = [{cap_str}]
+    let owned = |items: &[&str]| items.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
+    let mut manifest = Manifest {
+        name: spec.name.to_string(),
+        version: spec.version.to_string(),
+        wit_version: spec.wit_version.to_string(),
+        matches: owned(spec.matches),
+        url_regex: spec.url_regex.map(str::to_string),
+        priority: spec.priority,
+        claims_override: owned(spec.claims_override),
+        supports_search: spec.supports_search,
+        supports_extract: spec.supports_extract,
+        search_site: spec.search_site.map(str::to_string),
+        search_claims_override: owned(spec.search_claims_override),
+        capabilities: owned(spec.capabilities),
+        signature: Signature::Ed25519 {
+            pubkey: pubkey_b64(key),
+            signature: String::new(),
+        },
+    };
+    sign_manifest(&mut manifest, key, spec.wasm);
 
-[signature]
-type = "ed25519"
-pubkey = "{pubkey_b64}"
-signature = "PLACEHOLDER"
-"#,
-        name = spec.name,
-        version = spec.version,
-        wit_version = spec.wit_version,
-        priority = spec.priority,
-        supports_search = spec.supports_search,
-        supports_extract = spec.supports_extract,
-    );
-
-    let m = crate::manifest::parse_manifest_str(&toml_placeholder)
-        .unwrap_or_else(|e| panic!("parse manifest: {e}"));
-    let mut buf = crate::manifest::canonical_bytes(&m);
-    buf.extend_from_slice(spec.wasm);
-    let sig = key.sign(&buf);
-    let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
-
-    let final_toml = toml_placeholder.replace("PLACEHOLDER", &sig_b64);
-    write_fixture_file(dir, "plugin.toml", final_toml.as_bytes());
+    let text = toml::to_string(&manifest).unwrap_or_else(|e| panic!("serialise manifest: {e}"));
+    crate::manifest::parse_manifest_str(&text)
+        .unwrap_or_else(|e| panic!("the manifest write_signed_plugin built is invalid: {e}"));
+    write_fixture_file(dir, "plugin.toml", text.as_bytes());
 }
 
 /// Create `dir` and write `contents` to `dir.join(name)`. The one place
@@ -161,21 +201,74 @@ fn write_fixture_file(dir: &Path, name: &str, contents: &[u8]) {
         .unwrap_or_else(|e| panic!("write {}/{name}: {e}", dir.display()));
 }
 
-/// The trust-store identity string for a signing key: `ed25519:<hex of the
-/// SHA-256 over the base64-encoded public key>`, matching
-/// `Signature::identity_string()`'s post-MVP-hardening format. Every test
-/// that pre-trusts a freshly generated key (rather than going through the
-/// interactive prompter) needs this to populate
+/// The trust-store identity string for a signing key, computed by the
+/// production `Signature::identity_string` over the manifest's base64
+/// public key. Every test that pre-trusts a freshly generated key (rather
+/// than going through the interactive prompter) needs this to populate
 /// `Config::plugin_trusted_publishers`.
 #[doc(hidden)]
 #[must_use]
 pub fn trusted_identity_for(key: &SigningKey) -> String {
-    let pubkey_b64 =
-        base64::engine::general_purpose::STANDARD.encode(key.verifying_key().as_bytes());
-    format!(
-        "ed25519:{}",
-        hex::encode(Sha256::digest(pubkey_b64.as_bytes()))
-    )
+    Signature::Ed25519 {
+        pubkey: pubkey_b64(key),
+        signature: String::new(),
+    }
+    .identity_string()
+}
+
+/// Sign `spec` under a fresh key into `dir.join(spec.name)`, and a `Config`
+/// that pre-trusts that key with `dir` as its one plugin directory — so a
+/// `bootstrap_plugins`/`RdlpClient` test loads the fixture without an
+/// interactive prompt. The caller keeps `dir` alive for the test's
+/// duration.
+#[doc(hidden)]
+#[must_use]
+pub fn signed_fixture_config(dir: &Path, spec: &SignedPluginSpec<'_>) -> rdlp_types::Config {
+    let key = SigningKey::generate(&mut rand::rngs::OsRng);
+    write_signed_plugin(&dir.join(spec.name), &key, spec);
+    rdlp_types::Config {
+        plugin_directories: vec![dir.to_path_buf()],
+        plugin_trusted_publishers: vec![trusted_identity_for(&key)],
+        ..Default::default()
+    }
+}
+
+/// A [`Prompter`] that records every request it is shown and answers with
+/// a fixed response, so a test can assert what the loader asked.
+#[doc(hidden)]
+pub struct RecordingPrompter {
+    requests: std::sync::Mutex<Vec<ConfirmRequest>>,
+    answer: ConfirmResponse,
+}
+
+impl RecordingPrompter {
+    /// A prompter answering `answer` to everything.
+    #[must_use]
+    pub const fn answering(answer: ConfirmResponse) -> Self {
+        Self {
+            requests: std::sync::Mutex::new(Vec::new()),
+            answer,
+        }
+    }
+
+    /// Every request shown so far, in order.
+    #[must_use]
+    pub fn requests(&self) -> Vec<ConfirmRequest> {
+        self.requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl Prompter for RecordingPrompter {
+    fn confirm(&self, request: ConfirmRequest) -> ConfirmResponse {
+        self.requests
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(request);
+        self.answer
+    }
 }
 
 /// Run `f` with `XDG_CONFIG_HOME` and `HOME` both pointing at a fresh temp
@@ -346,17 +439,8 @@ mod tests {
             dir.path(),
             &key,
             &SignedPluginSpec {
-                name: "quote-test",
-                version: "0.1.0",
-                wit_version: "0.5.0",
-                matches: &["https://example.com/*"],
                 url_regex: Some(regex_with_quote_and_backslash),
-                priority: 150,
-                claims_override: &[],
-                capabilities: &[],
-                supports_extract: true,
-                supports_search: false,
-                wasm: b"not real wasm",
+                ..SignedPluginSpec::stub("quote-test", b"not real wasm")
             },
         );
 

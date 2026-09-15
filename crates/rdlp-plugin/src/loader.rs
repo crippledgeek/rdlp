@@ -110,9 +110,12 @@ impl<'a> Loader<'a> {
     /// Scan `root` for plugin subdirectories and load each. Errors are
     /// per-plugin and do not block siblings.
     ///
-    /// Returns one `DiscoverOutcome` per plugin directory found. Directories
-    /// missing `plugin.toml` or `plugin.wasm` are silently skipped; only
-    /// directories containing both files are processed.
+    /// Returns one `DiscoverOutcome` per plugin directory found, in path
+    /// order — `read_dir` yields entries in filesystem order, which differs
+    /// between filesystems, and the registry's "first registered wins"
+    /// tie-break downstream must not depend on it. Directories missing
+    /// `plugin.toml` or `plugin.wasm` are silently skipped; only directories
+    /// containing both files are processed.
     pub fn discover(&mut self, root: &Path) -> Vec<DiscoverOutcome> {
         let mut out = Vec::new();
         #[allow(clippy::disallowed_methods)] // startup/load-time sync I/O
@@ -123,8 +126,9 @@ impl<'a> Loader<'a> {
                 return out;
             }
         };
-        for entry in entries.flatten() {
-            let dir = entry.path();
+        let mut dirs: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+        dirs.sort();
+        for dir in dirs {
             if !dir.is_dir() {
                 continue;
             }
@@ -164,8 +168,10 @@ impl<'a> Loader<'a> {
         let identity = manifest.signature.identity_string();
 
         // Step 6: trust-store checks
-        let requested: BTreeSet<String> = manifest.capabilities.iter().cloned().collect();
-        self.check_trust(&manifest, &identity, &requested)?;
+        self.check_trust(&TrustSubject {
+            manifest: &manifest,
+            identity: &identity,
+        })?;
 
         // Step 7: compile component
         let component = wasmtime::component::Component::new(self.engine.raw(), &wasm)
@@ -181,57 +187,63 @@ impl<'a> Loader<'a> {
 
     /// Run the full trust-store / prompt workflow for one plugin. Mutates the
     /// trust store on `ApprovePersist`; session-only on `ApproveOnce`.
-    fn check_trust(
-        &mut self,
-        manifest: &Manifest,
-        identity: &str,
-        requested: &BTreeSet<String>,
-    ) -> Result<(), PluginError> {
+    ///
+    /// A known publisher is re-confirmed for two kinds of change, each
+    /// through its own prompt: capabilities not previously approved
+    /// (`CapabilityCreep`), and a search-site claim that differs from the
+    /// approved one (`SearchClaimsChange`) — a plugin must not be able to
+    /// start shadowing a built-in's search on an update the user never saw.
+    fn check_trust(&mut self, subject: &TrustSubject<'_>) -> Result<(), PluginError> {
+        let TrustSubject { manifest, identity } = *subject;
         match self
             .trust_store
             .check_identity_match(&manifest.name, identity)
         {
             IdentityCheck::Match => {
-                // Known publisher — check for capability creep.
                 if let CapabilityCheck::NewCapabilitiesRequested(new_caps) = self
                     .trust_store
-                    .check_capabilities(&manifest.name, requested)
+                    .check_capabilities(&manifest.name, &subject.requested_capabilities())
                 {
                     let previously_approved: Vec<String> = self
                         .trust_store
                         .lookup(&manifest.name)
                         .map(|e| e.approved_capabilities.iter().cloned().collect())
                         .unwrap_or_default();
-
                     let resp = self.prompter.confirm(ConfirmRequest::CapabilityCreep {
                         plugin_name: manifest.name.clone(),
                         new_version: manifest.version.clone(),
                         previously_approved,
                         new_capabilities: new_caps.clone(),
                     });
+                    let denied = || PluginError::CapabilityCreep {
+                        plugin: manifest.name.clone(),
+                        cap: new_caps.join(", "),
+                    };
+                    self.apply_decision(resp, subject, denied)?;
+                }
 
-                    match resp {
-                        ConfirmResponse::Deny => {
-                            return Err(PluginError::CapabilityCreep {
-                                plugin: manifest.name.clone(),
-                                cap: new_caps.join(", "),
-                            });
-                        }
-                        ConfirmResponse::ApprovePersist => {
-                            // Persist the expanded capability set so subsequent
-                            // loads of the same version don't prompt again.
-                            self.trust_store.record(TrustEntry {
-                                name: manifest.name.clone(),
-                                identity: identity.to_string(),
-                                approved_capabilities: requested.clone(),
-                            })?;
-                        }
-                        ConfirmResponse::ApproveOnce => {
-                            // Allow the current load but do NOT update the
-                            // trust store — user will be prompted again on the
-                            // next startup.
-                        }
-                    }
+                let approved_claims = self
+                    .trust_store
+                    .lookup(&manifest.name)
+                    .map(|e| e.search.clone())
+                    .unwrap_or_default();
+                let requested_claims = manifest.search_claims();
+                if approved_claims != requested_claims {
+                    let resp = self.prompter.confirm(ConfirmRequest::SearchClaimsChange {
+                        plugin_name: manifest.name.clone(),
+                        new_version: manifest.version.clone(),
+                        previously_approved: approved_claims,
+                        requested: requested_claims.clone(),
+                    });
+                    let denied = || PluginError::SearchClaimsChange {
+                        plugin: manifest.name.clone(),
+                        detail: format!(
+                            "search_site = {:?}, search_claims_override = {:?}",
+                            manifest.search_site_name(),
+                            requested_claims.search_claims_override
+                        ),
+                    };
+                    self.apply_decision(resp, subject, denied)?;
                 }
             }
             IdentityCheck::Mismatch {
@@ -245,38 +257,69 @@ impl<'a> Loader<'a> {
                 });
             }
             IdentityCheck::NewName => {
-                // First install — require explicit approval.
                 let resp = self.prompter.confirm(ConfirmRequest::FirstInstall {
                     plugin_name: manifest.name.clone(),
                     version: manifest.version.clone(),
                     identity: identity.to_string(),
                     capabilities: manifest.capabilities.clone(),
                     claims_override: manifest.claims_override.clone(),
+                    search: manifest.search_claims(),
                 });
-
-                match resp {
-                    ConfirmResponse::Deny => {
-                        return Err(PluginError::Internal(format!(
-                            "user declined trust for plugin {}",
-                            manifest.name
-                        )));
-                    }
-                    ConfirmResponse::ApprovePersist => {
-                        self.trust_store.record(TrustEntry {
-                            name: manifest.name.clone(),
-                            identity: identity.to_string(),
-                            approved_capabilities: requested.clone(),
-                        })?;
-                    }
-                    ConfirmResponse::ApproveOnce => {
-                        // Allow this session load but do NOT record in trust
-                        // store — user will be prompted again next startup.
-                    }
-                }
+                let denied = || {
+                    PluginError::Internal(format!(
+                        "user declined trust for plugin {}",
+                        manifest.name
+                    ))
+                };
+                self.apply_decision(resp, subject, denied)?;
             }
         }
 
         Ok(())
+    }
+
+    /// Apply one prompt decision: `Deny` is `denied()`, `ApprovePersist`
+    /// records the manifest's current capabilities and search-site claim so
+    /// the same version does not prompt again, and `ApproveOnce` allows this
+    /// load without touching the store (the user is prompted again next
+    /// startup). One implementation for all three prompts, so persisting an
+    /// approval always writes the whole entry.
+    fn apply_decision(
+        &mut self,
+        resp: ConfirmResponse,
+        subject: &TrustSubject<'_>,
+        denied: impl FnOnce() -> PluginError,
+    ) -> Result<(), PluginError> {
+        match resp {
+            ConfirmResponse::Deny => Err(denied()),
+            ConfirmResponse::ApprovePersist => self.trust_store.record(subject.entry()),
+            ConfirmResponse::ApproveOnce => Ok(()),
+        }
+    }
+}
+
+/// What the trust store judges one load by: the manifest being loaded and
+/// the identity its signature proved.
+struct TrustSubject<'a> {
+    manifest: &'a Manifest,
+    identity: &'a str,
+}
+
+impl TrustSubject<'_> {
+    /// The capability set the manifest asks for.
+    fn requested_capabilities(&self) -> BTreeSet<String> {
+        self.manifest.capabilities.iter().cloned().collect()
+    }
+
+    /// The entry an `ApprovePersist` writes: everything this version asks
+    /// for, so the same version never prompts again.
+    fn entry(&self) -> TrustEntry {
+        TrustEntry {
+            name: self.manifest.name.clone(),
+            identity: self.identity.to_string(),
+            approved_capabilities: self.requested_capabilities(),
+            search: self.manifest.search_claims(),
+        }
     }
 }
 

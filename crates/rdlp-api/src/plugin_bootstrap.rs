@@ -227,17 +227,9 @@ fn config_dir() -> anyhow::Result<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_dalek::SigningKey;
-    use rand::rngs::OsRng;
     use rdlp_plugin::test_support::{
-        SignedPluginSpec, trusted_identity_for, with_isolated_config_dir, write_signed_plugin,
+        SignedPluginSpec, signed_fixture_config, with_isolated_config_dir,
     };
-
-    /// The Task 1 fixture shared with `rdlp-plugin`'s own tests: a real,
-    /// WASI-free component implementing `extract` and `search`, so the
-    /// manifest's `supports_extract`/`supports_search` flags are the only
-    /// thing under test here — the component itself always answers both.
-    const FIXTURE_0_5_0: &str = "../rdlp-plugin/tests/fixtures/example-extractor-0.5.0/plugin.wasm";
 
     /// Which of the plugin's two independent capabilities (D5) a test
     /// manifest declares. A bare `(bool, bool)` positional pair is exactly
@@ -249,46 +241,24 @@ mod tests {
         search: bool,
     }
 
-    /// Sign the fixture component under the given capability flags into a
-    /// fresh temp plugin directory, and a `Config` pre-trusting the signer
-    /// so `bootstrap_plugins` loads it without an interactive prompt.
-    /// Returns the `TempDir` guard alongside the `Config` so the caller
-    /// keeps the plugin directory alive for the duration of the test
-    /// instead of it being deleted the moment this function returns.
+    /// Sign the committed 0.5.0 example component (a real, WASI-free
+    /// component implementing `extract` and `search`, so the manifest's
+    /// `supports_extract`/`supports_search` flags are the only thing under
+    /// test) under the given capability flags into a fresh temp plugin
+    /// directory, and a `Config` pre-trusting the signer so
+    /// `bootstrap_plugins` loads it without an interactive prompt. Returns
+    /// the `TempDir` guard alongside the `Config` so the caller keeps the
+    /// plugin directory alive for the duration of the test.
     fn config_with_signed_plugin(capabilities: &Capabilities) -> (Config, tempfile::TempDir) {
-        let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_0_5_0);
-        // Test fixture — sync I/O is acceptable per clippy.toml's
-        // disallowed-methods carve-out (c); this runs in test setup, never
-        // on an async hot path.
-        #[allow(clippy::disallowed_methods)]
-        let wasm = std::fs::read(&wasm_path)
-            .unwrap_or_else(|e| panic!("read fixture {}: {e}", wasm_path.display()));
-
         let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
-        let key = SigningKey::generate(&mut OsRng);
-        write_signed_plugin(
-            &tempdir.path().join("example"),
-            &key,
+        let config = signed_fixture_config(
+            tempdir.path(),
             &SignedPluginSpec {
-                name: "example",
-                version: "0.1.0",
-                wit_version: "0.5.0",
-                matches: &["https://example.com/*"],
-                url_regex: None,
-                priority: 150,
-                claims_override: &[],
-                capabilities: &[],
                 supports_extract: capabilities.extract,
                 supports_search: capabilities.search,
-                wasm: &wasm,
+                ..SignedPluginSpec::example()
             },
         );
-
-        let config = Config {
-            plugin_directories: vec![tempdir.path().to_path_buf()],
-            plugin_trusted_publishers: vec![trusted_identity_for(&key)],
-            ..Default::default()
-        };
         (config, tempdir)
     }
 

@@ -266,10 +266,15 @@ It adds:
   its supported `--search-filter` keys/values; the host resolves this export
   by name rather than through the generated bindings, so a plugin built
   before 0.5.1 still instantiates and is treated as declaring no filters.
-- **`supports_extract` / `search_site` manifest fields** — `supports_extract`
-  lets a search-only plugin opt out of extract dispatch (defaults `true`);
-  `search_site` names the site a search-capable plugin serves for
-  `--search-site` routing, defaulting to the plugin's own name.
+- **`supports_extract` / `search_site` / `search_claims_override` manifest
+  fields** — `supports_extract` lets a search-only plugin opt out of extract
+  dispatch (defaults `true`); `search_site` names the site a search-capable
+  plugin serves for `--search-site` routing, defaulting to the plugin's own
+  name; `search_claims_override` is the search counterpart of
+  `claims_override` — a plugin may list its own `search_site` here to shadow
+  rdlp's built-in search for that site (any other entry is rejected at load).
+  The claim is signed, shown at first install, and re-confirmed if a later
+  version changes it.
 
 ## Policy: yt-dlp-ported plugins stay byte-identical
 

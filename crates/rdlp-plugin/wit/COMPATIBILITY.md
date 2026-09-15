@@ -62,12 +62,13 @@ Splitting `extract` and `search` into separate WIT interfaces, so a plugin
 exports only the capability it provides instead of a stubbed no-op. This
 renames exports (a breaking change) and is deferred to the next minor bump.
 
-## 7. Manifest fields (0.5.1 adds; Task 10 implements)
+## 7. Manifest fields added in 0.5.1
 
-0.5.1 adds two `rdlp-plugin-manifest` TOML fields, not WIT records (adding a
-field to `plugin-info` itself would be a breaking record change):
-`supports_extract` (default `true`) and `search_site` (optional). Canonical
-manifest bytes include `supports_extract` only when `false`, and
-`search_site` only when present — so a 0.5.0 manifest's canonical bytes, and
-its signature over them, stay valid unchanged. Implemented in Task 10 of
-this slice.
+0.5.1 adds three `rdlp-plugin-manifest` TOML fields, not WIT records (adding
+a field to `plugin-info` itself would be a breaking record change):
+`supports_extract` (default `true`), `search_site` (optional), and
+`search_claims_override` (default empty; every entry must equal the
+plugin's own search site). Canonical manifest bytes include
+`supports_extract` only when `false`, `search_site` only when present, and
+`search_claims_override` only when non-empty — so a 0.5.0 manifest's
+canonical bytes, and its signature over them, stay valid unchanged.

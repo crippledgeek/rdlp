@@ -14,6 +14,8 @@
 // pre-existing patterns are accepted for now — addressed in a separate pass.
 #![allow(clippy::too_long_first_doc_paragraph)]
 
+use crate::manifest::SearchClaims;
+
 /// Describes the scenario requiring user confirmation.
 #[derive(Debug, Clone)]
 pub enum ConfirmRequest {
@@ -27,8 +29,13 @@ pub enum ConfirmRequest {
         identity: String,
         /// Capabilities the plugin declares.
         capabilities: Vec<String>,
-        /// Any claims the user has pre-overridden on the command line.
+        /// Hosts the manifest claims the right to shadow from a built-in
+        /// for URL routing (`claims_override`).
         claims_override: Vec<String>,
+        /// The manifest's search-site claim: the site its `search` serves
+        /// and, when `search_claims_override` names it, that the plugin
+        /// will shadow the built-in search for that site.
+        search: SearchClaims,
     },
     /// Subsequent install of a known plugin requesting MORE capabilities than
     /// previously approved.
@@ -42,10 +49,23 @@ pub enum ConfirmRequest {
         /// Net-new capabilities requested by the new version.
         new_capabilities: Vec<String>,
     },
+    /// Subsequent install of a known plugin whose search-site claim differs
+    /// from the one approved — it now serves a different site, or has
+    /// started (or stopped) claiming to shadow the built-in for it.
+    SearchClaimsChange {
+        /// Plugin name.
+        plugin_name: String,
+        /// New version being installed.
+        new_version: String,
+        /// The claim approved in the prior install.
+        previously_approved: SearchClaims,
+        /// The claim the new version makes.
+        requested: SearchClaims,
+    },
 }
 
 /// The prompter's decision.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfirmResponse {
     /// Permit the install / update for this session only.
     ///
@@ -92,8 +112,9 @@ impl Prompter for AlwaysDeny {
 
 /// Approves a [`ConfirmRequest::FirstInstall`] only if the request's identity
 /// is in the pre-trusted list. Always denies [`ConfirmRequest::CapabilityCreep`]
-/// because new capabilities should require explicit interactive re-trust, even
-/// for previously-approved publishers.
+/// and [`ConfirmRequest::SearchClaimsChange`] because new capabilities and a
+/// changed search-site claim should require explicit interactive re-trust,
+/// even for previously-approved publishers.
 pub struct PreTrustedIdentities {
     /// List of pre-trusted signing identities.
     pub trusted: Vec<String>,
@@ -109,7 +130,9 @@ impl Prompter for PreTrustedIdentities {
                     ConfirmResponse::Deny
                 }
             }
-            ConfirmRequest::CapabilityCreep { .. } => ConfirmResponse::Deny,
+            ConfirmRequest::CapabilityCreep { .. } | ConfirmRequest::SearchClaimsChange { .. } => {
+                ConfirmResponse::Deny
+            }
         }
     }
 }

@@ -39,12 +39,9 @@
 //! — when host-side helpers ship, parts of this test (m3u8 fixturing)
 //! become simpler because the host returns formats directly.
 
-mod common;
-
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use common::{SignedPluginSpec, extraction_ctx, write_signed_plugin};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 use rdlp_core::InfoExtractor;
@@ -54,6 +51,7 @@ use rdlp_plugin::engine::{Engine, EngineConfig};
 use rdlp_plugin::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
 use rdlp_plugin::loader::Loader;
 use rdlp_plugin::prompt::AlwaysApprove;
+use rdlp_plugin::test_support::{SignedPluginSpec, extraction_ctx, write_signed_plugin};
 use rdlp_plugin::trust_store::TrustStore;
 use tempfile::TempDir;
 
@@ -217,6 +215,8 @@ async fn svt_play_extract_matches_upstream_test_dict() {
             claims_override: &[],
             supports_extract: true,
             supports_search: false,
+            search_site: None,
+            search_claims_override: &[],
             // componentize-py emits IMPORTS for every interface in the WIT
             // world (Phase-1 limitation; see python_plugin_smoke.rs:182-195).
             // The manifest MUST declare all six caps so the linker wires

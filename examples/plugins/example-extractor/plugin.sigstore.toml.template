@@ -9,7 +9,7 @@ matches = ["https://example.com/video/*"]
 url_regex = "^https://example\\.com/video/(?P<id>\\d+)"
 priority = 150
 claims_override = []
-supports_search = false
+supports_search = true
 capabilities = []
 
 [signature]

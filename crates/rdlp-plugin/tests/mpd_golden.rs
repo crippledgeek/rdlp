@@ -32,12 +32,9 @@
 //!     .venv/bin/pip install -r requirements-dev.txt
 //!   cargo test -p rdlp-plugin --test mpd_golden -- --ignored --nocapture
 
-mod common;
-
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use common::{SignedPluginSpec, extraction_ctx, write_signed_plugin};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 use rdlp_core::InfoExtractor;
@@ -47,6 +44,7 @@ use rdlp_plugin::engine::{Engine, EngineConfig};
 use rdlp_plugin::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
 use rdlp_plugin::loader::Loader;
 use rdlp_plugin::prompt::AlwaysApprove;
+use rdlp_plugin::test_support::{SignedPluginSpec, extraction_ctx, write_signed_plugin};
 use rdlp_plugin::trust_store::TrustStore;
 use tempfile::TempDir;
 
@@ -160,6 +158,8 @@ async fn mpd_golden_extract_returns_formats_via_fixture() {
             claims_override: &[],
             supports_extract: true,
             supports_search: false,
+            search_site: None,
+            search_claims_override: &[],
             // componentize-py emits IMPORTS for every interface in the WIT
             // world (Phase-1 limitation). The manifest MUST declare all six
             // caps so the linker wires every import the wasm references — the

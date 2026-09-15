@@ -65,7 +65,7 @@ impl Guest for Component {
             url_regex: Some(r"^https://example\.com/video/(?P<id>\d+)".into()),
             priority: 150,
             claims_override: vec![],
-            supports_search: false,
+            supports_search: true,
         }
     }
 

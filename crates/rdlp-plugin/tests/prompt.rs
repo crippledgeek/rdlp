@@ -11,22 +11,11 @@
 
 // Lints suppressed for test code — panicking on unexpected errors is intentional here.
 
+use rdlp_plugin::manifest::SearchClaims;
 use rdlp_plugin::prompt::{
     AlwaysApprove, AlwaysDeny, ConfirmRequest, ConfirmResponse, PreTrustedIdentities, Prompter,
 };
-use std::sync::Mutex;
-
-struct Recording {
-    last: Mutex<Option<ConfirmRequest>>,
-    answer: ConfirmResponse,
-}
-
-impl Prompter for Recording {
-    fn confirm(&self, request: ConfirmRequest) -> ConfirmResponse {
-        *self.last.lock().unwrap() = Some(request);
-        self.answer.clone()
-    }
-}
+use rdlp_plugin::test_support::RecordingPrompter;
 
 fn first_install(name: &str) -> ConfirmRequest {
     ConfirmRequest::FirstInstall {
@@ -35,6 +24,7 @@ fn first_install(name: &str) -> ConfirmRequest {
         identity: format!("sigstore:github:user/{name}"),
         capabilities: vec!["fetch".into(), "log".into()],
         claims_override: vec![],
+        search: SearchClaims::default(),
     }
 }
 
@@ -59,18 +49,14 @@ fn always_deny_says_no() {
 
 #[test]
 fn recording_prompter_captures_request() {
-    let p = Recording {
-        last: Default::default(),
-        answer: ConfirmResponse::ApprovePersist,
-    };
+    let p = RecordingPrompter::answering(ConfirmResponse::ApprovePersist);
     let req = first_install("foo");
     let _ = p.confirm(req);
-    let captured = p.last.lock().unwrap();
-    match captured.as_ref().unwrap() {
-        ConfirmRequest::FirstInstall { plugin_name, .. } => {
+    match p.requests().as_slice() {
+        [ConfirmRequest::FirstInstall { plugin_name, .. }] => {
             assert_eq!(plugin_name, "foo");
         }
-        _ => panic!("wrong variant"),
+        other => panic!("wrong variant: {other:?}"),
     }
 }
 
@@ -121,4 +107,23 @@ fn pre_trusted_identities_denies_capability_creep_unconditionally() {
 fn confirm_request_is_clone() {
     let r = first_install("x");
     let _r2 = r.clone();
+}
+
+#[test]
+fn pre_trusted_identities_denies_a_search_claim_change_unconditionally() {
+    // A plugin that starts claiming a built-in's search after it was
+    // trusted needs explicit re-trust, exactly like capability creep.
+    let p = PreTrustedIdentities {
+        trusted: vec!["sigstore:github:user/foo".into()],
+    };
+    let req = ConfirmRequest::SearchClaimsChange {
+        plugin_name: "foo".into(),
+        new_version: "1.1.0".into(),
+        previously_approved: SearchClaims::default(),
+        requested: SearchClaims {
+            search_site: Some("pornhub".into()),
+            search_claims_override: vec!["pornhub".into()],
+        },
+    };
+    assert!(matches!(p.confirm(req), ConfirmResponse::Deny));
 }

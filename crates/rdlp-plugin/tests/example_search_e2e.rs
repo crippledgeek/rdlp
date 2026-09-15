@@ -24,13 +24,10 @@
 //! Run with:
 //!   cargo test -p rdlp-plugin --test example_search_e2e -- --ignored --nocapture
 
-mod common;
-
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use common::{SignedPluginSpec, extraction_ctx, write_signed_plugin};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 use rdlp_core::{RdlpError, SearchExtractor};
@@ -42,13 +39,12 @@ use rdlp_plugin::engine::{Engine, EngineConfig};
 use rdlp_plugin::loader::Loader;
 use rdlp_plugin::prompt::AlwaysApprove;
 use rdlp_plugin::search_adapter::PluginSearchExtractor;
+use rdlp_plugin::test_support::{
+    EXAMPLE_0_5_0_WASM, SignedPluginSpec, extraction_ctx, write_signed_plugin,
+};
 use rdlp_plugin::trust_store::TrustStore;
 use rdlp_types::{SearchFilter, SearchQuery};
 use tempfile::TempDir;
-
-/// The Task 1 fixture: built against `rdlp:plugin@0.5.0`, before
-/// `search-filters` existed — the absent-export path.
-const FIXTURE_0_5_0: &str = "tests/fixtures/example-extractor-0.5.0/plugin.wasm";
 
 fn example_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -106,9 +102,10 @@ fn build_example_component_uncached() -> Vec<u8> {
     std::fs::read(&out).unwrap()
 }
 
-/// Sign `wasm` under `wit_version`, discover it through the real loader,
-/// and wrap it in a `PluginExtractor` with no host resources (the example
-/// declares no capabilities).
+/// Sign `wasm` under `wit_version` as a search-capable `example` (the
+/// template's `supports_search = true`), discover it through the real
+/// loader, and wrap it in a `PluginExtractor` with no host resources (the
+/// example declares no capabilities).
 fn load_adapter(td: &TempDir, wasm: &[u8], wit_version: &str) -> PluginExtractor {
     let plugins_dir = td.path().join("plugins");
     let key = SigningKey::generate(&mut OsRng);
@@ -116,17 +113,10 @@ fn load_adapter(td: &TempDir, wasm: &[u8], wit_version: &str) -> PluginExtractor
         &plugins_dir.join("example"),
         &key,
         &SignedPluginSpec {
-            name: "example",
-            version: "0.1.0",
             wit_version,
-            matches: &["https://example.com/*"],
-            url_regex: None,
-            priority: 150,
-            claims_override: &[],
-            supports_extract: true,
-            supports_search: false,
-            capabilities: &[],
+            supports_search: true,
             wasm,
+            ..SignedPluginSpec::example()
         },
     );
     let engine = Arc::new(Engine::new(EngineConfig::default()).unwrap());
@@ -352,9 +342,8 @@ async fn a_0_5_0_component_without_the_export_answers_no_filters() {
     // resolves `search-filters`, so a component that never declared it
     // still instantiates and answers `[]` instead of failing at
     // instantiate with `no function export ... found`.
-    let wasm = std::fs::read(FIXTURE_0_5_0).unwrap();
     let td = TempDir::new().unwrap();
-    let adapter = load_adapter(&td, &wasm, "0.5.0");
+    let adapter = load_adapter(&td, EXAMPLE_0_5_0_WASM, "0.5.0");
     let filters = adapter
         .call_search_filters()
         .await
@@ -384,9 +373,8 @@ async fn a_0_5_0_component_without_the_export_answers_no_filters() {
 /// WHY there are no results, and it is not a strike.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_0_5_0_component_reports_unsupported_search_to_the_operator() {
-    let wasm = std::fs::read(FIXTURE_0_5_0).unwrap();
     let td = TempDir::new().unwrap();
-    let adapter = Arc::new(load_adapter(&td, &wasm, "0.5.0"));
+    let adapter = Arc::new(load_adapter(&td, EXAMPLE_0_5_0_WASM, "0.5.0"));
     let site = PluginSearchExtractor::new(Arc::clone(&adapter));
     let ctx = extraction_ctx();
 

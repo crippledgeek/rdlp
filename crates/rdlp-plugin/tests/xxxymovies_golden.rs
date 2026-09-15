@@ -26,12 +26,9 @@
 //! end-to-end-green plugin ports — proves the build/sign/dispatch/
 //! extract pipeline works for distinct extractor archetypes.
 
-mod common;
-
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use common::{SignedPluginSpec, extraction_ctx, write_signed_plugin};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 use rdlp_core::InfoExtractor;
@@ -41,6 +38,7 @@ use rdlp_plugin::engine::{Engine, EngineConfig};
 use rdlp_plugin::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
 use rdlp_plugin::loader::Loader;
 use rdlp_plugin::prompt::AlwaysApprove;
+use rdlp_plugin::test_support::{SignedPluginSpec, extraction_ctx, write_signed_plugin};
 use rdlp_plugin::trust_store::TrustStore;
 use tempfile::TempDir;
 
@@ -142,6 +140,8 @@ async fn xxxymovies_extract_returns_complete_info_dict() {
             claims_override: &[],
             supports_extract: true,
             supports_search: false,
+            search_site: None,
+            search_claims_override: &[],
             // componentize-py emits IMPORTS for every interface in the WIT
             // world; the manifest must declare all six caps so the linker
             // wires every import the wasm references.

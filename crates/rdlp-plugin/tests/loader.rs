@@ -9,9 +9,6 @@
     missing_docs
 )]
 
-mod common;
-
-use common::{SignedPluginSpec, extraction_ctx, write_signed_plugin};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
 use rdlp_core::InfoExtractor;
@@ -19,45 +16,22 @@ use rdlp_plugin::PluginError;
 use rdlp_plugin::adapter::{HostResources, PluginExtractor};
 use rdlp_plugin::engine::{Engine, EngineConfig};
 use rdlp_plugin::loader::Loader;
-use rdlp_plugin::prompt::{AlwaysApprove, AlwaysDeny};
+use rdlp_plugin::manifest::SearchClaims;
+use rdlp_plugin::prompt::{AlwaysApprove, AlwaysDeny, ConfirmRequest, ConfirmResponse};
+use rdlp_plugin::test_support::{
+    EXAMPLE_0_5_0_WASM, RecordingPrompter, SignedPluginSpec, extraction_ctx, write_signed_plugin,
+};
 use rdlp_plugin::trust_store::TrustStore;
-use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
 
 const MINIMAL_COMPONENT_WAT: &str = r#"(component)"#;
 
-/// This file's own tests all sign the same `(component)` WAT stub under the
-/// same fixed `version`/`wit_version`/`matches` — only `name`, `capabilities`,
-/// `priority`, and `claims_override` ever varied at these call sites, so this
-/// thin wrapper keeps that call shape while delegating the actual signing
-/// mechanism to the one shared `common::write_signed_plugin`.
-fn sign_stub_plugin(
-    dir: &Path,
-    name: &str,
-    key: &SigningKey,
-    capabilities: &[&str],
-    priority: u32,
-    claims_override: &[&str],
-) {
-    let wasm = wat::parse_str(MINIMAL_COMPONENT_WAT).unwrap();
-    write_signed_plugin(
-        dir,
-        key,
-        &SignedPluginSpec {
-            name,
-            version: "1.0.0",
-            wit_version: "0.5.0",
-            matches: &["https://example.com/*"],
-            url_regex: None,
-            priority,
-            claims_override,
-            supports_extract: true,
-            supports_search: false,
-            capabilities,
-            wasm: &wasm,
-        },
-    );
+/// The `(component)` WAT stub most tests here sign: it compiles, so the
+/// loader reaches the trust-store step, and it exports nothing, which is
+/// all these tests need.
+fn stub_wasm() -> Vec<u8> {
+    wat::parse_str(MINIMAL_COMPONENT_WAT).unwrap()
 }
 
 fn make_loader_args(
@@ -94,13 +68,14 @@ fn first_install_with_approval_loads_plugin() {
     let td = TempDir::new().unwrap();
     let plugins_dir = td.path().join("plugins");
     let key = SigningKey::generate(&mut OsRng);
-    sign_stub_plugin(
+    let wasm = stub_wasm();
+    write_signed_plugin(
         &plugins_dir.join("youtube"),
-        "youtube",
         &key,
-        &["log"],
-        150,
-        &[],
+        &SignedPluginSpec {
+            capabilities: &["log"],
+            ..SignedPluginSpec::stub("youtube", &wasm)
+        },
     );
 
     let (engine, mut trust, prompter) = make_loader_args(&td, Arc::new(AlwaysApprove));
@@ -118,7 +93,15 @@ fn first_install_denied_does_not_load() {
     let td = TempDir::new().unwrap();
     let plugins_dir = td.path().join("plugins");
     let key = SigningKey::generate(&mut OsRng);
-    sign_stub_plugin(&plugins_dir.join("foo"), "foo", &key, &["log"], 150, &[]);
+    let wasm = stub_wasm();
+    write_signed_plugin(
+        &plugins_dir.join("foo"),
+        &key,
+        &SignedPluginSpec {
+            capabilities: &["log"],
+            ..SignedPluginSpec::stub("foo", &wasm)
+        },
+    );
 
     let (engine, mut trust, prompter) = make_loader_args(&td, Arc::new(AlwaysDeny));
     let mut loader = Loader::new(&engine, &mut trust, prompter);
@@ -135,7 +118,12 @@ fn identity_mismatch_refuses_load() {
     let plugins_dir = td.path().join("plugins");
     let key1 = SigningKey::generate(&mut OsRng);
     let plugin_dir = plugins_dir.join("foo");
-    sign_stub_plugin(&plugin_dir, "foo", &key1, &["log"], 150, &[]);
+    let wasm = stub_wasm();
+    let foo = SignedPluginSpec {
+        capabilities: &["log"],
+        ..SignedPluginSpec::stub("foo", &wasm)
+    };
+    write_signed_plugin(&plugin_dir, &key1, &foo);
 
     // First install — approved
     {
@@ -149,7 +137,7 @@ fn identity_mismatch_refuses_load() {
     // Re-sign with a different key — same name, different identity
     let key2 = SigningKey::generate(&mut OsRng);
     std::fs::remove_dir_all(&plugin_dir).unwrap();
-    sign_stub_plugin(&plugin_dir, "foo", &key2, &["log"], 150, &[]);
+    write_signed_plugin(&plugin_dir, &key2, &foo);
 
     let engine = Engine::new(EngineConfig::default()).unwrap();
     let mut trust = TrustStore::open(td.path().join("trust.toml")).unwrap();
@@ -225,7 +213,15 @@ fn capability_creep_approved_updates_trust_store() {
     let plugin_dir = plugins_dir.join("bar");
 
     // First install with only "log"
-    sign_stub_plugin(&plugin_dir, "bar", &key, &["log"], 150, &[]);
+    let wasm = stub_wasm();
+    write_signed_plugin(
+        &plugin_dir,
+        &key,
+        &SignedPluginSpec {
+            capabilities: &["log"],
+            ..SignedPluginSpec::stub("bar", &wasm)
+        },
+    );
     {
         let (engine, mut trust, prompter) = make_loader_args(&td, Arc::new(AlwaysApprove));
         let mut loader = Loader::new(&engine, &mut trust, prompter);
@@ -236,7 +232,14 @@ fn capability_creep_approved_updates_trust_store() {
 
     // Update requesting "log" + "fetch" (capability creep)
     std::fs::remove_dir_all(&plugin_dir).unwrap();
-    sign_stub_plugin(&plugin_dir, "bar", &key, &["fetch", "log"], 150, &[]);
+    write_signed_plugin(
+        &plugin_dir,
+        &key,
+        &SignedPluginSpec {
+            capabilities: &["fetch", "log"],
+            ..SignedPluginSpec::stub("bar", &wasm)
+        },
+    );
 
     let (engine, mut trust, prompter) = make_loader_args(&td, Arc::new(AlwaysApprove));
     let mut loader = Loader::new(&engine, &mut trust, prompter);
@@ -260,7 +263,15 @@ fn capability_creep_denied_blocks_load() {
     let plugin_dir = plugins_dir.join("baz");
 
     // First install with only "log"
-    sign_stub_plugin(&plugin_dir, "baz", &key, &["log"], 150, &[]);
+    let wasm = stub_wasm();
+    write_signed_plugin(
+        &plugin_dir,
+        &key,
+        &SignedPluginSpec {
+            capabilities: &["log"],
+            ..SignedPluginSpec::stub("baz", &wasm)
+        },
+    );
     {
         let (engine, mut trust, prompter) = make_loader_args(&td, Arc::new(AlwaysApprove));
         let mut loader = Loader::new(&engine, &mut trust, prompter);
@@ -269,7 +280,14 @@ fn capability_creep_denied_blocks_load() {
 
     // Update requesting new capability, denied
     std::fs::remove_dir_all(&plugin_dir).unwrap();
-    sign_stub_plugin(&plugin_dir, "baz", &key, &["fetch", "log"], 150, &[]);
+    write_signed_plugin(
+        &plugin_dir,
+        &key,
+        &SignedPluginSpec {
+            capabilities: &["fetch", "log"],
+            ..SignedPluginSpec::stub("baz", &wasm)
+        },
+    );
 
     let (engine, mut trust, prompter) = make_loader_args(&td, Arc::new(AlwaysDeny));
     let mut loader = Loader::new(&engine, &mut trust, prompter);
@@ -340,7 +358,6 @@ fn make_loader_args_arc(
 /// the patch-below path of `check_wit_version_against`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_0_5_0_component_loads_on_the_0_5_1_host() {
-    let wasm = std::fs::read("tests/fixtures/example-extractor-0.5.0/plugin.wasm").unwrap();
     let td = TempDir::new().unwrap();
     let plugins_dir = td.path().join("plugins");
     let key = SigningKey::generate(&mut OsRng);
@@ -348,21 +365,7 @@ async fn a_0_5_0_component_loads_on_the_0_5_1_host() {
     write_signed_plugin(
         &plugins_dir.join("example"),
         &key,
-        &SignedPluginSpec {
-            name: "example",
-            version: "1.0.0",
-            wit_version: "0.5.0",
-            matches: &["https://example.com/*"],
-            url_regex: None,
-            priority: 150,
-            claims_override: &[],
-            supports_extract: true,
-            supports_search: false,
-            // example-extractor's plugin.toml.template declares no
-            // capabilities — it is a pure, deterministic plugin.
-            capabilities: &[],
-            wasm: &wasm,
-        },
+        &SignedPluginSpec::example(),
     );
 
     let (engine, mut trust, prompter) = make_loader_args_arc(&td, Arc::new(AlwaysApprove));
@@ -385,21 +388,12 @@ async fn a_0_5_0_component_loads_on_the_0_5_1_host() {
         .expect("adapter construction must succeed");
 
     let ctx = extraction_ctx();
-    let result = adapter.extract("https://example.com/video/1", &ctx).await;
-    match result {
-        Ok(info) => assert_eq!(info.id, "1"),
-        Err(err) => {
-            // Any failure here must be a domain error the plugin itself
-            // returned (e.g. a future ExtractError variant), never an
-            // instantiate/trap fault — the 3-strike trap counter stays at
-            // zero for domain errors (see adapter.rs's `extract`).
-            assert_eq!(
-                adapter.test_trap_count(),
-                0,
-                "expected a domain error, got a trap/instantiate fault: {err}"
-            );
-        }
-    }
+    let info = adapter
+        .extract("https://example.com/video/1", &ctx)
+        .await
+        .expect("the 0.5.0 fixture must extract on the 0.5.1 host");
+    assert_eq!(info.id, "1");
+    assert_eq!(adapter.test_trap_count(), 0);
 }
 
 /// D1 negative compat test: the SAME 0.5.0 component, but the manifest
@@ -407,7 +401,6 @@ async fn a_0_5_0_component_loads_on_the_0_5_1_host() {
 /// `discover` — before the component is even compiled for instantiation.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_component_declaring_a_newer_patch_is_rejected() {
-    let wasm = std::fs::read("tests/fixtures/example-extractor-0.5.0/plugin.wasm").unwrap();
     let td = TempDir::new().unwrap();
     let plugins_dir = td.path().join("plugins");
     let key = SigningKey::generate(&mut OsRng);
@@ -416,17 +409,8 @@ async fn a_component_declaring_a_newer_patch_is_rejected() {
         &plugins_dir.join("example"),
         &key,
         &SignedPluginSpec {
-            name: "example",
-            version: "1.0.0",
             wit_version: "0.5.2",
-            matches: &["https://example.com/*"],
-            url_regex: None,
-            priority: 150,
-            claims_override: &[],
-            supports_extract: true,
-            supports_search: false,
-            capabilities: &[],
-            wasm: &wasm,
+            ..SignedPluginSpec::example()
         },
     );
 
@@ -442,4 +426,170 @@ async fn a_component_declaring_a_newer_patch_is_rejected() {
             "expected WitVersionMismatch, got {err:?}"
         ),
     }
+}
+
+// ── discovery order (code review I5) ──────────────────────────────────────
+
+/// `discover` returns plugins in path order regardless of the order the
+/// filesystem lists them, so "first registered wins" tie-breaks downstream
+/// are deterministic across machines and filesystems.
+#[test]
+fn discover_returns_plugins_in_path_order() {
+    let td = TempDir::new().unwrap();
+    let plugins_dir = td.path().join("plugins");
+    let key = SigningKey::generate(&mut OsRng);
+    let wasm = stub_wasm();
+    // Written b-first so a listing that echoes creation order differs from
+    // path order.
+    for name in ["b-plugin", "a-plugin", "c-plugin"] {
+        write_signed_plugin(
+            &plugins_dir.join(name),
+            &key,
+            &SignedPluginSpec::stub(name, &wasm),
+        );
+    }
+
+    let (engine, mut trust, prompter) = make_loader_args(&td, Arc::new(AlwaysApprove));
+    let mut loader = Loader::new(&engine, &mut trust, prompter);
+    let names: Vec<String> = loader
+        .discover(&plugins_dir)
+        .into_iter()
+        .map(|o| o.expect("stub plugins load").manifest.name)
+        .collect();
+    assert_eq!(names, ["a-plugin", "b-plugin", "c-plugin"]);
+}
+
+// ── search-site claim binding (security M3) ───────────────────────────────
+
+/// A search plugin claiming the built-in `pornhub`'s site: the shape a
+/// first-install prompt must surface and the trust store must remember.
+fn pornhub_claimant<'a>(wasm: &'a [u8], claims_override: &'a [&'a str]) -> SignedPluginSpec<'a> {
+    SignedPluginSpec {
+        supports_search: true,
+        search_site: Some("pornhub"),
+        search_claims_override: claims_override,
+        ..SignedPluginSpec::stub("ph-search", wasm)
+    }
+}
+
+fn load_with(
+    td: &TempDir,
+    plugins_dir: &std::path::Path,
+    prompter: Arc<RecordingPrompter>,
+) -> Vec<rdlp_plugin::loader::DiscoverOutcome> {
+    let engine = Engine::new(EngineConfig::default()).unwrap();
+    let mut trust = TrustStore::open(td.path().join("trust.toml")).unwrap();
+    let mut loader = Loader::new(&engine, &mut trust, prompter);
+    loader.discover(plugins_dir)
+}
+
+/// The first-install prompt names the site the plugin will search AND the
+/// override it claims, and an `ApprovePersist` records both.
+#[test]
+fn first_install_prompt_shows_the_search_claim_and_the_store_records_it() {
+    let td = TempDir::new().unwrap();
+    let plugins_dir = td.path().join("plugins");
+    let key = SigningKey::generate(&mut OsRng);
+    let wasm = stub_wasm();
+    write_signed_plugin(
+        &plugins_dir.join("ph-search"),
+        &key,
+        &pornhub_claimant(&wasm, &["pornhub"]),
+    );
+
+    let prompter = Arc::new(RecordingPrompter::answering(
+        ConfirmResponse::ApprovePersist,
+    ));
+    let outcomes = load_with(&td, &plugins_dir, Arc::clone(&prompter));
+    assert!(outcomes[0].is_ok(), "{:?}", outcomes[0].as_ref().err());
+
+    let expected = SearchClaims {
+        search_site: Some("pornhub".into()),
+        search_claims_override: vec!["pornhub".into()],
+    };
+    match prompter.requests().as_slice() {
+        [ConfirmRequest::FirstInstall { search, .. }] => assert_eq!(*search, expected),
+        other => panic!("expected one FirstInstall, got {other:?}"),
+    }
+    let trust = TrustStore::open(td.path().join("trust.toml")).unwrap();
+    assert_eq!(
+        trust.lookup("ph-search").expect("recorded").search,
+        expected
+    );
+}
+
+/// An update that starts claiming the built-in's search is re-confirmed
+/// like capability creep: denied, it does not load; approved, the store
+/// records the new claim; and an unchanged claim prompts nothing.
+#[test]
+fn a_changed_search_claim_reprompts_and_an_unchanged_one_does_not() {
+    let td = TempDir::new().unwrap();
+    let plugins_dir = td.path().join("plugins");
+    let plugin_dir = plugins_dir.join("ph-search");
+    let key = SigningKey::generate(&mut OsRng);
+    let wasm = stub_wasm();
+
+    // First install: serves pornhub, claims no override.
+    write_signed_plugin(&plugin_dir, &key, &pornhub_claimant(&wasm, &[]));
+    let first = Arc::new(RecordingPrompter::answering(
+        ConfirmResponse::ApprovePersist,
+    ));
+    assert!(load_with(&td, &plugins_dir, Arc::clone(&first))[0].is_ok());
+    assert_eq!(first.requests().len(), 1, "one FirstInstall");
+
+    // Same manifest again: nothing to confirm.
+    let again = Arc::new(RecordingPrompter::answering(ConfirmResponse::Deny));
+    assert!(load_with(&td, &plugins_dir, Arc::clone(&again))[0].is_ok());
+    assert!(
+        again.requests().is_empty(),
+        "an unchanged claim must not prompt"
+    );
+
+    // Update now claims the override — denied.
+    std::fs::remove_dir_all(&plugin_dir).unwrap();
+    write_signed_plugin(&plugin_dir, &key, &pornhub_claimant(&wasm, &["pornhub"]));
+    let deny = Arc::new(RecordingPrompter::answering(ConfirmResponse::Deny));
+    let outcomes = load_with(&td, &plugins_dir, Arc::clone(&deny));
+    match &outcomes[0] {
+        Err((_, PluginError::SearchClaimsChange { plugin, .. })) => assert_eq!(plugin, "ph-search"),
+        Err((_, other)) => panic!("expected SearchClaimsChange, got {other:?}"),
+        Ok(_) => panic!("expected SearchClaimsChange, got Ok"),
+    }
+    match deny.requests().as_slice() {
+        [
+            ConfirmRequest::SearchClaimsChange {
+                previously_approved,
+                requested,
+                ..
+            },
+        ] => {
+            assert!(previously_approved.search_claims_override.is_empty());
+            assert_eq!(requested.search_claims_override, vec!["pornhub"]);
+        }
+        other => panic!("expected one SearchClaimsChange, got {other:?}"),
+    }
+
+    // Same update, approved and persisted — the store now carries the claim.
+    let approve = Arc::new(RecordingPrompter::answering(
+        ConfirmResponse::ApprovePersist,
+    ));
+    assert!(load_with(&td, &plugins_dir, approve)[0].is_ok());
+    let trust = TrustStore::open(td.path().join("trust.toml")).unwrap();
+    assert_eq!(
+        trust
+            .lookup("ph-search")
+            .unwrap()
+            .search
+            .search_claims_override,
+        vec!["pornhub"]
+    );
+}
+
+/// The committed example fixture is what `SignedPluginSpec::example`
+/// signs; pin that so a fixture swap cannot silently change every test
+/// built on it.
+#[test]
+fn example_spec_signs_the_committed_fixture() {
+    assert_eq!(SignedPluginSpec::example().wasm, EXAMPLE_0_5_0_WASM);
+    assert_eq!(SignedPluginSpec::example().name, "example");
 }
