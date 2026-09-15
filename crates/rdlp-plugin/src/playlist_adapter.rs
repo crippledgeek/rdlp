@@ -31,6 +31,7 @@ use crate::convert::{PluginOrigin, cap_plugin_playlist_entries};
 use crate::instance::PluginStoreData;
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result as RdlpResult};
 use rdlp_extractor::base::common::{PagedPlaylist, PlaylistEntry, PlaylistPage, PlaylistStart};
+use rdlp_redact::RedactedUrl;
 use rdlp_types::InfoDict;
 
 const EXTRACT_PLAYLIST_EXPORT: &str = "extract-playlist";
@@ -222,10 +223,15 @@ impl PluginExtractor {
                 // The by-name-call debug line: counted by
                 // `real_first_page_hands_off_to_the_scaffold_and_fetches_page_1_once`
                 // to prove the probe's page is reused by the scaffold
-                // rather than re-fetched.
+                // rather than re-fetched. The URL is part of the line
+                // because that test reads a process-global log buffer
+                // shared with every other playlist test in the binary —
+                // without it, the count is the whole process's page-1
+                // probes (measured: 5), not this playlist's.
                 log::debug!(
                     target: &store.data().log_target,
-                    "{EXTRACT_PLAYLIST_EXPORT}: fetching page {page}"
+                    "{EXTRACT_PLAYLIST_EXPORT}: fetching page {page} of {}",
+                    RedactedUrl::new(&owned)
                 );
                 let raw = call_extract_playlist(
                     store,

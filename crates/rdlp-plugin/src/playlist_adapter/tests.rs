@@ -1,11 +1,11 @@
 use super::*;
 use crate::convert::MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES;
 use crate::test_harness::instantiate;
-use crate::test_support::extraction_ctx;
 use crate::test_support::unit::{
     FIXTURE_MANIFEST, TEST_LOG_TARGET, captured_entry_containing, captured_logs, fixture_extractor,
     fixture_extractor_from, test_origin,
 };
+use crate::test_support::{EXAMPLE_0_5_2_WASM, extraction_ctx};
 
 /// A component with no `extract-playlist` export at all.
 const NO_PLAYLIST_WAT: &str = r#"(component
@@ -318,52 +318,39 @@ async fn absent_export_falls_back_to_single_extract() {
     assert_eq!(info.playlist_index, None);
 }
 
-/// Task 10's committed 0.5.2 fixture (metadata/extract/search plus
-/// `extract-playlist`), read from disk — not `include_bytes!`ed — so this
-/// module compiles before that fixture exists, and `tokio::fs::read` (not
-/// `std::fs::read`) since every caller below is an async test body and a
-/// blocking read has no `#[allow(clippy::disallowed_methods)]` carve-out
-/// inside one (fix round 1 finding 3). Shared by every ignored test below
-/// instead of four copies of the same path build.
-async fn read_0_5_2_fixture() -> Vec<u8> {
-    tokio::fs::read(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("tests/fixtures/example-extractor-0.5.2/plugin.wasm"),
-    )
-    .await
-    .expect("Task 10's 0.5.2 fixture")
-}
+// The four tests below load the committed 0.5.2 fixture
+// (`test_support::EXAMPLE_0_5_2_WASM`): a WAT component cannot export
+// both `extract-playlist` and the full 0.5.0 `extract` surface without
+// reproducing `info-dict`/`extract-error`'s whole shape by hand, so a
+// real compiled component is the only way to drive the probe-then-fall-
+// back path end to end. What its `extract-playlist` answers per URL is
+// pinned in `examples/plugins/example-extractor/src/lib.rs`.
 
 /// A plugin whose `extract-playlist` answers `err(unsupported-url)` for
 /// this URL falls back the same way `absent_export_falls_back_to_single_extract`
-/// does. A WAT component cannot export both `extract-playlist` and the
-/// full 0.5.0 `extract` surface without reproducing `info-dict`/
-/// `extract-error`'s whole shape by hand, so this test needs Task 10's
-/// 0.5.2 fixture and is ignored until Task 10 lands it — see the
-/// `#[ignore]` reason.
+/// does: the fixture's `extract` accepts this URL as a single video, so
+/// the fallback is the one entry it produces.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs the 0.5.2 fixture (Task 10)"]
 async fn unsupported_url_falls_back_to_single_extract() {
-    let wasm = read_0_5_2_fixture().await;
-    let ext = fixture_extractor_from(FIXTURE_MANIFEST, &wasm);
+    let ext = fixture_extractor_from(FIXTURE_MANIFEST, EXAMPLE_0_5_2_WASM);
     let out = ext
         .extract_playlist("https://example.com/not-a-playlist", &extraction_ctx())
         .await
         .expect("falls back to the single extract");
     assert_eq!(out.len(), 1);
+    assert_eq!(out.first().expect("one entry").playlist_index, None);
+    assert_eq!(ext.test_trap_count(), 0);
 }
 
 /// `internal` from `extract-playlist` on page one strikes exactly like any
 /// other `PluginError::Internal` — regression coverage for fix round 1
 /// finding 1 (mapping the domain error INSIDE the runner's closure, where
 /// `counts_as_strike` can see it, instead of after `run_in_fresh_store`
-/// already returned). Needs Task 10's 0.5.2 fixture, whose
-/// `extract-playlist` must answer `err(internal(...))` for this URL.
+/// already returned). The 0.5.2 fixture's `extract-playlist` answers
+/// `err(internal(...))` for this URL.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs the 0.5.2 fixture (Task 10)"]
 async fn internal_playlist_error_on_page_1_strikes() {
-    let wasm = read_0_5_2_fixture().await;
-    let ext = fixture_extractor_from(FIXTURE_MANIFEST, &wasm);
+    let ext = fixture_extractor_from(FIXTURE_MANIFEST, EXAMPLE_0_5_2_WASM);
     let err = ext
         .extract_playlist(
             "https://example.com/internal-error-playlist",
@@ -381,14 +368,11 @@ async fn internal_playlist_error_on_page_1_strikes() {
 
 /// A `not-found` domain error on page one propagates as its own error —
 /// the "any other domain error" branch of `extract_playlist_via_plugin`'s
-/// match, distinct from `unsupported-url`'s fallback. Needs Task 10's
-/// 0.5.2 fixture, whose `extract-playlist` must answer
-/// `err(not-found(...))` for this URL.
+/// match, distinct from `unsupported-url`'s fallback. The 0.5.2
+/// fixture's `extract-playlist` answers `err(not-found(...))` for this URL.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs the 0.5.2 fixture (Task 10)"]
 async fn not_found_on_page_1_propagates() {
-    let wasm = read_0_5_2_fixture().await;
-    let ext = fixture_extractor_from(FIXTURE_MANIFEST, &wasm);
+    let ext = fixture_extractor_from(FIXTURE_MANIFEST, EXAMPLE_0_5_2_WASM);
     let err = ext
         .extract_playlist("https://example.com/gone-playlist", &extraction_ctx())
         .await
@@ -406,28 +390,39 @@ async fn not_found_on_page_1_propagates() {
 /// `PagedPlaylist` scaffold, and page one is fetched EXACTLY ONCE — the
 /// probe's own page is reused, never re-fetched — proved via the
 /// by-name-call debug line `call_extract_playlist_page` logs on every
-/// attempt. Needs Task 10's 0.5.2 fixture, whose `extract-playlist` must
-/// answer a real (non-empty, `has-more = false`) page for this URL.
+/// attempt. The 0.5.2 fixture's `extract-playlist` answers two pages for
+/// this URL (page 1 `has-more = true`, page 2 final), so the scaffold
+/// really does continue past the probed page — and page 1 still shows up
+/// once. The count is filtered on THIS playlist's URL: the capture buffer
+/// is process-global, and every other playlist test in this binary
+/// probes its own page 1 too.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "needs the 0.5.2 fixture (Task 10)"]
 async fn real_first_page_hands_off_to_the_scaffold_and_fetches_page_1_once() {
-    let wasm = read_0_5_2_fixture().await;
-    let ext = fixture_extractor_from(FIXTURE_MANIFEST, &wasm);
+    let ext = fixture_extractor_from(FIXTURE_MANIFEST, EXAMPLE_0_5_2_WASM);
     let logs = captured_logs();
     let out = ext
         .extract_playlist("https://example.com/a-real-playlist", &extraction_ctx())
         .await
         .expect("a real first page hands off to the scaffold");
-    assert!(
-        !out.is_empty(),
-        "the scaffold resolved at least the probed page's entries"
+    let ids: Vec<&str> = out.iter().map(|i| i.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        ["1", "2", "3"],
+        "both pages' entries resolved, in order"
     );
-    let page_1_fetches = logs
-        .lock()
-        .expect("test mutex is never poisoned")
-        .iter()
-        .filter(|(_, m)| m.contains("extract-playlist: fetching page 1"))
-        .count();
+    let page_fetches = |page: u32| {
+        logs.lock()
+            .expect("test mutex is never poisoned")
+            .iter()
+            .filter(|(_, m)| {
+                m.contains(&format!(
+                    "extract-playlist: fetching page {page} of https://example.com/a-real-playlist"
+                ))
+            })
+            .count()
+    };
+    assert_eq!(page_fetches(2), 1, "the scaffold fetched page 2 itself");
+    let page_1_fetches = page_fetches(1);
     assert_eq!(
         page_1_fetches, 1,
         "page one must be fetched exactly once — the probe's page is reused by the scaffold"

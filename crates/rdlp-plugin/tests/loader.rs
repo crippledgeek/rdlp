@@ -19,7 +19,8 @@ use rdlp_plugin::loader::Loader;
 use rdlp_plugin::manifest::SearchClaims;
 use rdlp_plugin::prompt::{AlwaysApprove, AlwaysDeny, ConfirmRequest, ConfirmResponse};
 use rdlp_plugin::test_support::{
-    EXAMPLE_0_5_0_WASM, RecordingPrompter, SignedPluginSpec, extraction_ctx, write_signed_plugin,
+    EXAMPLE_0_5_0_WASM, RecordingPrompter, SignedPluginSpec, discover_signed_after, extraction_ctx,
+    write_signed_plugin,
 };
 use rdlp_plugin::trust_store::TrustStore;
 use std::sync::Arc;
@@ -337,54 +338,23 @@ signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 }
 
 /// Same construction as `make_loader_args`, but with the engine already
-/// `Arc`-wrapped: `PluginExtractor::new` takes `Arc<Engine>`, and both D1
-/// compat tests below need it, so this is the one path that produces it —
-/// neither test hand-rolls `Engine::new`/`TrustStore::open` itself.
-fn make_loader_args_arc(
-    td: &TempDir,
-    prompter: Arc<dyn rdlp_plugin::prompt::Prompter>,
-) -> (
-    Arc<Engine>,
-    TrustStore,
-    Arc<dyn rdlp_plugin::prompt::Prompter>,
-) {
-    let (engine, trust, prompter) = make_loader_args(td, prompter);
-    (Arc::new(engine), trust, prompter)
-}
-
 /// D1 positive compat test: a component built against 0.5.0 (Task 1
 /// fixture) loads through the real loader on the current host and answers
 /// `metadata` + `extract`. `wit_version = "0.5.0"` in its manifest takes
-/// the patch-below path of `check_wit_version_against`.
+/// the patch-below path of `check_wit_version_against`. The D1 negative
+/// (a manifest claiming `0.5.3`) lives in `tests/abi_0_5_2_fixture.rs`,
+/// where it runs over both committed fixtures through the same
+/// `discover_signed_after` helper this test uses.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_0_5_0_component_loads_on_the_current_host() {
     let td = TempDir::new().unwrap();
-    let plugins_dir = td.path().join("plugins");
-    let key = SigningKey::generate(&mut OsRng);
-
-    write_signed_plugin(
-        &plugins_dir.join("example"),
-        &key,
-        &SignedPluginSpec::example(),
-    );
-
-    let (engine, mut trust, prompter) = make_loader_args_arc(&td, Arc::new(AlwaysApprove));
-    let mut loader = Loader::new(engine.as_ref(), &mut trust, prompter);
-    let mut outcomes = loader.discover(&plugins_dir);
-
-    assert_eq!(outcomes.len(), 1, "expected exactly one discover outcome");
-    let loaded = outcomes.remove(0).unwrap_or_else(|(path, err)| {
+    let (engine, outcome) = discover_signed_after(td.path(), &SignedPluginSpec::example(), |_| {});
+    let loaded = outcome.unwrap_or_else(|(path, err)| {
         panic!("0.5.0 component must load on the current host: {path:?}: {err:?}")
     });
     assert_eq!(loaded.manifest.wit_version, "0.5.0");
 
-    let host_resources = HostResources {
-        fetch_client: None,
-        cookie_jar: None,
-        kv_db: None,
-        fetch_fixtures: None,
-    };
-    let adapter = PluginExtractor::new(loaded, engine.clone(), host_resources)
+    let adapter = PluginExtractor::new(loaded, engine, HostResources::default())
         .expect("adapter construction must succeed");
 
     let ctx = extraction_ctx();
@@ -394,38 +364,6 @@ async fn a_0_5_0_component_loads_on_the_current_host() {
         .expect("the 0.5.0 fixture must extract on the current host");
     assert_eq!(info.id, "1");
     assert_eq!(adapter.test_trap_count(), 0);
-}
-
-/// D1 negative compat test: the SAME 0.5.0 component, but the manifest
-/// claims a NEWER patch (`0.5.3`) than this host accepts. Rejected at
-/// `discover` — before the component is even compiled for instantiation.
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_component_declaring_a_newer_patch_is_rejected() {
-    let td = TempDir::new().unwrap();
-    let plugins_dir = td.path().join("plugins");
-    let key = SigningKey::generate(&mut OsRng);
-
-    write_signed_plugin(
-        &plugins_dir.join("example"),
-        &key,
-        &SignedPluginSpec {
-            wit_version: "0.5.3",
-            ..SignedPluginSpec::example()
-        },
-    );
-
-    let (engine, mut trust, prompter) = make_loader_args_arc(&td, Arc::new(AlwaysApprove));
-    let mut loader = Loader::new(engine.as_ref(), &mut trust, prompter);
-    let outcomes = loader.discover(&plugins_dir);
-
-    assert_eq!(outcomes.len(), 1);
-    match &outcomes[0] {
-        Ok(_) => panic!("expected WitVersionMismatch, got Ok"),
-        Err((_, err)) => assert!(
-            matches!(err, PluginError::WitVersionMismatch { .. }),
-            "expected WitVersionMismatch, got {err:?}"
-        ),
-    }
 }
 
 // ── discovery order (code review I5) ──────────────────────────────────────

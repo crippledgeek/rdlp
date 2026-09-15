@@ -18,8 +18,12 @@ use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey};
 use rdlp_core::ExtractionContext;
 
+use crate::adapter::{HostResources, PluginExtractor};
+use crate::engine::{Engine, EngineConfig};
+use crate::loader::{DiscoverOutcome, Loader};
 use crate::manifest::{Manifest, Signature, canonical_bytes};
-use crate::prompt::{ConfirmRequest, ConfirmResponse, Prompter};
+use crate::prompt::{AlwaysApprove, ConfirmRequest, ConfirmResponse, Prompter};
+use crate::trust_store::TrustStore;
 
 /// The committed 0.5.0 example component (`tests/fixtures/example-extractor-0.5.0`):
 /// WASI-free, no capabilities, implements `extract` and `search`, instantiates
@@ -28,6 +32,16 @@ use crate::prompt::{ConfirmRequest, ConfirmResponse, Prompter};
 #[doc(hidden)]
 pub const EXAMPLE_0_5_0_WASM: &[u8] =
     include_bytes!("../tests/fixtures/example-extractor-0.5.0/plugin.wasm");
+
+/// The committed 0.5.2 example component (`tests/fixtures/example-extractor-0.5.2`):
+/// the same source as the 0.5.0 one, rebuilt against `rdlp:plugin@0.5.2`
+/// with `search-filters`, `extract-playlist` and `extract-with-metadata`
+/// exported — see its README for what each answers per URL. The one copy
+/// of those bytes for the playlist/metadata unit tests and
+/// `tests/abi_0_5_2_fixture.rs`.
+#[doc(hidden)]
+pub const EXAMPLE_0_5_2_WASM: &[u8] =
+    include_bytes!("../tests/fixtures/example-extractor-0.5.2/plugin.wasm");
 
 /// The default extraction context a plugin test hands to `extract` /
 /// `search`: a stock HTTP client, the boa engine, an empty cookie jar and
@@ -122,6 +136,19 @@ impl<'a> SignedPluginSpec<'a> {
             ..Self::stub("example", EXAMPLE_0_5_0_WASM)
         }
     }
+
+    /// The committed 0.5.2 example component under the same template:
+    /// `wit_version = "0.5.2"` (the contract it was built against) and
+    /// `supports_search = true` (it exports `search` + `search-filters`).
+    #[must_use]
+    pub const fn example_0_5_2() -> Self {
+        Self {
+            wit_version: "0.5.2",
+            supports_search: true,
+            wasm: EXAMPLE_0_5_2_WASM,
+            ..Self::example()
+        }
+    }
 }
 
 /// Base64 of the key's 32-byte public key, as the manifest carries it.
@@ -200,6 +227,71 @@ fn write_fixture_file(dir: &Path, name: &str, contents: &[u8]) {
     std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
     std::fs::write(dir.join(name), contents)
         .unwrap_or_else(|e| panic!("write {}/{name}: {e}", dir.display()));
+}
+
+/// Sign `spec` under a fresh key into `<root>/plugins/<spec.name>`, let
+/// `tamper` edit that directory (a no-op closure for the honest case),
+/// then run the production [`Loader::discover`] over `<root>/plugins` with
+/// an [`AlwaysApprove`] prompter and a trust store at `<root>/trust.toml`.
+/// Returns the engine (an adapter built from the outcome must share it)
+/// and the one outcome `discover` produced for that directory.
+///
+/// The one "sign, then discover through the real loader" mechanism for
+/// every fixture: the ABI compat tests (`tests/loader.rs`,
+/// `tests/abi_0_5_2_fixture.rs`) and the example search e2e. `tamper`
+/// runs between the write and the discover so a refusal test can flip a
+/// byte of the signed artefact or rewrite the manifest without a second
+/// copy of this wiring.
+///
+/// # Panics
+///
+/// If `discover` returns anything other than exactly one outcome — the
+/// directory holds exactly the one plugin this wrote.
+#[doc(hidden)]
+pub fn discover_signed_after(
+    root: &Path,
+    spec: &SignedPluginSpec<'_>,
+    tamper: impl FnOnce(&Path),
+) -> (Arc<Engine>, DiscoverOutcome) {
+    let plugins_dir = root.join("plugins");
+    let dir = plugins_dir.join(spec.name);
+    let key = SigningKey::generate(&mut rand::rngs::OsRng);
+    write_signed_plugin(&dir, &key, spec);
+    tamper(&dir);
+
+    let engine =
+        Arc::new(Engine::new(EngineConfig::default()).unwrap_or_else(|e| panic!("engine: {e}")));
+    let mut trust =
+        TrustStore::open(root.join("trust.toml")).unwrap_or_else(|e| panic!("trust store: {e}"));
+    let mut loader = Loader::new(engine.as_ref(), &mut trust, Arc::new(AlwaysApprove));
+    let mut outcomes = loader.discover(&plugins_dir);
+    assert_eq!(
+        outcomes.len(),
+        1,
+        "discover over a directory holding one plugin yields exactly one outcome"
+    );
+    (engine, outcomes.remove(0))
+}
+
+/// [`discover_signed_after`] with no tampering, unwrapped into a
+/// [`PluginExtractor`] with no host resources — the shape every fixture
+/// that declares no capabilities loads through.
+///
+/// # Panics
+///
+/// If the loader refuses the plugin or the adapter cannot be built.
+#[doc(hidden)]
+#[must_use]
+pub fn load_signed_adapter(root: &Path, spec: &SignedPluginSpec<'_>) -> PluginExtractor {
+    let (engine, outcome) = discover_signed_after(root, spec, |_| {});
+    let loaded = outcome.unwrap_or_else(|(path, err)| {
+        panic!(
+            "the signed fixture must load through the production loader: {}: {err:?}",
+            path.display()
+        )
+    });
+    PluginExtractor::new(loaded, engine, HostResources::default())
+        .unwrap_or_else(|e| panic!("adapter: {e}"))
 }
 
 /// The trust-store identity string for a signing key, computed by the
