@@ -61,12 +61,13 @@ pub async fn expand_hls_in_place(formats: Vec<Format>, http: Arc<wreq::Client>) 
 
 /// Expand only the M3u8 / M3u8Native rows that do NOT yet carry `fragments`,
 /// leaving every other row (already-expanded HLS, progressive, DASH) exactly
-/// where it was. The orchestrator's downloader guarantee (rdlp-api
-/// `extract_video`) uses this so an extractor that skipped expansion — a
-/// plugin cannot return fragments through the WIT `format` record — still
-/// yields downloadable HLS rows, while in-tree rows (already expanded by
-/// the extractor itself) are never re-fetched. Order is preserved because
-/// expansion is per-row in place.
+/// where it was. The orchestrator's downloader guarantee (rdlp-api's shared
+/// `Orchestrator::finish_extracted_formats` boundary, called from
+/// `extract_video`, `extract_lazy_formats`, and `extract_playlist`) uses this
+/// so an extractor that skipped expansion — a plugin cannot return fragments
+/// through the WIT `format` record — still yields downloadable HLS rows,
+/// while in-tree rows (already expanded by the extractor itself) are never
+/// re-fetched. Order is preserved because expansion is per-row in place.
 pub async fn expand_missing_hls_fragments(
     formats: Vec<Format>,
     http: Arc<wreq::Client>,

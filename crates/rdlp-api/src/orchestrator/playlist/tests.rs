@@ -128,9 +128,10 @@ fn test_extract_cdn_host_stickiness_sort() {
 /// rather than asserting on source text, so it stays valid however a future
 /// sweep might be spelled — including the existence-probe shape that
 /// `scripts/check-no-dir-sweep-delete.sh` cannot see.
-// The `mockito::Server` must stay alive for the whole body — it stops
-// serving when dropped (`mockito::Server`'s `Drop` calls `reset()`). Rather
-// than allowing clippy's early-drop suggestion, `server` is dropped
+// The `mockito::ServerGuard` must stay alive for the whole body — dropping
+// it recycles the underlying `Server` back to mockito's server pool, and
+// that recycle step calls `reset()`, clearing every mock it had registered.
+// Rather than allowing clippy's early-drop suggestion, `server` is dropped
 // explicitly as the LAST statement below, after every assertion — same
 // convention as `orchestrator/tests/hls_e2e.rs`.
 #[tokio::test]

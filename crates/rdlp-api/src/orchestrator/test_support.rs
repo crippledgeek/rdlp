@@ -99,9 +99,11 @@ static MATCH_ANY_URL: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r".").expect("static pattern is valid"));
 
 /// An [`InfoExtractor`] that ignores its input and hands back a fixed
-/// `InfoDict`, so a test can drive `Orchestrator::extract_video` (the single
-/// boundary under test in `tests/hls_expansion_guarantee.rs`) without a real
-/// site.
+/// `InfoDict`, so a test can drive any of the orchestrator's three
+/// extraction boundaries (`extract_video`, `extract_lazy_formats`,
+/// `extract_playlist` — see `Orchestrator::finish_extracted_formats` in
+/// `extraction.rs`), as `tests/hls_expansion_guarantee.rs` does, without a
+/// real site.
 pub(super) struct FakeExtractor {
     pub(super) info: InfoDict,
 }
@@ -137,17 +139,21 @@ impl ExtractorRegistryTrait for FakeRegistry {
     }
 }
 
-/// If the SSRF gate on `expand_missing_hls_fragments` ever regresses and lets
-/// a hostile fragment URL through to a real fetch, this bounds how long a
-/// test can hang waiting for it, rather than the default 30s connect timeout
-/// a real download needs.
+/// A row this fake extractor hands back can be seeded at an address the SSRF
+/// gate is supposed to reject before any fetch is attempted (see
+/// `rdlp_extractor::hls::expand::tests::seed_link_local_metadata_address_rejected`
+/// for the gate's own guarantee). If a caller-side regression ever let such a
+/// row reach a real fetch anyway, this bounds how long a test can hang
+/// waiting for it, rather than the default 30s connect timeout a real
+/// download needs.
 const HOSTILE_FETCH_BOUND_SECS: u64 = 2;
 
 /// An orchestrator whose extractor is `info` regardless of the URL passed to
-/// `extract_video`, and whose HTTP client times out quickly — so a test that
-/// exercises the fragments-expansion boundary against mockito, alongside a
-/// deliberately hostile URL, fails fast on an SSRF-gate regression instead of
-/// hanging on a real network round trip.
+/// `extract_video`/`extract_lazy_formats`/`extract_playlist`, and whose HTTP
+/// client times out quickly — so a test exercising any of the three
+/// `finish_extracted_formats` boundaries against mockito, alongside a
+/// deliberately unresolvable URL, fails fast instead of hanging on a real
+/// network round trip if that URL is ever mistakenly reached.
 pub(super) fn orchestrator_with_fake_extractor(info: InfoDict) -> Orchestrator {
     let config = Config {
         socket_timeout: Some(HOSTILE_FETCH_BOUND_SECS),

@@ -23,13 +23,14 @@
 // strict per-fn line cap.
 #![allow(clippy::too_many_lines)]
 
-// The test below holds a `mockito::Server` for its full body and drops it
-// explicitly as the LAST statement, after its assertions run. Same
-// convention, same reason, as `orchestrator/tests/hls_e2e.rs`:
-// `mockito::Server`'s `Drop` calls `reset()`, which clears its registered
-// mocks — dropping it any earlier (clippy's early-drop suggestion) would
-// clear them before the awaited request and the `.expect(N)` mock-drop
-// assertions run.
+// The test below holds a `mockito::ServerGuard` for its full body and drops
+// it explicitly as the LAST statement, after its assertions run. Same
+// convention, same reason, as `orchestrator/tests/hls_e2e.rs`: dropping a
+// `ServerGuard` recycles the underlying `Server` back to mockito's server
+// pool, and that recycle step calls `reset()`, which clears every mock the
+// server had registered — dropping it any earlier (clippy's early-drop
+// suggestion) would clear them before the awaited request and the
+// `.expect(N)` mock-drop assertions run.
 
 use crate::events::Event;
 use crate::handle::DownloadId;
