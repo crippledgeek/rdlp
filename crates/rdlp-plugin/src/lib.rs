@@ -146,9 +146,9 @@ pub use error::PluginError;
 /// host binds here. Exports added to `extractor-plugin` after 0.5.0 (such as
 /// `search-filters`, `extract-playlist`, and `extract-with-metadata`) are
 /// optional to the host and looked up by name on the live instance through
-/// [`adapter::call_export_by_name`] — [`search_adapter::call_search_filters`],
-/// [`playlist_adapter::call_extract_playlist`], and
-/// [`metadata_adapter::call_extract_with_metadata`] — rather than
+/// `adapter::call_export_by_name` — `search_adapter::call_search_filters`,
+/// `playlist_adapter::call_extract_playlist`, and
+/// `metadata_adapter::call_extract_with_metadata` — rather than
 /// bound at instantiation, because generated bindings require every
 /// world-level export to be present at instantiate time
 /// (wasmtime-wit-bindgen 30, `no function export … found`) — binding the

@@ -80,7 +80,7 @@ pub enum ConfigValidationError {
         reason: &'static str,
     },
     /// `playlist_items` does not parse as a
-    /// [`PlaylistItems`](crate::PlaylistItems) spec.
+    /// [`PlaylistItems`] spec.
     InvalidPlaylistItems(String),
 }
 

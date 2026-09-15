@@ -3,7 +3,7 @@
 //! `wit/COMPATIBILITY.md` §3/§8. The host binds the frozen
 //! `extractor-plugin-host` bindings, which omit every post-0.5.0 export, so
 //! this export is looked up on the live instance through
-//! [`crate::adapter::call_export_by_name`] — the same mechanism
+//! `crate::adapter::call_export_by_name` — the same mechanism
 //! `search_adapter::call_search_filters` uses.
 //!
 //! `bindgen!` only emits Rust types for records/variants reachable from a
