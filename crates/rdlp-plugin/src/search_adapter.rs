@@ -303,7 +303,8 @@ impl PluginSearchExtractor {
             Ok(filters) => filters.clone(),
             Err(e) => {
                 log::warn!(
-                    "plugin '{}' search-filters failed; treating as no filters: {e:#}",
+                    "plugin '{}' search-filters failed; treating as no filters, so every \
+                     search filter will be rejected as unknown until the plugin answers: {e:#}",
                     self.inner.manifest.name
                 );
                 Vec::new()
@@ -670,6 +671,21 @@ mod tests {
             PluginSearchExtractor::new(Arc::new(fixture_extractor_with_manifest(&overriding)));
         assert_eq!(SearchExtractor::name(&ext), "examplesite");
         assert!(ext.overrides_builtin());
+    }
+
+    /// A plugin the runner refuses (here: disabled by the 3-strike rule)
+    /// answers no filters — and the failure is NOT cached, so the cell
+    /// stays empty for a retry once the plugin can answer.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_failed_filters_fetch_reports_no_filters_and_is_not_cached() {
+        let inner = Arc::new(fixture_extractor());
+        for _ in 0..crate::adapter::TRAP_DISABLE_THRESHOLD {
+            inner.test_record_trap();
+        }
+        assert!(inner.test_is_disabled());
+        let ext = PluginSearchExtractor::new(inner);
+        assert!(ext.supported_filters().await.is_empty());
+        assert!(ext.filters.get().is_none(), "a failure must not be cached");
     }
 
     /// `SearchUnsupported`'s `Display` IS the operator message, so the

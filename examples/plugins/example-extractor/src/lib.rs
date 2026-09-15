@@ -46,6 +46,13 @@ const CANNED_RESULTS: u32 = 2;
 /// Pages the canned search claims to have; the last one repeats the first.
 const CANNED_PAGES: u32 = 2;
 
+/// The `ordering` value under which page 1 still claims a further page
+/// but page 2 fails with `internal`. A host that fetches a page it should
+/// not have (past `max-results`) turns that into a counted fault, which is
+/// how a test observes the fetch: the host instantiates a fresh store per
+/// call, so the plugin itself cannot count them.
+const ORDERING_TRAPS_PAST_PAGE_ONE: &str = "views";
+
 struct Component;
 
 impl Guest for Component {
@@ -110,9 +117,20 @@ impl Guest for Component {
     /// end-to-end without a network; echoes the requested page number.
     /// Page 1 claims a further page exists and page 2 repeats the same two
     /// results, so a host that terminates on a duplicate page stops at two
-    /// results while one that trusts `has-more` alone would loop.
+    /// results while one that trusts `has-more` alone would loop. Under
+    /// `ordering=views` page 2 is an `internal` error instead (see
+    /// `ORDERING_TRAPS_PAST_PAGE_ONE`).
     fn search(q: SearchQuery) -> Result<SearchPage, SearchError> {
         let page = q.page.unwrap_or(1);
+        let traps_past_page_one = q
+            .filters
+            .iter()
+            .any(|(k, v)| k == "ordering" && v == ORDERING_TRAPS_PAST_PAGE_ONE);
+        if traps_past_page_one && page > 1 {
+            return Err(SearchError::Internal(format!(
+                "page {page} requested under ordering={ORDERING_TRAPS_PAST_PAGE_ONE}"
+            )));
+        }
         let results = (1..=CANNED_RESULTS)
             .map(|i| SearchResult {
                 url: format!("{URL_PREFIX}{i}"),

@@ -43,7 +43,7 @@ use rdlp_http::wreq;
 use rdlp_types::InfoDict;
 
 /// Number of traps before a plugin is automatically disabled for the session.
-const TRAP_DISABLE_THRESHOLD: u32 = 3;
+pub(crate) const TRAP_DISABLE_THRESHOLD: u32 = 3;
 
 /// Wall-clock cap on one `extract` call — the "30 s extract" default the
 /// crate doc (`lib.rs`, "Per-call execution") promises. Bounds the
@@ -521,7 +521,7 @@ pub(crate) mod tests {
     use super::*;
     use crate::engine::EngineConfig;
     use crate::manifest::parse_manifest_str;
-    use rdlp_http::HttpClientFactory;
+    use crate::test_support::extraction_ctx;
     use std::sync::atomic::AtomicBool;
 
     /// The committed 0.5.0 example component: WASI-free, no capabilities,
@@ -573,15 +573,6 @@ signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             subject_for_errors: "https://example.com/video/42",
             timeout,
         }
-    }
-
-    fn extraction_ctx() -> ExtractionContext {
-        ExtractionContext::new(
-            Arc::new(HttpClientFactory::default().build()),
-            Arc::new(rdlp_jsinterp::BoaJsEngine::new()),
-            Arc::new(rdlp_cookies::SimpleCookieJar::new()),
-            Arc::new(rdlp_types::Config::default()),
-        )
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

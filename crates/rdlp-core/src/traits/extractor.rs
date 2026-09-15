@@ -241,9 +241,13 @@ pub trait SearchExtractor: Send + Sync {
     /// Whether this extractor's signed manifest explicitly claims the
     /// right to shadow a built-in for the same search site.
     ///
-    /// A plugin's priority is clamped below every built-in unless its
-    /// manifest opts in (`claims_override`); this exposes that opt-in so
-    /// the registry can honour it without reading manifests. Built-ins
+    /// When a built-in competes, a plugin's priority is clamped to the
+    /// built-in ceiling (`BUILT_IN_MAX`, 99 — the top of the built-in
+    /// tier, not below every built-in) unless its manifest opts in via
+    /// `claims_override`. URL routing checks that list against the URL's
+    /// host; a search has no URL, so for search-site arbitration a
+    /// non-empty `claims_override` is read as the opt-in. This exposes it
+    /// so the registry can honour it without reading manifests. Built-ins
     /// never override anything, so the default is `false`.
     fn overrides_builtin(&self) -> bool {
         false

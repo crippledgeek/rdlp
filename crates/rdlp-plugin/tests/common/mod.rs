@@ -18,23 +18,13 @@
 
 use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey};
-use rdlp_core::ExtractionContext;
 use rdlp_plugin::manifest::canonical_bytes;
 use std::path::Path;
-use std::sync::Arc;
 
-/// The default extraction context every plugin integration test hands to
-/// `extract`/`search`: a stock HTTP client, the boa engine, an empty cookie
-/// jar and default config. Formerly five identical `make_extraction_ctx`
-/// copies (loader, svt/mpd/xxxymovies golden, python smoke).
-pub fn extraction_ctx() -> ExtractionContext {
-    ExtractionContext::new(
-        Arc::new(rdlp_http::HttpClientFactory::default().build()),
-        Arc::new(rdlp_jsinterp::BoaJsEngine::new()),
-        Arc::new(rdlp_cookies::SimpleCookieJar::new()),
-        Arc::new(rdlp_types::Config::default()),
-    )
-}
+/// The one extraction-context builder, shared with the library's own unit
+/// tests; re-exported so every integration binary imports it from here
+/// alongside the signer.
+pub use rdlp_plugin::test_support::extraction_ctx;
 
 /// Every manifest field this crate's integration tests vary across the five
 /// former copies of the signer. `dir` and `key` stay as the function's own

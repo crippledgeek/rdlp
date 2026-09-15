@@ -255,21 +255,18 @@ async fn plugin_search_extractor_drives_the_example_through_the_host_scaffold() 
     );
 
     // `max_results: Some(1)` truncates within page 1 and never fetches
-    // page 2. The store is fresh per call so the plugin cannot count
-    // calls; the absence of the pacing sleep is the proof that no second
-    // page was requested.
-    let started = Instant::now();
+    // page 2. Under `ordering=views` the example's page 2 is an `internal`
+    // error — a counted fault — so an over-fetch would show up in the
+    // trap count (the store is fresh per call, so the plugin itself cannot
+    // count). `later_page_error_returns_partial_results_and_counts_a_strike`
+    // below proves that page really does count, so `0` here is not vacuous.
     let one = site
-        .search(&host_query(&[], Some(1), None), &ctx)
+        .search(&host_query(&[("ordering", "views")], Some(1), None), &ctx)
         .await
         .expect("search");
-    let elapsed = started.elapsed();
+    assert_eq!(adapter.test_trap_count(), 0, "page 2 must not be fetched");
     assert_eq!(one.len(), 1);
     assert_eq!(one[0].video_url, "https://example.com/video/1");
-    assert!(
-        elapsed < pacing,
-        "a single page must not be paced; took {elapsed:?}"
-    );
 
     // Single page: the scaffold echoes the page it asked for, and page 2
     // of the example reports no further page.
@@ -312,14 +309,36 @@ async fn plugin_search_extractor_drives_the_example_through_the_host_scaffold() 
         "Unknown filter 'foo' for example. Available: ordering"
     );
 
-    // An allowed filter value goes through to the plugin.
-    let filtered = site
-        .search(&host_query(&[("ordering", "views")], Some(1), None), &ctx)
-        .await
-        .expect("allowed filter");
-    assert_eq!(filtered.len(), 1);
-
     assert_eq!(adapter.test_trap_count(), 0);
+}
+
+/// The scaffold's later-page asymmetry through a plugin: under
+/// `ordering=views` page 1 succeeds and page 2 fails with `internal`, so
+/// the operator gets page 1's results and the plugin is charged one
+/// strike. Its own adapter, so the count is attributable to this run.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "builds examples/plugins/example-extractor via cargo + wasm-tools"]
+async fn later_page_error_returns_partial_results_and_counts_a_strike() {
+    let wasm = build_example_component();
+    let td = TempDir::new().unwrap();
+    let adapter = Arc::new(load_adapter(&td, wasm, "0.5.1"));
+    let site = PluginSearchExtractor::new(Arc::clone(&adapter));
+    let ctx = extraction_ctx();
+
+    let partial = site
+        .search(&host_query(&[("ordering", "views")], None, None), &ctx)
+        .await
+        .expect("a later-page failure yields the pages gathered so far");
+    let urls: Vec<&str> = partial.iter().map(|r| r.video_url.as_str()).collect();
+    assert_eq!(
+        urls,
+        ["https://example.com/video/1", "https://example.com/video/2"]
+    );
+    assert_eq!(
+        adapter.test_trap_count(),
+        1,
+        "page 2's internal error is a strike"
+    );
 }
 
 /// Not `#[ignore]`d: needs only the committed fixture, so the default gate
