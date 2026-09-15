@@ -3,26 +3,47 @@
 //!
 //! # Why this file exists as an integration test and not a unit test
 //!
-//! `hls::expand::validate_resolved_url` carries a `#[cfg(test)]` exemption that
-//! lets `http(s)` loopback origins through, so mockito-backed unit tests can
+//! `hls::expand::validate_resolved_url` delegates to
+//! `base::common::manifest_url::validate_manifest_sourced_url`, which carries
+//! an exemption gated `cfg(any(test, feature = "loopback-test-exemption"))`
+//! that lets `http(s)` loopback origins through, so mockito-backed tests can
 //! drive expansion against a local fixture server at all. That exemption makes
 //! the loopback rejection class unassertable from inside
 //! `src/hls/expand.rs`'s own `#[cfg(test)] mod tests`.
 //!
 //! `cfg(test)` is set by rustc only while compiling a crate AS a test harness.
 //! An integration test under `tests/` links `rdlp-extractor` as an ordinary
-//! dependency, so the library here is the **production** build: the loopback
-//! exemption is not compiled in, and the real gate is reachable.
+//! dependency, so `cfg(test)` is off here regardless. The `feature =
+//! "loopback-test-exemption"` half of the `cfg(any(...))`, however, is a real
+//! Cargo feature on this crate, and **Cargo unifies features across the whole
+//! build graph for a given profile** — so when this crate is built in the
+//! same `cargo test --workspace` invocation as `rdlp-plugin` or `rdlp-api`
+//! (whose `[dev-dependencies]` enable the feature so *their own* mockito
+//! tests can drive HLS expansion without depending on `rdlp-extractor`'s
+//! `#[cfg(test)]` code), the feature is unified in here too, and this
+//! integration test's binary carries the loopback exemption exactly as if
+//! `cfg(test)` had applied. This is by design, not a leak to fix: two
+//! sibling crates need the exemption in their own test builds, and Cargo has
+//! no per-crate feature isolation within one workspace build.
 //!
-//! That buys two things the unit tests cannot:
+//! Because of that unification, the loopback-specific cases below
+//! (`loopback_seed_rejected_in_production_build`,
+//! `https_loopback_seed_rejected_in_production_build`) are compiled only when
+//! the feature is OFF (`#[cfg(not(feature = "loopback-test-exemption"))]`) —
+//! `cargo test -p rdlp-extractor` (no `--features`, and no unifying sibling in
+//! the same invocation) is what actually exercises them. The other three
+//! cases here — link-local, RFC 1918, and non-HTTP scheme — carry NO
+//! exemption in either build configuration (see
+//! `validate_manifest_sourced_url`'s `cfg(any(test, feature = ...))` gate,
+//! which only ever widens the loopback check), so they prove the real gate
+//! fires in an integration build unconditionally, feature on or off.
 //!
-//! 1. the loopback rejection class, asserted against the gate that actually
-//!    ships; and
-//! 2. a regression guard on the exemption's own scope — if a future refactor
-//!    widens it out of `cfg(test)`, or drops the `cfg` attribute entirely,
-//!    these tests go red. That widening is precisely the failure the gate
-//!    exists to prevent, and no unit test can observe it, because in a unit
-//!    test the exemption is supposed to be present.
+//! The actual production guarantee — that no binary a user runs ever carries
+//! `loopback-test-exemption` — is `scripts/check-loopback-feature-not-in-release.sh`,
+//! which derives every workspace binary crate from `cargo metadata` and checks
+//! its non-dev dependency graph for the feature. That script, not this file,
+//! is what a future refactor widening the exemption's scope would need to
+//! defeat.
 //!
 //! Every assertion below matches on the `URI rejected:` prefix, which only
 //! `validate_resolved_url` emits. A bare `HlsExpandError::Network(_)` match
@@ -81,9 +102,12 @@ fn assert_rejected_by_gate(err: &HlsExpandError, url: &str) {
 
 /// The loopback rejection class, asserted against the shipping gate.
 ///
-/// This is the case the unit tests structurally cannot cover: in
-/// `src/hls/expand.rs`'s own test module the `cfg(test)` exemption lets these
-/// exact URLs through on purpose.
+/// Feature-gated OFF: with `loopback-test-exemption` enabled (as it is when
+/// this crate is unified with `rdlp-plugin`/`rdlp-api` under
+/// `cargo test --workspace`), loopback origins are let through by design —
+/// this exact case is what that feature exists to allow. Run
+/// `cargo test -p rdlp-extractor` alone to exercise this assertion.
+#[cfg(not(feature = "loopback-test-exemption"))]
 #[tokio::test]
 async fn loopback_seed_rejected_in_production_build() {
     for host in ["127.0.0.1", "localhost", "[::1]"] {
@@ -92,8 +116,10 @@ async fn loopback_seed_rejected_in_production_build() {
     }
 }
 
-/// The `cfg(test)` exemption covers `http` and `https` alike, so both must be
-/// refused once it is absent.
+/// The loopback exemption covers `http` and `https` alike, so both must be
+/// refused once it is absent — see `loopback_seed_rejected_in_production_build`
+/// for why this is feature-gated OFF the same way.
+#[cfg(not(feature = "loopback-test-exemption"))]
 #[tokio::test]
 async fn https_loopback_seed_rejected_in_production_build() {
     let url = format!("https://127.0.0.1:{UNREACHABLE_PORT}/master.m3u8");
