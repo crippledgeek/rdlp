@@ -122,6 +122,8 @@ fn load_adapter(td: &TempDir, wasm: &[u8], wit_version: &str) -> PluginExtractor
             matches: &["https://example.com/*"],
             priority: 150,
             claims_override: &[],
+            supports_extract: true,
+            supports_search: false,
             capabilities: &[],
             wasm,
         },

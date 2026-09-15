@@ -136,9 +136,7 @@ impl ExtractorRegistry {
 
         // Register ABXXX extractor (KVS site with JSON XHR player config)
         registry.register(Arc::new(AbxxxExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(AbxxxExtractor::new()));
+        registry.register_search(Arc::new(AbxxxExtractor::new()));
 
         // Register SpankBang extractor
         registry.register(Arc::new(SpankBangExtractor::new()));
@@ -153,54 +151,22 @@ impl ExtractorRegistry {
         registry.register(Arc::new(GenericExtractor::new()));
 
         // Register search extractors
-        registry
-            .search_extractors
-            .push(Arc::new(XHamsterExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(RedTubeExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(TNAFlixSearchExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(PornHubExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(HQPornerExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(EMPFlixSearchExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(MovieFapSearchExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(XTitsExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(NineAnimeExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(KoreanPornMovieExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(XVideosExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(XNXXExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(EPornerExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(SpankBangExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(PornoxoExtractor::new()));
-        registry
-            .search_extractors
-            .push(Arc::new(PornoneExtractor::new()));
+        registry.register_search(Arc::new(XHamsterExtractor::new()));
+        registry.register_search(Arc::new(RedTubeExtractor::new()));
+        registry.register_search(Arc::new(TNAFlixSearchExtractor::new()));
+        registry.register_search(Arc::new(PornHubExtractor::new()));
+        registry.register_search(Arc::new(HQPornerExtractor::new()));
+        registry.register_search(Arc::new(EMPFlixSearchExtractor::new()));
+        registry.register_search(Arc::new(MovieFapSearchExtractor::new()));
+        registry.register_search(Arc::new(XTitsExtractor::new()));
+        registry.register_search(Arc::new(NineAnimeExtractor::new()));
+        registry.register_search(Arc::new(KoreanPornMovieExtractor::new()));
+        registry.register_search(Arc::new(XVideosExtractor::new()));
+        registry.register_search(Arc::new(XNXXExtractor::new()));
+        registry.register_search(Arc::new(EPornerExtractor::new()));
+        registry.register_search(Arc::new(SpankBangExtractor::new()));
+        registry.register_search(Arc::new(PornoxoExtractor::new()));
+        registry.register_search(Arc::new(PornoneExtractor::new()));
 
         registry
     }
@@ -211,6 +177,14 @@ impl ExtractorRegistry {
     /// * `extractor` - Arc-wrapped extractor implementing InfoExtractor trait
     pub fn register(&mut self, extractor: Arc<dyn InfoExtractor>) {
         self.extractors.push(extractor);
+    }
+
+    /// Register a new search extractor
+    ///
+    /// # Arguments
+    /// * `extractor` - Arc-wrapped extractor implementing `SearchExtractor` trait
+    pub fn register_search(&mut self, extractor: Arc<dyn SearchExtractor>) {
+        self.search_extractors.push(extractor);
     }
 
     /// Find a suitable extractor for the given URL
@@ -255,7 +229,12 @@ impl ExtractorRegistry {
         self.extractors.iter().map(|e| e.name()).collect()
     }
 
-    /// Find a search extractor by site name (case-insensitive).
+    /// Find a search extractor by site name (case-insensitive), arbitrating
+    /// name collisions the same way [`Self::find_extractor`] arbitrates URL
+    /// collisions: a built-in wins its own site name unless a plugin's
+    /// signed manifest declared `claims_override` (surfaced here via
+    /// [`SearchExtractor::overrides_builtin`]); among competing plugins the
+    /// highest [`SearchExtractor::search_priority`] wins.
     ///
     /// # Arguments
     /// * `name` - Site name to look up (e.g., "xhamster", "XHamster")
@@ -264,19 +243,53 @@ impl ExtractorRegistry {
     /// An `Arc<dyn SearchExtractor>` if found, `None` otherwise
     #[must_use]
     pub fn find_search_extractor(&self, name: &str) -> Option<Arc<dyn SearchExtractor>> {
-        self.search_extractors
+        let candidates: Vec<&Arc<dyn SearchExtractor>> = self
+            .search_extractors
             .iter()
-            .find(|e| e.name().eq_ignore_ascii_case(name))
+            .filter(|e| e.name().eq_ignore_ascii_case(name))
+            .collect();
+
+        let builtin = candidates.iter().find(|e| !e.is_plugin());
+        let has_overriding_plugin = candidates
+            .iter()
+            .any(|e| e.is_plugin() && e.overrides_builtin());
+
+        // Built-in wins its own site name unless a plugin declared the
+        // override in its signed manifest (red-flagged at first install).
+        if let Some(builtin) = builtin
+            && !has_overriding_plugin
+        {
+            return Some(Arc::clone(builtin));
+        }
+
+        // `max_by_key` returns the LAST maximum on ties; reverse the
+        // registration order first so a tie instead resolves to whichever
+        // plugin registered first, matching `find_extractor`'s tie policy.
+        candidates
+            .into_iter()
+            .filter(|e| e.is_plugin())
+            .rev()
+            .max_by_key(|e| e.search_priority())
             .cloned()
     }
 
-    /// List all registered search extractor names.
+    /// List all registered search extractor names, deduplicated
+    /// case-insensitively so a name shared by a built-in and a plugin is
+    /// listed once (keeping the casing and position of whichever
+    /// registered first).
     ///
     /// # Returns
     /// A vector of site names that support search
     #[must_use]
     pub fn list_search_extractors(&self) -> Vec<&str> {
-        self.search_extractors.iter().map(|e| e.name()).collect()
+        let mut names: Vec<&str> = Vec::with_capacity(self.search_extractors.len());
+        for extractor in &self.search_extractors {
+            let name = extractor.name();
+            if !names.iter().any(|seen| seen.eq_ignore_ascii_case(name)) {
+                names.push(name);
+            }
+        }
+        names
     }
 }
 
@@ -535,5 +548,189 @@ mod tests {
                 "search extractor {name:?} is not a registered ExtractorName"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod registry_search_arbitration_tests {
+    use super::*;
+    use async_trait::async_trait;
+    use rdlp_types::{
+        SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchResultPreview,
+    };
+
+    /// A minimal `SearchExtractor` double whose only job is to report a
+    /// name/plugin-flag/priority/override combination, so arbitration can
+    /// be pinned without a real site.
+    struct FakeSearch {
+        name: &'static str,
+        plugin: bool,
+        prio: i32,
+        overrides: bool,
+    }
+
+    #[async_trait]
+    impl SearchExtractor for FakeSearch {
+        fn name(&self) -> &str {
+            self.name
+        }
+
+        async fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
+            Vec::new()
+        }
+
+        async fn search(
+            &self,
+            _query: &SearchQuery,
+            _ctx: &rdlp_core::ExtractionContext,
+        ) -> rdlp_core::Result<Vec<SearchResultPreview>> {
+            Ok(Vec::new())
+        }
+
+        async fn search_page(
+            &self,
+            query: &SearchQuery,
+            _ctx: &rdlp_core::ExtractionContext,
+        ) -> rdlp_core::Result<SearchPageResponse> {
+            Ok(SearchPageResponse {
+                results: Vec::new(),
+                page: query.page.unwrap_or(1),
+                has_more: false,
+                total_estimate: None,
+            })
+        }
+
+        fn is_plugin(&self) -> bool {
+            self.plugin
+        }
+
+        fn search_priority(&self) -> i32 {
+            self.prio
+        }
+
+        fn overrides_builtin(&self) -> bool {
+            self.overrides
+        }
+    }
+
+    fn builtin(name: &'static str) -> FakeSearch {
+        FakeSearch {
+            name,
+            plugin: false,
+            prio: 0,
+            overrides: false,
+        }
+    }
+
+    fn plugin(name: &'static str, prio: i32, overrides: bool) -> FakeSearch {
+        FakeSearch {
+            name,
+            plugin: true,
+            prio,
+            overrides,
+        }
+    }
+
+    fn registry_of(extractors: Vec<FakeSearch>) -> ExtractorRegistry {
+        let mut reg = ExtractorRegistry {
+            extractors: Vec::new(),
+            search_extractors: Vec::new(),
+        };
+        for e in extractors {
+            reg.register_search(Arc::new(e));
+        }
+        reg
+    }
+
+    #[test]
+    fn builtin_wins_its_own_site_over_a_non_overriding_plugin() {
+        let reg = registry_of(vec![builtin("pornhub"), plugin("pornhub", 190, false)]);
+        let found = reg.find_search_extractor("pornhub").expect("a match");
+        assert!(
+            !found.is_plugin(),
+            "built-in must win when no override is claimed"
+        );
+    }
+
+    /// A plugin literally named "evil" declaring the built-in's own site
+    /// name (the manifest-level equivalent of `search_site = "pornhub"`)
+    /// must NOT shadow the built-in unless it also claims the override —
+    /// this is the exact shadowing attack the override gate exists for.
+    #[test]
+    fn a_plugin_claiming_a_builtins_site_name_cannot_shadow_it_without_override() {
+        let reg = registry_of(vec![builtin("pornhub"), plugin("pornhub", 999, false)]);
+        let found = reg.find_search_extractor("pornhub").expect("a match");
+        assert!(
+            !found.is_plugin(),
+            "an unprivileged shadowing attempt must lose to the built-in regardless of priority"
+        );
+    }
+
+    #[test]
+    fn overriding_plugin_shadows_the_builtin() {
+        let reg = registry_of(vec![builtin("pornhub"), plugin("pornhub", 100, true)]);
+        let found = reg.find_search_extractor("pornhub").expect("a match");
+        assert!(
+            found.is_plugin(),
+            "an override-claiming plugin must shadow the built-in"
+        );
+    }
+
+    #[test]
+    fn two_plugins_highest_priority_wins() {
+        let reg = registry_of(vec![plugin("site", 120, false), plugin("site", 150, false)]);
+        let found = reg.find_search_extractor("site").expect("a match");
+        assert_eq!(found.search_priority(), 150);
+    }
+
+    #[test]
+    fn equal_priority_plugins_resolve_to_first_registered() {
+        // Equal-priority candidates are indistinguishable through any
+        // `SearchExtractor` field, so the tie-break is pinned by pointer
+        // identity (`Arc::ptr_eq`) against the specific instance registered
+        // first — a `max_by_key` without the `.rev()` reversal would return
+        // the second instance instead, and this assertion catches that.
+        let mut reg = ExtractorRegistry {
+            extractors: Vec::new(),
+            search_extractors: Vec::new(),
+        };
+        let first: Arc<dyn SearchExtractor> = Arc::new(plugin("site", 100, false));
+        let second: Arc<dyn SearchExtractor> = Arc::new(plugin("site", 100, false));
+        reg.register_search(Arc::clone(&first));
+        reg.register_search(Arc::clone(&second));
+
+        let found = reg.find_search_extractor("site").expect("a match");
+        assert!(
+            Arc::ptr_eq(&found, &first),
+            "a priority tie must resolve to whichever plugin registered first"
+        );
+    }
+
+    #[test]
+    fn plugin_only_name_returns_the_plugin() {
+        let reg = registry_of(vec![plugin("onlyplugin", 100, false)]);
+        let found = reg.find_search_extractor("onlyplugin").expect("a match");
+        assert!(found.is_plugin());
+    }
+
+    #[test]
+    fn list_search_extractors_dedupes_a_shared_name() {
+        let reg = registry_of(vec![builtin("pornhub"), plugin("pornhub", 190, false)]);
+        let names = reg.list_search_extractors();
+        assert_eq!(
+            names
+                .iter()
+                .filter(|n| n.eq_ignore_ascii_case("pornhub"))
+                .count(),
+            1,
+            "a name shared by two providers must be listed once: {names:?}"
+        );
+    }
+
+    #[test]
+    fn name_matching_is_case_insensitive() {
+        let reg = registry_of(vec![builtin("PornHub")]);
+        assert!(reg.find_search_extractor("pornhub").is_some());
+        assert!(reg.find_search_extractor("PORNHUB").is_some());
     }
 }

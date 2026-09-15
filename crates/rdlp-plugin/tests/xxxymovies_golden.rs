@@ -139,6 +139,8 @@ async fn xxxymovies_extract_returns_complete_info_dict() {
             matches: &["https://*.xxxymovies.com/*", "https://xxxymovies.com/*"],
             priority: 150,
             claims_override: &[],
+            supports_extract: true,
+            supports_search: false,
             // componentize-py emits IMPORTS for every interface in the WIT
             // world; the manifest must declare all six caps so the linker
             // wires every import the wasm references.

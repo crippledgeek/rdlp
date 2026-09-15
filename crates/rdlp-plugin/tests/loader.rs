@@ -51,6 +51,8 @@ fn sign_stub_plugin(
             matches: &["https://example.com/*"],
             priority,
             claims_override,
+            supports_extract: true,
+            supports_search: false,
             capabilities,
             wasm: &wasm,
         },
@@ -352,6 +354,8 @@ async fn a_0_5_0_component_loads_on_the_0_5_1_host() {
             matches: &["https://example.com/*"],
             priority: 150,
             claims_override: &[],
+            supports_extract: true,
+            supports_search: false,
             // example-extractor's plugin.toml.template declares no
             // capabilities — it is a pure, deterministic plugin.
             capabilities: &[],
@@ -416,6 +420,8 @@ async fn a_component_declaring_a_newer_patch_is_rejected() {
             matches: &["https://example.com/*"],
             priority: 150,
             claims_override: &[],
+            supports_extract: true,
+            supports_search: false,
             capabilities: &[],
             wasm: &wasm,
         },

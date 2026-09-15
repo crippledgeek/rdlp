@@ -8,6 +8,7 @@
 
 use anyhow::Context as _;
 use rdlp_cookies::SimpleCookieJar;
+use rdlp_core::InfoExtractor;
 use rdlp_extractor::ExtractorRegistry;
 use rdlp_http::HttpClientFactory;
 use rdlp_plugin::{
@@ -17,6 +18,7 @@ use rdlp_plugin::{
     host::store_kv::open_host_db,
     loader::Loader,
     prompt::{AlwaysDeny, PreTrustedIdentities, Prompter},
+    search_adapter::PluginSearchExtractor,
     trust_store::TrustStore,
 };
 use rdlp_types::Config;
@@ -127,8 +129,28 @@ fn bootstrap_plugins(
                     match PluginExtractor::new(plugin, Arc::clone(&engine), host_resources.clone())
                     {
                         Ok(extractor) => {
-                            log::debug!("plugin bootstrap: registered plugin '{plugin_name}'");
-                            registry.register(Arc::new(extractor));
+                            // Extract and search are independent capabilities
+                            // (D5): a search-only plugin sets
+                            // `supports_extract = false` and must not appear
+                            // as an `InfoExtractor` at all, so URL routing
+                            // never dispatches to it. Both registrations
+                            // share one `Arc<PluginExtractor>` rather than
+                            // constructing the adapter twice.
+                            let supports_extract = extractor.manifest.supports_extract;
+                            let supports_search = extractor.manifest.supports_search;
+                            let adapter = Arc::new(extractor);
+                            if supports_extract {
+                                registry.register(Arc::clone(&adapter) as Arc<dyn InfoExtractor>);
+                            }
+                            if supports_search {
+                                registry.register_search(Arc::new(PluginSearchExtractor::new(
+                                    Arc::clone(&adapter),
+                                )));
+                            }
+                            log::debug!(
+                                "plugin bootstrap: registered plugin '{plugin_name}' \
+                                 (extract={supports_extract}, search={supports_search})"
+                            );
                             loaded_count += 1;
                         }
                         Err(e) => {
@@ -200,4 +222,122 @@ fn config_dir() -> anyhow::Result<std::path::PathBuf> {
     }
     let home = std::env::var("HOME").context("HOME not set and no config dir available")?;
     Ok(std::path::PathBuf::from(home).join(".config"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use base64::Engine as _;
+    use ed25519_dalek::SigningKey;
+    use rand::rngs::OsRng;
+    use rdlp_plugin::test_support::{SignedPluginSpec, write_signed_plugin};
+    use sha2::{Digest, Sha256};
+
+    /// The Task 1 fixture shared with `rdlp-plugin`'s own tests: a real,
+    /// WASI-free component implementing `extract` and `search`, so the
+    /// manifest's `supports_extract`/`supports_search` flags are the only
+    /// thing under test here — the component itself always answers both.
+    const FIXTURE_0_5_0: &str = "../rdlp-plugin/tests/fixtures/example-extractor-0.5.0/plugin.wasm";
+
+    /// Sign `wasm` under the given capability flags into a fresh temp
+    /// plugin directory, and a `Config` pre-trusting the signer so
+    /// `bootstrap_plugins` loads it without an interactive prompt. Returns
+    /// the `TempDir` guard alongside the `Config` so the caller keeps the
+    /// plugin directory alive for the duration of the test instead of it
+    /// being deleted the moment this function returns.
+    fn config_with_signed_plugin(
+        supports_extract: bool,
+        supports_search: bool,
+    ) -> (Config, tempfile::TempDir) {
+        let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_0_5_0);
+        // Test fixture — sync I/O is acceptable per clippy.toml's
+        // disallowed-methods carve-out (c); this runs in test setup, never
+        // on an async hot path.
+        #[allow(clippy::disallowed_methods)]
+        let wasm = std::fs::read(&wasm_path)
+            .unwrap_or_else(|e| panic!("read fixture {}: {e}", wasm_path.display()));
+
+        let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let key = SigningKey::generate(&mut OsRng);
+        write_signed_plugin(
+            &tempdir.path().join("example"),
+            &key,
+            &SignedPluginSpec {
+                name: "example",
+                version: "0.1.0",
+                wit_version: "0.5.0",
+                matches: &["https://example.com/*"],
+                priority: 150,
+                claims_override: &[],
+                capabilities: &[],
+                supports_extract,
+                supports_search,
+                wasm: &wasm,
+            },
+        );
+
+        let pubkey_b64 =
+            base64::engine::general_purpose::STANDARD.encode(key.verifying_key().as_bytes());
+        let identity = format!(
+            "ed25519:{}",
+            hex::encode(Sha256::digest(pubkey_b64.as_bytes()))
+        );
+
+        let config = Config {
+            plugin_directories: vec![tempdir.path().to_path_buf()],
+            plugin_trusted_publishers: vec![identity],
+            ..Default::default()
+        };
+        (config, tempdir)
+    }
+
+    /// Isolate the trust store from any pre-existing global state, exactly
+    /// as `plugin_dispatch_regression.rs` does: `bootstrap_plugins`
+    /// resolves it via `dirs::config_dir()` → `XDG_CONFIG_HOME` → `HOME`.
+    fn with_isolated_config_dir<R>(f: impl FnOnce() -> R) -> R {
+        let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+        let path_str = tempdir
+            .path()
+            .to_str()
+            .unwrap_or_else(|| panic!("tempdir path is not utf-8: {}", tempdir.path().display()));
+        temp_env::with_vars(
+            [
+                ("XDG_CONFIG_HOME", Some(path_str)),
+                ("HOME", Some(path_str)),
+            ],
+            f,
+        )
+    }
+
+    #[test]
+    fn search_only_plugin_registers_only_as_a_search_extractor() {
+        with_isolated_config_dir(|| {
+            let (config, _tempdir) = config_with_signed_plugin(false, true);
+            let registry = build_registry_with_plugins(&config);
+            assert!(
+                !registry.list_extractors().contains(&"example"),
+                "supports_extract = false must not register as an InfoExtractor"
+            );
+            assert!(
+                registry.list_search_extractors().contains(&"example"),
+                "supports_search = true must register as a SearchExtractor"
+            );
+        });
+    }
+
+    #[test]
+    fn plugin_supporting_both_registers_in_both_lists() {
+        with_isolated_config_dir(|| {
+            let (config, _tempdir) = config_with_signed_plugin(true, true);
+            let registry = build_registry_with_plugins(&config);
+            assert!(
+                registry.list_extractors().contains(&"example"),
+                "supports_extract = true must register as an InfoExtractor"
+            );
+            assert!(
+                registry.list_search_extractors().contains(&"example"),
+                "supports_search = true must register as a SearchExtractor"
+            );
+        });
+    }
 }

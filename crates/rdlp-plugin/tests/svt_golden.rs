@@ -214,6 +214,8 @@ async fn svt_play_extract_matches_upstream_test_dict() {
             ],
             priority: 150,
             claims_override: &[],
+            supports_extract: true,
+            supports_search: false,
             // componentize-py emits IMPORTS for every interface in the WIT
             // world (Phase-1 limitation; see python_plugin_smoke.rs:182-195).
             // The manifest MUST declare all six caps so the linker wires

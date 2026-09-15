@@ -65,6 +65,8 @@ async fn python_hello_world_loads_and_signs() {
             matches: &["https://example.com/*"],
             priority: 150,
             claims_override: &[],
+            supports_extract: true,
+            supports_search: false,
             capabilities: &[
                 "fetch",
                 "cookie-jar",
@@ -146,6 +148,8 @@ async fn python_hello_world_extract_succeeds() {
             matches: &["https://example.com/*"],
             priority: 150,
             claims_override: &[],
+            supports_extract: true,
+            supports_search: false,
             // componentize-py emits IMPORTS for every interface in the WIT world,
             // so the host must link all six. The Manifest still gates *use*: if the
             // plugin calls a capability whose context isn't populated (see

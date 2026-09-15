@@ -157,6 +157,8 @@ async fn mpd_golden_extract_returns_formats_via_fixture() {
             matches: &["https://mpd-test.example.com/*"],
             priority: 150,
             claims_override: &[],
+            supports_extract: true,
+            supports_search: false,
             // componentize-py emits IMPORTS for every interface in the WIT
             // world (Phase-1 limitation). The manifest MUST declare all six
             // caps so the linker wires every import the wasm references — the
