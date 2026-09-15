@@ -1,8 +1,9 @@
 //! Test-support seams shared by this crate's unit tests, its `tests/`
-//! integration binaries, and — for the signer — other crates' integration
-//! tests (`rdlp-api`'s bootstrap tests need to fabricate a loadable signed
-//! plugin the same way this crate's own tests do, and a second hand-rolled
-//! copy of the signing mechanism is exactly what
+//! integration binaries, and — for the signer, identity helper, and
+//! config-dir isolation wrapper — other crates' integration tests
+//! (`rdlp-api`'s bootstrap tests need to fabricate a loadable signed
+//! plugin the same way this crate's own tests do, and a second
+//! hand-rolled copy of any of these mechanisms is exactly what
 //! `extract-before-you-duplicate` forbids).
 //!
 //! Compiled into the library (not `cfg(test)`) because an integration
@@ -16,6 +17,7 @@ use std::sync::Arc;
 use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey};
 use rdlp_core::ExtractionContext;
+use sha2::{Digest, Sha256};
 
 /// The default extraction context a plugin test hands to `extract` /
 /// `search`: a stock HTTP client, the boa engine, an empty cookie jar and
@@ -46,15 +48,19 @@ pub struct SignedPluginSpec<'a> {
     pub wit_version: &'a str,
     /// Chrome-style match patterns.
     pub matches: &'a [&'a str],
+    /// Optional fine-grained regex for ID extraction.
+    pub url_regex: Option<&'a str>,
     /// Plugin priority within the band 100..=199.
     pub priority: u32,
     /// Hostnames this plugin claims the right to shadow from a built-in.
     pub claims_override: &'a [&'a str],
     /// Host capabilities the plugin requests.
     pub capabilities: &'a [&'a str],
-    /// Whether the manifest declares `supports_extract`. Defaults to
-    /// `true` (matching every manifest written before the field existed)
-    /// when a caller has no reason to vary it.
+    /// The manifest's `supports_extract` value. This struct field is a
+    /// plain mandatory `bool` — every caller states it explicitly; it is
+    /// only the TOML *parser*'s `#[serde(default = "default_true")]` that
+    /// treats an omitted `supports_extract` key as `true` for manifests
+    /// written before the field existed.
     pub supports_extract: bool,
     /// Whether the manifest declares `supports_search`.
     pub supports_search: bool,
@@ -67,14 +73,7 @@ pub struct SignedPluginSpec<'a> {
 /// integration test across the workspace shares.
 #[doc(hidden)]
 pub fn write_signed_plugin(dir: &Path, key: &SigningKey, spec: &SignedPluginSpec<'_>) {
-    // Test fixture — sync I/O is acceptable per clippy.toml's disallowed-methods
-    // carve-out (c); every caller is a `#[test]`/`#[tokio::test]` setup step,
-    // not a hot async path.
-    #[allow(clippy::disallowed_methods)]
-    std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("create plugin dir: {e}"));
-    #[allow(clippy::disallowed_methods)]
-    std::fs::write(dir.join("plugin.wasm"), spec.wasm)
-        .unwrap_or_else(|e| panic!("write plugin.wasm: {e}"));
+    write_fixture_file(dir, "plugin.wasm", spec.wasm);
 
     let pubkey_b64 =
         base64::engine::general_purpose::STANDARD.encode(key.verifying_key().as_bytes());
@@ -96,13 +95,21 @@ pub fn write_signed_plugin(dir: &Path, key: &SigningKey, spec: &SignedPluginSpec
         .map(|c| format!("\"{c}\""))
         .collect::<Vec<_>>()
         .join(", ");
+    // TOML basic strings interpret `\`, so a caller's regex (written with
+    // ordinary single backslashes, e.g. `r"(?P<id>\d+)"`) needs its
+    // backslashes doubled here to round-trip — the caller should not have
+    // to pre-escape for TOML.
+    let url_regex_line = spec
+        .url_regex
+        .map(|r| format!("url_regex = \"{}\"\n", r.replace('\\', "\\\\")))
+        .unwrap_or_default();
     let toml_placeholder = format!(
         r#"
 name = "{name}"
 version = "{version}"
 wit_version = "{wit_version}"
 matches = [{match_str}]
-priority = {priority}
+{url_regex_line}priority = {priority}
 claims_override = [{claims_str}]
 supports_search = {supports_search}
 supports_extract = {supports_extract}
@@ -129,7 +136,60 @@ signature = "PLACEHOLDER"
     let sig_b64 = base64::engine::general_purpose::STANDARD.encode(sig.to_bytes());
 
     let final_toml = toml_placeholder.replace("PLACEHOLDER", &sig_b64);
-    #[allow(clippy::disallowed_methods)]
-    std::fs::write(dir.join("plugin.toml"), final_toml)
-        .unwrap_or_else(|e| panic!("write plugin.toml: {e}"));
+    write_fixture_file(dir, "plugin.toml", final_toml.as_bytes());
+}
+
+/// Create `dir` and write `contents` to `dir.join(name)`. The one place
+/// sync `std::fs` I/O happens in this module — a single scoped allow
+/// covers both calls instead of one per call site.
+///
+/// Test fixture — sync I/O is acceptable per clippy.toml's
+/// disallowed-methods carve-out (c); every caller is a
+/// `#[test]`/`#[tokio::test]` setup step, never a hot async path.
+#[allow(clippy::disallowed_methods)]
+fn write_fixture_file(dir: &Path, name: &str, contents: &[u8]) {
+    std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
+    std::fs::write(dir.join(name), contents)
+        .unwrap_or_else(|e| panic!("write {}/{name}: {e}", dir.display()));
+}
+
+/// The trust-store identity string for a signing key: `ed25519:<hex of the
+/// SHA-256 over the base64-encoded public key>`, matching
+/// `Signature::identity_string()`'s post-MVP-hardening format. Every test
+/// that pre-trusts a freshly generated key (rather than going through the
+/// interactive prompter) needs this to populate
+/// `Config::plugin_trusted_publishers`.
+#[doc(hidden)]
+#[must_use]
+pub fn trusted_identity_for(key: &SigningKey) -> String {
+    let pubkey_b64 =
+        base64::engine::general_purpose::STANDARD.encode(key.verifying_key().as_bytes());
+    format!(
+        "ed25519:{}",
+        hex::encode(Sha256::digest(pubkey_b64.as_bytes()))
+    )
+}
+
+/// Run `f` with `XDG_CONFIG_HOME` and `HOME` both pointing at a fresh temp
+/// directory, so a plugin-bootstrap test never reads or writes the real
+/// `~/.config/rdlp` trust store. `bootstrap_plugins` resolves its config
+/// directory via `dirs::config_dir()` → `XDG_CONFIG_HOME` → `HOME`, so
+/// pointing all of them at the same tempdir guarantees a clean slate.
+/// `temp-env`'s internal mutex serialises this against any other test in
+/// the same process that reads or writes these vars; the tempdir is
+/// cleaned up when `f` returns.
+#[doc(hidden)]
+pub fn with_isolated_config_dir<R>(f: impl FnOnce() -> R) -> R {
+    let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
+    let path_str = tempdir
+        .path()
+        .to_str()
+        .unwrap_or_else(|| panic!("tempdir path is not utf-8: {}", tempdir.path().display()));
+    temp_env::with_vars(
+        [
+            ("XDG_CONFIG_HOME", Some(path_str)),
+            ("HOME", Some(path_str)),
+        ],
+        f,
+    )
 }

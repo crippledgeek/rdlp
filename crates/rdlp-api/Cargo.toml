@@ -61,12 +61,11 @@ regex = { workspace = true }
 rdlp-extractor = { path = "../rdlp-extractor", features = [
     "loopback-test-exemption",
 ] }
-# For plugin-dispatch regression test (signs a manifest + wasm in setup).
+# For plugin-bootstrap tests (sign a manifest + wasm in setup); the actual
+# signing/identity mechanism lives in `rdlp_plugin::test_support`, which
+# already depends on base64/sha2/hex — this crate doesn't need them directly.
 ed25519-dalek = { version = "2", features = ["std", "rand_core"] }
 rand = "0.8"
-base64 = { workspace = true }
-sha2 = "0.10"
-hex = { workspace = true }
 # Captures span/event output to assert the instrument level and redaction
 # (Task 8: the tracing->log bridge is not exercised by a plain log capture).
 tracing-subscriber = { workspace = true }

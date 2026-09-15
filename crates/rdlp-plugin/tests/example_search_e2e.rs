@@ -120,6 +120,7 @@ fn load_adapter(td: &TempDir, wasm: &[u8], wit_version: &str) -> PluginExtractor
             version: "0.1.0",
             wit_version,
             matches: &["https://example.com/*"],
+            url_regex: None,
             priority: 150,
             claims_override: &[],
             supports_extract: true,

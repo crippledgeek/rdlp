@@ -212,6 +212,7 @@ async fn svt_play_extract_matches_upstream_test_dict() {
                 "https://*.svt.se/*",
                 "https://svt.se/*",
             ],
+            url_regex: None,
             priority: 150,
             claims_override: &[],
             supports_extract: true,

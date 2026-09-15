@@ -50,9 +50,14 @@ url = { workspace = true }
 percent-encoding = "2"
 rdlp-extractor = { version = "0.1.0", path = "../rdlp-extractor" }
 rdlp-redact = { workspace = true }
+# Regular (not dev-)dependency: `test_support` is compiled into the lib
+# (not `cfg(test)`) so `rdlp-api`'s integration tests can share the
+# isolated-config-dir helper too — see that module's doc. `tempfile` moves
+# here for the same reason (that helper creates its own tempdir).
+temp-env = { workspace = true }
+tempfile = { workspace = true }
 
 [dev-dependencies]
-tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 wat = "1"
 rand = "0.8.5"

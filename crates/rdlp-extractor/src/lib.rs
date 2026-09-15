@@ -229,12 +229,19 @@ impl ExtractorRegistry {
         self.extractors.iter().map(|e| e.name()).collect()
     }
 
-    /// Find a search extractor by site name (case-insensitive), arbitrating
-    /// name collisions the same way [`Self::find_extractor`] arbitrates URL
-    /// collisions: a built-in wins its own site name unless a plugin's
-    /// signed manifest declared `claims_override` (surfaced here via
-    /// [`SearchExtractor::overrides_builtin`]); among competing plugins the
-    /// highest [`SearchExtractor::search_priority`] wins.
+    /// Find a search extractor by site name (case-insensitive), applying
+    /// this policy on a name collision: a built-in wins its own site name
+    /// unless a plugin's signed manifest declared `claims_override`
+    /// (surfaced here via [`SearchExtractor::overrides_builtin`]) — and
+    /// when a built-in IS present, only override-claiming plugins are
+    /// even eligible to compete for the name, so a bystander plugin's
+    /// priority can never hijack a site it never claimed the right to
+    /// shadow. Among the eligible plugins the highest
+    /// [`SearchExtractor::search_priority`] wins; a tie resolves to
+    /// whichever plugin registered first. This tie policy is a
+    /// **deliberate divergence** from [`Self::find_extractor`], whose
+    /// plain `max_by_key` over URL candidates resolves ties to whichever
+    /// extractor registered LAST — the two are not "the same policy".
     ///
     /// # Arguments
     /// * `name` - Site name to look up (e.g., "xhamster", "XHamster")
@@ -249,25 +256,30 @@ impl ExtractorRegistry {
             .filter(|e| e.name().eq_ignore_ascii_case(name))
             .collect();
 
-        let builtin = candidates.iter().find(|e| !e.is_plugin());
-        let has_overriding_plugin = candidates
-            .iter()
-            .any(|e| e.is_plugin() && e.overrides_builtin());
+        let builtin = candidates.iter().copied().find(|e| !e.is_plugin());
 
-        // Built-in wins its own site name unless a plugin declared the
-        // override in its signed manifest (red-flagged at first install).
+        // When a built-in exists, only plugins that claim `overrides_builtin`
+        // are eligible to contest its site name at all — a non-overriding
+        // plugin's priority must never matter against a built-in it did not
+        // claim the right to shadow. Without a built-in, every plugin is
+        // eligible and competes on priority alone.
+        let eligible_plugins: Vec<&Arc<dyn SearchExtractor>> = candidates
+            .iter()
+            .copied()
+            .filter(|e| e.is_plugin() && (builtin.is_none() || e.overrides_builtin()))
+            .collect();
+
         if let Some(builtin) = builtin
-            && !has_overriding_plugin
+            && eligible_plugins.is_empty()
         {
             return Some(Arc::clone(builtin));
         }
 
         // `max_by_key` returns the LAST maximum on ties; reverse the
         // registration order first so a tie instead resolves to whichever
-        // plugin registered first, matching `find_extractor`'s tie policy.
-        candidates
+        // eligible plugin registered first.
+        eligible_plugins
             .into_iter()
-            .filter(|e| e.is_plugin())
             .rev()
             .max_by_key(|e| e.search_priority())
             .cloned()
@@ -631,11 +643,18 @@ mod registry_search_arbitration_tests {
         }
     }
 
-    fn registry_of(extractors: Vec<FakeSearch>) -> ExtractorRegistry {
-        let mut reg = ExtractorRegistry {
+    /// An `ExtractorRegistry` with no built-in extractors registered, so
+    /// tests can pin arbitration against exactly the `FakeSearch` doubles
+    /// they construct instead of the ~30 real built-ins `new()` populates.
+    fn empty() -> ExtractorRegistry {
+        ExtractorRegistry {
             extractors: Vec::new(),
             search_extractors: Vec::new(),
-        };
+        }
+    }
+
+    fn registry_of(extractors: Vec<FakeSearch>) -> ExtractorRegistry {
+        let mut reg = empty();
         for e in extractors {
             reg.register_search(Arc::new(e));
         }
@@ -683,6 +702,28 @@ mod registry_search_arbitration_tests {
         assert_eq!(found.search_priority(), 150);
     }
 
+    /// Regression for the round-1 CRITICAL finding: once ANY plugin among
+    /// the candidates claims `overrides_builtin`, a naive final
+    /// `max_by_key` over ALL plugins lets a higher-priority
+    /// NON-overriding plugin hijack the site out from under the built-in.
+    /// Only the override-claiming plugin may ever contest a built-in's
+    /// site name; a bystander plugin's priority is irrelevant.
+    #[test]
+    fn a_non_overriding_plugin_cannot_hijack_via_priority_once_another_plugin_overrides() {
+        let reg = registry_of(vec![
+            builtin("pornhub"),
+            plugin("pornhub", 100, true),
+            plugin("pornhub", 200, false),
+        ]);
+        let found = reg.find_search_extractor("pornhub").expect("a match");
+        assert_eq!(
+            found.search_priority(),
+            100,
+            "only the override-claiming plugin may contest the built-in's site name"
+        );
+        assert!(found.overrides_builtin());
+    }
+
     #[test]
     fn equal_priority_plugins_resolve_to_first_registered() {
         // Equal-priority candidates are indistinguishable through any
@@ -690,10 +731,7 @@ mod registry_search_arbitration_tests {
         // identity (`Arc::ptr_eq`) against the specific instance registered
         // first — a `max_by_key` without the `.rev()` reversal would return
         // the second instance instead, and this assertion catches that.
-        let mut reg = ExtractorRegistry {
-            extractors: Vec::new(),
-            search_extractors: Vec::new(),
-        };
+        let mut reg = empty();
         let first: Arc<dyn SearchExtractor> = Arc::new(plugin("site", 100, false));
         let second: Arc<dyn SearchExtractor> = Arc::new(plugin("site", 100, false));
         reg.register_search(Arc::clone(&first));
@@ -715,22 +753,15 @@ mod registry_search_arbitration_tests {
 
     #[test]
     fn list_search_extractors_dedupes_a_shared_name() {
-        let reg = registry_of(vec![builtin("pornhub"), plugin("pornhub", 190, false)]);
+        // Exact-Vec assertion (not just a count) so both the casing kept
+        // (the first-registered provider's) and the surviving order (the
+        // shared name first, in its original slot) are pinned.
+        let reg = registry_of(vec![
+            builtin("PornHub"),
+            plugin("PORNHUB", 190, false),
+            builtin("other"),
+        ]);
         let names = reg.list_search_extractors();
-        assert_eq!(
-            names
-                .iter()
-                .filter(|n| n.eq_ignore_ascii_case("pornhub"))
-                .count(),
-            1,
-            "a name shared by two providers must be listed once: {names:?}"
-        );
-    }
-
-    #[test]
-    fn name_matching_is_case_insensitive() {
-        let reg = registry_of(vec![builtin("PornHub")]);
-        assert!(reg.find_search_extractor("pornhub").is_some());
-        assert!(reg.find_search_extractor("PORNHUB").is_some());
+        assert_eq!(names, vec!["PornHub", "other"]);
     }
 }

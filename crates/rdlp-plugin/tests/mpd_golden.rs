@@ -155,6 +155,7 @@ async fn mpd_golden_extract_returns_formats_via_fixture() {
             version: "0.1.0",
             wit_version: "0.5.0",
             matches: &["https://mpd-test.example.com/*"],
+            url_regex: None,
             priority: 150,
             claims_override: &[],
             supports_extract: true,

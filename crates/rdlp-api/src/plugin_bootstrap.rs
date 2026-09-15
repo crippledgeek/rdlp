@@ -227,11 +227,11 @@ fn config_dir() -> anyhow::Result<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::Engine as _;
     use ed25519_dalek::SigningKey;
     use rand::rngs::OsRng;
-    use rdlp_plugin::test_support::{SignedPluginSpec, write_signed_plugin};
-    use sha2::{Digest, Sha256};
+    use rdlp_plugin::test_support::{
+        SignedPluginSpec, trusted_identity_for, with_isolated_config_dir, write_signed_plugin,
+    };
 
     /// The Task 1 fixture shared with `rdlp-plugin`'s own tests: a real,
     /// WASI-free component implementing `extract` and `search`, so the
@@ -239,16 +239,23 @@ mod tests {
     /// thing under test here — the component itself always answers both.
     const FIXTURE_0_5_0: &str = "../rdlp-plugin/tests/fixtures/example-extractor-0.5.0/plugin.wasm";
 
-    /// Sign `wasm` under the given capability flags into a fresh temp
-    /// plugin directory, and a `Config` pre-trusting the signer so
-    /// `bootstrap_plugins` loads it without an interactive prompt. Returns
-    /// the `TempDir` guard alongside the `Config` so the caller keeps the
-    /// plugin directory alive for the duration of the test instead of it
-    /// being deleted the moment this function returns.
-    fn config_with_signed_plugin(
-        supports_extract: bool,
-        supports_search: bool,
-    ) -> (Config, tempfile::TempDir) {
+    /// Which of the plugin's two independent capabilities (D5) a test
+    /// manifest declares. A bare `(bool, bool)` positional pair is exactly
+    /// the ambiguous-call-site shape `limit-function-arguments` flags —
+    /// `config_with_signed_plugin(false, true)` reads no better here than
+    /// it would with the arguments swapped.
+    struct Capabilities {
+        extract: bool,
+        search: bool,
+    }
+
+    /// Sign the fixture component under the given capability flags into a
+    /// fresh temp plugin directory, and a `Config` pre-trusting the signer
+    /// so `bootstrap_plugins` loads it without an interactive prompt.
+    /// Returns the `TempDir` guard alongside the `Config` so the caller
+    /// keeps the plugin directory alive for the duration of the test
+    /// instead of it being deleted the moment this function returns.
+    fn config_with_signed_plugin(capabilities: &Capabilities) -> (Config, tempfile::TempDir) {
         let wasm_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(FIXTURE_0_5_0);
         // Test fixture — sync I/O is acceptable per clippy.toml's
         // disallowed-methods carve-out (c); this runs in test setup, never
@@ -267,52 +274,31 @@ mod tests {
                 version: "0.1.0",
                 wit_version: "0.5.0",
                 matches: &["https://example.com/*"],
+                url_regex: None,
                 priority: 150,
                 claims_override: &[],
                 capabilities: &[],
-                supports_extract,
-                supports_search,
+                supports_extract: capabilities.extract,
+                supports_search: capabilities.search,
                 wasm: &wasm,
             },
         );
 
-        let pubkey_b64 =
-            base64::engine::general_purpose::STANDARD.encode(key.verifying_key().as_bytes());
-        let identity = format!(
-            "ed25519:{}",
-            hex::encode(Sha256::digest(pubkey_b64.as_bytes()))
-        );
-
         let config = Config {
             plugin_directories: vec![tempdir.path().to_path_buf()],
-            plugin_trusted_publishers: vec![identity],
+            plugin_trusted_publishers: vec![trusted_identity_for(&key)],
             ..Default::default()
         };
         (config, tempdir)
     }
 
-    /// Isolate the trust store from any pre-existing global state, exactly
-    /// as `plugin_dispatch_regression.rs` does: `bootstrap_plugins`
-    /// resolves it via `dirs::config_dir()` → `XDG_CONFIG_HOME` → `HOME`.
-    fn with_isolated_config_dir<R>(f: impl FnOnce() -> R) -> R {
-        let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
-        let path_str = tempdir
-            .path()
-            .to_str()
-            .unwrap_or_else(|| panic!("tempdir path is not utf-8: {}", tempdir.path().display()));
-        temp_env::with_vars(
-            [
-                ("XDG_CONFIG_HOME", Some(path_str)),
-                ("HOME", Some(path_str)),
-            ],
-            f,
-        )
-    }
-
     #[test]
     fn search_only_plugin_registers_only_as_a_search_extractor() {
         with_isolated_config_dir(|| {
-            let (config, _tempdir) = config_with_signed_plugin(false, true);
+            let (config, _tempdir) = config_with_signed_plugin(&Capabilities {
+                extract: false,
+                search: true,
+            });
             let registry = build_registry_with_plugins(&config);
             assert!(
                 !registry.list_extractors().contains(&"example"),
@@ -328,7 +314,10 @@ mod tests {
     #[test]
     fn plugin_supporting_both_registers_in_both_lists() {
         with_isolated_config_dir(|| {
-            let (config, _tempdir) = config_with_signed_plugin(true, true);
+            let (config, _tempdir) = config_with_signed_plugin(&Capabilities {
+                extract: true,
+                search: true,
+            });
             let registry = build_registry_with_plugins(&config);
             assert!(
                 registry.list_extractors().contains(&"example"),
@@ -337,6 +326,28 @@ mod tests {
             assert!(
                 registry.list_search_extractors().contains(&"example"),
                 "supports_search = true must register as a SearchExtractor"
+            );
+        });
+    }
+
+    /// The extract-only negative: a plugin that does not declare
+    /// `supports_search` must not appear in `list_search_extractors()`,
+    /// mirroring the search-only test's own negative assertion.
+    #[test]
+    fn extract_only_plugin_is_absent_from_search_extractors() {
+        with_isolated_config_dir(|| {
+            let (config, _tempdir) = config_with_signed_plugin(&Capabilities {
+                extract: true,
+                search: false,
+            });
+            let registry = build_registry_with_plugins(&config);
+            assert!(
+                registry.list_extractors().contains(&"example"),
+                "supports_extract = true must register as an InfoExtractor"
+            );
+            assert!(
+                !registry.list_search_extractors().contains(&"example"),
+                "supports_search = false must not register as a SearchExtractor"
             );
         });
     }

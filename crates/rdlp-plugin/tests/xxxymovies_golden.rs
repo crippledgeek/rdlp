@@ -137,6 +137,7 @@ async fn xxxymovies_extract_returns_complete_info_dict() {
             version: "0.1.0",
             wit_version: "0.5.0",
             matches: &["https://*.xxxymovies.com/*", "https://xxxymovies.com/*"],
+            url_regex: None,
             priority: 150,
             claims_override: &[],
             supports_extract: true,
