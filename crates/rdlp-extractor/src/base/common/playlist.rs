@@ -161,32 +161,61 @@ struct Listed {
     entries: Vec<PlaylistEntry>,
     playlist_id: Option<String>,
     playlist_title: Option<String>,
+    total_estimate: Option<u64>,
 }
 
 impl Listed {
     fn start(first_page: PlaylistPage, last_needed: Option<usize>) -> (Self, Listing) {
+        let PlaylistPage {
+            entries,
+            has_more,
+            playlist_id,
+            playlist_title,
+            total_estimate,
+        } = first_page;
         let mut listed = Self {
             entries: Vec::new(),
-            playlist_id: first_page.playlist_id.clone(),
-            playlist_title: first_page.playlist_title.clone(),
+            playlist_id,
+            playlist_title,
+            total_estimate,
         };
-        let next = listed.absorb(first_page, last_needed);
+        let next = listed.extend(entries, has_more, last_needed);
         (listed, next)
+    }
+
+    /// The `playlist_count` to stamp: the site's own total when page one
+    /// reported one, else the number of entries listed. Never below the
+    /// listed count — a site total smaller than what was actually listed is
+    /// wrong by construction.
+    fn count(&self) -> usize {
+        let listed = self.entries.len();
+        self.total_estimate
+            .and_then(|t| usize::try_from(t).ok())
+            .map_or(listed, |t| t.max(listed))
     }
 
     /// Append a page's entries and decide whether another page is needed:
     /// an empty page, `!has_more`, reaching `last_needed`, or reaching
     /// `MAX_PLAYLIST_SIZE` all end the listing.
     fn absorb(&mut self, page: PlaylistPage, last_needed: Option<usize>) -> Listing {
-        if page.entries.is_empty() {
+        self.extend(page.entries, page.has_more, last_needed)
+    }
+
+    fn extend(
+        &mut self,
+        entries: Vec<PlaylistEntry>,
+        has_more: bool,
+        last_needed: Option<usize>,
+    ) -> Listing {
+        if entries.is_empty() {
             return Listing::Stop;
         }
-        self.entries.extend(page.entries);
+        self.entries.extend(entries);
         if self.entries.len() >= MAX_PLAYLIST_SIZE {
             self.entries.truncate(MAX_PLAYLIST_SIZE);
             return Listing::Stop;
         }
-        if last_needed.is_some_and(|n| self.entries.len() >= n) || !page.has_more {
+        if last_needed.is_some_and(|n| self.entries.len() >= n) || !has_more {
             return Listing::Stop;
         }
         Listing::Continue
@@ -221,6 +250,9 @@ impl ResolvePlan {
     fn new(selected: Vec<(usize, PlaylistEntry)>, cfg: &Config) -> Self {
         Self {
             selected,
+            // `Config::validate` rejects 0 post-load, but a hand-built `Config`
+            // never runs it, and `buffer_unordered(0)` polls an empty queue
+            // and stays `Pending` forever.
             concurrency: cfg
                 .playlist_concurrency
                 .unwrap_or(DEFAULT_PLAYLIST_CONCURRENCY)
@@ -237,9 +269,11 @@ impl ResolvePlan {
 struct Stamp {
     playlist_id: Option<String>,
     playlist_title: Option<String>,
-    /// Number of entries LISTED (yt-dlp `n_entries`) — not the number
-    /// resolved or selected, so a `--playlist-items 2-3` download of a
-    /// 40-entry playlist still reports `playlist_count = 40`.
+    /// The site's reported total (`PlaylistPage::total_estimate` on page
+    /// one) when it gave one, else the number of entries LISTED (yt-dlp
+    /// `n_entries`) — never the number resolved or selected. Under a range
+    /// the listing stops at the last needed page, so without a site total
+    /// this is a lower bound on the playlist's true size, not the size.
     count: usize,
 }
 
@@ -309,14 +343,19 @@ pub trait PagedPlaylist: Send + Sync {
     ///
     /// # Errors
     ///
-    /// A first-page failure propagates as-is; see `extract_all_entries_from`
-    /// for the loop's own errors.
+    /// An unparsable `Config::playlist_items` is an `Extraction` error
+    /// before the first page is fetched (the selection is parsed here to
+    /// fail fast, and again inside `extract_all_entries_from`, which is
+    /// also an entry point in its own right). A first-page failure
+    /// propagates as-is; see `extract_all_entries_from` for the loop's own
+    /// errors.
     fn extract_all_entries(
         &self,
         url: &str,
         ctx: &ExtractionContext,
     ) -> impl Future<Output = Result<Vec<InfoDict>>> + Send {
         async move {
+            PlaylistSelection::from_config(&ctx.config, url)?;
             let first_page = self
                 .fetch_playlist_page(url, self.first_page_index(), ctx)
                 .await?;
@@ -339,9 +378,12 @@ pub trait PagedPlaylist: Send + Sync {
     /// # Errors
     ///
     /// An unparsable `Config::playlist_items` is an `Extraction` error before
-    /// anything is fetched. Under `AbortOnFirstFailure`, the first failed
-    /// entry BY LISTING POSITION returns its own error (or an `Extraction`
-    /// error naming the entry, for a timeout). A later-page listing failure
+    /// any further page is fetched (the caller has already fetched page
+    /// one). Under `AbortOnFirstFailure`, the first failed entry BY LISTING
+    /// POSITION returns its own error (or an `Extraction` error naming the
+    /// entry, for a timeout); the cost of that contract is that every
+    /// selected entry is resolved before the error comes back, since a
+    /// by-position verdict needs every outcome. A later-page listing failure
     /// is not an error: the entries listed so far are resolved.
     fn extract_all_entries_from(
         &self,
@@ -355,23 +397,25 @@ pub trait PagedPlaylist: Send + Sync {
             let selection = PlaylistSelection::from_config(cfg, url)?;
             let last_needed = selection.last_needed();
 
-            let mut page = self.first_page_index();
+            let mut last_page = self.first_page_index();
             let (mut listed, mut next) = Listed::start(first_page, last_needed);
             while next == Listing::Continue {
                 tokio::time::sleep(self.page_rate_limit()).await;
-                page += 1;
-                next = match self.fetch_playlist_page(url, page, ctx).await {
+                last_page += 1;
+                next = match self.fetch_playlist_page(url, last_page, ctx).await {
                     Ok(p) => listed.absorb(p, last_needed),
                     Err(e) => {
-                        debug!(page; "{tag} Playlist page failed, resolving the entries listed so far: {e}");
+                        debug!(page = last_page; "{tag} Playlist page failed, resolving the entries listed so far: {e}");
                         Listing::Stop
                     }
                 };
             }
+            let total = listed.count();
+            let n_listed = listed.entries.len();
             let stamp = Stamp {
                 playlist_id: listed.playlist_id,
                 playlist_title: listed.playlist_title,
-                count: listed.entries.len(),
+                count: total,
             };
             let selected: Vec<(usize, PlaylistEntry)> = listed
                 .entries
@@ -380,7 +424,10 @@ pub trait PagedPlaylist: Send + Sync {
                 .map(|(i, e)| (i + 1, e))
                 .filter(|(position, _)| selection.wants(*position))
                 .collect();
-            debug!(listed = stamp.count, selected = selected.len(), pages = page; "{tag} Playlist listed");
+            debug!(listed = n_listed, selected = selected.len(), last_page; "{tag} Playlist listed");
+            if selected.is_empty() && n_listed > 0 {
+                debug!(listed = n_listed; "{tag} Requested playlist range selects nothing from the listed entries");
+            }
 
             let plan = ResolvePlan::new(selected, cfg);
             let policy = PlaylistResolution::from_config(cfg.playlist_ignore_errors);
@@ -394,7 +441,6 @@ pub trait PagedPlaylist: Send + Sync {
                 outcome,
             } in outcomes
             {
-                let total = stamp.count;
                 match (outcome, policy) {
                     (ItemOutcome::Resolved(mut info), _) => {
                         stamp.apply(&mut info, position);
@@ -527,6 +573,18 @@ mod tests {
         }
     }
 
+    /// Decrements the mock's in-flight counter when the resolve future
+    /// ends — including when `timeout` DROPS it mid-`sleep`, which a
+    /// decrement after the `.await` would miss and leave `max_in_flight`
+    /// inflated for the rest of the run.
+    struct InFlight<'a>(&'a AtomicUsize);
+
+    impl Drop for InFlight<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+
     struct MockPlaylist {
         pages: PageFn,
         behavior: BehaviorFn,
@@ -599,10 +657,10 @@ mod tests {
                 .expect("test mutex is never poisoned")
                 .push(entry.url.clone());
             let now = self.in_flight.fetch_add(1, Ordering::SeqCst) + 1;
+            let _guard = InFlight(&self.in_flight);
             self.max_in_flight.fetch_max(now, Ordering::SeqCst);
             let behavior = (self.behavior)(entry);
             tokio::time::sleep(behavior.delay).await;
-            self.in_flight.fetch_sub(1, Ordering::SeqCst);
             if behavior.fail {
                 return Err(RdlpError::extraction("mock resolve failure", &entry.url));
             }
@@ -697,8 +755,10 @@ mod tests {
         assert_eq!(mock.resolves.load(Ordering::SeqCst), 1);
     }
 
+    /// The skip branch also emits a `warn!`; this crate has no log capture,
+    /// so the log line is not asserted — only the pruning it accompanies.
     #[tokio::test]
-    async fn ignore_errors_true_skips_and_warns_false_aborts() {
+    async fn ignore_errors_true_skips_false_aborts() {
         let fail_v2: BehaviorFn = Box::new(|e| {
             if e.url.ends_with("/v2") {
                 failing()
@@ -731,7 +791,7 @@ mod tests {
         assert_eq!(error_url(&err), "https://x.test/v2");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn abort_reports_the_first_failure_by_listing_position() {
         // Position 3 fails instantly; position 2 fails after a delay. Under
         // `buffer_unordered` #3 completes first, but the reported failure
@@ -808,6 +868,99 @@ mod tests {
         .expect_err("abort policy propagates the timeout");
         assert!(err.to_string().contains("timed out"), "got {err}");
         assert_eq!(error_url(&err), "https://x.test/v2");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn timed_out_entry_releases_its_concurrency_slot() {
+        // Entry #1 is dropped by the 1 s timeout while #2..#4 finish; with
+        // concurrency 2 the in-flight peak is 2 both before and after the
+        // drop, so a leaked slot would show as a peak of 3 only if the
+        // counter over-reported — the guard keeps it at exactly 2.
+        let slow_v1: BehaviorFn = Box::new(|e| {
+            if e.url.ends_with("/v1") {
+                slow(5000)
+            } else {
+                slow(20)
+            }
+        });
+        let mock = MockPlaylist::new(scripted(1, 4)).with_behavior(slow_v1);
+        let out = run(
+            &mock,
+            cfg(|c| {
+                c.playlist_concurrency = Some(2);
+                c.playlist_item_timeout = Some(1);
+            }),
+        )
+        .await
+        .expect("skip policy prunes the timed-out entry");
+        assert_eq!(indices(&out), vec![2, 3, 4]);
+        assert_eq!(mock.max_in_flight.load(Ordering::SeqCst), 2);
+        assert_eq!(
+            mock.in_flight.load(Ordering::SeqCst),
+            0,
+            "the dropped resolve released its slot"
+        );
+    }
+
+    #[tokio::test]
+    async fn playlist_count_prefers_the_site_total_estimate() {
+        // Estimate present on page one → count = estimate, even though the
+        // range stops the listing at page two (4 of 6 listed).
+        let with_estimate: PageFn = Box::new(|p| {
+            let mut pg = page(entries((p as usize - 1) * 2 + 1, 2), p < 3);
+            pg.total_estimate = if p == 1 { Some(40) } else { None };
+            Ok(pg)
+        });
+        let mock = MockPlaylist::new(with_estimate);
+        let out = run(&mock, cfg(|c| c.playlist_items = Some("2-3".to_string())))
+            .await
+            .expect("selected entries resolve");
+        assert_eq!(indices(&out), vec![2, 3]);
+        assert!(out.iter().all(|i| i.playlist_count == Some(40)));
+
+        // Estimate absent → the listed count (a lower bound under a range).
+        let mock = MockPlaylist::new(scripted(3, 2));
+        let out = run(&mock, cfg(|c| c.playlist_items = Some("2-3".to_string())))
+            .await
+            .expect("selected entries resolve");
+        assert!(out.iter().all(|i| i.playlist_count == Some(4)));
+
+        // An estimate below what was actually listed is not trusted.
+        let low_estimate: PageFn = Box::new(|_| {
+            let mut pg = page(entries(1, 3), false);
+            pg.total_estimate = Some(1);
+            Ok(pg)
+        });
+        let mock = MockPlaylist::new(low_estimate);
+        let out = run(&mock, cfg(|_| {})).await.expect("all resolve");
+        assert!(out.iter().all(|i| i.playlist_count == Some(3)));
+    }
+
+    #[tokio::test]
+    async fn unparsable_playlist_items_is_an_extraction_error() {
+        let mock = MockPlaylist::new(scripted(2, 2));
+        let err = run(&mock, cfg(|c| c.playlist_items = Some("3-1".to_string())))
+            .await
+            .expect_err("a reversed range is rejected");
+        assert!(matches!(err, RdlpError::Extraction { .. }), "got {err:?}");
+        assert_eq!(error_url(&err), "https://x.test/list");
+        assert_eq!(
+            mock.fetches.load(Ordering::SeqCst),
+            0,
+            "rejected before the first page is fetched"
+        );
+        assert_eq!(mock.resolves.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn range_beyond_the_listing_yields_ok_empty() {
+        let mock = MockPlaylist::new(scripted(2, 2));
+        let out = run(&mock, cfg(|c| c.playlist_start = 10))
+            .await
+            .expect("an out-of-range window is not an error");
+        assert!(out.is_empty());
+        assert_eq!(mock.fetches.load(Ordering::SeqCst), 2);
+        assert_eq!(mock.resolves.load(Ordering::SeqCst), 0);
     }
 
     #[tokio::test]
