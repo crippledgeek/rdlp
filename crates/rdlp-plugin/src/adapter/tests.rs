@@ -305,6 +305,38 @@ async fn extractor_field_and_name_use_display_name() {
     assert_eq!(info.extractor, "Example Site");
 }
 
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn display_name_does_not_leak_into_store_identity_or_log_target() {
+    use crate::test_support::unit::fixture_extractor_with_manifest;
+
+    let toml = fixture_manifest_with_display_name("Example Site");
+    let ext = fixture_extractor_with_manifest(&toml);
+
+    // `InfoDict::extractor` is the display surface and must show the
+    // manifest's `display_name`.
+    let info = ext
+        .extract("https://example.com/video/42", &extraction_ctx())
+        .await
+        .expect("extract");
+    assert_eq!(info.extractor, "Example Site");
+
+    // `PluginStoreData::plugin_name`/`log_target` are the identity surface
+    // (strike-log lines, `host:log` target) and must stay keyed on
+    // `manifest.name`, never on the divergent `display_name`.
+    let (plugin_name, log_target) = ext
+        .run_in_fresh_store(spec(EXTRACT_TIMEOUT), |store, _inst| {
+            let observed = (
+                store.data().plugin_name.clone(),
+                store.data().log_target.clone(),
+            );
+            Box::pin(async move { Ok::<_, PluginError>(observed) })
+        })
+        .await
+        .expect("run_in_fresh_store");
+    assert_eq!(plugin_name, "example");
+    assert_eq!(log_target, "plugin::example");
+}
+
 #[test]
 fn search_site_routing_still_uses_name() {
     use crate::test_support::unit::fixture_extractor_with_manifest;
