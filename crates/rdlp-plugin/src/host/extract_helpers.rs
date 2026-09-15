@@ -192,10 +192,26 @@ impl PluginStoreData {
     }
 }
 
-/// `fetch-options.headers` become the row's `http_headers` so the expander
-/// (and later the downloader) send them on every playlist/segment request —
-/// the same channel in-tree extractors use for a required `Referer`.
+/// Apply `fetch-options` to one `expand-hls` / `probe-format-sizes` seed
+/// before it reaches `rdlp_extractor::hls`.
+///
+/// `query` is appended to the seed's `url` via the same
+/// [`build_url_with_query`] `extract_m3u8`/`extract_mpd` use. `headers`
+/// become the row's `http_headers` so the expander (and later the
+/// downloader) send them on every playlist/segment request — the same
+/// channel in-tree extractors use for a required `Referer`. Two divergences
+/// from `extract_m3u8`/`extract_mpd`'s use of the same `fetch-options`
+/// record, both because these two imports never issue a request of their
+/// own (they hand the URL to `rdlp_extractor::hls`, which always GETs it):
+/// `body` is IGNORED — there is no POST here for a body to attach to — and
+/// duplicate header keys COLLAPSE (last one wins), because
+/// `Format::http_headers` is a `HashMap`, not the ordered
+/// `Vec<(String, String)>` `host:fetch`'s `Request` uses, so duplicates
+/// cannot be preserved verbatim across this boundary the way they can there.
 fn apply_fetch_headers(mut f: rdlp_types::Format, fetch: &FetchOptions) -> rdlp_types::Format {
+    if !fetch.query.is_empty() {
+        f.url = build_url_with_query(f.url, &fetch.query);
+    }
     if !fetch.headers.is_empty() {
         f.http_headers
             .get_or_insert_with(std::collections::HashMap::new)
@@ -552,6 +568,11 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         })
     }
 
+    // See the WIT doc comment on `expand-hls` for the contract this wraps
+    // unchanged (`expand_hls_in_place`): drop-not-fail per row, SSRF-gated,
+    // capped. The only `FetchError` this can return is
+    // `Network(FETCH_NOT_GRANTED)` from `hls_http_client` above — nothing
+    // downstream of it is fallible at this boundary.
     async fn expand_hls(
         &mut self,
         formats: Vec<WitFormat>,
@@ -570,6 +591,13 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
             .collect())
     }
 
+    // See the WIT doc comment on `probe-format-sizes`. The WIT `format`
+    // record carries no `fragments` field, so `format_from_wit` always
+    // produces `rdlp_types::Format { fragments: None, .. }` here — the
+    // in-tree fragment-reuse short-circuit inside
+    // `detect_format_sizes_inner` (fragments already present → skip
+    // re-expansion) can NEVER trigger from this import. Every call re-fetches
+    // and re-parses each row's own playlist URL.
     async fn probe_format_sizes(
         &mut self,
         formats: Vec<WitFormat>,
@@ -580,10 +608,14 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
             .into_iter()
             .map(|w| apply_fetch_headers(crate::convert::format_from_wit(w), &fetch))
             .collect();
-        // No `ExtractionContext` exists at the plugin host — `Config::default()`
-        // is deliberate (see the WIT doc comment on `probe-format-sizes`: the
-        // HEAD-probe timeout is the built-in 5s default, not operator-tunable
-        // from a plugin).
+        // No `ExtractionContext` exists at the plugin host, so `SizeProbeEnv`
+        // needs a `Config` from somewhere. `Config::default()` is fine
+        // because nothing this lazy probe does reads it: `detect_sizes` is
+        // hardcoded `false` by `detect_format_sizes_lazy_in`, so the
+        // non-HLS HEAD-probe branch (the only reader of
+        // `hls_head_probe_timeout`) never runs. The only `Config` field this
+        // path is sensitive to is `verbose` (debug-log detail), which
+        // defaults to `false` either way.
         let config = rdlp_types::Config::default();
         let probe = rdlp_extractor::hls::SizeProbeEnv {
             http_client: http,

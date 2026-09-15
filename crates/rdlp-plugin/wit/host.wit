@@ -284,20 +284,31 @@ interface host-extract-helpers {
     /// SSRF-gated. Rows that fail (encrypted, live, too large, network,
     /// parse, refused URL) are DROPPED, not returned as an error, exactly
     /// as the in-tree `expand_hls_in_place`. Non-HLS rows are not returned.
-    /// `fetch-error` is only for the host being unable to run at all
-    /// (capability not granted, cancelled). The returned `fragments` are
+    /// `fetch-error` here is only `network` — the plugin's `fetch`
+    /// capability was not granted; there is no `cancelled` path (a
+    /// cancelled call aborts the whole export before this returns at all,
+    /// it does not surface as this variant). The returned `fragments` are
     /// what the host's downloader needs; the host ALSO re-derives them for
     /// any HLS row you return without having called this, so calling it is
     /// optional — do so when you need per-variant labels/sizes to decide
-    /// what to return.
+    /// what to return. `fetch.query` is appended to each seed's url before
+    /// fetching; `fetch.body` is IGNORED (playlists are always fetched via
+    /// GET) and duplicate `fetch.headers` keys COLLAPSE to the last value.
     @since(version = 0.5.1)
     expand-hls: func(formats: list<format>, fetch: fetch-options) -> result<list<hls-format>, fetch-error>;
 
-    /// Wraps the in-tree `detect_format_sizes_lazy`: reuses fragments from a
-    /// prior `expand-hls`, else derives per-variant labels and size
-    /// estimates; never fails the batch; flags aggregate live/DRM across all
-    /// rows. HEAD-probe timeout is the default 5 s; not operator-tunable
-    /// from a plugin.
+    /// Wraps the in-tree `detect_format_sizes_lazy`: re-derives per-variant
+    /// labels and stream flags by fetching and parsing each row's OWN
+    /// playlist url — the `format` record has no `fragments` field, so a
+    /// row returned by a prior `expand-hls` call is NOT recognised as
+    /// already-expanded and its playlist is fetched again here (fragment
+    /// reuse is an in-tree-only optimisation, unreachable across this
+    /// boundary). Lazy: no HEAD-based file-size probing runs, and this
+    /// reads no operator configuration. Never fails the batch (a per-row
+    /// failure just leaves that row unenriched); flags aggregate live/DRM
+    /// across all rows. Same `fetch.query`/`.body`/`.headers` handling as
+    /// `expand-hls` above; `fetch-error` is likewise only `network`
+    /// (capability not granted).
     @since(version = 0.5.1)
     probe-format-sizes: func(formats: list<format>, fetch: fetch-options) -> result<size-probe, fetch-error>;
 }

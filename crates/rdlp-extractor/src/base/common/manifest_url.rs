@@ -26,9 +26,10 @@
 /// `rdlp-api`) can drive this expander against mockito without depending on
 /// rdlp-extractor's `#[cfg(test)]` code. It is intended to be enabled ONLY as
 /// a dev-dependency feature in those sibling crates, added when their own
-/// tests need it — nothing references it yet. It must never be enabled by a
-/// production binary — `scripts/check-loopback-feature-not-in-release.sh`
-/// proves that.
+/// tests need it — `rdlp-plugin`'s `[dev-dependencies]` enables it today, for
+/// its `expand-hls`/`probe-format-sizes` host-import tests. It must never be
+/// enabled by a production binary —
+/// `scripts/check-loopback-feature-not-in-release.sh` proves that.
 ///
 /// Returns `rdlp_security`'s own error so each protocol can map it into its
 /// own error type without this gate having to know about any of them.

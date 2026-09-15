@@ -1321,8 +1321,32 @@ mod hls_host_imports {
     use super::ctx;
     use crate::bindings::rdlp::plugin::host_extract_helpers::{FetchOptions, Host as _};
     use crate::bindings::rdlp::plugin::host_fetch::FetchError;
-    use crate::host::fetch::FetchCtx;
+    use crate::host::fetch::{FETCH_NOT_GRANTED, FetchCtx};
     use crate::instance::PluginStoreData;
+    use std::time::Duration;
+
+    // Every test below holds a `mockito::Server` for its full body and drops
+    // it explicitly as the LAST statement. `clippy::significant_drop_tightening`
+    // would otherwise suggest dropping it right after its last field access
+    // (typically `server.url()`, used to build a seed URL early in the
+    // function), but `mockito::Server`'s `Drop` calls `reset()`, which clears
+    // its registered mocks — doing that before the awaited request and
+    // assertions run would break the test, not just release a resource
+    // earlier. Moving the real last use (this explicit `drop`) to the true
+    // end of the function closes the gap the lint flags without changing
+    // when the server actually goes away.
+
+    /// Real-network timeout for the mockito-backed `wreq::Client` these
+    /// tests build: `expand_hls_in_place`/`detect_format_sizes_lazy_in`
+    /// take an `Arc<wreq::Client>` directly and issue genuine connections
+    /// (not the fixture-replay `host:fetch` path other tests in this file
+    /// use), so a regression in the SSRF gate they rely on
+    /// (`validate_resolved_url`/`validate_manifest_sourced_url`) would
+    /// otherwise let a seed like `169.254.169.254` attempt a real,
+    /// slow-to-time-out connection instead of failing fast. 5s is generous
+    /// for a loopback mockito round-trip and short enough that such a
+    /// regression fails the affected test instead of hanging the suite.
+    const TEST_HTTP_TIMEOUT: Duration = Duration::from_secs(5);
 
     /// A store with a real (non-fixture) `wreq::Client` — `expand_hls_in_place`
     /// and `detect_format_sizes_lazy_in` make genuine HTTP calls (they take an
@@ -1334,6 +1358,7 @@ mod hls_host_imports {
         let mut c = ctx();
         c.fetch = Some(FetchCtx {
             client: rdlp_http::wreq::Client::builder()
+                .timeout(TEST_HTTP_TIMEOUT)
                 .build()
                 .expect("test client"),
             fixtures: None,
@@ -1406,9 +1431,6 @@ mod hls_host_imports {
         assert!(out.iter().all(|h| h.fragments.len() == 2));
         assert!(out.iter().any(|h| h.format.format_id == "hls-720p"));
         assert!(out.iter().all(|h| h.duration == Some(12.0)));
-        // `server` must outlive every await above (its `Drop` resets the
-        // mocks); this makes that live range end at its actual last point
-        // of relevance rather than an implicit end-of-scope drop.
         drop(server);
     }
 
@@ -1421,6 +1443,13 @@ mod hls_host_imports {
     /// `fragments`); this host wrapper then filters to HLS rows only
     /// (`fragments.is_some()`), so the non-HLS row is excluded from the
     /// output too — only the good master's 2 variants remain.
+    ///
+    /// This test pins DROP-NOT-FAIL behaviour only, not the SSRF gate's own
+    /// correctness (that's `rdlp_extractor::hls::expand::tests`, e.g.
+    /// `refuses_link_local_segment_uri`). `store_data_with_fetch`'s client
+    /// carries `TEST_HTTP_TIMEOUT` so that IF the gate ever regressed, this
+    /// test would fail fast on a real, slow connection attempt to
+    /// `169.254.169.254` rather than hanging the suite.
     #[tokio::test]
     async fn expand_hls_drops_a_failing_seed_and_keeps_the_rest() {
         let mut server = mockito::Server::new_async().await;
@@ -1472,20 +1501,23 @@ mod hls_host_imports {
             .await
             .unwrap_err();
         assert!(
-            matches!(err, FetchError::Network(ref m) if m.contains("fetch capability not granted")),
+            matches!(err, FetchError::Network(ref m) if m == FETCH_NOT_GRANTED),
             "{err:?}"
         );
     }
 
-    /// probe-format-sizes reuses fragments a prior expand-hls produced (no
-    /// re-fetch — the master mock expects exactly 1 hit across both calls).
+    /// `fetch-options.query` must reach the request `expand-hls` issues:
+    /// the master mock only matches when the configured query string is
+    /// present, so if `apply_fetch_headers` ever stopped applying it,
+    /// mockito would 501 the request, `expand_hls_in_place` would drop the
+    /// row, and `out.len()` would be 0 instead of 2.
     #[tokio::test]
-    async fn probe_format_sizes_matches_in_tree_flags_and_does_not_refetch() {
+    async fn expand_hls_query_reaches_the_master_request() {
         let mut server = mockito::Server::new_async().await;
         let master = server
             .mock("GET", "/master.m3u8")
+            .match_query(mockito::Matcher::UrlEncoded("tok".into(), "abc".into()))
             .with_body(rdlp_extractor::hls::test_fixtures::MASTER_TWO_VARIANTS)
-            .expect(1)
             .create_async()
             .await;
         let _v720 = server
@@ -1496,6 +1528,59 @@ mod hls_host_imports {
         let _v360 = server
             .mock("GET", "/v360.m3u8")
             .with_body(rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA)
+            .create_async()
+            .await;
+
+        let mut data = store_data_with_fetch();
+        let seed = wit_format("hls", &format!("{}/master.m3u8", server.url()), "m3u8");
+        let fetch = FetchOptions {
+            headers: vec![],
+            query: vec![("tok".to_string(), "abc".to_string())],
+            body: None,
+        };
+        let out = data.expand_hls(vec![seed], fetch).await.unwrap();
+        assert_eq!(out.len(), 2, "query must reach the master request: {out:?}");
+        master.assert_async().await;
+        drop(server);
+    }
+
+    /// probe-format-sizes re-fetches each row's OWN playlist — it does NOT
+    /// reuse fragments a prior `expand-hls` call produced. The WIT `format`
+    /// record has no `fragments` field, so `format_from_wit` always yields
+    /// `fragments: None`, and the in-tree fragment-reuse short-circuit
+    /// cannot trigger across this boundary (see the doc comment on
+    /// `probe_format_sizes` in `extract_helpers.rs`).
+    ///
+    /// Each variant mock is `.expect(3)`: 1 fetch when `expand_hls` first
+    /// expands the master, **plus 2 more** inside `probe_format_sizes` —
+    /// `detect_hls_variants` fetches the url attempting a master-playlist
+    /// parse, and (since a variant url is a MEDIA playlist, so that parse
+    /// yields zero variants) `build_format_detection_future` falls back to
+    /// `enrich_single_hls_format`, which fetches the same url again via
+    /// `detect_hls_metadata`. Measured directly: setting either variant
+    /// mock's `.expect()` to 2 fails this test with mockito's own
+    /// "Expected 2 request(s) … but received 3". The master mock stays
+    /// `.expect(1)` — `probe_format_sizes` never sees the master url at
+    /// all, only the per-variant ones `expand_hls` produced.
+    #[tokio::test]
+    async fn probe_format_sizes_refetches_each_rows_playlist() {
+        let mut server = mockito::Server::new_async().await;
+        let master = server
+            .mock("GET", "/master.m3u8")
+            .with_body(rdlp_extractor::hls::test_fixtures::MASTER_TWO_VARIANTS)
+            .expect(1)
+            .create_async()
+            .await;
+        let v720 = server
+            .mock("GET", "/v720.m3u8")
+            .with_body(rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA)
+            .expect(3)
+            .create_async()
+            .await;
+        let v360 = server
+            .mock("GET", "/v360.m3u8")
+            .with_body(rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA)
+            .expect(3)
             .create_async()
             .await;
 
@@ -1532,6 +1617,8 @@ mod hls_host_imports {
             expected_ids
         );
         master.assert_async().await;
+        v720.assert_async().await;
+        v360.assert_async().await;
         drop(server);
     }
 
