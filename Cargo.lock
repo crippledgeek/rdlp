@@ -6290,6 +6290,7 @@ dependencies = [
  "rdlp-redact",
  "rdlp-security",
  "rdlp-types",
+ "regex",
  "serde",
  "serde_json",
  "sha2 0.10.9",

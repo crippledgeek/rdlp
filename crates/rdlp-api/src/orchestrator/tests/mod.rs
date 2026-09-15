@@ -12,6 +12,7 @@ mod abi_mismatch_tests;
 mod cancel_ownership_tests;
 mod dash_e2e;
 mod hls_e2e;
+mod hls_expansion_guarantee;
 mod property_tests;
 mod resume_tests;
 mod template_tests;

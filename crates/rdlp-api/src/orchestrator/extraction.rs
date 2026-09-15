@@ -7,6 +7,7 @@ use super::{
 use log::{debug, info};
 use rdlp_redact::RedactedUrlBuf;
 use rdlp_types::{SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchResultPreview};
+use std::sync::Arc;
 use tracing::instrument;
 
 /// Apply the decode boundary to a page of search previews.
@@ -22,6 +23,32 @@ fn decode_previews(previews: &mut [SearchResultPreview]) {
 }
 
 impl Orchestrator {
+    /// The downloader's HLS path requires pre-resolved fragments
+    /// (`rdlp-downloader/src/hls/mod.rs` refuses a row without them).
+    /// In-tree extractors expand before returning; a plugin cannot — the
+    /// WIT `format` record has no fragments field. Rows that already carry
+    /// fragments are not re-fetched.
+    ///
+    /// Shared by every path an `InfoDict`'s formats can reach the downloader
+    /// through without another pass through this boundary: `extract_video`
+    /// (single-video downloads), `extract_lazy_formats` (a playlist episode
+    /// resolved at download time), and `extract_playlist` (an episode an
+    /// extractor populated with formats eagerly, which then skips
+    /// `extract_lazy_formats`'s `info.formats.is_empty()` re-resolution
+    /// entirely — see `playlist/episode.rs`). One helper so the three cannot
+    /// drift the way the `#698` decode boundary once did (`PornoXO` skipped
+    /// it while every sibling ran it).
+    async fn expand_missing_hls_fragments(
+        &self,
+        formats: Vec<rdlp_types::Format>,
+    ) -> Vec<rdlp_types::Format> {
+        rdlp_extractor::hls::expand_missing_hls_fragments(
+            formats,
+            Arc::clone(&self.extraction_context.http_client),
+        )
+        .await
+    }
+
     /// Extract video information from URL
     ///
     /// Finds the appropriate extractor for the given URL and extracts metadata
@@ -48,6 +75,11 @@ impl Orchestrator {
             .extract(url, &self.extraction_context)
             .await
             .map_err(OrchestratorError::ExtractionFailed)?;
+
+        // See `Self::expand_missing_hls_fragments` for why this runs here.
+        info.formats = self
+            .expand_missing_hls_fragments(std::mem::take(&mut info.formats))
+            .await;
 
         // The single decode boundary (#698). Sites serve display text
         // entity-encoded — in markup, in JSON-LD and `window.*` script blobs,
@@ -145,6 +177,13 @@ impl Orchestrator {
             .await
             .map_err(OrchestratorError::ExtractionFailed)?;
 
+        // See `Self::expand_missing_hls_fragments`: this is the resolution
+        // point for a playlist episode's formats, so it needs the same
+        // guarantee `extract_video` gives a single-video download.
+        info.formats = self
+            .expand_missing_hls_fragments(std::mem::take(&mut info.formats))
+            .await;
+
         // Same boundary as `extract_video` — see there. Every path that
         // returns an InfoDict decodes, or the boundary is not one. This path
         // additionally needs the echo guard; see the function's own docs.
@@ -198,6 +237,17 @@ impl Orchestrator {
             .extract_playlist(url, &self.extraction_context)
             .await
             .map_err(OrchestratorError::ExtractionFailed)?;
+
+        // See `Self::expand_missing_hls_fragments`. An episode an extractor
+        // populated with formats here skips `extract_lazy_formats`'s own
+        // `info.formats.is_empty()` re-resolution entirely
+        // (`playlist/episode.rs`), so eagerly-populated formats can reach the
+        // downloader having only ever passed through this loop.
+        for info in &mut infos {
+            info.formats = self
+                .expand_missing_hls_fragments(std::mem::take(&mut info.formats))
+                .await;
+        }
 
         // Same boundary as `extract_video`. This path is NOT niche: it backs
         // `extract_info`, so it serves `--dump-json`, `--print`, `--simulate`,
