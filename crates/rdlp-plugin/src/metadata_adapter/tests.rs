@@ -1,5 +1,30 @@
 use super::*;
+use crate::convert::{ExtractionSite, info_dict_from_extraction};
 use crate::test_harness::instantiate;
+use crate::test_support::unit::test_origin;
+
+/// A minimal `info-dict` core — only `id`/`title` vary across callers, so
+/// [`typed_extra_fields_reach_info_dict`] and [`empty_thumbnails_is_none`]
+/// share this rather than repeating every `None`/`Vec::new()` field.
+fn minimal_core() -> WitInfoDict {
+    WitInfoDict {
+        id: "abc123".into(),
+        title: "A Title".into(),
+        url: None,
+        formats: Vec::new(),
+        subtitles: Vec::new(),
+        thumbnail: None,
+        description: None,
+        uploader: None,
+        uploader_id: None,
+        upload_date: None,
+        duration: None,
+        view_count: None,
+        like_count: None,
+        tags: Vec::new(),
+        categories: Vec::new(),
+    }
+}
 
 /// A component with no `extract-with-metadata` export at all.
 const NO_METADATA_WAT: &str = r#"(component
@@ -207,4 +232,79 @@ fn extraction_carries_every_field_through() {
         Some(-1)
     );
     assert_eq!(extraction.extra.extras.len(), 1);
+}
+
+/// Task 6: `info_dict_from_extraction` copies every typed `info-dict-extra`
+/// field onto the `InfoDict` it builds around [`info_dict_from_wit`]'s core
+/// conversion — `actors`/`channel`/`channel_url`/`age_limit` verbatim, and
+/// a non-empty thumbnail list wrapped in `Some`.
+#[test]
+fn typed_extra_fields_reach_info_dict() {
+    let extraction = WitExtraction {
+        core: minimal_core(),
+        extra: WitInfoDictExtra {
+            actors: vec!["a".into(), "b".into()],
+            channel: Some("c".into()),
+            channel_url: Some("https://x.example/c".into()),
+            age_limit: Some(18),
+            thumbnails: vec![WitThumbnail {
+                url: "https://x.example/t.jpg".into(),
+                id: Some("t1".into()),
+                width: Some(320),
+                height: Some(180),
+                preference: Some(2),
+            }],
+            extras: Vec::new(),
+        },
+    };
+    let caps = MetadataCaps::default();
+    let site = ExtractionSite {
+        url: "https://x.example/v/1",
+        origin: test_origin(),
+        caps: &caps,
+    };
+
+    let out = info_dict_from_extraction(extraction, &site);
+
+    assert_eq!(out.actors, vec!["a".to_string(), "b".to_string()]);
+    assert_eq!(out.channel.as_deref(), Some("c"));
+    assert_eq!(out.channel_url.as_deref(), Some("https://x.example/c"));
+    assert_eq!(out.age_limit, Some(18));
+    let thumbs = out.thumbnails.expect("non-empty thumbnails become Some");
+    assert_eq!(thumbs.len(), 1);
+    let thumb = thumbs.first().expect("checked len() == 1 above");
+    assert_eq!(thumb.url, "https://x.example/t.jpg");
+    assert_eq!(thumb.id.as_deref(), Some("t1"));
+    assert_eq!(thumb.width, Some(320));
+    assert_eq!(thumb.height, Some(180));
+    assert_eq!(thumb.preference, Some(2));
+}
+
+/// An `info-dict-extra` with no thumbnails at all must leave
+/// `InfoDict::thumbnails` as `None`, not `Some(vec![])` — the same
+/// empty-collapses-to-None convention `info_dict_from_wit` already applies
+/// to `tags`/`categories`.
+#[test]
+fn empty_thumbnails_is_none() {
+    let extraction = WitExtraction {
+        core: minimal_core(),
+        extra: WitInfoDictExtra {
+            actors: Vec::new(),
+            channel: None,
+            channel_url: None,
+            age_limit: None,
+            thumbnails: Vec::new(),
+            extras: Vec::new(),
+        },
+    };
+    let caps = MetadataCaps::default();
+    let site = ExtractionSite {
+        url: "https://x.example/v/1",
+        origin: test_origin(),
+        caps: &caps,
+    };
+
+    let out = info_dict_from_extraction(extraction, &site);
+
+    assert!(out.thumbnails.is_none());
 }

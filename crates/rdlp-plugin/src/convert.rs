@@ -197,6 +197,72 @@ pub(crate) fn info_dict_from_wit(
     out
 }
 
+/// The per-call context [`info_dict_from_extraction`] needs beyond the
+/// `extraction` payload: the request URL and diagnostics origin
+/// [`info_dict_from_wit`] already takes, plus the metadata caps
+/// `extras_from_wit` bounds `WitInfoDictExtra::extras` with (Task 7, refs
+/// #768). Grouped into one value so the function stays at two positional
+/// parameters instead of growing a fourth — see
+/// `~/.claude/rules/limit-function-arguments.md`.
+pub(crate) struct ExtractionSite<'a> {
+    /// The request URL, passed through to [`info_dict_from_wit`].
+    pub url: &'a str,
+    /// The calling plugin's diagnostics origin.
+    pub origin: PluginOrigin<'a>,
+    /// Bounds for the not-yet-wired `extras` mapping (Task 7).
+    #[expect(
+        dead_code,
+        reason = "read by extras_from_wit, added in Task 7 of this slice (refs #768)"
+    )]
+    pub caps: &'a crate::metadata_adapter::MetadataCaps,
+}
+
+/// Convert a bindgen-generated `WitThumbnail` (0.5.2 `extract-with-metadata`
+/// extra) to the rdlp-types `Thumbnail`. Field-for-field: both sides agree
+/// on `url`/`id`/`width`/`height`/`preference`.
+fn thumbnail_from_wit(t: crate::metadata_adapter::WitThumbnail) -> rdlp_types::Thumbnail {
+    rdlp_types::Thumbnail {
+        url: t.url,
+        id: t.id,
+        width: t.width,
+        height: t.height,
+        preference: t.preference,
+    }
+}
+
+/// Convert a 0.5.2 `extraction` (frozen `info-dict` core plus the typed
+/// `info-dict-extra`) to the rdlp-types `InfoDict`.
+///
+/// Reuses [`info_dict_from_wit`] for the core so that conversion continues
+/// to exist in exactly one place; the extra's typed fields are then copied
+/// onto the result directly. `actors` is a bare `Vec` on both sides;
+/// `thumbnails` collapses an empty list to `None`, matching
+/// [`info_dict_from_wit`]'s existing `tags`/`categories` convention. The
+/// open `extras` key/value tail is validated and capped by Task 7's
+/// `extras_from_wit`; this function does not touch it.
+pub(crate) fn info_dict_from_extraction(
+    w: crate::metadata_adapter::WitExtraction,
+    site: &ExtractionSite<'_>,
+) -> rdlp_types::InfoDict {
+    let mut out = info_dict_from_wit(w.core, site.url, &site.origin);
+    out.actors = w.extra.actors;
+    out.channel = w.extra.channel;
+    out.channel_url = w.extra.channel_url;
+    out.age_limit = w.extra.age_limit;
+    out.thumbnails = if w.extra.thumbnails.is_empty() {
+        None
+    } else {
+        Some(
+            w.extra
+                .thumbnails
+                .into_iter()
+                .map(thumbnail_from_wit)
+                .collect(),
+        )
+    };
+    out
+}
+
 /// Sanitise a plugin-supplied string before it enters a filesystem path.
 ///
 /// Plugin output is untrusted: a malicious extractor could return

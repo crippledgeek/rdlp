@@ -513,12 +513,37 @@ where
 
 /// Call `extract` on an already-instantiated component and convert the
 /// result. The plugin name comes from the store data the runner built.
+///
+/// Tries the 0.5.2 `extract-with-metadata` export first
+/// (`metadata_adapter::call_extract_with_metadata`); `Ok(None)` means the
+/// component predates that export (or never declared it), so this falls
+/// back to the frozen 0.5.0 `extract` unchanged. `metadata_caps` is
+/// `MetadataCaps::default()` for now — Task 7 threads it from
+/// `PluginStoreData` (populated from `Config` at store-build time) instead.
 pub(crate) async fn call_plugin_extract(
     store: &mut wasmtime::Store<PluginStoreData>,
     inst: &FreshInstance,
     url: &str,
 ) -> Result<InfoDict, PluginError> {
     let plugin_name = store.data().plugin_name.clone();
+
+    let metadata_caps = crate::metadata_adapter::MetadataCaps::default();
+    if let Some(r) =
+        crate::metadata_adapter::call_extract_with_metadata(store, &inst.raw, url).await?
+    {
+        return match r {
+            Ok(extraction) => Ok(crate::convert::info_dict_from_extraction(
+                extraction,
+                &crate::convert::ExtractionSite {
+                    url,
+                    origin: store.data().origin(),
+                    caps: &metadata_caps,
+                },
+            )),
+            Err(extract_err) => Err(extract_error_to_plugin_error(&plugin_name, extract_err)),
+        };
+    }
+
     let wit_result = inst
         .host
         .call_extract(&mut *store, url)

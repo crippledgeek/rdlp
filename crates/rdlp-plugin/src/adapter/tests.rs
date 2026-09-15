@@ -121,6 +121,24 @@ async fn runner_hands_the_closure_a_live_instance() {
     assert_eq!(ext.test_trap_count(), 0);
 }
 
+/// Task 6: `call_plugin_extract` tries `extract-with-metadata` first; on
+/// the committed 0.5.0 fixture (which predates that export) it must fall
+/// back to the typed `extract` path unchanged — same title, no strike.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn extract_on_a_0_5_0_component_still_uses_extract() {
+    let ext = fixture_extractor();
+    let info = ext
+        .run_in_fresh_store(spec(EXTRACT_TIMEOUT), |store, inst| {
+            Box::pin(async move {
+                call_plugin_extract(store, inst, "https://example.com/video/42").await
+            })
+        })
+        .await
+        .expect("falls back to extract when extract-with-metadata is absent");
+    assert_eq!(info.title, "Example Video 42");
+    assert_eq!(ext.test_trap_count(), 0);
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn runner_timeout_is_a_strike_and_cancels_the_call() {
     let ext = fixture_extractor();

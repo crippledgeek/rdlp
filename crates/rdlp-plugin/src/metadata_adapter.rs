@@ -17,13 +17,12 @@
 //! Extras validation (`InfoDictExtra`/`MetaValue` bounds) is a later task;
 //! this module only calls the export and hands back the raw lift.
 
-// Why every hand-declared item below carries a per-item
-// `#[cfg_attr(not(test), expect(dead_code, reason = "…"))]`: the caller —
-// `PluginExtractor` — lands in a later task of this slice (refs #768), so
-// each is unreachable from production code today. Scoped per item, not at
-// module level, so each `expect` unfulfills (and fails the build) the
-// moment that specific item is wired in, instead of one blanket
-// suppression silently covering whatever is still unused.
+// Why `WitMetaValue` and the `extras` field of `WitInfoDictExtra` still
+// carry `#[cfg_attr(not(test), expect(dead_code, reason = "…"))]`: validating
+// and mapping the open key/value tail is Task 7 of this slice (refs #768).
+// This task (6) wires `extract-with-metadata` itself plus every typed
+// field, so their own markers are removed here — each `expect` would now
+// fail the build as "unfulfilled" on a live item.
 
 use wasmtime::Store;
 use wasmtime::component::{ComponentType, Lift};
@@ -35,25 +34,11 @@ use crate::bindings::rdlp::plugin::types::{
 };
 use crate::instance::PluginStoreData;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into PluginExtractor by a later task in this slice (refs #768)"
-    )
-)]
 const EXTRACT_WITH_METADATA_EXPORT: &str = "extract-with-metadata";
 
 /// Hand-lift of `wit/types.wit`'s `thumbnail` record.
 #[derive(Debug, Clone, PartialEq, ComponentType, Lift)]
 #[component(record)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into PluginExtractor by a later task in this slice (refs #768)"
-    )
-)]
 pub(crate) struct WitThumbnail {
     /// Thumbnail URL.
     pub url: String,
@@ -72,13 +57,6 @@ pub(crate) struct WitThumbnail {
 /// nested map.
 #[derive(Debug, Clone, PartialEq, ComponentType, Lift)]
 #[component(variant)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into PluginExtractor by a later task in this slice (refs #768)"
-    )
-)]
 pub(crate) enum WitMetaValue {
     /// UTF-8 text.
     #[component(name = "text")]
@@ -100,13 +78,6 @@ pub(crate) enum WitMetaValue {
 /// Hand-lift of `wit/types.wit`'s `info-dict-extra` record.
 #[derive(Debug, Clone, PartialEq, ComponentType, Lift)]
 #[component(record)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into PluginExtractor by a later task in this slice (refs #768)"
-    )
-)]
 pub(crate) struct WitInfoDictExtra {
     /// Cast/performer names.
     pub actors: Vec<String>,
@@ -121,7 +92,10 @@ pub(crate) struct WitInfoDictExtra {
     /// Additional thumbnails beyond `info-dict`'s single `thumbnail`.
     pub thumbnails: Vec<WitThumbnail>,
     /// Open key/value tail, validated and capped host-side before reaching
-    /// `InfoDict::extra`.
+    /// `InfoDict::extra`. Not yet read outside this struct's own derives
+    /// (`Debug`/`Clone`/`PartialEq`) — `extras_from_wit` reads it in Task 7
+    /// of this slice (refs #768) — but those derives already count as a
+    /// use, so this carries no `expect(dead_code)`.
     pub extras: Vec<(String, WitMetaValue)>,
 }
 
@@ -132,13 +106,6 @@ pub(crate) struct WitInfoDictExtra {
 /// it, so this can't either.
 #[derive(Debug, Clone, ComponentType, Lift)]
 #[component(record)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into PluginExtractor by a later task in this slice (refs #768)"
-    )
-)]
 pub(crate) struct WitExtraction {
     /// The frozen 0.5.0 `info-dict`, bindgen-generated (reachable from
     /// `extract`'s own signature in the bound host world).
@@ -151,13 +118,6 @@ pub(crate) struct WitExtraction {
 /// the plugin answered with a domain error, mapped by the caller through the
 /// same `extract_error_to_plugin_error` `extract` already uses. `Err(Trapped)`:
 /// wrong signature, trap, or post-return failure.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into PluginExtractor by a later task in this slice (refs #768)"
-    )
-)]
 pub(crate) async fn call_extract_with_metadata(
     store: &mut Store<PluginStoreData>,
     inst: &wasmtime::component::Instance,
@@ -173,6 +133,49 @@ pub(crate) async fn call_extract_with_metadata(
     )
     .await?;
     Ok(out.map(|(r,)| r))
+}
+
+/// Bounds on `WitInfoDictExtra::extras` (`Task 7`, refs #768): entry count,
+/// per-value size, and total size. Threaded through
+/// [`crate::convert::ExtractionSite`] now so `info_dict_from_extraction`'s
+/// signature is stable across that task; `Default` (all-zero) is a
+/// placeholder — the config-derived values and their named consts land in
+/// Task 7, which also writes the `extras_from_wit` that reads these
+/// fields for its own bounds checks. No test reads a field back either
+/// yet, so — unlike the hand-lifted WIT types above, whose derived
+/// `PartialEq` already counts as a read — these carry a real
+/// `expect(dead_code)` each.
+#[derive(Debug, Clone, Copy, Default)]
+// The shared `max_` prefix is the fixed Task 7 interface (refs #768,
+// `.superpowers/sdd/2026-09-15-plugin-slice-c0a-abi-0-5-2/task-7-brief.md`):
+// `MetadataCaps { max_extras, max_value_bytes, max_total_bytes }`. All three
+// genuinely bound the same `extras` tail from a different angle (count vs.
+// one value vs. the total), so the repetition names that relationship
+// rather than being lazy naming — renaming here would only have to be
+// undone to match the brief `extras_from_wit` is written against.
+#[expect(
+    clippy::struct_field_names,
+    reason = "field names are the fixed Task 7 interface — see comment above"
+)]
+pub(crate) struct MetadataCaps {
+    /// Maximum number of `extras` entries kept per extraction.
+    #[expect(
+        dead_code,
+        reason = "read by extras_from_wit, added in Task 7 of this slice (refs #768)"
+    )]
+    pub max_extras: usize,
+    /// Maximum serialized size, in bytes, of one entry's value.
+    #[expect(
+        dead_code,
+        reason = "read by extras_from_wit, added in Task 7 of this slice (refs #768)"
+    )]
+    pub max_value_bytes: usize,
+    /// Maximum combined size, in bytes, of all kept entries.
+    #[expect(
+        dead_code,
+        reason = "read by extras_from_wit, added in Task 7 of this slice (refs #768)"
+    )]
+    pub max_total_bytes: usize,
 }
 
 #[cfg(test)]
