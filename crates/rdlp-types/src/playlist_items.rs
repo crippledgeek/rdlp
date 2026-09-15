@@ -76,7 +76,7 @@ impl PlaylistItems {
             if item.starts_with('-') {
                 return Err(PlaylistItemsError::Unsupported(item.to_string()));
             }
-            if item.matches(':').count() > 1 {
+            if item.matches(['-', ':']).count() > 1 {
                 return Err(PlaylistItemsError::Unsupported(item.to_string()));
             }
             let (a, b) = match item.split_once(['-', ':']) {
@@ -175,5 +175,20 @@ mod tests {
     #[test]
     fn garbage_rejected() {
         assert!(PlaylistItems::parse("a-b").is_err());
+    }
+
+    /// A second `-`/`:` separator (mixed or not) must be refused the same
+    /// deliberate way `::step` is, not fall through to a `NotANumber` on the
+    /// leftover fragment (`"1-2-3"` used to parse `a="1"`, then fail parsing
+    /// `"2-3"` as an integer — an accident, not a decision).
+    #[test]
+    fn multi_separator_rejected_as_unsupported() {
+        for spec in ["1-2-3", "1:2-3", "1-2:3"] {
+            let err = PlaylistItems::parse(spec).expect_err(spec);
+            assert!(
+                matches!(err, PlaylistItemsError::Unsupported(_)),
+                "{spec}: got {err:?}"
+            );
+        }
     }
 }

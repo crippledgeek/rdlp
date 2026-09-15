@@ -282,9 +282,9 @@ pub struct Config {
     #[serde(default)]
     pub max_fragment_bytes: Option<u64>,
 
-    /// Ceiling on how many plugin-supplied metadata extras keys
-    /// [`rdlp-plugin`](../../rdlp_plugin/index.html)'s metadata adapter will
-    /// carry into `InfoDict`. Unset keeps the consuming crate's default
+    /// Ceiling on how many plugin-supplied metadata extras keys the
+    /// `rdlp-plugin` crate's metadata adapter will carry into `InfoDict`.
+    /// Unset keeps the consuming crate's default
     /// (`DEFAULT_MAX_METADATA_EXTRAS`). Validated post-load by
     /// `Config::validate()`: must be 1..=1024.
     #[serde(default)]
