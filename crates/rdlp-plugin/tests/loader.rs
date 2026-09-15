@@ -472,10 +472,10 @@ fn pornhub_claimant<'a>(wasm: &'a [u8], claims_override: &'a [&'a str]) -> Signe
     }
 }
 
-fn load_with(
+fn load_with<P: rdlp_plugin::prompt::Prompter + 'static>(
     td: &TempDir,
     plugins_dir: &std::path::Path,
-    prompter: Arc<RecordingPrompter>,
+    prompter: Arc<P>,
 ) -> Vec<rdlp_plugin::loader::DiscoverOutcome> {
     let engine = Engine::new(EngineConfig::default()).unwrap();
     let mut trust = TrustStore::open(td.path().join("trust.toml")).unwrap();
@@ -646,4 +646,98 @@ fn a_bundled_capability_and_search_claim_change_fires_both_prompts() {
     let entry = trust.lookup("ph-search").unwrap();
     assert!(entry.approved_capabilities.contains("log"));
     assert_eq!(entry.search.search_claims_override, vec!["pornhub"]);
+}
+
+/// A prompter that answers per request kind: persist the capability creep,
+/// deny the search-claim change.
+struct PersistCapsDenyClaims(RecordingPrompter);
+
+impl rdlp_plugin::prompt::Prompter for PersistCapsDenyClaims {
+    fn confirm(&self, request: ConfirmRequest) -> ConfirmResponse {
+        let answer = match &request {
+            ConfirmRequest::SearchClaimsChange { .. } => ConfirmResponse::Deny,
+            _ => ConfirmResponse::ApprovePersist,
+        };
+        let _ = self.0.confirm(request);
+        answer
+    }
+}
+
+/// Persisting the first prompt's approval must not write the second
+/// prompt's (denied) claim: with capability creep approved-and-persisted
+/// and the bundled search claim denied, the load is refused AND the next
+/// startup still asks about the search claim — the store may only ever
+/// record what every prompt in the load agreed to.
+#[test]
+fn a_denied_search_claim_is_not_persisted_by_an_earlier_approval() {
+    let td = TempDir::new().unwrap();
+    let plugins_dir = td.path().join("plugins");
+    let plugin_dir = plugins_dir.join("ph-search");
+    let key = SigningKey::generate(&mut OsRng);
+    let wasm = stub_wasm();
+
+    write_signed_plugin(&plugin_dir, &key, &pornhub_claimant(&wasm, &[]));
+    let first = Arc::new(RecordingPrompter::answering(
+        ConfirmResponse::ApprovePersist,
+    ));
+    assert!(load_with(&td, &plugins_dir, first)[0].is_ok());
+
+    std::fs::remove_dir_all(&plugin_dir).unwrap();
+    write_signed_plugin(
+        &plugin_dir,
+        &key,
+        &SignedPluginSpec {
+            capabilities: &["log"],
+            ..pornhub_claimant(&wasm, &["pornhub"])
+        },
+    );
+    let split = Arc::new(PersistCapsDenyClaims(RecordingPrompter::answering(
+        ConfirmResponse::Deny,
+    )));
+    let outcomes = load_with(&td, &plugins_dir, Arc::clone(&split));
+    assert!(
+        matches!(
+            &outcomes[0],
+            Err((_, PluginError::SearchClaimsChange { .. }))
+        ),
+        "the denied claim must refuse this load"
+    );
+    assert_eq!(split.0.requests().len(), 2, "both prompts fired");
+
+    let entry_after = TrustStore::open(td.path().join("trust.toml")).unwrap();
+    let entry = entry_after
+        .lookup("ph-search")
+        .expect("the first install's entry");
+    assert!(
+        entry.search.search_claims_override.is_empty(),
+        "a denied claim must not reach the store: {entry:?}"
+    );
+    assert!(
+        !entry.approved_capabilities.contains("log"),
+        "an approval that was part of a refused load must not be persisted either: {entry:?}"
+    );
+
+    // Next startup, same answers: the claim is still unapproved, so it is
+    // asked again (a store that had absorbed it would load silently).
+    let again = Arc::new(PersistCapsDenyClaims(RecordingPrompter::answering(
+        ConfirmResponse::Deny,
+    )));
+    let outcomes = load_with(&td, &plugins_dir, Arc::clone(&again));
+    assert!(
+        matches!(
+            &outcomes[0],
+            Err((_, PluginError::SearchClaimsChange { .. }))
+        ),
+        "got {:?}",
+        outcomes[0].as_ref().err()
+    );
+    assert!(
+        again
+            .0
+            .requests()
+            .iter()
+            .any(|r| matches!(r, ConfirmRequest::SearchClaimsChange { .. })),
+        "the next startup must still prompt for the search claim: {:?}",
+        again.0.requests()
+    );
 }

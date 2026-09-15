@@ -193,19 +193,24 @@ impl<'a> Loader<'a> {
     /// (`CapabilityCreep`), and a search-site claim that differs from the
     /// approved one (`SearchClaimsChange`) — a plugin must not be able to
     /// start shadowing a built-in's search on an update the user never saw.
+    ///
+    /// The store is written ONCE, after every prompt the load needed has
+    /// approved: an entry always describes the whole manifest, so writing
+    /// it on the first approval would also record whatever a later prompt
+    /// then denied, and the next startup would load that denied claim
+    /// without asking. It is persisted only when every prompt answered
+    /// `ApprovePersist`; one `ApproveOnce` keeps the whole load session-only.
     fn check_trust(&mut self, subject: &TrustSubject<'_>) -> Result<(), PluginError> {
         let TrustSubject { manifest, identity } = *subject;
+        let mut decisions = Decisions::default();
         match self
             .trust_store
             .check_identity_match(&manifest.name, identity)
         {
             IdentityCheck::Match => {
-                // Snapshot the approved entry ONCE, before either prompt: an
-                // `ApprovePersist` on the first prompt records the whole
-                // current manifest (new search claim included), so a second
-                // comparison that re-read the store would find nothing left
-                // to confirm and a bundled update could shadow a built-in's
-                // search behind a prompt that never mentioned search.
+                // Snapshot the approved entry ONCE, before either prompt,
+                // so both comparisons judge the update against what was
+                // actually approved last time.
                 let prior = self.trust_store.lookup(&manifest.name).cloned();
                 if let CapabilityCheck::NewCapabilitiesRequested(new_caps) = self
                     .trust_store
@@ -221,11 +226,10 @@ impl<'a> Loader<'a> {
                         previously_approved,
                         new_capabilities: new_caps.clone(),
                     });
-                    let denied = || PluginError::CapabilityCreep {
+                    decisions.record(resp, || PluginError::CapabilityCreep {
                         plugin: manifest.name.clone(),
                         cap: new_caps.join(", "),
-                    };
-                    self.apply_decision(resp, subject, denied)?;
+                    })?;
                 }
 
                 let approved_claims = prior.map(|e| e.search).unwrap_or_default();
@@ -237,15 +241,14 @@ impl<'a> Loader<'a> {
                         previously_approved: approved_claims,
                         requested: requested_claims.clone(),
                     });
-                    let denied = || PluginError::SearchClaimsChange {
+                    decisions.record(resp, || PluginError::SearchClaimsChange {
                         plugin: manifest.name.clone(),
                         detail: format!(
                             "search_site = {:?}, search_claims_override = {:?}",
                             manifest.search_site_name(),
                             requested_claims.search_claims_override
                         ),
-                    };
-                    self.apply_decision(resp, subject, denied)?;
+                    })?;
                 }
             }
             IdentityCheck::Mismatch {
@@ -267,36 +270,58 @@ impl<'a> Loader<'a> {
                     claims_override: manifest.claims_override.clone(),
                     search: manifest.search_claims(),
                 });
-                let denied = || {
+                decisions.record(resp, || {
                     PluginError::Internal(format!(
                         "user declined trust for plugin {}",
                         manifest.name
                     ))
-                };
-                self.apply_decision(resp, subject, denied)?;
+                })?;
             }
         }
 
+        if decisions.persist() {
+            self.trust_store.record(subject.entry())?;
+        }
+        Ok(())
+    }
+}
+
+/// The prompt answers one load collected, folded into whether the trust
+/// store gets written at the end. A `Deny` short-circuits the load at the
+/// prompt that produced it; the store is never touched before the fold.
+#[derive(Debug, Default)]
+struct Decisions {
+    prompted: bool,
+    every_answer_persists: bool,
+}
+
+impl Decisions {
+    /// Fold one answer in: `Deny` is `denied()`; `ApproveOnce` makes the
+    /// whole load session-only; `ApprovePersist` keeps persistence on the
+    /// table.
+    fn record(
+        &mut self,
+        resp: ConfirmResponse,
+        denied: impl FnOnce() -> PluginError,
+    ) -> Result<(), PluginError> {
+        let persists = match resp {
+            ConfirmResponse::Deny => return Err(denied()),
+            ConfirmResponse::ApprovePersist => true,
+            ConfirmResponse::ApproveOnce => false,
+        };
+        self.every_answer_persists = if self.prompted {
+            self.every_answer_persists && persists
+        } else {
+            persists
+        };
+        self.prompted = true;
         Ok(())
     }
 
-    /// Apply one prompt decision: `Deny` is `denied()`, `ApprovePersist`
-    /// records the manifest's current capabilities and search-site claim so
-    /// the same version does not prompt again, and `ApproveOnce` allows this
-    /// load without touching the store (the user is prompted again next
-    /// startup). One implementation for all three prompts, so persisting an
-    /// approval always writes the whole entry.
-    fn apply_decision(
-        &mut self,
-        resp: ConfirmResponse,
-        subject: &TrustSubject<'_>,
-        denied: impl FnOnce() -> PluginError,
-    ) -> Result<(), PluginError> {
-        match resp {
-            ConfirmResponse::Deny => Err(denied()),
-            ConfirmResponse::ApprovePersist => self.trust_store.record(subject.entry()),
-            ConfirmResponse::ApproveOnce => Ok(()),
-        }
+    /// Whether the entry is written: at least one prompt fired and every
+    /// one of them asked to persist.
+    const fn persist(&self) -> bool {
+        self.prompted && self.every_answer_persists
     }
 }
 

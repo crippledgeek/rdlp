@@ -536,8 +536,16 @@ fn descriptor_strings_with_control_characters_are_refused() {
             .collect::<Vec<_>>(),
         ["v0", "v1"]
     );
-    let (target, msg) = captured_entry_containing(&logs, "control character");
+    // Both diagnostics: the descriptor-drop warn and the value-path tally.
+    let (target, msg) = captured_entry_containing(&logs, "carrying a control character");
     assert_eq!(target, TEST_LOG_TARGET);
+    assert!(
+        !msg.contains('\x1b'),
+        "the offending text must not be echoed: {msg:?}"
+    );
+    let (target, msg) = captured_entry_containing(&logs, "1 with a control character");
+    assert_eq!(target, TEST_LOG_TARGET);
+    assert!(msg.contains("filter 'k'"), "{msg}");
     assert!(
         !msg.contains('\x1b'),
         "the offending text must not be echoed: {msg:?}"
@@ -594,11 +602,14 @@ async fn instantiate(wat: &str) -> (Store<PluginStoreData>, wasmtime::component:
     let component =
         wasmtime::component::Component::new(engine.raw(), wat::parse_str(wat).expect("wat"))
             .expect("component");
+    // The production deadline: an unbounded tick count overflows
+    // wasmtime's epoch arithmetic (`store.rs` adds unchecked) once the
+    // engine's ticker has advanced.
     let mut store = crate::instance::build_store(
         &engine,
         "test",
         tokio_util::sync::CancellationToken::new(),
-        u64::MAX,
+        crate::instance::deadline_ticks(SEARCH_TIMEOUT, engine.tick_period()),
     );
     let instance = wasmtime::component::Linker::<PluginStoreData>::new(engine.raw())
         .instantiate_async(&mut store, &component)
