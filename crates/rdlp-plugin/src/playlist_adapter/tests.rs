@@ -1,5 +1,11 @@
 use super::*;
+use crate::convert::MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES;
 use crate::test_harness::instantiate;
+use crate::test_support::extraction_ctx;
+use crate::test_support::unit::{
+    FIXTURE_MANIFEST, TEST_LOG_TARGET, captured_entry_containing, captured_logs, fixture_extractor,
+    fixture_extractor_from, test_origin,
+};
 
 /// A component with no `extract-playlist` export at all.
 const NO_PLAYLIST_WAT: &str = r#"(component
@@ -180,4 +186,118 @@ fn playlist_page_carries_every_field_through() {
     assert_eq!(page.playlist_id.as_deref(), Some("pl-1"));
     assert_eq!(page.playlist_title.as_deref(), Some("A Playlist"));
     assert_eq!(page.total_estimate, Some(42));
+}
+
+/// `playlist_page_from_wit` copies every field verbatim (entries included)
+/// from the lifted `WitPlaylistPage` into the host-owned loop's own
+/// `PlaylistPage`/`PlaylistEntry`.
+#[test]
+fn page_fetch_maps_wit_page_to_playlist_page() {
+    let w = WitPlaylistPage {
+        entries: vec![WitPlaylistEntry {
+            url: "https://x.example/v/1".into(),
+            id: Some("1".into()),
+            title: Some("Clip One".into()),
+        }],
+        page: 2,
+        has_more: true,
+        playlist_id: Some("pl-1".into()),
+        playlist_title: Some("A Playlist".into()),
+        total_estimate: Some(42),
+    };
+    let page = playlist_page_from_wit(w, &test_origin());
+    assert_eq!(page.entries.len(), 1);
+    let entry = page.entries.first().expect("one entry");
+    assert_eq!(entry.url, "https://x.example/v/1");
+    assert_eq!(entry.id.as_deref(), Some("1"));
+    assert_eq!(entry.title.as_deref(), Some("Clip One"));
+    assert!(page.has_more);
+    assert_eq!(page.playlist_id.as_deref(), Some("pl-1"));
+    assert_eq!(page.playlist_title.as_deref(), Some("A Playlist"));
+    assert_eq!(page.total_estimate, Some(42));
+}
+
+/// `playlist_page_from_wit` caps `entries` the same way
+/// `info_dict_from_wit` caps `formats` (`convert::format_cap_tests`):
+/// truncate to the bound, warn once on the plugin's log target, naming the
+/// call and the count.
+#[test]
+fn page_fetch_caps_entries_and_warns() {
+    let logs = captured_logs();
+    let entries: Vec<WitPlaylistEntry> = (0..=MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES)
+        .map(|i| WitPlaylistEntry {
+            url: format!("https://x.example/v/{i}"),
+            id: None,
+            title: None,
+        })
+        .collect();
+    let w = WitPlaylistPage {
+        entries,
+        page: 1,
+        has_more: false,
+        playlist_id: None,
+        playlist_title: None,
+        total_estimate: None,
+    };
+    let page = playlist_page_from_wit(w, &test_origin());
+    assert_eq!(page.entries.len(), MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES);
+    let (target, msg) = captured_entry_containing(
+        &logs,
+        &format!(
+            "extract-playlist: plugin test supplied {} playlist entries",
+            MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES + 1
+        ),
+    );
+    assert_eq!(target, TEST_LOG_TARGET);
+    assert!(
+        msg.contains(&MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES.to_string()),
+        "{msg}"
+    );
+}
+
+// ── `PluginExtractor::extract_playlist` (the probe + fallback) ───────────
+
+/// A plugin whose component never declared `extract-playlist` (the
+/// committed 0.5.0 fixture) falls back to the trait default: one
+/// `extract` call, wrapped in a one-element `Vec`, with no playlist index
+/// stamped.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn absent_export_falls_back_to_single_extract() {
+    let ext = fixture_extractor();
+    let out = ext
+        .extract_playlist("https://example.com/video/42", &extraction_ctx())
+        .await
+        .expect("falls back to the single extract");
+    assert_eq!(out.len(), 1);
+    let info = out.first().expect("one entry");
+    assert_eq!(info.title, "Example Video 42");
+    assert_eq!(info.playlist_index, None);
+}
+
+/// A plugin whose `extract-playlist` answers `err(unsupported-url)` for
+/// this URL falls back the same way `absent_export_falls_back_to_single_extract`
+/// does. A WAT component cannot export both `extract-playlist` and the
+/// full 0.5.0 `extract` surface without reproducing `info-dict`/
+/// `extract-error`'s whole shape by hand, so this test reads Task 10's
+/// committed 0.5.2 fixture from disk (not `include_bytes!`, so the module
+/// compiles before that fixture exists) and is ignored until Task 10 lands
+/// it — see the `#[ignore]` reason.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "needs the 0.5.2 fixture (Task 10)"]
+async fn unsupported_url_falls_back_to_single_extract() {
+    // Test fixture — sync I/O is acceptable per clippy.toml's
+    // disallowed-methods carve-out (c); this test is ignored until Task 10
+    // commits the fixture, so the blocking read never runs today.
+    #[allow(clippy::disallowed_methods)]
+    let wasm = std::fs::read(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/example-extractor-0.5.2/plugin.wasm"),
+    )
+    .expect("Task 10's 0.5.2 fixture");
+    let ext = fixture_extractor_from(FIXTURE_MANIFEST, &wasm);
+    let out = ext
+        .extract_playlist("https://example.com/not-a-playlist", &extraction_ctx())
+        .await
+        .expect("falls back to the single extract");
+    assert_eq!(out.len(), 1);
 }

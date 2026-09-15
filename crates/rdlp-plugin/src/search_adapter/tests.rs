@@ -1,5 +1,13 @@
 use super::*;
 
+/// `crate::test_harness::instantiate` under this module's established name:
+/// a minimal component exporting only `search-filters`, instantiated on a
+/// bare linker (no host world, no capabilities) into a store carrying the
+/// unit-test plugin name — the smallest thing `call_search_filters` can be
+/// pointed at. Shared with `playlist_adapter`/`metadata_adapter`'s own
+/// by-name-export tests, which needed the identical setup.
+use crate::test_harness::instantiate;
+
 #[test]
 fn unsupported_is_the_search_only_variant() {
     assert!(matches!(
@@ -594,14 +602,6 @@ fn an_over_long_allowed_value_is_dropped_from_its_descriptor() {
 }
 
 // ── the by-name export call against minimal components (L1 / m7) ─────────
-
-/// `crate::test_harness::instantiate` under this module's established name:
-/// a minimal component exporting only `search-filters`, instantiated on a
-/// bare linker (no host world, no capabilities) into a store carrying the
-/// unit-test plugin name — the smallest thing `call_search_filters` can be
-/// pointed at. Shared with `playlist_adapter`/`metadata_adapter`'s own
-/// by-name-export tests, which needed the identical setup.
-use crate::test_harness::instantiate;
 
 /// `search-filters` returning one descriptor, laid out by hand in core
 /// memory in canonical-ABI order: `key`, `display-name`, `allowed-values`

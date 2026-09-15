@@ -27,6 +27,18 @@ use rdlp_types::DownloadProtocol;
 /// one warning on the plugin's log target.
 pub(crate) const MAX_PLUGIN_FORMATS: usize = 256;
 
+/// Upper bound on the entries one `extract-playlist` page may carry across
+/// the boundary. Mirrors `rdlp_extractor::base::common::MAX_PLAYLIST_SIZE`
+/// (`crates/rdlp-extractor/src/base/common/selectors.rs`) — the host-owned
+/// playlist loop's own overall cap across every page of one playlist — so a
+/// single plugin-controlled page can never itself exceed what the loop
+/// would ever keep. That constant is `pub(crate)` to `rdlp-extractor` and
+/// not reachable from here, so the value is restated rather than imported;
+/// the two are expected to move together. Excess rows are dropped from the
+/// tail with one warning on the plugin's log target, same as
+/// [`MAX_PLUGIN_FORMATS`].
+pub(crate) const MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES: usize = 1000;
+
 /// Whom a conversion's diagnostics name and where they go: the plugin's
 /// name for identity, its `log` target for the warning channel `host:log`
 /// already uses (so a plugin author reading their plugin's log sees the
@@ -39,24 +51,76 @@ pub(crate) struct PluginOrigin<'a> {
     pub log_target: &'a str,
 }
 
+/// What varies between [`cap_plugin_formats`] and
+/// [`cap_plugin_playlist_entries`]: which WIT call is reporting the row
+/// count, how many rows are kept, and what to call a row in the warning.
+/// The truncate-then-warn-once mechanism itself is shared in [`cap_rows`].
+struct CapSpec<'a> {
+    /// Names the WIT call in the warning, so an author can tell which list
+    /// was cut.
+    import: &'a str,
+    /// Rows beyond this many are dropped.
+    bound: usize,
+    /// What to call one row in the warning (`"format rows"`, `"playlist
+    /// entries"`).
+    noun: &'a str,
+}
+
+/// Enforce `spec.bound` on a plugin-supplied row list, keeping the first
+/// `spec.bound` rows and warning once, on `origin`'s log target, when any
+/// are dropped.
+fn cap_rows<T>(mut rows: Vec<T>, spec: &CapSpec<'_>, origin: &PluginOrigin<'_>) -> Vec<T> {
+    if rows.len() > spec.bound {
+        log::warn!(
+            target: origin.log_target,
+            "{}: plugin {} supplied {} {}; keeping the first {} and dropping the rest",
+            spec.import,
+            origin.plugin_name,
+            rows.len(),
+            spec.noun,
+            spec.bound,
+        );
+        rows.truncate(spec.bound);
+    }
+    rows
+}
+
 /// Enforce [`MAX_PLUGIN_FORMATS`] on a plugin-supplied row list, keeping
 /// the first `MAX_PLUGIN_FORMATS` rows. `import` names the WIT call in the
 /// warning so an author can tell which list was cut.
 pub(crate) fn cap_plugin_formats<T>(
-    mut rows: Vec<T>,
+    rows: Vec<T>,
     import: &str,
     origin: &PluginOrigin<'_>,
 ) -> Vec<T> {
-    if rows.len() > MAX_PLUGIN_FORMATS {
-        log::warn!(
-            target: origin.log_target,
-            "{import}: plugin {} supplied {} format rows; keeping the first {MAX_PLUGIN_FORMATS} and dropping the rest",
-            origin.plugin_name,
-            rows.len()
-        );
-        rows.truncate(MAX_PLUGIN_FORMATS);
-    }
-    rows
+    cap_rows(
+        rows,
+        &CapSpec {
+            import,
+            bound: MAX_PLUGIN_FORMATS,
+            noun: "format rows",
+        },
+        origin,
+    )
+}
+
+/// Enforce [`MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES`] on one `extract-playlist`
+/// page's entries, keeping the first that many. `import` names the WIT
+/// call in the warning so an author can tell which list was cut.
+pub(crate) fn cap_plugin_playlist_entries<T>(
+    rows: Vec<T>,
+    import: &str,
+    origin: &PluginOrigin<'_>,
+) -> Vec<T> {
+    cap_rows(
+        rows,
+        &CapSpec {
+            import,
+            bound: MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES,
+            noun: "playlist entries",
+        },
+        origin,
+    )
 }
 
 /// Narrow an `f64` to `f32` at the WIT boundary.

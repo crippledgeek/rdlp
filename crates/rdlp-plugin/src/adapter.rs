@@ -290,6 +290,19 @@ impl InfoExtractor for PluginExtractor {
         .await
         .map_err(|e| plugin_error_to_rdlp(e, Some(url)))
     }
+
+    /// Drives `extract-playlist` through [`crate::playlist_adapter`]'s
+    /// `PagedPlaylist` scaffold, falling back to the trait default (one
+    /// `extract` call) when the export is absent or the plugin declines
+    /// the URL. See `PluginExtractor::extract_playlist_via_plugin` for the
+    /// probe/fallback design.
+    async fn extract_playlist(
+        &self,
+        url: &str,
+        ctx: &ExtractionContext,
+    ) -> rdlp_core::Result<Vec<InfoDict>> {
+        self.extract_playlist_via_plugin(url, ctx).await
+    }
 }
 
 impl PluginExtractor {
@@ -437,9 +450,9 @@ pub(crate) const fn counts_as_strike(e: &PluginError) -> bool {
 }
 
 /// The two things that vary between `call_export_by_name`'s callers: which
-/// export to look up, and what to pass it. Grouped so the call keeps to
-/// three positional parameters alongside `store`/`inst` (see
-/// `limit-function-arguments`).
+/// export to look up, and what to pass it. Grouped into one value so the
+/// call keeps to three positional parameters alongside `store`/`inst`,
+/// rather than growing a fourth.
 pub(crate) struct ExportCall<'a, P> {
     /// Name of the world export to look up, as declared in `wit/extractor.wit`.
     pub name: &'a str,
