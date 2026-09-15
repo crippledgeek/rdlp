@@ -593,3 +593,57 @@ fn example_spec_signs_the_committed_fixture() {
     assert_eq!(SignedPluginSpec::example().wasm, EXAMPLE_0_5_0_WASM);
     assert_eq!(SignedPluginSpec::example().name, "example");
 }
+
+/// An update that bundles a new capability WITH a new search claim must
+/// fire BOTH prompts. The trap this pins: an `ApprovePersist` on the
+/// capability-creep prompt records the whole entry — new claim included —
+/// and a claims check that reads the store afterwards finds nothing to
+/// confirm, so the plugin shadows a built-in's search behind a prompt that
+/// never mentioned search.
+#[test]
+fn a_bundled_capability_and_search_claim_change_fires_both_prompts() {
+    let td = TempDir::new().unwrap();
+    let plugins_dir = td.path().join("plugins");
+    let plugin_dir = plugins_dir.join("ph-search");
+    let key = SigningKey::generate(&mut OsRng);
+    let wasm = stub_wasm();
+
+    write_signed_plugin(&plugin_dir, &key, &pornhub_claimant(&wasm, &[]));
+    let first = Arc::new(RecordingPrompter::answering(
+        ConfirmResponse::ApprovePersist,
+    ));
+    assert!(load_with(&td, &plugins_dir, first)[0].is_ok());
+
+    std::fs::remove_dir_all(&plugin_dir).unwrap();
+    write_signed_plugin(
+        &plugin_dir,
+        &key,
+        &SignedPluginSpec {
+            capabilities: &["log"],
+            ..pornhub_claimant(&wasm, &["pornhub"])
+        },
+    );
+    let both = Arc::new(RecordingPrompter::answering(
+        ConfirmResponse::ApprovePersist,
+    ));
+    assert!(load_with(&td, &plugins_dir, Arc::clone(&both))[0].is_ok());
+
+    let requests = both.requests();
+    assert!(
+        requests
+            .iter()
+            .any(|r| matches!(r, ConfirmRequest::CapabilityCreep { .. })),
+        "capability creep must be prompted: {requests:?}"
+    );
+    assert!(
+        requests
+            .iter()
+            .any(|r| matches!(r, ConfirmRequest::SearchClaimsChange { .. })),
+        "the bundled search claim must be prompted too: {requests:?}"
+    );
+
+    let trust = TrustStore::open(td.path().join("trust.toml")).unwrap();
+    let entry = trust.lookup("ph-search").unwrap();
+    assert!(entry.approved_capabilities.contains("log"));
+    assert_eq!(entry.search.search_claims_override, vec!["pornhub"]);
+}

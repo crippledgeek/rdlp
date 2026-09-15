@@ -498,10 +498,69 @@ fn descriptor_strings_are_bounded_inclusive_per_field() {
     long_default.default = Some(over);
     assert!(descriptor_from_wit(long_default, &test_origin()).is_none());
 
-    let (target, msg) = captured_entry_containing(&logs, "key, display name, or default over");
+    let (target, _msg) = captured_entry_containing(
+        &logs,
+        "key, display name, or default is over the byte-length bound",
+    );
+    assert_eq!(target, TEST_LOG_TARGET);
+}
+
+/// A control character (here an ESC, the terminal-escape vector) in any
+/// descriptor string is refused the same way an over-long one is: in the
+/// key, display name or default it drops the descriptor; in an allowed
+/// value it drops that value.
+#[test]
+fn descriptor_strings_with_control_characters_are_refused() {
+    let logs = captured_logs();
+    let esc = "sort\x1b[31m";
+    for field in ["key", "display_name", "default"] {
+        let mut d = descriptor("k", 1);
+        match field {
+            "key" => d.key = esc.into(),
+            "display_name" => d.display_name = esc.into(),
+            _ => d.default = Some(esc.into()),
+        }
+        assert!(
+            descriptor_from_wit(d, &test_origin()).is_none(),
+            "a control character in {field} must drop the descriptor"
+        );
+    }
+    let mut d = descriptor("k", 2);
+    d.allowed_values.push(esc.into());
+    let converted = descriptor_from_wit(d, &test_origin()).expect("descriptor survives");
+    assert_eq!(
+        converted
+            .allowed_values
+            .iter()
+            .map(|v| v.value.as_str())
+            .collect::<Vec<_>>(),
+        ["v0", "v1"]
+    );
+    let (target, msg) = captured_entry_containing(&logs, "control character");
     assert_eq!(target, TEST_LOG_TARGET);
     assert!(
-        msg.contains(&MAX_SEARCH_FILTER_STRING_BYTES.to_string()),
+        !msg.contains('\x1b'),
+        "the offending text must not be echoed: {msg:?}"
+    );
+}
+
+/// Each dropped allowed value is counted under its actual reason: two
+/// over-long values positioned AFTER the 256 kept ones are reported as
+/// over-long, not as "past the count bound".
+#[test]
+fn dropped_allowed_values_are_counted_by_their_actual_reason() {
+    let logs = captured_logs();
+    let mut d = descriptor("reasons", MAX_SEARCH_FILTER_VALUES);
+    d.allowed_values
+        .push("x".repeat(MAX_SEARCH_FILTER_STRING_BYTES + 1));
+    d.allowed_values
+        .push("y".repeat(MAX_SEARCH_FILTER_STRING_BYTES + 1));
+    d.allowed_values.push("fine".into());
+    let converted = descriptor_from_wit(d, &test_origin()).expect("descriptor survives");
+    assert_eq!(converted.allowed_values.len(), MAX_SEARCH_FILTER_VALUES);
+    let (_, msg) = captured_entry_containing(&logs, "filter 'reasons'");
+    assert!(
+        msg.contains("2 over 256 bytes") && msg.contains("1 past the 256-value bound"),
         "{msg}"
     );
 }

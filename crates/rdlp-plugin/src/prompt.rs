@@ -51,7 +51,10 @@ pub enum ConfirmRequest {
     },
     /// Subsequent install of a known plugin whose search-site claim differs
     /// from the one approved — it now serves a different site, or has
-    /// started (or stopped) claiming to shadow the built-in for it.
+    /// started (or stopped) claiming to shadow the built-in for it. Denied
+    /// (as every non-interactive prompter does), the plugin does not load
+    /// until `rdlp plugin retrust <name>` clears the recorded entry —
+    /// the same remedy as [`Self::CapabilityCreep`].
     SearchClaimsChange {
         /// Plugin name.
         plugin_name: String,

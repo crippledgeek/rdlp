@@ -249,7 +249,7 @@ Plugins implement the `extractor-plugin` WIT world declared at `crates/rdlp-plug
 
 Plugins must be signed (Sigstore keyless via GitHub Actions OIDC, or Ed25519 fallback) and dropped into the user's plugin directory (defaults to `~/.config/rdlp/plugins/<name>/`). On first run, rdlp shows the plugin's declared capabilities and asks the user to confirm trust.
 
-Reference plugin example (in Rust + cargo-component) and full plugin author guide are tracked in [issue #213](https://github.com/crippledgeek/rdlp/issues/213) — pending Task 28. For the design rationale and security model, see `crates/rdlp-plugin/wit/COMPATIBILITY.md` (WIT versioning policy) and the module doc on `crates/rdlp-plugin/src/lib.rs` (trust model).
+The reference plugin lives at `examples/plugins/example-extractor` (Rust + cargo-component); the full plugin author guide is tracked in [issue #213](https://github.com/crippledgeek/rdlp/issues/213). For the design rationale and security model, see `crates/rdlp-plugin/wit/COMPATIBILITY.md` (WIT versioning policy) and the module doc on `crates/rdlp-plugin/src/lib.rs` (trust model).
 
 ### WIT 0.5.1 additions
 

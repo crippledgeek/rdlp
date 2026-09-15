@@ -200,13 +200,19 @@ impl<'a> Loader<'a> {
             .check_identity_match(&manifest.name, identity)
         {
             IdentityCheck::Match => {
+                // Snapshot the approved entry ONCE, before either prompt: an
+                // `ApprovePersist` on the first prompt records the whole
+                // current manifest (new search claim included), so a second
+                // comparison that re-read the store would find nothing left
+                // to confirm and a bundled update could shadow a built-in's
+                // search behind a prompt that never mentioned search.
+                let prior = self.trust_store.lookup(&manifest.name).cloned();
                 if let CapabilityCheck::NewCapabilitiesRequested(new_caps) = self
                     .trust_store
                     .check_capabilities(&manifest.name, &subject.requested_capabilities())
                 {
-                    let previously_approved: Vec<String> = self
-                        .trust_store
-                        .lookup(&manifest.name)
+                    let previously_approved: Vec<String> = prior
+                        .as_ref()
                         .map(|e| e.approved_capabilities.iter().cloned().collect())
                         .unwrap_or_default();
                     let resp = self.prompter.confirm(ConfirmRequest::CapabilityCreep {
@@ -222,11 +228,7 @@ impl<'a> Loader<'a> {
                     self.apply_decision(resp, subject, denied)?;
                 }
 
-                let approved_claims = self
-                    .trust_store
-                    .lookup(&manifest.name)
-                    .map(|e| e.search.clone())
-                    .unwrap_or_default();
+                let approved_claims = prior.map(|e| e.search).unwrap_or_default();
                 let requested_claims = manifest.search_claims();
                 if approved_claims != requested_claims {
                     let resp = self.prompter.confirm(ConfirmRequest::SearchClaimsChange {

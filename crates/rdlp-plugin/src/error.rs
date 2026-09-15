@@ -48,9 +48,12 @@ pub enum PluginError {
         cap: String,
     },
 
-    /// A known plugin's search-site claim changed and the user declined it.
+    /// A known plugin's search-site claim changed and the prompter declined
+    /// it. Like [`Self::CapabilityCreep`], this is a hard refusal under a
+    /// non-interactive prompter (`AlwaysDeny`, `PreTrustedIdentities`):
+    /// the plugin stays unloaded until the operator re-trusts it.
     #[error(
-        "plugin '{plugin}' changed its search-site claim ({detail}) since it was approved. Re-confirm to update."
+        "plugin '{plugin}' changed its search-site claim ({detail}) since it was approved. Run `rdlp plugin retrust {plugin}` to re-confirm."
     )]
     SearchClaimsChange {
         /// Plugin name as declared in its manifest.

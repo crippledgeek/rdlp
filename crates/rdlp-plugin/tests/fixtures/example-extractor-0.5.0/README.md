@@ -38,7 +38,7 @@ rdlp capability interfaces (see `crates/rdlp-plugin/src/lib.rs` module docs,
 "Known limitations") and never WASI — so that fixture could never actually be
 loaded by the real loader; it would trap at instantiation with `component
 imports instance 'wasi:cli/environment@0.2.3' ... not found in the linker`,
-making it useless as Task 2's "loads through the real loader" positive case.
+making it useless as the "loads through the real loader" positive case.
 
 Rebuild the WASI-free component with:
 

@@ -198,6 +198,9 @@ hex = "0.4"
 mockito = "1.5"
 temp-env = "0.3"
 tempfile = "3.14"
+# Test-key generation (`SigningKey::generate(&mut OsRng)`); rand_core 0.6
+# is what ed25519-dalek 2 takes, so this stays on the 0.8 series.
+rand = "0.8"
 
 [workspace.lints.rust]
 missing_docs = "warn"

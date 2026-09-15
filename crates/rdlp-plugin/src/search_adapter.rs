@@ -48,7 +48,7 @@ use wasmtime::component::{ComponentType, Lift};
 const SEARCH_FILTERS_EXPORT: &str = "search-filters";
 
 /// Upper bound on the descriptors one `search-filters` answer may declare.
-/// The largest in-tree table (`RedTube`) has four; 32 leaves room for a far
+/// The largest in-tree table (xHamster) has six; 32 leaves room for a far
 /// richer site while keeping the `Available:` list the host renders on an
 /// unknown-key error bounded by a constant, not by the plugin.
 const MAX_SEARCH_FILTER_DESCRIPTORS: usize = 32;
@@ -201,9 +201,27 @@ fn descriptors_from_wit(
         .collect()
 }
 
-/// Whether a descriptor string fits [`MAX_SEARCH_FILTER_STRING_BYTES`].
-const fn fits(s: &str) -> bool {
-    s.len() <= MAX_SEARCH_FILTER_STRING_BYTES
+/// Why a descriptor string was refused: over
+/// [`MAX_SEARCH_FILTER_STRING_BYTES`], or carrying a control character.
+/// Every descriptor string is echoed into operator-facing error text and
+/// logs, so a terminal escape (CWE-150) or a line break in one must never
+/// get that far — `char::is_control` is the same stdlib predicate rdlp-api
+/// applies to its own operator-visible names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StringRefusal {
+    TooLong,
+    ControlCharacter,
+}
+
+/// Whether a descriptor string is admissible, else why not.
+fn check_string(s: &str) -> Result<(), StringRefusal> {
+    if s.len() > MAX_SEARCH_FILTER_STRING_BYTES {
+        Err(StringRefusal::TooLong)
+    } else if s.chars().any(char::is_control) {
+        Err(StringRefusal::ControlCharacter)
+    } else {
+        Ok(())
+    }
 }
 
 /// Call the generated `search` export and map its `search-error`.
@@ -242,44 +260,45 @@ fn search_error_to_plugin_error(plugin: &str, err: WitSearchError) -> PluginErro
 
 /// The WIT record carries values only; the host renders each label as its
 /// value (documented on the `search-filter-descriptor` record). `None` when
-/// the descriptor's key, display name, or default exceeds
-/// [`MAX_SEARCH_FILTER_STRING_BYTES`] — such a descriptor is dropped whole,
-/// since every one of those strings is echoed into operator-facing text.
+/// the descriptor's key, display name, or default is refused by
+/// [`check_string`] — such a descriptor is dropped whole, since every one
+/// of those strings is echoed into operator-facing text. A refused allowed
+/// value drops only itself. The warning never echoes the offending text
+/// (it may be the very escape being refused); it names the bound instead.
 fn descriptor_from_wit(
     d: WitSearchFilterDescriptor,
     origin: &PluginOrigin<'_>,
 ) -> Option<SearchFilterDescriptor> {
-    if !fits(&d.key) || !fits(&d.display_name) || !d.default.as_deref().is_none_or(fits) {
+    let identity_refusal = check_string(&d.key)
+        .and_then(|()| check_string(&d.display_name))
+        .and_then(|()| d.default.as_deref().map_or(Ok(()), check_string));
+    if let Err(why) = identity_refusal {
         log::warn!(
             target: origin.log_target,
-            "search-filters: plugin {} declared a descriptor with a key, display name, or default over {MAX_SEARCH_FILTER_STRING_BYTES} bytes; dropping it",
-            origin.plugin_name
+            "search-filters: plugin {} declared a descriptor whose key, display name, or default is {}; dropping it",
+            origin.plugin_name,
+            refusal_text(why)
         );
         return None;
     }
-    let declared = d.allowed_values.len();
-    let mut kept = 0usize;
-    let mut oversize = 0usize;
+    let mut tally = ValueTally::default();
     let allowed = SearchFilterValue::list(
         d.allowed_values
             .iter()
-            .filter(|v| {
-                let ok = fits(v);
-                if !ok {
-                    oversize += 1;
-                }
-                ok
-            })
-            .take(MAX_SEARCH_FILTER_VALUES)
-            .inspect(|_| kept += 1)
+            .filter(|v| tally.admit(v))
             .map(|v| (v.as_str(), v.as_str())),
     );
-    if oversize > 0 || declared - oversize > kept {
+    if tally.dropped() > 0 {
         log::warn!(
             target: origin.log_target,
-            "search-filters: plugin {} filter '{}' declared {declared} allowed values; kept {kept} (dropped {oversize} over {MAX_SEARCH_FILTER_STRING_BYTES} bytes, the rest past {MAX_SEARCH_FILTER_VALUES})",
+            "search-filters: plugin {} filter '{}' declared {} allowed values; kept {} (dropped {} over {MAX_SEARCH_FILTER_STRING_BYTES} bytes, {} with a control character, {} past the {MAX_SEARCH_FILTER_VALUES}-value bound)",
             origin.plugin_name,
-            d.key
+            d.key,
+            d.allowed_values.len(),
+            tally.kept,
+            tally.too_long,
+            tally.control,
+            tally.over_count
         );
     }
     Some(SearchFilterDescriptor::new(
@@ -288,6 +307,46 @@ fn descriptor_from_wit(
         allowed,
         d.default.as_deref(),
     ))
+}
+
+/// The bound a refused string broke, for the warning.
+const fn refusal_text(why: StringRefusal) -> &'static str {
+    match why {
+        StringRefusal::TooLong => "over the byte-length bound",
+        StringRefusal::ControlCharacter => "carrying a control character",
+    }
+}
+
+/// Per-descriptor accounting of `allowed-values` admissions, so the warning
+/// reports each dropped value under its actual reason: a value refused on
+/// its own account is never counted as "past the count bound", and the
+/// count bound applies to admissible values only.
+#[derive(Debug, Default)]
+struct ValueTally {
+    kept: usize,
+    too_long: usize,
+    control: usize,
+    over_count: usize,
+}
+
+impl ValueTally {
+    /// Whether `value` is admitted, recording why not otherwise.
+    fn admit(&mut self, value: &str) -> bool {
+        match check_string(value) {
+            Err(StringRefusal::TooLong) => self.too_long += 1,
+            Err(StringRefusal::ControlCharacter) => self.control += 1,
+            Ok(()) if self.kept >= MAX_SEARCH_FILTER_VALUES => self.over_count += 1,
+            Ok(()) => {
+                self.kept += 1;
+                return true;
+            }
+        }
+        false
+    }
+
+    const fn dropped(&self) -> usize {
+        self.too_long + self.control + self.over_count
+    }
 }
 
 /// The host's page request for the plugin: the scaffold has already chosen
