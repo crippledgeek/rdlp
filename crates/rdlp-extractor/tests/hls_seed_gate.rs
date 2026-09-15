@@ -31,7 +31,9 @@
 //! `https_loopback_seed_rejected_in_production_build`) are compiled only when
 //! the feature is OFF (`#[cfg(not(feature = "loopback-test-exemption"))]`) —
 //! `cargo test -p rdlp-extractor` (no `--features`, and no unifying sibling in
-//! the same invocation) is what actually exercises them. The other three
+//! the same invocation) is what actually exercises them, and
+//! `scripts/check-hls-seed-gate.sh` (part of `scripts/check-all.sh`) runs
+//! exactly that and fails unless both cases ran and passed. The other three
 //! cases here — link-local, RFC 1918, and non-HTTP scheme — carry NO
 //! exemption in either build configuration (see
 //! `validate_manifest_sourced_url`'s `cfg(any(test, feature = ...))` gate,
@@ -105,8 +107,9 @@ fn assert_rejected_by_gate(err: &HlsExpandError, url: &str) {
 /// Feature-gated OFF: with `loopback-test-exemption` enabled (as it is when
 /// this crate is unified with `rdlp-plugin`/`rdlp-api` under
 /// `cargo test --workspace`), loopback origins are let through by design —
-/// this exact case is what that feature exists to allow. Run
-/// `cargo test -p rdlp-extractor` alone to exercise this assertion.
+/// this exact case is what that feature exists to allow.
+/// `scripts/check-hls-seed-gate.sh` runs `cargo test -p rdlp-extractor` alone
+/// and requires this test to have passed.
 #[cfg(not(feature = "loopback-test-exemption"))]
 #[tokio::test]
 async fn loopback_seed_rejected_in_production_build() {

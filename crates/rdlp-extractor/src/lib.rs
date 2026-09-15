@@ -42,6 +42,23 @@
 
 #![warn(missing_docs)]
 
+// `loopback-test-exemption` widens the HLS seed gate's loopback bypass
+// (`base::common::manifest_url`) and exists only so sibling crates' tests
+// can drive expansion against mockito. It is enabled from dev-dependencies,
+// and Cargo unifies features per profile, so `--all-features` or a stray
+// non-dev dependency could carry it into a release build. A release build
+// runs without `debug_assertions`; a test build (any profile Cargo uses for
+// `cargo test` without `--release`) has them on, so this fires exactly on
+// the combination that would ship the bypass. `cargo test --release` is
+// not used anywhere in this repository (see BUILDING.md).
+#[cfg(all(
+    feature = "loopback-test-exemption",
+    not(any(test, debug_assertions))
+))]
+compile_error!(
+    "the `loopback-test-exemption` feature is test-only and must not be enabled in a release build"
+);
+
 /// Base extraction utilities and network-specific base extractors
 pub mod base;
 /// Site-specific extractor implementations

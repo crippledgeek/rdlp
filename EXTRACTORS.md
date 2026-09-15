@@ -259,9 +259,13 @@ Reference plugin example (in Rust + cargo-component) and full plugin author guid
 It adds:
 
 - **`expand-hls` / `probe-format-sizes` host imports** — extract-time helpers
-  a plugin can call to expand an HLS master playlist into per-variant formats,
-  or probe format byte sizes over a ranged `HEAD`/partial `GET`, without
-  reimplementing HTTP fetch logic itself.
+  a plugin can call without reimplementing HTTP fetch logic itself:
+  `expand-hls` expands an HLS master playlist into per-variant formats
+  carrying pre-resolved fragments; `probe-format-sizes` is the lazy
+  enrichment pass — it fetches each HLS row's own playlist to fill in labels
+  (resolution, codecs, duration, an estimated size from bitrate × duration)
+  and reports the stream-level live/DRM flags. It does not probe byte sizes
+  over HEAD or ranged GET; non-HLS rows pass through untouched.
 - **`search-filters` export (optional)** — a search-capable plugin may declare
   its supported `--search-filter` keys/values; the host resolves this export
   by name rather than through the generated bindings, so a plugin built

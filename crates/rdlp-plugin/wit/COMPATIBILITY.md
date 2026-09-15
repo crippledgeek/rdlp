@@ -26,8 +26,8 @@ patch bump must not touch their fields.
 ## 3. Exports added after 0.5.0 are optional to the host
 
 `wasmtime-wit-bindgen` 30 requires every world-level export to exist at
-`instantiate` time — Task 1's measurement reproduced the exact failure
-against a 0.5.0-built component bound to the full `extractor-plugin` world:
+`instantiate` time — measured against a 0.5.0-built component bound to the
+full `extractor-plugin` world, which fails with exactly:
 `no function export `search-filters` found`. `extractor.wit` splits the
 contract in two: `extractor-plugin-host` (the frozen 0.5.0 exports) and
 `extractor-plugin` (`include`s the host world, adds

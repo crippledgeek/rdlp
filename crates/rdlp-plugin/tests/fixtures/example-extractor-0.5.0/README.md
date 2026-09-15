@@ -52,12 +52,21 @@ wasm-tools component new \
 cp plugin.wasm ../../../crates/rdlp-plugin/tests/fixtures/example-extractor-0.5.0/plugin.wasm
 ```
 
-`wasm-tools component wit plugin.wasm` on the result shows exactly one world
-import — `rdlp:plugin/types@0.5.0` — no WASI of any kind. Verified against the
-production loader path (`instance::build_store` + an empty
-`Linker<PluginStoreData>`, matching `example-extractor`'s
-`capabilities = []`): the component instantiates on the `extractor-plugin-host`
-world (Fact C) and fails with `no function export `search-filters` found`
-against the full `extractor-plugin` world (Fact D) — both re-confirmed with
-this rebuild; see `docs/superpowers/reports/2026-09-15-since-annotation-acceptance.md`
-"Fix round 1" section for full command+output transcripts.
+The component's world, as `wasm-tools component wit plugin.wasm` prints it:
+
+```
+  import rdlp:plugin/types@0.5.0;
+  export metadata: func() -> plugin-info;
+  export extract: func(url: string) -> result<info-dict, extract-error>;
+  export search: func(query: search-query) -> result<search-page, search-error>;
+```
+
+One import, no WASI of any kind, and no `search-filters` export. That last
+absence is what the host/full world split exists for
+(`crates/rdlp-plugin/wit/COMPATIBILITY.md` §3): the component instantiates on
+the `extractor-plugin-host` world the host binds (Fact C — proven every run by
+`crates/rdlp-plugin/tests/loader.rs::a_0_5_0_component_loads_on_the_0_5_1_host`
+through the production loader), and would fail with `no function export
+`search-filters` found` against the full `extractor-plugin` world (Fact D —
+the failure measured at the time of this rebuild; the host never binds that
+world, so no committed test exercises it).

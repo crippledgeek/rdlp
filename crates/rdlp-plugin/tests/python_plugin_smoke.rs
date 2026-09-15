@@ -41,8 +41,8 @@ const WASM_PATH: &str = concat!(
     "/../../examples/plugins/ytdlp-hello-world/out/plugin.wasm"
 );
 
-/// Measures cold-start (load+sign+discover) — the load-bearing deliverable for
-/// Task 2. Does not call `extract`; that path hits Phase 1 host limits
+/// Measures cold-start (load+sign+discover) for a componentize-py-built
+/// component. Does not call `extract`; that path hits Phase 1 host limits
 /// documented inline in the second test below.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "requires examples/plugins/ytdlp-hello-world/build.sh to have run"]
@@ -228,7 +228,7 @@ async fn python_hello_world_extract_succeeds() {
         info.formats[0]
     );
 
-    // `search_filters` (Task 2's stub in entry.py) returns `[]` — the
+    // `search_filters` (the stub in entry.py) returns `[]` — the
     // present-export path for a real componentize-py-built component,
     // sibling to `example_search_e2e.rs`'s absent-export (0.5.0 fixture)
     // and present-export (Rust example) coverage.

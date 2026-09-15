@@ -36,12 +36,16 @@ urlencoding = "2"
 [features]
 # Widens the `#[cfg(test)]` mockito-loopback exemption in
 # `base/common/manifest_url.rs` to non-test builds of THIS crate, so a
-# sibling crate's own tests (rdlp-plugin, rdlp-api) can drive
-# expand_hls_in_place / expand_missing_hls_fragments against a mockito
-# server. Intended to be enabled ONLY as a dev-dependency feature in those
-# sibling crates, added when the plugin host's own tests need it — nothing
-# references it yet. Must never reach a production binary; see
-# scripts/check-test-only-features-not-in-release.sh.
+# sibling crate's own tests can drive expand_hls_in_place /
+# expand_missing_hls_fragments against a mockito server. Enabled ONLY as a
+# dev-dependency feature by rdlp-plugin and rdlp-api (both list
+# `rdlp-extractor = { ..., features = ["loopback-test-exemption"] }` under
+# `[dev-dependencies]`). Must never reach a production binary: `src/lib.rs`
+# carries a `compile_error!` for a release build with it on, and
+# scripts/check-test-only-features-not-in-release.sh proves no binary's
+# non-dev graph enables it. Its cost is that `cargo test --workspace`
+# unifies it into this crate's own test build — scripts/check-hls-seed-gate.sh
+# runs the loopback-rejection tests in isolation for that reason.
 loopback-test-exemption = []
 
 [dev-dependencies]

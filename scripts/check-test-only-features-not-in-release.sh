@@ -71,6 +71,21 @@ CHECKS=(
     "rdlp-plugin:test-support"
 )
 
+# Whether `cargo tree -e features` output enables `feature` on `crate`: the
+# `<crate> feature "<name>"` token it prints, preceded by the tree-drawing
+# prefix (`├── `, `└── `, `│   `) and optionally followed by
+# ` (command-line)` -- measured on real `cargo tree -p rdlp-plugin -e
+# features -i rdlp-extractor` output, e.g.
+# `└── rdlp-extractor feature "loopback-test-exemption"`. The token is
+# whitespace-bounded on both sides so a line that merely mentions the
+# feature name inside a path or a comment cannot match, and so a line
+# starting with a tree prefix (which a `^` anchor would reject, failing
+# this gate OPEN) does.
+feature_enabled() {
+    local crate="$1" feature="$2" output="$3"
+    grep -qE "(^|[[:space:]])${crate} feature \"${feature}\"([[:space:]]|$)" <<<"$output"
+}
+
 # Every workspace package with at least one `bin` target -- the set of crates
 # whose dependency graph is a real release build a user runs, as opposed to a
 # library crate nothing ships standalone. Read from `cargo metadata` rather
@@ -86,20 +101,32 @@ if [ "${1:-}" = "--self-test" ]; then
         crate="${check%%:*}"
         feature="${check#*:}"
 
-        # `cargo tree -e features` prints one feature per line as
-        # `<crate> feature "<name>"` (verified against real
-        # `cargo tree -p rdlp-cli -e features,no-dev -i <crate>` runs for
-        # both registered crates). Assert the gate's grep both fires on a
-        # real positive line AND stays silent on a real negative one (the
-        # default-feature line every binary actually prints today) -- a
-        # matcher broad enough to fire on "default" too would pass this
-        # gate on every binary vacuously.
-        if ! echo "${crate} feature \"${feature}\"" | grep -q -- "$feature"; then
+        # Assert the gate's matcher both fires on the real positive line
+        # shapes AND stays silent on a real negative one (the default-feature
+        # line every binary actually prints today) -- a matcher broad enough
+        # to fire on "default" too would pass this gate on every binary
+        # vacuously, and one too narrow for the tree prefix would fail it
+        # open.
+        # The real line shapes: tree-prefixed, and tree-prefixed with the
+        # `(command-line)` suffix cargo adds to a feature named on the
+        # command line.
+        if ! feature_enabled "$crate" "$feature" "└── ${crate} feature \"${feature}\""; then
             echo "SELF-TEST FAILED ($check): the gate's matcher no longer fires on a known feature line."
             exit 1
         fi
-        if echo "${crate} feature \"default\"" | grep -q -- "$feature"; then
+        if ! feature_enabled "$crate" "$feature" "│       ├── ${crate} feature \"${feature}\" (command-line)"; then
+            echo "SELF-TEST FAILED ($check): the gate's matcher no longer fires on a command-line feature line."
+            exit 1
+        fi
+        if feature_enabled "$crate" "$feature" "├── ${crate} feature \"default\""; then
             echo "SELF-TEST FAILED ($check): the gate's matcher fires on an unrelated feature line."
+            exit 1
+        fi
+        # A comment or a dependency line that merely MENTIONS the feature
+        # name is not the feature being enabled; only the exact
+        # `<crate> feature "<name>"` line is.
+        if feature_enabled "$crate" "$feature" "some-other-crate v1.0.0 (${feature} mentioned in a path)"; then
+            echo "SELF-TEST FAILED ($check): the gate's matcher fires on a line that merely mentions the feature."
             exit 1
         fi
     done
@@ -107,9 +134,9 @@ if [ "${1:-}" = "--self-test" ]; then
     # The derivation itself must not be able to silently return nothing: a
     # `jq` filter that stopped matching (a metadata schema change, a typo'd
     # rewrite) would otherwise make the main loop iterate zero times and
-    # print "ok" having checked no binary at all -- the exact fail-open class
-    # Important-1 fixed for the per-binary `cargo tree` call, now asserted
-    # for the list that feeds it.
+    # print "ok" having checked no binary at all -- the same fail-open class
+    # the per-binary `cargo tree` call guards against with its `2>&1` (see
+    # below), now asserted for the list that feeds it.
     bins=$(list_workspace_binaries) || exit 2
     if [ -z "$bins" ]; then
         echo "SELF-TEST FAILED: the binary-crate derivation returned nothing."
@@ -120,7 +147,7 @@ if [ "${1:-}" = "--self-test" ]; then
         exit 1
     fi
 
-    echo "SELF-TEST OK: the gate's matcher fires on the real feature line and only that line for every registered check, and the binary-crate derivation is non-empty and includes rdlp-cli."
+    echo "SELF-TEST OK: the matcher fires on the exact feature line and not on the default-feature or mention-only lines for every registered check, and the binary-crate derivation is non-empty and includes rdlp-cli."
     exit 0
 fi
 
@@ -164,7 +191,7 @@ for bin in "${bin_list[@]}"; do
             exit 2
         fi
 
-        if printf '%s' "$out" | grep -q -- "$feature"; then
+        if feature_enabled "$crate" "$feature" "$out"; then
             echo "error: $bin enables $crate/$feature in a non-test build" >&2
             exit 1
         fi

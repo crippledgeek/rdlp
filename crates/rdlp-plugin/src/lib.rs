@@ -93,14 +93,22 @@
 //!
 //! ## See also
 //!
-//! - Design spec: `docs/superpowers/specs/2026-04-28-plugin-system-mvp-design.md` (local)
-//! - Implementation plan: `docs/superpowers/plans/2026-04-28-plugin-system-mvp.md` (local)
+//! - Plugin author guide: `EXTRACTORS.md` (repository root), "Writing a WASM plugin"
 //! - Compatibility policy: `crates/rdlp-plugin/wit/COMPATIBILITY.md`
 //! - Tracking issue: <https://github.com/crippledgeek/rdlp/issues/213>
 //!
 //! [issue-213]: https://github.com/crippledgeek/rdlp/issues/213
 
 #![warn(missing_docs)]
+
+// `test-support` compiles the signer/fixture helpers (and their
+// `tempfile`/`temp-env`/`rand` dependencies) into the library for sibling
+// crates' tests. Same guard as rdlp-extractor's `loopback-test-exemption`:
+// a release build (no `debug_assertions`) that somehow enables it fails to
+// compile instead of shipping test-only code. `cargo test --release` is
+// not used anywhere in this repository (see BUILDING.md).
+#[cfg(all(feature = "test-support", not(any(test, debug_assertions))))]
+compile_error!("the `test-support` feature is test-only and must not be enabled in a release build");
 
 pub mod adapter;
 pub mod convert;
