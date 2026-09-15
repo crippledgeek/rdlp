@@ -233,3 +233,47 @@ fn extract_error_mapping_keeps_the_plugin_name_on_internal() {
         PluginError::Cancelled { .. }
     ));
 }
+
+/// Task 6 fix round 1: `call_plugin_extract`'s `Some(Err(_))` arm — a
+/// plugin that answers `extract-with-metadata` with a domain error must
+/// map through `extract_error_to_plugin_error` and short-circuit, never
+/// silently fall through to the typed `extract` path. Exercises
+/// `route_metadata_extraction` directly (no wasm component needed — see
+/// its own doc comment for why) rather than `call_plugin_extract` end to
+/// end, because reaching that arm through a real component would require
+/// hand-encoding a WAT component satisfying the ENTIRE
+/// `extractor-plugin-host` world (metadata + extract + search exports,
+/// plus every nested `info-dict`/`search-page` type) merely to reach one
+/// `extract-with-metadata` error case — `call_extract_with_metadata`'s own
+/// tests already cover the wasm-boundary mechanics this function's input
+/// comes from.
+#[test]
+fn some_err_from_metadata_short_circuits_without_falling_through() {
+    use crate::bindings::rdlp::plugin::types::ExtractError as W;
+    use crate::convert::ExtractionSite;
+    use crate::metadata_adapter::MetadataCaps;
+    use crate::test_support::unit::test_origin;
+
+    let caps = MetadataCaps::default();
+    let site = ExtractionSite {
+        url: "https://example.com/video/42",
+        origin: test_origin(),
+        caps: &caps,
+    };
+    let routed = route_metadata_extraction(
+        Some(Err(W::UnsupportedUrl("nope".into()))),
+        "example",
+        &site,
+    )
+    .expect("Some(Err(_)) must short-circuit, not fall through as None");
+    let err = routed.expect_err("a domain error stays an error");
+    assert!(
+        matches!(&err, PluginError::UnsupportedUrl { plugin, detail }
+            if plugin == "example" && detail == "nope"),
+        "got {err:?}"
+    );
+    assert!(
+        !counts_as_strike(&err),
+        "a declined URL is a domain outcome, not a strike"
+    );
+}

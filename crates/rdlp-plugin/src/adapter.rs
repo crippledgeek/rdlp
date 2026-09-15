@@ -511,15 +511,42 @@ where
     Ok(Some(out))
 }
 
+/// What `call_plugin_extract` does with `call_extract_with_metadata`'s
+/// already-obtained result: `None` means "fall through to the typed
+/// `extract` path" (export absent); `Some(_)` short-circuits with the
+/// converted extraction or the mapped domain error.
+///
+/// Isolated as its own pure function — no `Store`/`Instance` — so the
+/// routing DECISION (short-circuit vs. fall through) is unit-testable
+/// without a wasm component that satisfies the full
+/// `extractor-plugin-host` world. `call_extract_with_metadata`'s own tests
+/// (`metadata_adapter/tests.rs`) already cover the wasm-boundary mechanics
+/// this function's input comes from: absent export, wrong-typed export.
+fn route_metadata_extraction(
+    r: Option<
+        Result<
+            crate::metadata_adapter::WitExtraction,
+            crate::bindings::rdlp::plugin::types::ExtractError,
+        >,
+    >,
+    plugin_name: &str,
+    site: &crate::convert::ExtractionSite<'_>,
+) -> Option<Result<InfoDict, PluginError>> {
+    Some(match r? {
+        Ok(extraction) => Ok(crate::convert::info_dict_from_extraction(extraction, site)),
+        Err(extract_err) => Err(extract_error_to_plugin_error(plugin_name, extract_err)),
+    })
+}
+
 /// Call `extract` on an already-instantiated component and convert the
 /// result. The plugin name comes from the store data the runner built.
 ///
 /// Tries the 0.5.2 `extract-with-metadata` export first
-/// (`metadata_adapter::call_extract_with_metadata`); `Ok(None)` means the
-/// component predates that export (or never declared it), so this falls
-/// back to the frozen 0.5.0 `extract` unchanged. `metadata_caps` is
-/// `MetadataCaps::default()` for now — Task 7 threads it from
-/// `PluginStoreData` (populated from `Config` at store-build time) instead.
+/// (`metadata_adapter::call_extract_with_metadata`); [`route_metadata_extraction`]
+/// decides whether to short-circuit on it or fall back to the frozen 0.5.0
+/// `extract` unchanged. `metadata_caps` is `MetadataCaps::default()` for
+/// now — Task 7 threads it from `PluginStoreData` (populated from `Config`
+/// at store-build time) instead.
 pub(crate) async fn call_plugin_extract(
     store: &mut wasmtime::Store<PluginStoreData>,
     inst: &FreshInstance,
@@ -528,20 +555,17 @@ pub(crate) async fn call_plugin_extract(
     let plugin_name = store.data().plugin_name.clone();
 
     let metadata_caps = crate::metadata_adapter::MetadataCaps::default();
-    if let Some(r) =
-        crate::metadata_adapter::call_extract_with_metadata(store, &inst.raw, url).await?
-    {
-        return match r {
-            Ok(extraction) => Ok(crate::convert::info_dict_from_extraction(
-                extraction,
-                &crate::convert::ExtractionSite {
-                    url,
-                    origin: store.data().origin(),
-                    caps: &metadata_caps,
-                },
-            )),
-            Err(extract_err) => Err(extract_error_to_plugin_error(&plugin_name, extract_err)),
-        };
+    let r = crate::metadata_adapter::call_extract_with_metadata(store, &inst.raw, url).await?;
+    if let Some(routed) = route_metadata_extraction(
+        r,
+        &plugin_name,
+        &crate::convert::ExtractionSite {
+            url,
+            origin: store.data().origin(),
+            caps: &metadata_caps,
+        },
+    ) {
+        return routed;
     }
 
     let wit_result = inst

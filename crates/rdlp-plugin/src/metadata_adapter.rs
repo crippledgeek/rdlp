@@ -145,37 +145,32 @@ pub(crate) async fn call_extract_with_metadata(
 /// yet, so — unlike the hand-lifted WIT types above, whose derived
 /// `PartialEq` already counts as a read — these carry a real
 /// `expect(dead_code)` each.
+///
+/// Unprefixed field names on purpose: the type name `MetadataCaps` already
+/// says every field is a ceiling, so `extras`/`value_bytes`/`total_bytes`
+/// read as `caps.extras`, `caps.value_bytes`, `caps.total_bytes` without
+/// the repeated `max_` clippy's `struct_field_names` (pedantic) correctly
+/// flagged.
 #[derive(Debug, Clone, Copy, Default)]
-// The shared `max_` prefix is the fixed Task 7 interface (refs #768,
-// `.superpowers/sdd/2026-09-15-plugin-slice-c0a-abi-0-5-2/task-7-brief.md`):
-// `MetadataCaps { max_extras, max_value_bytes, max_total_bytes }`. All three
-// genuinely bound the same `extras` tail from a different angle (count vs.
-// one value vs. the total), so the repetition names that relationship
-// rather than being lazy naming — renaming here would only have to be
-// undone to match the brief `extras_from_wit` is written against.
-#[expect(
-    clippy::struct_field_names,
-    reason = "field names are the fixed Task 7 interface — see comment above"
-)]
 pub(crate) struct MetadataCaps {
     /// Maximum number of `extras` entries kept per extraction.
     #[expect(
         dead_code,
         reason = "read by extras_from_wit, added in Task 7 of this slice (refs #768)"
     )]
-    pub max_extras: usize,
+    pub extras: usize,
     /// Maximum serialized size, in bytes, of one entry's value.
     #[expect(
         dead_code,
         reason = "read by extras_from_wit, added in Task 7 of this slice (refs #768)"
     )]
-    pub max_value_bytes: usize,
+    pub value_bytes: usize,
     /// Maximum combined size, in bytes, of all kept entries.
     #[expect(
         dead_code,
         reason = "read by extras_from_wit, added in Task 7 of this slice (refs #768)"
     )]
-    pub max_total_bytes: usize,
+    pub total_bytes: usize,
 }
 
 #[cfg(test)]
