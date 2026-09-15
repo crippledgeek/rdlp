@@ -227,8 +227,11 @@ impl PluginExtractor {
 
 #[async_trait]
 impl InfoExtractor for PluginExtractor {
+    /// Display-only: `%(extractor)s`, log tags, list/UI rendering.
+    /// `self.manifest.name` (identity, dispatch, the trust store, the
+    /// archive token) is deliberately untouched by `display_name`.
     fn name(&self) -> &str {
-        &self.manifest.name
+        self.manifest.display_name()
     }
 
     fn valid_url(&self) -> &Regex {
@@ -352,6 +355,11 @@ impl PluginExtractor {
         let cancel = tokio_util::sync::CancellationToken::new();
         let ticks = deadline_ticks(spec.timeout, self.engine.tick_period());
         let mut store = build_store(&self.engine, &plugin, cancel.clone(), ticks);
+        // Every call through this runner (extract, search, playlist pages)
+        // shares one display identity for the call's lifetime, so it is set
+        // once here rather than per-closure the way `metadata_caps` is
+        // (that one genuinely varies per `extract` call; this one doesn't).
+        store.data_mut().display_name = self.manifest.display_name().to_string();
         self.populate_capability_contexts(store.data_mut())?;
 
         let call = async {

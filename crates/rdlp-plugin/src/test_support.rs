@@ -163,6 +163,7 @@ pub fn write_signed_plugin(dir: &Path, key: &SigningKey, spec: &SignedPluginSpec
     let owned = |items: &[&str]| items.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
     let mut manifest = Manifest {
         name: spec.name.to_string(),
+        display_name: None,
         version: spec.version.to_string(),
         wit_version: spec.wit_version.to_string(),
         matches: owned(spec.matches),
@@ -370,6 +371,7 @@ signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         PluginOrigin {
             plugin_name: TEST_PLUGIN_NAME,
             log_target: TEST_LOG_TARGET,
+            display_name: TEST_PLUGIN_NAME,
         }
     }
 

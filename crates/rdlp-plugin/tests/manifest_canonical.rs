@@ -317,6 +317,61 @@ signature = "ZA"
     );
 }
 
+/// Same fixture as `canonical_bytes_of_a_pre_0_5_1_manifest_are_unchanged`
+/// above, restated under its own name for Task 8: a manifest with no
+/// `display_name` set must keep byte-identical canonical output, so an
+/// existing plugin's signature does not silently stop verifying just
+/// because the field was added to the schema.
+#[test]
+fn canonical_bytes_unchanged_when_display_name_unset() {
+    let toml = r#"
+name = "x"
+version = "1.0.0"
+wit_version = "0.5.0"
+matches = ["https://x.com/*"]
+priority = 150
+capabilities = ["log"]
+
+[signature]
+type = "ed25519"
+pubkey = "ZA"
+signature = "ZA"
+"#;
+    let m = parse_manifest_str(toml).unwrap();
+    let s = String::from_utf8(canonical_bytes(&m)).unwrap();
+    assert_eq!(
+        s,
+        "capabilities = [\"log\"]\nclaims_override = []\nmatches = [\"https://x.com/*\"]\nname = \"x\"\npriority = 150\nsupports_search = false\nversion = \"1.0.0\"\nwit_version = \"0.5.0\"\n"
+    );
+}
+
+/// `display_name`, when set, appears in the canonical bytes at the
+/// position its own lexicographic sort position puts it: between
+/// `claims_override` and `matches`.
+#[test]
+fn canonical_bytes_include_display_name_when_set() {
+    let toml = r#"
+name = "x"
+version = "1.0.0"
+wit_version = "0.5.0"
+matches = ["https://x.com/*"]
+priority = 150
+display_name = "XHamster"
+capabilities = ["log"]
+
+[signature]
+type = "ed25519"
+pubkey = "ZA"
+signature = "ZA"
+"#;
+    let m = parse_manifest_str(toml).unwrap();
+    let s = String::from_utf8(canonical_bytes(&m)).unwrap();
+    assert_eq!(
+        s,
+        "capabilities = [\"log\"]\nclaims_override = []\ndisplay_name = \"XHamster\"\nmatches = [\"https://x.com/*\"]\nname = \"x\"\npriority = 150\nsupports_search = false\nversion = \"1.0.0\"\nwit_version = \"0.5.0\"\n"
+    );
+}
+
 /// Exact-bytes golden for a manifest carrying every 0.5.1 field at a
 /// non-default value — the shape a third-party signer must reproduce
 /// byte-for-byte. Keys sorted, new keys interleaved in that order,

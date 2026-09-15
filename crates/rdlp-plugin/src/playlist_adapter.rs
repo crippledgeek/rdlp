@@ -301,10 +301,10 @@ pub(crate) struct PluginPlaylistSource<'a> {
 }
 
 impl PagedPlaylist for PluginPlaylistSource<'_> {
-    /// `manifest.name` for now; Task 8 adds `Manifest::display_name()` and
-    /// switches this to it (refs #768).
+    /// Display-only — mirrors [`InfoExtractor::name`]'s use of
+    /// `Manifest::display_name()`. Identity/routing stay on `manifest.name`.
     fn name(&self) -> &str {
-        &self.plugin.manifest.name
+        self.plugin.manifest.display_name()
     }
 
     async fn fetch_playlist_page(

@@ -45,10 +45,13 @@ pub(crate) const MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES: usize =
 /// host's refusals next to their own lines).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PluginOrigin<'a> {
-    /// The plugin's manifest name.
+    /// The plugin's manifest name — identity, never rendered to the user.
     pub plugin_name: &'a str,
     /// The plugin's `log` target (`PluginStoreData::log_target`).
     pub log_target: &'a str,
+    /// `Manifest::display_name()` — what [`info_dict_from_wit`] puts in
+    /// `InfoDict::extractor`. Display-only; identity stays on `plugin_name`.
+    pub display_name: &'a str,
 }
 
 /// What varies between [`cap_plugin_formats`] and
@@ -155,7 +158,7 @@ pub(crate) fn info_dict_from_wit(
     let mut out = rdlp_types::InfoDict::new(
         w.id,
         w.title,
-        origin.plugin_name,
+        origin.display_name,
         // Prefer the URL the plugin returned; fall back to the request URL.
         w.url.as_deref().unwrap_or(url),
     );

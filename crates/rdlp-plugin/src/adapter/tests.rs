@@ -277,3 +277,43 @@ fn some_err_from_metadata_short_circuits_without_falling_through() {
         "a declined URL is a domain outcome, not a strike"
     );
 }
+
+/// A manifest carrying `display_name` on top of `test_support::unit::FIXTURE_MANIFEST`.
+/// `FIXTURE_MANIFEST` ends with a `[signature]` table, so appending the new
+/// key after that text would land it inside (or after) that table — invalid
+/// TOML. Splicing it into the top-level key block above `[signature]` keeps
+/// the fixture valid.
+fn fixture_manifest_with_display_name(display_name: &str) -> String {
+    crate::test_support::unit::FIXTURE_MANIFEST.replace(
+        "capabilities = []",
+        &format!("capabilities = []\ndisplay_name = \"{display_name}\""),
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn extractor_field_and_name_use_display_name() {
+    use crate::test_support::unit::fixture_extractor_with_manifest;
+
+    let toml = fixture_manifest_with_display_name("Example Site");
+    let ext = fixture_extractor_with_manifest(&toml);
+    assert_eq!(ext.name(), "Example Site");
+
+    let info = ext
+        .extract("https://example.com/video/42", &extraction_ctx())
+        .await
+        .expect("extract");
+    assert_eq!(info.extractor, "Example Site");
+}
+
+#[test]
+fn search_site_routing_still_uses_name() {
+    use crate::test_support::unit::fixture_extractor_with_manifest;
+
+    let toml = fixture_manifest_with_display_name("Example Site");
+    let ext = fixture_extractor_with_manifest(&toml);
+    // `FIXTURE_MANIFEST` declares `name = "example"`; display_name is
+    // display-only and must not shift routing/identity, which stays on
+    // `search_site_name()` (== `name` here, since no `search_site` override).
+    assert_eq!(ext.manifest.search_site_name(), "example");
+    assert_eq!(ext.manifest.name, "example");
+}
