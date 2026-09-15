@@ -122,6 +122,8 @@ pub mod host;
 pub mod instance;
 pub mod loader;
 pub mod manifest;
+pub mod metadata_adapter;
+pub mod playlist_adapter;
 pub mod priority;
 pub mod prompt;
 pub mod search_adapter;
@@ -140,14 +142,20 @@ pub use error::PluginError;
 /// Two worlds live in `wit/extractor.wit`: `extractor-plugin` is the guest
 /// contract plugin authors build against; `extractor-plugin-host` is what the
 /// host binds here. Exports added to `extractor-plugin` after 0.5.0 (such as
-/// `search-filters`) are optional to the host and looked up by name on the
-/// live instance by [`adapter::PluginExtractor::call_search_filters`]
-/// (in [`search_adapter`]), rather than
+/// `search-filters`, `extract-playlist`, and `extract-with-metadata`) are
+/// optional to the host and looked up by name on the live instance through
+/// [`adapter::call_export_by_name`] — [`search_adapter::call_search_filters`],
+/// [`playlist_adapter::call_extract_playlist`], and
+/// [`metadata_adapter::call_extract_with_metadata`] — rather than
 /// bound at instantiation, because generated bindings require every
 /// world-level export to be present at instantiate time
 /// (wasmtime-wit-bindgen 30, `no function export … found`) — binding the
 /// smaller host world is what lets a 0.5.0-built component, which never
-/// declared `search-filters`, still instantiate on the current host.
+/// declared any of them, still instantiate on the current host.
+/// `extractor-plugin-host`'s own `use` also brings in the 0.5.2 record and
+/// variant types (`playlist-page`, `playlist-error`, `extraction`, and their
+/// nested types) so bindgen generates Rust types for them even though the
+/// host binds no export that returns them.
 ///
 /// It exposes:
 /// - `bindings::ExtractorPluginHost` — the generated host-side instance type

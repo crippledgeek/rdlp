@@ -25,8 +25,8 @@ use wasmtime::Store;
 
 use crate::PluginError;
 use crate::adapter::{
-    CallSpec, CommonPluginErr, FreshInstance, PluginExtractor, SEARCH_TIMEOUT, common_plugin_error,
-    plugin_error_to_rdlp,
+    CallSpec, CommonPluginErr, FreshInstance, PluginExtractor, SEARCH_TIMEOUT, call_export_by_name,
+    common_plugin_error, plugin_error_to_rdlp,
 };
 use crate::bindings::rdlp::plugin::types::{
     SearchError as WitSearchError, SearchPage as WitSearchPage, SearchQuery as WitSearchQuery,
@@ -152,28 +152,20 @@ pub(crate) async fn call_search_filters(
     store: &mut Store<PluginStoreData>,
     inst: &wasmtime::component::Instance,
 ) -> Result<Vec<SearchFilterDescriptor>, PluginError> {
-    let plugin = store.data().plugin_name.clone();
-    let Some(idx) = inst.get_export(&mut *store, None, SEARCH_FILTERS_EXPORT) else {
+    let out = call_export_by_name::<(), (Vec<WitSearchFilterDescriptor>,)>(
+        store,
+        inst,
+        SEARCH_FILTERS_EXPORT,
+        (),
+    )
+    .await?;
+    let Some((descs,)) = out else {
         log::debug!(
             target: &store.data().log_target,
             "plugin exports no `{SEARCH_FILTERS_EXPORT}` (pre-0.5.1); treating as no filters"
         );
         return Ok(Vec::new());
     };
-    let trapped = |stage: &str, e: wasmtime::Error| PluginError::Trapped {
-        plugin: plugin.clone(),
-        reason: format!("{stage} {SEARCH_FILTERS_EXPORT}: {e}"),
-    };
-    let func = inst
-        .get_typed_func::<(), (Vec<WitSearchFilterDescriptor>,)>(&mut *store, idx)
-        .map_err(|e| trapped("signature of", e))?;
-    let (descs,) = func
-        .call_async(&mut *store, ())
-        .await
-        .map_err(|e| trapped("call", e))?;
-    func.post_return_async(&mut *store)
-        .await
-        .map_err(|e| trapped("post-return", e))?;
     Ok(descriptors_from_wit(descs, &store.data().origin()))
 }
 

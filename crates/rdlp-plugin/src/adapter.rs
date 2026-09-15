@@ -436,6 +436,52 @@ pub(crate) const fn counts_as_strike(e: &PluginError) -> bool {
     )
 }
 
+/// Look up `export` by name on the live instance and call it with `params`,
+/// returning `Ok(None)` when the component never declared the export.
+///
+/// The mechanism `search_adapter::call_search_filters`,
+/// `playlist_adapter::call_extract_playlist`, and
+/// `metadata_adapter::call_extract_with_metadata` all share: post-0.5.0
+/// exports are optional on the frozen `extractor-plugin-host` bindings
+/// (wasmtime-wit-bindgen 30 requires every world export at instantiate
+/// time, so binding them would break a component that predates the
+/// export), so each is resolved on the live instance instead. Each call
+/// site attaches its own domain meaning to "absent" — `search_adapter`
+/// treats absence as no filters, `playlist_adapter`/`metadata_adapter`
+/// hand `None` back to their caller to try a different export in turn —
+/// so only the mechanism, not the meaning, lives here.
+pub(crate) async fn call_export_by_name<P, R>(
+    store: &mut wasmtime::Store<PluginStoreData>,
+    inst: &wasmtime::component::Instance,
+    export: &str,
+    params: P,
+) -> Result<Option<R>, PluginError>
+where
+    P: wasmtime::component::ComponentNamedList + wasmtime::component::Lower + Send + Sync + 'static,
+    R: wasmtime::component::ComponentNamedList + wasmtime::component::Lift + Send + Sync + 'static,
+{
+    let plugin = store.data().plugin_name.clone();
+    let Some(idx) = inst.get_export(&mut *store, None, export) else {
+        log::debug!(target: &store.data().log_target, "plugin exports no `{export}`");
+        return Ok(None);
+    };
+    let trapped = |stage: &str, e: wasmtime::Error| PluginError::Trapped {
+        plugin: plugin.clone(),
+        reason: format!("{stage} {export}: {e}"),
+    };
+    let func = inst
+        .get_typed_func::<P, R>(&mut *store, idx)
+        .map_err(|e| trapped("signature of", e))?;
+    let out = func
+        .call_async(&mut *store, params)
+        .await
+        .map_err(|e| trapped("call", e))?;
+    func.post_return_async(&mut *store)
+        .await
+        .map_err(|e| trapped("post-return", e))?;
+    Ok(Some(out))
+}
+
 /// Call `extract` on an already-instantiated component and convert the
 /// result. The plugin name comes from the store data the runner built.
 pub(crate) async fn call_plugin_extract(
