@@ -334,7 +334,7 @@ impl SearchExtractor for XHamsterExtractor {
         NAME.as_str()
     }
 
-    fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
+    async fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
         patterns::search_filter_descriptors()
     }
 
@@ -436,11 +436,11 @@ mod tests {
         assert!(parse_initials_json(webpage).is_none());
     }
 
-    #[test]
-    fn test_xhamster_implements_search_extractor() {
+    #[tokio::test]
+    async fn test_xhamster_implements_search_extractor() {
         let extractor = XHamsterExtractor::new();
         let filters =
-            <XHamsterExtractor as rdlp_core::SearchExtractor>::supported_filters(&extractor);
+            <XHamsterExtractor as rdlp_core::SearchExtractor>::supported_filters(&extractor).await;
         assert!(!filters.is_empty());
         assert_eq!(
             <XHamsterExtractor as rdlp_core::SearchExtractor>::name(&extractor),

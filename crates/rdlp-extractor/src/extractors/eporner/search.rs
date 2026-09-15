@@ -283,7 +283,7 @@ impl SearchExtractor for EPornerExtractor {
         NAME.as_str()
     }
 
-    fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
+    async fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
         vec![SearchFilterDescriptor {
             key: "sort".into(),
             display_name: "Sort order".into(),

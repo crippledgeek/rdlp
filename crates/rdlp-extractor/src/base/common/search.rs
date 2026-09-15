@@ -845,7 +845,7 @@ mod tests {
         fn name(&self) -> &str {
             "Mock"
         }
-        fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
+        async fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
             Vec::new()
         }
         async fn search(

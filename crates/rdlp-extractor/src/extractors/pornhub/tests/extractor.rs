@@ -23,10 +23,10 @@ fn test_suitable_urls() {
     assert!(!extractor.suitable("https://youtube.com/watch?v=test"));
 }
 
-#[test]
-fn test_pornhub_implements_search_extractor() {
+#[tokio::test]
+async fn test_pornhub_implements_search_extractor() {
     let extractor = PornHubExtractor::new();
-    let filters = <PornHubExtractor as SearchExtractor>::supported_filters(&extractor);
+    let filters = <PornHubExtractor as SearchExtractor>::supported_filters(&extractor).await;
     assert!(!filters.is_empty());
     assert_eq!(
         <PornHubExtractor as SearchExtractor>::name(&extractor),
@@ -34,28 +34,28 @@ fn test_pornhub_implements_search_extractor() {
     );
 }
 
-#[test]
-fn test_search_filters_have_ordering() {
+#[tokio::test]
+async fn test_search_filters_have_ordering() {
     let extractor = PornHubExtractor::new();
-    let filters = <PornHubExtractor as SearchExtractor>::supported_filters(&extractor);
+    let filters = <PornHubExtractor as SearchExtractor>::supported_filters(&extractor).await;
     let ordering = filters.iter().find(|f| f.key == "ordering");
     assert!(ordering.is_some());
     assert_eq!(ordering.unwrap().allowed_values.len(), 4);
 }
 
-#[test]
-fn test_search_filters_have_period() {
+#[tokio::test]
+async fn test_search_filters_have_period() {
     let extractor = PornHubExtractor::new();
-    let filters = <PornHubExtractor as SearchExtractor>::supported_filters(&extractor);
+    let filters = <PornHubExtractor as SearchExtractor>::supported_filters(&extractor).await;
     let period = filters.iter().find(|f| f.key == "period");
     assert!(period.is_some());
     assert_eq!(period.unwrap().allowed_values.len(), 3);
 }
 
-#[test]
-fn test_search_filters_have_category() {
+#[tokio::test]
+async fn test_search_filters_have_category() {
     let extractor = PornHubExtractor::new();
-    let filters = <PornHubExtractor as SearchExtractor>::supported_filters(&extractor);
+    let filters = <PornHubExtractor as SearchExtractor>::supported_filters(&extractor).await;
     let category = filters.iter().find(|f| f.key == "category");
     assert!(category.is_some());
     assert!(!category.unwrap().allowed_values.is_empty());

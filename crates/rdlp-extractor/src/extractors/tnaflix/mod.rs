@@ -124,10 +124,10 @@ mod tests {
         assert_eq!(SearchExtractor::name(&extractor), "TNAFlix");
     }
 
-    #[test]
-    fn test_search_extractor_supported_filters() {
+    #[tokio::test]
+    async fn test_search_extractor_supported_filters() {
         let extractor = TNAFlixSearchExtractor::new();
-        let filters = extractor.supported_filters();
+        let filters = extractor.supported_filters().await;
         assert_eq!(filters.len(), 2);
         assert_eq!(filters[0].key, "ordering");
     }
@@ -140,10 +140,10 @@ mod tests {
         assert_eq!(rdlp_core::SearchExtractor::name(&extractor), "EMPFlix");
     }
 
-    #[test]
-    fn test_empflix_search_extractor_supported_filters() {
+    #[tokio::test]
+    async fn test_empflix_search_extractor_supported_filters() {
         let extractor = EMPFlixSearchExtractor::new();
-        let filters = extractor.supported_filters();
+        let filters = extractor.supported_filters().await;
         // EMPFlix shares the TNAFlix filter set (ordering + category)
         assert_eq!(filters.len(), 2);
         assert_eq!(filters[0].key, "ordering");
@@ -226,19 +226,19 @@ mod tests {
         assert_eq!(rdlp_core::SearchExtractor::name(&extractor), "MovieFap");
     }
 
-    #[test]
-    fn test_moviefap_search_extractor_supported_filters() {
+    #[tokio::test]
+    async fn test_moviefap_search_extractor_supported_filters() {
         let extractor = MovieFapSearchExtractor::new();
-        let filters = extractor.supported_filters();
+        let filters = extractor.supported_filters().await;
         assert_eq!(filters.len(), 1);
         assert_eq!(filters[0].key, "ordering");
         assert_eq!(filters[0].allowed_values.len(), 5);
     }
 
-    #[test]
-    fn test_moviefap_search_extractor_default_ordering() {
+    #[tokio::test]
+    async fn test_moviefap_search_extractor_default_ordering() {
         let extractor = MovieFapSearchExtractor::new();
-        let filters = extractor.supported_filters();
+        let filters = extractor.supported_filters().await;
         assert_eq!(filters[0].default, Some("relevance".to_string()));
     }
 

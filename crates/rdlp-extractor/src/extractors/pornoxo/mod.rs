@@ -251,7 +251,7 @@ impl SearchExtractor for PornoxoExtractor {
         NAME.as_str()
     }
 
-    fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
+    async fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
         search_patterns::supported_filters()
     }
 

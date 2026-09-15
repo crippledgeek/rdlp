@@ -114,7 +114,7 @@ impl SearchExtractor for XTitsExtractor {
         NAME.as_str()
     }
 
-    fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
+    async fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
         search_patterns::search_filter_descriptors()
     }
 
@@ -277,10 +277,10 @@ mod tests {
         assert_eq!(ext.name(), "XTits");
     }
 
-    #[test]
-    fn test_supported_filters() {
+    #[tokio::test]
+    async fn test_supported_filters() {
         let ext = XTitsExtractor::new();
-        let filters = SearchExtractor::supported_filters(&ext);
+        let filters = SearchExtractor::supported_filters(&ext).await;
         assert_eq!(filters.len(), 2);
         assert_eq!(filters[0].key, "ordering");
         assert_eq!(filters[1].key, "period");

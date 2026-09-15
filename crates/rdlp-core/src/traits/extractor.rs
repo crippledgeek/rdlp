@@ -147,9 +147,12 @@ pub trait SearchExtractor: Send + Sync {
 
     /// Describe the available search filters for this site.
     ///
+    /// Async because a plugin extractor answers this by a wasm call on an
+    /// `async_support(true)` Wasmtime engine; a sync method cannot host it.
+    ///
     /// # Returns
     /// A list of filter descriptors that frontends use to build filter UI.
-    fn supported_filters(&self) -> Vec<SearchFilterDescriptor>;
+    async fn supported_filters(&self) -> Vec<SearchFilterDescriptor>;
 
     /// Execute a search and return lightweight result previews.
     ///

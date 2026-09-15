@@ -408,14 +408,17 @@ impl Orchestrator {
     ///
     /// # Errors
     /// Returns an error if the site name is unknown.
-    pub fn search_filters(&self, extractor_name: &str) -> Result<Vec<SearchFilterDescriptor>> {
+    pub async fn search_filters(
+        &self,
+        extractor_name: &str,
+    ) -> Result<Vec<SearchFilterDescriptor>> {
         let extractor = self
             .extractor_registry
             .find_search_extractor(extractor_name)
             .ok_or_else(|| {
                 OrchestratorError::Configuration(format!("Unknown search site: '{extractor_name}'"))
             })?;
-        Ok(extractor.supported_filters())
+        Ok(extractor.supported_filters().await)
     }
 }
 

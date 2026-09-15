@@ -94,7 +94,7 @@ impl rdlp_core::SearchExtractor for EMPFlixSearchExtractor {
         NAME.as_str()
     }
 
-    fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
+    async fn supported_filters(&self) -> Vec<rdlp_types::SearchFilterDescriptor> {
         // EMPFlix uses the same filter set as TNAFlix
         search_patterns::search_filter_descriptors()
     }
