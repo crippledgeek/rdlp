@@ -6569,6 +6569,7 @@ dependencies = [
  "ed25519-dalek",
  "hex",
  "log",
+ "mockito",
  "percent-encoding",
  "psl",
  "rand 0.8.5",

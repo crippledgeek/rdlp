@@ -56,6 +56,8 @@ tempfile = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 wat = "1"
 rand = "0.8.5"
+mockito = { workspace = true }
+rdlp-extractor = { path = "../rdlp-extractor", features = ["loopback-test-exemption"] }
 
 [lints.rust]
 missing_docs = "warn"

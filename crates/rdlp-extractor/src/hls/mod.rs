@@ -40,6 +40,8 @@ mod expand;
 mod expand_in_place;
 mod format_detection;
 mod segments;
+#[cfg(any(test, feature = "loopback-test-exemption"))]
+pub mod test_fixtures;
 #[cfg(test)]
 pub(crate) mod test_support;
 mod types;

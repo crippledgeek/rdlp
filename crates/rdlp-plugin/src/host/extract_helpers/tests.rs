@@ -1314,3 +1314,266 @@ fn refused_oversize_compiled_pattern_warns_on_plugin_target() {
         "pattern text must not be logged: {msg}"
     );
 }
+
+// ---- expand-hls / probe-format-sizes (D2, @since 0.5.1) ----------------
+
+mod hls_host_imports {
+    use super::ctx;
+    use crate::bindings::rdlp::plugin::host_extract_helpers::{FetchOptions, Host as _};
+    use crate::bindings::rdlp::plugin::host_fetch::FetchError;
+    use crate::host::fetch::FetchCtx;
+    use crate::instance::PluginStoreData;
+
+    /// A store with a real (non-fixture) `wreq::Client` — `expand_hls_in_place`
+    /// and `detect_format_sizes_lazy_in` make genuine HTTP calls (they take an
+    /// `Arc<wreq::Client>` directly, not the `host:fetch` capability), so
+    /// these tests exercise them against a real mockito loopback server
+    /// rather than the `FetchFixtures` canned-response map the other tests
+    /// in this file use for `host:fetch` itself.
+    fn store_data_with_fetch() -> PluginStoreData {
+        let mut c = ctx();
+        c.fetch = Some(FetchCtx {
+            client: rdlp_http::wreq::Client::builder()
+                .build()
+                .expect("test client"),
+            fixtures: None,
+        });
+        c
+    }
+
+    fn store_data_without_fetch() -> PluginStoreData {
+        ctx()
+    }
+
+    fn wit_format(
+        format_id: &str,
+        url: &str,
+        ext: &str,
+    ) -> crate::bindings::rdlp::plugin::types::Format {
+        crate::bindings::rdlp::plugin::types::Format {
+            format_id: format_id.to_string(),
+            url: url.to_string(),
+            ext: ext.to_string(),
+            protocol: ext.to_string(),
+            width: None,
+            height: None,
+            fps: None,
+            tbr: None,
+            vbr: None,
+            abr: None,
+            vcodec: None,
+            acodec: None,
+            container: None,
+            filesize: None,
+            format_note: None,
+        }
+    }
+
+    fn empty_fetch_options() -> FetchOptions {
+        FetchOptions {
+            headers: vec![],
+            query: vec![],
+            body: None,
+        }
+    }
+
+    /// D2 positive: one M3u8 seed → per-variant rows carrying fragments.
+    #[tokio::test]
+    async fn expand_hls_returns_variant_rows_with_fragments() {
+        let mut server = mockito::Server::new_async().await;
+        let _master = server
+            .mock("GET", "/master.m3u8")
+            .with_body(rdlp_extractor::hls::test_fixtures::MASTER_TWO_VARIANTS)
+            .create_async()
+            .await;
+        let _v720 = server
+            .mock("GET", "/v720.m3u8")
+            .with_body(rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA)
+            .create_async()
+            .await;
+        let _v360 = server
+            .mock("GET", "/v360.m3u8")
+            .with_body(rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA)
+            .create_async()
+            .await;
+        let mut data = store_data_with_fetch();
+        let seed = wit_format("hls", &format!("{}/master.m3u8", server.url()), "m3u8");
+        let out = data
+            .expand_hls(vec![seed], empty_fetch_options())
+            .await
+            .unwrap();
+        assert_eq!(out.len(), 2);
+        assert!(out.iter().all(|h| h.fragments.len() == 2));
+        assert!(out.iter().any(|h| h.format.format_id == "hls-720p"));
+        assert!(out.iter().all(|h| h.duration == Some(12.0)));
+        // `server` must outlive every await above (its `Drop` resets the
+        // mocks); this makes that live range end at its actual last point
+        // of relevance rather than an implicit end-of-scope drop.
+        drop(server);
+    }
+
+    /// D2 drop-not-fail: a broken variant costs only its own row.
+    ///
+    /// One good mockito master (2 variants) + one seed refused by the SSRF
+    /// gate (`169.254.169.254` is the cloud metadata address, always
+    /// rejected) + one non-HLS row. `expand_hls_in_place` drops the SSRF-
+    /// refused row and passes the non-HLS row through untouched (no
+    /// `fragments`); this host wrapper then filters to HLS rows only
+    /// (`fragments.is_some()`), so the non-HLS row is excluded from the
+    /// output too — only the good master's 2 variants remain.
+    #[tokio::test]
+    async fn expand_hls_drops_a_failing_seed_and_keeps_the_rest() {
+        let mut server = mockito::Server::new_async().await;
+        let _master = server
+            .mock("GET", "/master.m3u8")
+            .with_body(rdlp_extractor::hls::test_fixtures::MASTER_TWO_VARIANTS)
+            .create_async()
+            .await;
+        let _v720 = server
+            .mock("GET", "/v720.m3u8")
+            .with_body(rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA)
+            .create_async()
+            .await;
+        let _v360 = server
+            .mock("GET", "/v360.m3u8")
+            .with_body(rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA)
+            .create_async()
+            .await;
+
+        let mut data = store_data_with_fetch();
+        let good_seed = wit_format("hls", &format!("{}/master.m3u8", server.url()), "m3u8");
+        let ssrf_seed = wit_format("hls-bad", "http://169.254.169.254/x.m3u8", "m3u8");
+        let mut non_hls_seed = wit_format("plain", "https://example.com/x.mp4", "mp4");
+        non_hls_seed.protocol = "https".to_string();
+
+        let out = data
+            .expand_hls(
+                vec![good_seed, ssrf_seed, non_hls_seed],
+                empty_fetch_options(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            out.len(),
+            2,
+            "only the good master's 2 variants survive: {out:?}"
+        );
+        drop(server);
+    }
+
+    #[tokio::test]
+    async fn expand_hls_without_fetch_capability_is_fetch_error_not_trap() {
+        let mut data = store_data_without_fetch();
+        let err = data
+            .expand_hls(
+                vec![wit_format("x", "https://h/x.m3u8", "m3u8")],
+                empty_fetch_options(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, FetchError::Network(ref m) if m.contains("fetch capability not granted")),
+            "{err:?}"
+        );
+    }
+
+    /// probe-format-sizes reuses fragments a prior expand-hls produced (no
+    /// re-fetch — the master mock expects exactly 1 hit across both calls).
+    #[tokio::test]
+    async fn probe_format_sizes_matches_in_tree_flags_and_does_not_refetch() {
+        let mut server = mockito::Server::new_async().await;
+        let master = server
+            .mock("GET", "/master.m3u8")
+            .with_body(rdlp_extractor::hls::test_fixtures::MASTER_TWO_VARIANTS)
+            .expect(1)
+            .create_async()
+            .await;
+        let _v720 = server
+            .mock("GET", "/v720.m3u8")
+            .with_body(rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA)
+            .create_async()
+            .await;
+        let _v360 = server
+            .mock("GET", "/v360.m3u8")
+            .with_body(rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA)
+            .create_async()
+            .await;
+
+        let mut data = store_data_with_fetch();
+        let seed = wit_format("hls", &format!("{}/master.m3u8", server.url()), "m3u8");
+        let expanded = data
+            .expand_hls(vec![seed], empty_fetch_options())
+            .await
+            .unwrap();
+        let formats: Vec<_> = expanded.into_iter().map(|h| h.format).collect();
+        let expected_ids: Vec<String> = formats.iter().map(|f| f.format_id.clone()).collect();
+
+        let probe = data
+            .probe_format_sizes(formats, empty_fetch_options())
+            .await
+            .unwrap();
+
+        assert!(
+            !probe.stream_flags.is_live,
+            "{:?}",
+            probe.stream_flags.is_live
+        );
+        assert!(
+            !probe.stream_flags.has_any_drm,
+            "{:?}",
+            probe.stream_flags.has_any_drm
+        );
+        assert_eq!(
+            probe
+                .formats
+                .iter()
+                .map(|f| f.format_id.clone())
+                .collect::<Vec<_>>(),
+            expected_ids
+        );
+        master.assert_async().await;
+        drop(server);
+    }
+
+    #[tokio::test]
+    async fn probe_format_sizes_reports_live_and_drm_flags() {
+        let mut server = mockito::Server::new_async().await;
+        let _live = server
+            .mock("GET", "/live.m3u8")
+            .with_body(
+                "#EXTM3U\n\
+#EXT-X-VERSION:3\n\
+#EXT-X-TARGETDURATION:6\n\
+#EXTINF:6.0,\n\
+seg-1.ts\n",
+            )
+            .create_async()
+            .await;
+        let _drm = server
+            .mock("GET", "/drm.m3u8")
+            .with_body(
+                "#EXTM3U\n\
+#EXT-X-VERSION:3\n\
+#EXT-X-TARGETDURATION:6\n\
+#EXT-X-KEY:METHOD=AES-128,URI=\"https://h.com/key\"\n\
+#EXTINF:6.0,\n\
+seg-1.ts\n\
+#EXT-X-ENDLIST\n",
+            )
+            .create_async()
+            .await;
+
+        let mut data = store_data_with_fetch();
+        let seeds = vec![
+            wit_format("live", &format!("{}/live.m3u8", server.url()), "m3u8"),
+            wit_format("drm", &format!("{}/drm.m3u8", server.url()), "m3u8"),
+        ];
+        let probe = data
+            .probe_format_sizes(seeds, empty_fetch_options())
+            .await
+            .unwrap();
+        assert!(probe.stream_flags.is_live, "{:?}", probe.stream_flags);
+        assert!(probe.stream_flags.has_any_drm, "{:?}", probe.stream_flags);
+        drop(server);
+    }
+}

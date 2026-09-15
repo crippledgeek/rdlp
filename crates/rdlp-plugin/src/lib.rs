@@ -166,6 +166,8 @@ pub mod bindings {
                 "set-cookie",
                 "extract-m3u8",
                 "extract-mpd",
+                "expand-hls",
+                "probe-format-sizes",
             ],
         },
     });
