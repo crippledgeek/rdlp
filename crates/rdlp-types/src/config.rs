@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use crate::browser_emulation::BrowserEmulation;
 use crate::browser_type::BrowserType;
+use crate::playlist_items::PlaylistItems;
 use crate::postprocess::PostProcess;
 use crate::subtitle_format::SubtitleFormat;
 
@@ -78,6 +79,9 @@ pub enum ConfigValidationError {
         /// Human-readable explanation of the allowed range
         reason: &'static str,
     },
+    /// `playlist_items` does not parse as a
+    /// [`PlaylistItems`](crate::PlaylistItems) spec.
+    InvalidPlaylistItems(String),
 }
 
 impl fmt::Display for ConfigValidationError {
@@ -99,6 +103,9 @@ impl fmt::Display for ConfigValidationError {
             }
             Self::OutOfRange { field, reason } => {
                 write!(f, "{field}: {reason}")
+            }
+            Self::InvalidPlaylistItems(reason) => {
+                write!(f, "playlist_items: {reason}")
             }
         }
     }
@@ -275,6 +282,28 @@ pub struct Config {
     #[serde(default)]
     pub max_fragment_bytes: Option<u64>,
 
+    /// Ceiling on how many plugin-supplied metadata extras keys
+    /// [`rdlp-plugin`](../../rdlp_plugin/index.html)'s metadata adapter will
+    /// carry into `InfoDict`. Unset keeps the consuming crate's default
+    /// (`DEFAULT_MAX_METADATA_EXTRAS`). Validated post-load by
+    /// `Config::validate()`: must be 1..=1024.
+    #[serde(default)]
+    pub max_metadata_extras: Option<usize>,
+
+    /// Ceiling on a single metadata extras value's byte length. Unset keeps
+    /// the consuming crate's default (`DEFAULT_MAX_METADATA_VALUE_BYTES`).
+    /// Validated post-load by `Config::validate()`: must be `1..=1_048_576`
+    /// bytes (1 MiB).
+    #[serde(default)]
+    pub max_metadata_value_bytes: Option<usize>,
+
+    /// Ceiling on the total byte length of a metadata extras map, summed
+    /// across all its keys and values. Unset keeps the consuming crate's
+    /// default (`DEFAULT_MAX_METADATA_EXTRAS_BYTES`). Validated post-load by
+    /// `Config::validate()`: must be `1..=16_777_216` bytes (16 MiB).
+    #[serde(default)]
+    pub max_metadata_extras_bytes: Option<usize>,
+
     /// Source IP address to bind to
     pub source_address: Option<String>,
 
@@ -354,6 +383,26 @@ pub struct Config {
 
     /// Download only matching playlist items
     pub playlist_items: Option<String>,
+
+    /// How many playlist items the host-driven page loop resolves
+    /// concurrently. Unset keeps the consuming crate's default
+    /// (`DEFAULT_PLAYLIST_CONCURRENCY`). Validated post-load by
+    /// `Config::validate()`: must be 1..=16.
+    #[serde(default)]
+    pub playlist_concurrency: Option<usize>,
+
+    /// Wall-clock cap, in seconds, on resolving a single playlist item.
+    /// Unset keeps the consuming crate's default
+    /// (`DEFAULT_PLAYLIST_ITEM_TIMEOUT_SECS`). Validated post-load by
+    /// `Config::validate()`: must be 1..=600 seconds.
+    #[serde(default)]
+    pub playlist_item_timeout: Option<u64>,
+
+    /// Whether a single playlist item's extraction failure aborts the whole
+    /// playlist loop or is skipped with a warning. Unset keeps the consuming
+    /// crate's default (`true` — skip and continue).
+    #[serde(default)]
+    pub playlist_ignore_errors: Option<bool>,
 
     // === Authentication ===
     /// Username for authentication
@@ -476,6 +525,9 @@ impl Default for Config {
             hls_expansion_timeout: None,
             parallel_threshold: Some(10 * 1024 * 1024),
             max_fragment_bytes: Some(DEFAULT_MAX_FRAGMENT_BYTES),
+            max_metadata_extras: None,
+            max_metadata_value_bytes: None,
+            max_metadata_extras_bytes: None,
             source_address: None,
             user_agent: Some(
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36".to_string(),
@@ -509,6 +561,9 @@ impl Default for Config {
             playlist_start: 1,
             playlist_end: None,
             playlist_items: None,
+            playlist_concurrency: None,
+            playlist_item_timeout: None,
+            playlist_ignore_errors: None,
 
             // Authentication
             username: None,
@@ -783,6 +838,52 @@ impl Config {
                 field: "max_fragment_bytes",
                 reason: "must be 1..=2_147_483_648 bytes (2 GiB)",
             });
+        }
+        if let Some(n) = self.max_metadata_extras
+            && !(1..=1024).contains(&n)
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "max_metadata_extras",
+                reason: "must be 1..=1024",
+            });
+        }
+        if let Some(b) = self.max_metadata_value_bytes
+            && !(1..=1_048_576).contains(&b)
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "max_metadata_value_bytes",
+                reason: "must be 1..=1_048_576 bytes (1 MiB)",
+            });
+        }
+        if let Some(b) = self.max_metadata_extras_bytes
+            && !(1..=16_777_216).contains(&b)
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "max_metadata_extras_bytes",
+                reason: "must be 1..=16_777_216 bytes (16 MiB)",
+            });
+        }
+
+        // Playlist loop range checks
+        if let Some(n) = self.playlist_concurrency
+            && !(1..=16).contains(&n)
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "playlist_concurrency",
+                reason: "must be 1..=16",
+            });
+        }
+        if let Some(t) = self.playlist_item_timeout
+            && !(1..=600).contains(&t)
+        {
+            return Err(ConfigValidationError::OutOfRange {
+                field: "playlist_item_timeout",
+                reason: "must be 1..=600 seconds",
+            });
+        }
+        if let Some(s) = &self.playlist_items {
+            PlaylistItems::parse(s)
+                .map_err(|e| ConfigValidationError::InvalidPlaylistItems(e.to_string()))?;
         }
 
         Ok(())

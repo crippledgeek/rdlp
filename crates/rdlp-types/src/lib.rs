@@ -40,6 +40,7 @@ pub mod log_targets;
 pub mod match_filter;
 pub mod media_name;
 pub mod parse_error;
+pub mod playlist_items;
 pub mod postprocess;
 pub mod progress;
 pub mod protocol;
@@ -70,6 +71,7 @@ pub use media_name::{
     AudioEncoderName, CodecName, InvalidMediaName, Rfc6381Codec, VideoEncoderName,
 };
 pub use parse_error::ParseEnumError;
+pub use playlist_items::{PlaylistItems, PlaylistItemsError};
 pub use postprocess::{ContainerRequest, ContainerSource, ExplicitContainer, PostProcess};
 pub use progress::Progress;
 pub use protocol::DownloadProtocol;

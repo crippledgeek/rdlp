@@ -573,6 +573,117 @@ fn hls_expansion_timeout_boundaries() {
     }
 }
 
+/// Asserts a `usize`/`u64` `Config` field's inclusive validation boundary:
+/// `min` and `max` accepted, `min - 1` and `max + 1` rejected with
+/// `ConfigValidationError::OutOfRange { field, .. }`. Mirrors
+/// `hls_expansion_timeout_boundaries` above, generalized so the six new
+/// playlist/metadata fields don't each hand-roll the same four assertions.
+fn assert_usize_field_boundaries(
+    field: &'static str,
+    min: usize,
+    max: usize,
+    with_value: impl Fn(Option<usize>) -> Config,
+) {
+    for accepted in [min, max] {
+        with_value(Some(accepted))
+            .validate()
+            .unwrap_or_else(|e| panic!("{field}={accepted} must be accepted: {e}"));
+    }
+    for rejected in [min - 1, max + 1] {
+        let err = with_value(Some(rejected))
+            .validate()
+            .expect_err("out of range must reject");
+        assert!(
+            matches!(err, ConfigValidationError::OutOfRange { field: f, .. } if f == field),
+            "{field}={rejected}: got {err:?}"
+        );
+    }
+    with_value(None)
+        .validate()
+        .expect("None must be accepted (falls back to the consuming module's default)");
+}
+
+#[test]
+fn playlist_concurrency_boundaries() {
+    assert_usize_field_boundaries("playlist_concurrency", 1, 16, |v| Config {
+        playlist_concurrency: v,
+        ..Config::default()
+    });
+}
+
+#[test]
+fn playlist_item_timeout_boundaries() {
+    assert_usize_field_boundaries("playlist_item_timeout", 1, 600, |v| Config {
+        playlist_item_timeout: v.map(|n| n as u64),
+        ..Config::default()
+    });
+}
+
+#[test]
+fn max_metadata_extras_boundaries() {
+    assert_usize_field_boundaries("max_metadata_extras", 1, 1024, |v| Config {
+        max_metadata_extras: v,
+        ..Config::default()
+    });
+}
+
+#[test]
+fn max_metadata_value_bytes_boundaries() {
+    assert_usize_field_boundaries("max_metadata_value_bytes", 1, 1_048_576, |v| Config {
+        max_metadata_value_bytes: v,
+        ..Config::default()
+    });
+}
+
+#[test]
+fn max_metadata_extras_bytes_boundaries() {
+    assert_usize_field_boundaries("max_metadata_extras_bytes", 1, 16_777_216, |v| Config {
+        max_metadata_extras_bytes: v,
+        ..Config::default()
+    });
+}
+
+#[test]
+fn playlist_ignore_errors_default_is_none() {
+    // Unset keeps the consuming module's `true` default, matching the
+    // `Option`-as-inherit shape every other field in this cluster uses.
+    assert_eq!(Config::default().playlist_ignore_errors, None);
+}
+
+#[test]
+fn playlist_items_rejects_reversed_range() {
+    let err = Config {
+        playlist_items: Some("5-3".to_string()),
+        ..Config::default()
+    }
+    .validate()
+    .expect_err("reversed range must reject");
+    assert!(matches!(
+        err,
+        ConfigValidationError::InvalidPlaylistItems(_)
+    ));
+}
+
+#[test]
+fn playlist_items_accepts_valid_spec() {
+    Config {
+        playlist_items: Some("1,3-5".to_string()),
+        ..Config::default()
+    }
+    .validate()
+    .expect("valid spec must be accepted");
+}
+
+#[test]
+fn playlist_items_none_is_accepted() {
+    Config {
+        playlist_items: None,
+        ..Config::default()
+    }
+    .validate()
+    .expect("None must be accepted");
+}
+
 #[test]
 fn hls_timeouts_partial_json_inherits_struct_default() {
     // Struct-level `#[serde(default)]` means an empty/partial JSON deserializes
