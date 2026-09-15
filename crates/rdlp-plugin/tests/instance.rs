@@ -115,3 +115,16 @@ async fn spinning_component_traps_on_epoch_deadline() {
         "should have trapped quickly; took {elapsed:?}"
     );
 }
+
+/// The adapter derives epoch-deadline ticks from the engine's own tick
+/// period; a hardcoded 100 ms would under-count deadlines on any engine
+/// configured with a different period (this one runs at 50 ms).
+#[test]
+fn engine_reports_its_configured_tick_period() {
+    let engine = engine_for_tests();
+    assert_eq!(engine.tick_period(), Duration::from_millis(50));
+    assert_eq!(
+        deadline_ticks(Duration::from_secs(1), engine.tick_period()),
+        20
+    );
+}

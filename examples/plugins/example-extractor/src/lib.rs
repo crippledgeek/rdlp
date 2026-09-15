@@ -32,11 +32,11 @@
 #[allow(warnings)]
 mod bindings;
 
+use bindings::Guest;
 use bindings::rdlp::plugin::types::{
     ExtractError, Format, InfoDict, PluginInfo, SearchError, SearchFilterDescriptor, SearchPage,
-    SearchQuery,
+    SearchQuery, SearchResult,
 };
-use bindings::Guest;
 
 const URL_PREFIX: &str = "https://example.com/video/";
 
@@ -100,12 +100,32 @@ impl Guest for Component {
         })
     }
 
-    fn search(_q: SearchQuery) -> Result<SearchPage, SearchError> {
-        Err(SearchError::Unsupported)
+    /// Canned single-result page so the host's search path can be exercised
+    /// end-to-end without a network; echoes the requested page number.
+    fn search(q: SearchQuery) -> Result<SearchPage, SearchError> {
+        Ok(SearchPage {
+            results: vec![SearchResult {
+                url: format!("{URL_PREFIX}1"),
+                title: format!("Example result for {}", q.query),
+                thumbnail: None,
+                duration: Some(60),
+                uploader: None,
+            }],
+            page: q.page.unwrap_or(1),
+            has_more: false,
+            total_estimate: Some(1),
+        })
     }
 
+    /// One descriptor, so a host that resolves `search-filters` by name has
+    /// something non-empty to observe (a 0.5.0 build has no such export).
     fn search_filters() -> Vec<SearchFilterDescriptor> {
-        Vec::new()
+        vec![SearchFilterDescriptor {
+            key: "ordering".into(),
+            display_name: "Ordering".into(),
+            allowed_values: vec!["newest".into(), "views".into()],
+            default: Some("newest".into()),
+        }]
     }
 }
 

@@ -181,6 +181,15 @@ pub enum PluginError {
         detail: String,
     },
 
+    /// The plugin's `search` export answered `unsupported`: it implements
+    /// the export only to satisfy the world and serves no search site.
+    /// Counted as a normal search outcome, NOT as a trap.
+    #[error("plugin '{plugin}' does not support search")]
+    SearchUnsupported {
+        /// Plugin name as declared in its manifest.
+        plugin: String,
+    },
+
     /// Wiring host capability imports into the wasmtime linker failed
     /// (e.g. a bindgen-generated `add_to_linker` returned an error).
     #[error("plugin '{plugin}' linker wiring failed: {reason}")]

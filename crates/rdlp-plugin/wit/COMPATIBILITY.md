@@ -33,9 +33,10 @@ contract in two: `extractor-plugin-host` (the frozen 0.5.0 exports) and
 `extractor-plugin` (`include`s the host world, adds
 `@since(version = 0.5.1) search-filters`). `lib.rs` binds only the smaller
 host world at compile time — this is what lets a 0.5.0 component instantiate
-on a 0.5.1 host at all. Looking up `search-filters` by name at call time and
-falling back to a stub (`[]`) when a plugin never declared it is added by the
-search adapter in Task 11 of this slice, not yet implemented.
+on a 0.5.1 host at all. `search_adapter::call_search_filters` looks
+`search-filters` up by name on the live instance at call time and answers `[]`
+when the plugin never declared it, so the absent export is a normal outcome,
+not an error.
 
 ## 4. `@since` toolchain acceptance (measured 2026-09-15)
 

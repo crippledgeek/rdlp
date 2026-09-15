@@ -67,6 +67,10 @@ pub struct Engine {
     /// propagate through `Drop`). The `Option` is only `None` before
     /// the first `new()` call completes — always `Some` in live use.
     tick_thread: Option<thread::JoinHandle<()>>,
+    /// Period the tick thread was configured with; callers converting a
+    /// wall-clock deadline into epoch ticks read it from here so the
+    /// conversion cannot drift from the cadence actually running.
+    tick_period: Duration,
 }
 
 impl Engine {
@@ -200,6 +204,7 @@ impl Engine {
             epoch,
             shutdown,
             tick_thread: Some(tick_thread),
+            tick_period: cfg.tick_period,
         })
     }
 
@@ -213,6 +218,15 @@ impl Engine {
     #[allow(clippy::missing_const_for_fn)]
     pub fn raw(&self) -> &wasmtime::Engine {
         &self.inner
+    }
+
+    /// Wall-clock period of one epoch tick, as configured at construction.
+    ///
+    /// Pair with [`crate::instance::deadline_ticks`] to turn a per-call
+    /// deadline into the tick count `Store::set_epoch_deadline` expects.
+    #[must_use]
+    pub const fn tick_period(&self) -> Duration {
+        self.tick_period
     }
 
     /// Current observed epoch tick count (host-side counter).
