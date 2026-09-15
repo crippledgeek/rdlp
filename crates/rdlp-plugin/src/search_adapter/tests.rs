@@ -53,9 +53,12 @@ fn only_internal_among_the_search_errors_is_a_strike() {
 }
 
 /// Drift guard for the hand-written lift: the record's field lines in
-/// `wit/types.wit` must be exactly these, in this order — the component
-/// canonical ABI lifts records positionally, so a reordered or retyped
-/// field would lift garbage without a type error.
+/// `wit/types.wit` must be exactly these, in this order. wasmtime
+/// typechecks the lift by field name, type, AND order at `get_typed_func`
+/// (`wasmtime::component::func::typed::typecheck_record`, wasmtime
+/// 30.0.2) — a drifted hand-lift would trap, and strike, every plugin at
+/// call time rather than fail silently, so this test exists to catch the
+/// drift here, at test time, before that happens.
 #[test]
 fn lift_mirrors_the_wit_record_field_for_field() {
     const TYPES_WIT: &str = include_str!("../../wit/types.wit");
@@ -592,31 +595,13 @@ fn an_over_long_allowed_value_is_dropped_from_its_descriptor() {
 
 // ── the by-name export call against minimal components (L1 / m7) ─────────
 
-/// A minimal component exporting only `search-filters`, instantiated on a
+/// `crate::test_harness::instantiate` under this module's established name:
+/// a minimal component exporting only `search-filters`, instantiated on a
 /// bare linker (no host world, no capabilities) into a store carrying the
 /// unit-test plugin name — the smallest thing `call_search_filters` can be
-/// pointed at.
-async fn instantiate(wat: &str) -> (Store<PluginStoreData>, wasmtime::component::Instance) {
-    use crate::engine::{Engine, EngineConfig};
-    let engine = Engine::new(EngineConfig::default()).expect("engine");
-    let component =
-        wasmtime::component::Component::new(engine.raw(), wat::parse_str(wat).expect("wat"))
-            .expect("component");
-    // The production deadline: an unbounded tick count overflows
-    // wasmtime's epoch arithmetic (`store.rs` adds unchecked) once the
-    // engine's ticker has advanced.
-    let mut store = crate::instance::build_store(
-        &engine,
-        "test",
-        tokio_util::sync::CancellationToken::new(),
-        crate::instance::deadline_ticks(SEARCH_TIMEOUT, engine.tick_period()),
-    );
-    let instance = wasmtime::component::Linker::<PluginStoreData>::new(engine.raw())
-        .instantiate_async(&mut store, &component)
-        .await
-        .expect("instantiate");
-    (store, instance)
-}
+/// pointed at. Shared with `playlist_adapter`/`metadata_adapter`'s own
+/// by-name-export tests, which needed the identical setup.
+use crate::test_harness::instantiate;
 
 /// `search-filters` returning one descriptor, laid out by hand in core
 /// memory in canonical-ABI order: `key`, `display-name`, `allowed-values`

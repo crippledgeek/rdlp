@@ -1,6 +1,5 @@
 use super::*;
-use crate::adapter::SEARCH_TIMEOUT;
-use crate::instance::PluginStoreData;
+use crate::test_harness::instantiate;
 
 /// A component with no `extract-with-metadata` export at all.
 const NO_METADATA_WAT: &str = r#"(component
@@ -21,30 +20,6 @@ const METADATA_WRONG_TYPE_WAT: &str = r#"(component
     (canon lift (core func $i "extract-with-metadata") (memory $i "mem") (realloc (func $i "realloc"))
       string-encoding=utf8))
 )"#;
-
-async fn instantiate(
-    wat: &str,
-) -> (
-    wasmtime::Store<PluginStoreData>,
-    wasmtime::component::Instance,
-) {
-    use crate::engine::{Engine, EngineConfig};
-    let engine = Engine::new(EngineConfig::default()).expect("engine");
-    let component =
-        wasmtime::component::Component::new(engine.raw(), wat::parse_str(wat).expect("wat"))
-            .expect("component");
-    let mut store = crate::instance::build_store(
-        &engine,
-        "test",
-        tokio_util::sync::CancellationToken::new(),
-        crate::instance::deadline_ticks(SEARCH_TIMEOUT, engine.tick_period()),
-    );
-    let instance = wasmtime::component::Linker::<PluginStoreData>::new(engine.raw())
-        .instantiate_async(&mut store, &component)
-        .await
-        .expect("instantiate");
-    (store, instance)
-}
 
 #[tokio::test]
 async fn absent_export_is_ok_none() {
@@ -69,8 +44,12 @@ async fn mis_typed_export_is_a_trap_and_a_strike() {
 /// Drift guard for the hand-written lifts, mirroring
 /// `search_adapter::tests::lift_mirrors_the_wit_record_field_for_field`:
 /// each record/variant's field lines in `wit/types.wit` must be exactly
-/// these, in this order — the component canonical ABI lifts positionally,
-/// so a reordered or retyped field would lift garbage without a type error.
+/// these, in this order. wasmtime typechecks the lift by field/case
+/// name, type, AND order at `get_typed_func`
+/// (`wasmtime::component::func::typed::typecheck_record`/`typecheck_variant`,
+/// wasmtime 30.0.2) — a drifted hand-lift would trap, and strike, every
+/// plugin at call time rather than fail silently, so this test exists to
+/// catch the drift here, at test time, before that happens.
 #[test]
 fn thumbnail_lift_mirrors_the_wit_record_field_for_field() {
     const TYPES_WIT: &str = include_str!("../../wit/types.wit");
@@ -158,11 +137,33 @@ fn extraction_lift_mirrors_the_wit_record_field_for_field() {
 }
 
 /// The end-to-end lift of a real `extraction` record needs a fixture
-/// component (Task 10); this pins the hand-lift's field shape by
-/// constructing one plainly and reading it back, so `WitExtraction`'s
-/// `core`/`extra` fields are exercised without a WASM round trip.
+/// component (Task 10); this pins every hand-lift's field shape by
+/// constructing one of each plainly and reading every field back — so
+/// `WitThumbnail.preference`, `WitInfoDictExtra.{channel_url,age_limit,
+/// thumbnails}`, and every `WitMetaValue` variant (none of which any other
+/// test in this module touches) are exercised without a WASM round trip.
 #[test]
-fn extraction_carries_core_and_extra_through() {
+fn extraction_carries_every_field_through() {
+    let thumb = WitThumbnail {
+        url: "https://x.example/t/1.jpg".into(),
+        id: Some("t1".into()),
+        width: Some(320),
+        height: Some(180),
+        preference: Some(-1),
+    };
+    let extra_values = [
+        WitMetaValue::Text("studio".into()),
+        WitMetaValue::Integer(-7),
+        WitMetaValue::Number(1.5),
+        WitMetaValue::Flag(true),
+        WitMetaValue::TextList(vec!["a".into(), "b".into()]),
+    ];
+    assert!(matches!(&extra_values[0], WitMetaValue::Text(s) if s == "studio"));
+    assert!(matches!(&extra_values[1], WitMetaValue::Integer(-7)));
+    assert!(matches!(&extra_values[2], WitMetaValue::Number(n) if (*n - 1.5).abs() < f64::EPSILON));
+    assert!(matches!(&extra_values[3], WitMetaValue::Flag(true)));
+    assert!(matches!(&extra_values[4], WitMetaValue::TextList(v) if v.len() == 2));
+
     let core = WitInfoDict {
         id: "abc123".into(),
         title: "A Title".into(),
@@ -183,12 +184,27 @@ fn extraction_carries_core_and_extra_through() {
     let extra = WitInfoDictExtra {
         actors: vec!["Alice".into()],
         channel: Some("chan".into()),
-        channel_url: None,
-        age_limit: None,
-        thumbnails: Vec::new(),
-        extras: Vec::new(),
+        channel_url: Some("https://x.example/c/chan".into()),
+        age_limit: Some(18),
+        thumbnails: vec![thumb],
+        extras: vec![("studio".into(), WitMetaValue::Text("Acme".into()))],
     };
     let extraction = WitExtraction { core, extra };
+
     assert_eq!(extraction.core.id, "abc123");
     assert_eq!(extraction.extra.channel.as_deref(), Some("chan"));
+    assert_eq!(
+        extraction.extra.channel_url.as_deref(),
+        Some("https://x.example/c/chan")
+    );
+    assert_eq!(extraction.extra.age_limit, Some(18));
+    assert_eq!(
+        extraction
+            .extra
+            .thumbnails
+            .first()
+            .and_then(|t| t.preference),
+        Some(-1)
+    );
+    assert_eq!(extraction.extra.extras.len(), 1);
 }

@@ -1,6 +1,5 @@
 use super::*;
-use crate::adapter::SEARCH_TIMEOUT;
-use crate::instance::PluginStoreData;
+use crate::test_harness::instantiate;
 
 /// A component with no `extract-playlist` export at all.
 const NO_PLAYLIST_WAT: &str = r#"(component
@@ -24,36 +23,19 @@ const PLAYLIST_WRONG_TYPE_WAT: &str = r#"(component
       string-encoding=utf8))
 )"#;
 
-async fn instantiate(
-    wat: &str,
-) -> (
-    wasmtime::Store<PluginStoreData>,
-    wasmtime::component::Instance,
-) {
-    use crate::engine::{Engine, EngineConfig};
-    let engine = Engine::new(EngineConfig::default()).expect("engine");
-    let component =
-        wasmtime::component::Component::new(engine.raw(), wat::parse_str(wat).expect("wat"))
-            .expect("component");
-    let mut store = crate::instance::build_store(
-        &engine,
-        "test",
-        tokio_util::sync::CancellationToken::new(),
-        crate::instance::deadline_ticks(SEARCH_TIMEOUT, engine.tick_period()),
-    );
-    let instance = wasmtime::component::Linker::<PluginStoreData>::new(engine.raw())
-        .instantiate_async(&mut store, &component)
-        .await
-        .expect("instantiate");
-    (store, instance)
-}
-
 #[tokio::test]
 async fn absent_export_is_ok_none() {
     let (mut store, inst) = instantiate(NO_PLAYLIST_WAT).await;
-    let r = call_extract_playlist(&mut store, &inst, "https://x.example/u/a", 1)
-        .await
-        .expect("no trap");
+    let r = call_extract_playlist(
+        &mut store,
+        &inst,
+        PlaylistPageRequest {
+            url: "https://x.example/u/a",
+            page: 1,
+        },
+    )
+    .await
+    .expect("no trap");
     assert!(r.is_none());
 }
 
@@ -61,9 +43,16 @@ async fn absent_export_is_ok_none() {
 async fn mis_typed_export_is_a_trap_and_a_strike() {
     use crate::adapter::counts_as_strike;
     let (mut store, inst) = instantiate(PLAYLIST_WRONG_TYPE_WAT).await;
-    let err = call_extract_playlist(&mut store, &inst, "https://x.example/u/a", 1)
-        .await
-        .unwrap_err();
+    let err = call_extract_playlist(
+        &mut store,
+        &inst,
+        PlaylistPageRequest {
+            url: "https://x.example/u/a",
+            page: 1,
+        },
+    )
+    .await
+    .unwrap_err();
     assert!(matches!(err, PluginError::Trapped { .. }), "{err:?}");
     assert!(counts_as_strike(&err));
 }
@@ -71,8 +60,12 @@ async fn mis_typed_export_is_a_trap_and_a_strike() {
 /// Drift guard for the hand-written lifts, mirroring
 /// `search_adapter::tests::lift_mirrors_the_wit_record_field_for_field`:
 /// each record/variant's field lines in `wit/types.wit` must be exactly
-/// these, in this order — the component canonical ABI lifts positionally,
-/// so a reordered or retyped field would lift garbage without a type error.
+/// these, in this order. wasmtime typechecks the lift by field/case
+/// name, type, AND order at `get_typed_func`
+/// (`wasmtime::component::func::typed::typecheck_record`/`typecheck_variant`,
+/// wasmtime 30.0.2) — a drifted hand-lift would trap, and strike, every
+/// plugin at call time rather than fail silently, so this test exists to
+/// catch the drift here, at test time, before that happens.
 #[test]
 fn playlist_entry_lift_mirrors_the_wit_record_field_for_field() {
     const TYPES_WIT: &str = include_str!("../../wit/types.wit");
@@ -156,4 +149,35 @@ fn playlist_error_mapping_strikes_only_internal() {
         let mapped = playlist_error_to_plugin_error("p", e);
         assert_eq!(counts_as_strike(&mapped), strike, "{mapped:?}");
     }
+}
+
+/// The end-to-end lift of a real `playlist-page` needs a fixture component
+/// (Task 10); this pins the hand-lift's field shape by constructing one
+/// plainly and reading it back, so every `WitPlaylistPage`/`WitPlaylistEntry`
+/// field — including `total_estimate`, which no other test in this module
+/// touches — is exercised without a WASM round trip.
+#[test]
+fn playlist_page_carries_every_field_through() {
+    let entry = WitPlaylistEntry {
+        url: "https://x.example/v/1".into(),
+        id: Some("1".into()),
+        title: Some("Clip One".into()),
+    };
+    let page = WitPlaylistPage {
+        entries: vec![entry],
+        page: 2,
+        has_more: true,
+        playlist_id: Some("pl-1".into()),
+        playlist_title: Some("A Playlist".into()),
+        total_estimate: Some(42),
+    };
+    assert_eq!(
+        page.entries.first().map(|e| e.url.as_str()),
+        Some("https://x.example/v/1")
+    );
+    assert_eq!(page.page, 2);
+    assert!(page.has_more);
+    assert_eq!(page.playlist_id.as_deref(), Some("pl-1"));
+    assert_eq!(page.playlist_title.as_deref(), Some("A Playlist"));
+    assert_eq!(page.total_estimate, Some(42));
 }

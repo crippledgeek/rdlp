@@ -25,8 +25,8 @@ use wasmtime::Store;
 
 use crate::PluginError;
 use crate::adapter::{
-    CallSpec, CommonPluginErr, FreshInstance, PluginExtractor, SEARCH_TIMEOUT, call_export_by_name,
-    common_plugin_error, plugin_error_to_rdlp,
+    CallSpec, CommonPluginErr, ExportCall, FreshInstance, PluginExtractor, SEARCH_TIMEOUT,
+    call_export_by_name, common_plugin_error, plugin_error_to_rdlp,
 };
 use crate::bindings::rdlp::plugin::types::{
     SearchError as WitSearchError, SearchPage as WitSearchPage, SearchQuery as WitSearchQuery,
@@ -144,6 +144,8 @@ impl PluginExtractor {
 
 /// Look up `search-filters` by name on the live instance and call it.
 /// Absent export ⇒ `Ok(vec![])` — the component was built before 0.5.1.
+/// `call_export_by_name` already logs the absent-export case once, at
+/// debug; this function does not log it again.
 ///
 /// Takes the raw instance rather than a [`FreshInstance`] because the
 /// by-name lookup is all it needs — which also lets a unit test drive it
@@ -155,15 +157,13 @@ pub(crate) async fn call_search_filters(
     let out = call_export_by_name::<(), (Vec<WitSearchFilterDescriptor>,)>(
         store,
         inst,
-        SEARCH_FILTERS_EXPORT,
-        (),
+        ExportCall {
+            name: SEARCH_FILTERS_EXPORT,
+            params: (),
+        },
     )
     .await?;
     let Some((descs,)) = out else {
-        log::debug!(
-            target: &store.data().log_target,
-            "plugin exports no `{SEARCH_FILTERS_EXPORT}` (pre-0.5.1); treating as no filters"
-        );
         return Ok(Vec::new());
     };
     Ok(descriptors_from_wit(descs, &store.data().origin()))

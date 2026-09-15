@@ -436,8 +436,21 @@ pub(crate) const fn counts_as_strike(e: &PluginError) -> bool {
     )
 }
 
-/// Look up `export` by name on the live instance and call it with `params`,
-/// returning `Ok(None)` when the component never declared the export.
+/// The two things that vary between `call_export_by_name`'s callers: which
+/// export to look up, and what to pass it. Grouped so the call keeps to
+/// three positional parameters alongside `store`/`inst` (see
+/// `limit-function-arguments`).
+pub(crate) struct ExportCall<'a, P> {
+    /// Name of the world export to look up, as declared in `wit/extractor.wit`.
+    pub name: &'a str,
+    /// Parameters to pass once the export is found and typechecks.
+    pub params: P,
+}
+
+/// Look up `call.name` by name on the live instance and call it with
+/// `call.params`, returning `Ok(None)` when the component never declared
+/// the export. Logs once, at debug, on that absent-export path — callers
+/// do not log it again.
 ///
 /// The mechanism `search_adapter::call_search_filters`,
 /// `playlist_adapter::call_extract_playlist`, and
@@ -453,13 +466,16 @@ pub(crate) const fn counts_as_strike(e: &PluginError) -> bool {
 pub(crate) async fn call_export_by_name<P, R>(
     store: &mut wasmtime::Store<PluginStoreData>,
     inst: &wasmtime::component::Instance,
-    export: &str,
-    params: P,
+    call: ExportCall<'_, P>,
 ) -> Result<Option<R>, PluginError>
 where
     P: wasmtime::component::ComponentNamedList + wasmtime::component::Lower + Send + Sync + 'static,
     R: wasmtime::component::ComponentNamedList + wasmtime::component::Lift + Send + Sync + 'static,
 {
+    let ExportCall {
+        name: export,
+        params,
+    } = call;
     let plugin = store.data().plugin_name.clone();
     let Some(idx) = inst.get_export(&mut *store, None, export) else {
         log::debug!(target: &store.data().log_target, "plugin exports no `{export}`");

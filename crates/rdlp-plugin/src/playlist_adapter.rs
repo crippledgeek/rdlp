@@ -19,33 +19,41 @@
 //! `search-filter-descriptor`. Each carries a source-text pin test in
 //! `tests.rs` against `wit/types.wit`.
 
-// Nothing outside this module's own tests calls `call_extract_playlist` /
-// `playlist_error_to_plugin_error` yet — the caller is `PluginExtractor`,
-// wired up in the follow-on task of this same slice (Task 5, refs #768).
-// `not(test)` scopes the expectation to non-test builds, where these items
-// really are unreachable today; wiring the caller in makes every item live
-// at once, and the unfulfilled expectation then forces this line's removal.
-#![cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "wired into PluginExtractor by the next task in this slice (refs #768)"
-    )
-)]
-
 use wasmtime::Store;
 use wasmtime::component::{ComponentType, Lift};
 
 use crate::PluginError;
-use crate::adapter::{CommonPluginErr, call_export_by_name, common_plugin_error};
+use crate::adapter::{CommonPluginErr, ExportCall, call_export_by_name, common_plugin_error};
 use crate::instance::PluginStoreData;
 
+// Why every hand-declared item below carries a per-item
+// `#[cfg_attr(not(test), expect(dead_code, reason = "…"))]`: the caller —
+// `PluginExtractor` — lands in a later task of this slice (refs #768), so
+// each is unreachable from production code today. Scoped per item, not at
+// module level, so each `expect` unfulfills (and fails the build) the
+// moment that specific item is wired in, instead of one blanket
+// suppression silently covering whatever is still unused.
+
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired into PluginExtractor by a later task in this slice (refs #768)"
+    )
+)]
 const EXTRACT_PLAYLIST_EXPORT: &str = "extract-playlist";
 
 /// Hand-lift of `wit/types.wit`'s `playlist-entry` record. See the module
 /// doc for why this is hand-declared rather than bindgen-generated.
 #[derive(Debug, Clone, PartialEq, Eq, ComponentType, Lift)]
 #[component(record)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired into PluginExtractor by a later task in this slice (refs #768)"
+    )
+)]
 pub(crate) struct WitPlaylistEntry {
     /// URL the host resolves via this plugin's `extract`.
     pub url: String,
@@ -58,6 +66,13 @@ pub(crate) struct WitPlaylistEntry {
 /// Hand-lift of `wit/types.wit`'s `playlist-page` record.
 #[derive(Debug, Clone, PartialEq, Eq, ComponentType, Lift)]
 #[component(record)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired into PluginExtractor by a later task in this slice (refs #768)"
+    )
+)]
 pub(crate) struct WitPlaylistPage {
     /// The page's items.
     pub entries: Vec<WitPlaylistEntry>,
@@ -80,6 +95,13 @@ pub(crate) struct WitPlaylistPage {
 /// Hand-lift of `wit/types.wit`'s `playlist-error` variant.
 #[derive(Debug, Clone, PartialEq, Eq, ComponentType, Lift)]
 #[component(variant)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired into PluginExtractor by a later task in this slice (refs #768)"
+    )
+)]
 pub(crate) enum WitPlaylistError {
     /// The URL is not one this plugin's playlist resolver handles.
     #[component(name = "unsupported-url")]
@@ -101,21 +123,38 @@ pub(crate) enum WitPlaylistError {
     Internal(String),
 }
 
+/// The two arguments `call_extract_playlist` needs beyond `store`/`inst`,
+/// grouped to keep the call to three positional parameters.
+pub(crate) struct PlaylistPageRequest<'a> {
+    /// URL to list.
+    pub url: &'a str,
+    /// 1-indexed page number, matching `search-page`.
+    pub page: u32,
+}
+
 /// `Ok(None)`: the component never declared the export (pre-0.5.2, or a
 /// plugin without playlists). `Ok(Some(Err(_)))`: the plugin answered with a
 /// domain error. `Err(Trapped)`: wrong signature, trap, or post-return
 /// failure.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired into PluginExtractor by a later task in this slice (refs #768)"
+    )
+)]
 pub(crate) async fn call_extract_playlist(
     store: &mut Store<PluginStoreData>,
     inst: &wasmtime::component::Instance,
-    url: &str,
-    page: u32,
+    request: PlaylistPageRequest<'_>,
 ) -> Result<Option<Result<WitPlaylistPage, WitPlaylistError>>, PluginError> {
     let out = call_export_by_name::<(String, u32), (Result<WitPlaylistPage, WitPlaylistError>,)>(
         store,
         inst,
-        EXTRACT_PLAYLIST_EXPORT,
-        (url.to_string(), page),
+        ExportCall {
+            name: EXTRACT_PLAYLIST_EXPORT,
+            params: (request.url.to_string(), request.page),
+        },
     )
     .await?;
     Ok(out.map(|(r,)| r))
@@ -123,6 +162,13 @@ pub(crate) async fn call_extract_playlist(
 
 /// `unsupported-url`/`not-found` are domain outcomes (no strike); the shared
 /// cases map through `common_plugin_error` so `internal` alone strikes.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired into PluginExtractor by a later task in this slice (refs #768)"
+    )
+)]
 pub(crate) fn playlist_error_to_plugin_error(plugin: &str, e: WitPlaylistError) -> PluginError {
     let common = match e {
         WitPlaylistError::UnsupportedUrl(detail) => {

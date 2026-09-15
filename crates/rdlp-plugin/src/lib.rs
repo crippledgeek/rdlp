@@ -128,6 +128,8 @@ pub mod priority;
 pub mod prompt;
 pub mod search_adapter;
 pub mod signature;
+#[cfg(test)]
+pub(crate) mod test_harness;
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
 pub mod test_support;
@@ -152,10 +154,15 @@ pub use error::PluginError;
 /// (wasmtime-wit-bindgen 30, `no function export … found`) — binding the
 /// smaller host world is what lets a 0.5.0-built component, which never
 /// declared any of them, still instantiate on the current host.
-/// `extractor-plugin-host`'s own `use` also brings in the 0.5.2 record and
-/// variant types (`playlist-page`, `playlist-error`, `extraction`, and their
-/// nested types) so bindgen generates Rust types for them even though the
-/// host binds no export that returns them.
+/// `bindgen!` emits a Rust type only for a record/variant reachable from a
+/// function signature in the *bound* world — adding a types-only `use` to
+/// `extractor-plugin-host` (no export attached) was tried and confirmed
+/// (via `cargo check`) NOT to make it emit `playlist-page`/`playlist-error`/
+/// `extraction`. Those, and every 0.5.2 type nested under them
+/// (`playlist-entry`, `thumbnail`, `meta-value`, `info-dict-extra`), are
+/// hand-declared `ComponentType + Lift` mirrors in [`playlist_adapter`] and
+/// [`metadata_adapter`] instead, each pinned against `wit/types.wit`'s
+/// source text by a test in that module.
 ///
 /// It exposes:
 /// - `bindings::ExtractorPluginHost` — the generated host-side instance type

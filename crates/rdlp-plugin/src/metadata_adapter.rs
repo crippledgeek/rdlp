@@ -17,35 +17,43 @@
 //! Extras validation (`InfoDictExtra`/`MetaValue` bounds) is a later task;
 //! this module only calls the export and hands back the raw lift.
 
-// Nothing outside this module's own tests calls `call_extract_with_metadata`
-// yet — the caller is `PluginExtractor`, wired up in a follow-on task of
-// this same slice (refs #768). `not(test)` scopes the expectation to
-// non-test builds, where these items really are unreachable today; wiring
-// the caller in makes every item live at once, and the unfulfilled
-// expectation then forces this line's removal.
-#![cfg_attr(
+// Why every hand-declared item below carries a per-item
+// `#[cfg_attr(not(test), expect(dead_code, reason = "…"))]`: the caller —
+// `PluginExtractor` — lands in a later task of this slice (refs #768), so
+// each is unreachable from production code today. Scoped per item, not at
+// module level, so each `expect` unfulfills (and fails the build) the
+// moment that specific item is wired in, instead of one blanket
+// suppression silently covering whatever is still unused.
+
+use wasmtime::Store;
+use wasmtime::component::{ComponentType, Lift};
+
+use crate::PluginError;
+use crate::adapter::{ExportCall, call_export_by_name};
+use crate::bindings::rdlp::plugin::types::{
+    ExtractError as WitExtractError, InfoDict as WitInfoDict,
+};
+use crate::instance::PluginStoreData;
+
+#[cfg_attr(
     not(test),
     expect(
         dead_code,
         reason = "wired into PluginExtractor by a later task in this slice (refs #768)"
     )
 )]
-
-use wasmtime::Store;
-use wasmtime::component::{ComponentType, Lift};
-
-use crate::PluginError;
-use crate::adapter::call_export_by_name;
-use crate::bindings::rdlp::plugin::types::{
-    ExtractError as WitExtractError, InfoDict as WitInfoDict,
-};
-use crate::instance::PluginStoreData;
-
 const EXTRACT_WITH_METADATA_EXPORT: &str = "extract-with-metadata";
 
 /// Hand-lift of `wit/types.wit`'s `thumbnail` record.
 #[derive(Debug, Clone, PartialEq, ComponentType, Lift)]
 #[component(record)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired into PluginExtractor by a later task in this slice (refs #768)"
+    )
+)]
 pub(crate) struct WitThumbnail {
     /// Thumbnail URL.
     pub url: String,
@@ -64,6 +72,13 @@ pub(crate) struct WitThumbnail {
 /// nested map.
 #[derive(Debug, Clone, PartialEq, ComponentType, Lift)]
 #[component(variant)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired into PluginExtractor by a later task in this slice (refs #768)"
+    )
+)]
 pub(crate) enum WitMetaValue {
     /// UTF-8 text.
     #[component(name = "text")]
@@ -85,6 +100,13 @@ pub(crate) enum WitMetaValue {
 /// Hand-lift of `wit/types.wit`'s `info-dict-extra` record.
 #[derive(Debug, Clone, PartialEq, ComponentType, Lift)]
 #[component(record)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired into PluginExtractor by a later task in this slice (refs #768)"
+    )
+)]
 pub(crate) struct WitInfoDictExtra {
     /// Cast/performer names.
     pub actors: Vec<String>,
@@ -110,6 +132,13 @@ pub(crate) struct WitInfoDictExtra {
 /// it, so this can't either.
 #[derive(Debug, Clone, ComponentType, Lift)]
 #[component(record)]
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired into PluginExtractor by a later task in this slice (refs #768)"
+    )
+)]
 pub(crate) struct WitExtraction {
     /// The frozen 0.5.0 `info-dict`, bindgen-generated (reachable from
     /// `extract`'s own signature in the bound host world).
@@ -122,6 +151,13 @@ pub(crate) struct WitExtraction {
 /// the plugin answered with a domain error, mapped by the caller through the
 /// same `extract_error_to_plugin_error` `extract` already uses. `Err(Trapped)`:
 /// wrong signature, trap, or post-return failure.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "wired into PluginExtractor by a later task in this slice (refs #768)"
+    )
+)]
 pub(crate) async fn call_extract_with_metadata(
     store: &mut Store<PluginStoreData>,
     inst: &wasmtime::component::Instance,
@@ -130,8 +166,10 @@ pub(crate) async fn call_extract_with_metadata(
     let out = call_export_by_name::<(String,), (Result<WitExtraction, WitExtractError>,)>(
         store,
         inst,
-        EXTRACT_WITH_METADATA_EXPORT,
-        (url.to_string(),),
+        ExportCall {
+            name: EXTRACT_WITH_METADATA_EXPORT,
+            params: (url.to_string(),),
+        },
     )
     .await?;
     Ok(out.map(|(r,)| r))
