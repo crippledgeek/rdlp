@@ -63,6 +63,12 @@ const PLAYLIST_URL_REAL: &str = "https://example.com/a-real-playlist";
 /// A URL `extract-playlist` declines (`unsupported-url`) but `extract`
 /// accepts as a single video — the shape the host's fallback exists for.
 /// Without a `URL_PREFIX` numeric id, so it carries this literal id.
+///
+/// Deliberately OUTSIDE this plugin's declared `matches` / `url-regex`
+/// (`https://example.com/video/*`): it is reachable only when a host test
+/// calls the adapter directly, never through registry routing. Do not
+/// widen the manifest to cover it — the routing surface is the video
+/// prefix, this is a test seam for the fallback path.
 const SINGLE_VIDEO_NOT_A_PLAYLIST: &str = "https://example.com/not-a-playlist";
 const SINGLE_VIDEO_NOT_A_PLAYLIST_ID: &str = "not-a-playlist";
 

@@ -141,27 +141,47 @@ async fn real_playlist_resolves_every_entry_across_both_pages() {
 
 // ── refusals: both committed fixtures through one helper ─────────────────
 
-/// Load every committed fixture after `tamper` has edited its signed
-/// directory, and return each fixture's label with the error the loader
-/// refused it with. A fixture the loader ACCEPTS after tampering fails
-/// here — refusal is the whole point.
-fn refusals_after(tamper: impl Fn(&Path) + Copy) -> Vec<(&'static str, PluginError)> {
-    let fixtures = [
+/// One row per committed fixture: a label for assertion messages and the
+/// spec that loads it honestly.
+type LabelledSpecs = [(&'static str, SignedPluginSpec<'static>); 2];
+
+fn committed_fixtures() -> LabelledSpecs {
+    [
         ("0.5.0", SignedPluginSpec::example()),
         ("0.5.2", SignedPluginSpec::example_0_5_2()),
-    ];
-    fixtures
+    ]
+}
+
+/// Sign each spec, let `tamper` edit its directory, discover it through
+/// the production loader, and return each label with the error the loader
+/// refused it with. A spec the loader ACCEPTS fails here — refusal is the
+/// whole point. Two ways to make a spec refusable, kept distinct because
+/// `Loader::load_one` checks the manifest's version BEFORE the signature:
+/// a defect in the *signed content* goes into `specs` (validly signed,
+/// `tamper = |_| {}`); a defect in the *artefact after signing* goes into
+/// `tamper` over [`committed_fixtures`].
+fn refusals_of(
+    specs: LabelledSpecs,
+    tamper: impl Fn(&Path) + Copy,
+) -> Vec<(&'static str, PluginError)> {
+    specs
         .into_iter()
         .map(|(label, spec)| {
             let td = TempDir::new().unwrap();
             let (_engine, outcome) = discover_signed_after(td.path(), &spec, tamper);
             let err = match outcome {
-                Ok(_) => panic!("the tampered {label} fixture must be refused"),
+                Ok(_) => panic!("the {label} fixture must be refused"),
                 Err((_, err)) => err,
             };
             (label, err)
         })
         .collect()
+}
+
+/// [`refusals_of`] over both committed fixtures, honestly signed, with the
+/// defect introduced by `tamper` after signing.
+fn refusals_after(tamper: impl Fn(&Path) + Copy) -> Vec<(&'static str, PluginError)> {
+    refusals_of(committed_fixtures(), tamper)
 }
 
 /// Rewrite one line of the signed `plugin.toml`: the line starting with
@@ -254,15 +274,25 @@ async fn tampered_manifest_is_refused() {
     }
 }
 
-/// A manifest claiming a NEWER patch (`0.5.3`) than this host's contract
-/// is refused at `discover`, before any crypto or compilation — for both
-/// the 0.5.0 and the 0.5.2 component alike (the check reads the manifest,
-/// not the component).
+/// A VALIDLY SIGNED manifest claiming a NEWER patch (`0.5.3`) than this
+/// host's contract is refused at `discover` — for both the 0.5.0 and the
+/// 0.5.2 component alike (the check reads the manifest, not the
+/// component). The version goes through the spec, so the signature covers
+/// the `0.5.3` claim and the version check is the ONLY defect; rewriting
+/// the line after signing would also break the signature and the
+/// assertion would then only be telling us which check runs first.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn wit_version_0_5_3_manifest_is_refused() {
-    for (label, err) in refusals_after(|dir| {
-        rewrite_manifest_line(dir, "wit_version = ", "wit_version = \"0.5.3\"");
-    }) {
+    let claiming_0_5_3 = committed_fixtures().map(|(label, spec)| {
+        (
+            label,
+            SignedPluginSpec {
+                wit_version: "0.5.3",
+                ..spec
+            },
+        )
+    });
+    for (label, err) in refusals_of(claiming_0_5_3, |_| {}) {
         assert!(
             matches!(err, PluginError::WitVersionMismatch { .. }),
             "{label}: expected WitVersionMismatch, got {err:?}"
