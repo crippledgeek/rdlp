@@ -51,6 +51,10 @@ pub fn archive_key(extractor: &str, id: &str) -> String {
 /// [`archive_key`] produces — see the module docs. A line with no space is
 /// malformed (never produced by [`record_in_archive`]) and is kept verbatim;
 /// it can never match a real query, since every valid key contains a space.
+/// The same holds for any other whitespace separator (a tab, e.g.
+/// `"XHamster\t123"`): rdlp and yt-dlp both always write a literal space, so
+/// a tab-separated line is malformed too — kept verbatim, never normalised,
+/// never matched.
 /// Takes a shared lock for the duration of the read so a concurrent writer
 /// cannot append a half-line under us.
 pub fn load_archive(path: &Path) -> HashSet<String> {
@@ -240,6 +244,21 @@ mod tests {
         assert!(archive.contains("NoSpaceHere"));
         assert!(!is_in_archive(&archive, "nospacehere", ""));
         assert!(!is_in_archive(&archive, "NoSpaceHere", ""));
+    }
+
+    /// A tab (or any other whitespace) separator is equally malformed: rdlp
+    /// and yt-dlp both always write a literal space, so `split_once(' ')`
+    /// finds no space and the whole line is kept verbatim, never matching.
+    #[test]
+    fn malformed_line_with_tab_separator_survives_and_never_matches() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        writeln!(tmp, "XHamster\t123").unwrap();
+        tmp.flush().unwrap();
+
+        let archive = load_archive(tmp.path());
+        assert!(archive.contains("XHamster\t123"));
+        assert!(!is_in_archive(&archive, "xhamster", "123"));
+        assert!(!is_in_archive(&archive, "XHamster", "123"));
     }
 
     #[test]
