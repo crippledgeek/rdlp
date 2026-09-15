@@ -147,7 +147,7 @@ pub use error::PluginError;
 /// world-level export to be present at instantiate time
 /// (wasmtime-wit-bindgen 30, `no function export … found`) — binding the
 /// smaller host world is what lets a 0.5.0-built component, which never
-/// declared `search-filters`, still instantiate on a 0.5.1 host.
+/// declared `search-filters`, still instantiate on the current host.
 ///
 /// It exposes:
 /// - `bindings::ExtractorPluginHost` — the generated host-side instance type

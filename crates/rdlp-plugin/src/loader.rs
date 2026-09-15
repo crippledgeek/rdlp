@@ -478,6 +478,19 @@ mod tests {
         );
     }
 
+    /// Same D1 boundary, one host patch further on: a 0.5.2 host accepts any
+    /// plugin declaring 0.5.2 or an earlier patch in the 0.5 line, and
+    /// refuses a plugin declaring a newer patch it may not yet define an
+    /// import for.
+    #[test]
+    fn patch_boundary_0_5_2_accepted_0_5_3_rejected() {
+        assert!(check_wit_version_against("p", "0.5.2", "0.5.2").is_ok());
+        assert!(check_wit_version_against("p", "0.5.1", "0.5.2").is_ok());
+        assert!(check_wit_version_against("p", "0.5.0", "0.5.2").is_ok());
+        assert!(check_wit_version_against("p", "0.5.3", "0.5.2").is_err());
+        assert!(check_wit_version_against("p", "0.6.0", "0.5.2").is_err());
+    }
+
     #[test]
     fn minor_above_host_rejects() {
         assert!(check_wit_version_against("p", "0.6.0", "0.5.1").is_err());
@@ -495,10 +508,10 @@ mod tests {
 
     #[test]
     fn host_constant_is_derived_from_types_wit() {
-        assert_eq!(HOST_WIT_VERSION, "0.5.1");
+        assert_eq!(HOST_WIT_VERSION, "0.5.2");
         assert_eq!(
             crate::wit_version::package_version(include_str!("../wit/types.wit")),
-            "0.5.1"
+            "0.5.2"
         );
     }
 

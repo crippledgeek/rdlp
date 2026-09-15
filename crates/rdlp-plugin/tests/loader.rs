@@ -353,11 +353,11 @@ fn make_loader_args_arc(
 }
 
 /// D1 positive compat test: a component built against 0.5.0 (Task 1
-/// fixture) loads through the real loader on this 0.5.1 host and answers
+/// fixture) loads through the real loader on the current host and answers
 /// `metadata` + `extract`. `wit_version = "0.5.0"` in its manifest takes
 /// the patch-below path of `check_wit_version_against`.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn a_0_5_0_component_loads_on_the_0_5_1_host() {
+async fn a_0_5_0_component_loads_on_the_current_host() {
     let td = TempDir::new().unwrap();
     let plugins_dir = td.path().join("plugins");
     let key = SigningKey::generate(&mut OsRng);
@@ -374,7 +374,7 @@ async fn a_0_5_0_component_loads_on_the_0_5_1_host() {
 
     assert_eq!(outcomes.len(), 1, "expected exactly one discover outcome");
     let loaded = outcomes.remove(0).unwrap_or_else(|(path, err)| {
-        panic!("0.5.0 component must load on the 0.5.1 host: {path:?}: {err:?}")
+        panic!("0.5.0 component must load on the current host: {path:?}: {err:?}")
     });
     assert_eq!(loaded.manifest.wit_version, "0.5.0");
 
@@ -391,13 +391,13 @@ async fn a_0_5_0_component_loads_on_the_0_5_1_host() {
     let info = adapter
         .extract("https://example.com/video/1", &ctx)
         .await
-        .expect("the 0.5.0 fixture must extract on the 0.5.1 host");
+        .expect("the 0.5.0 fixture must extract on the current host");
     assert_eq!(info.id, "1");
     assert_eq!(adapter.test_trap_count(), 0);
 }
 
 /// D1 negative compat test: the SAME 0.5.0 component, but the manifest
-/// claims a NEWER patch (`0.5.2`) than this 0.5.1 host accepts. Rejected at
+/// claims a NEWER patch (`0.5.3`) than this host accepts. Rejected at
 /// `discover` — before the component is even compiled for instantiation.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_component_declaring_a_newer_patch_is_rejected() {
@@ -409,7 +409,7 @@ async fn a_component_declaring_a_newer_patch_is_rejected() {
         &plugins_dir.join("example"),
         &key,
         &SignedPluginSpec {
-            wit_version: "0.5.2",
+            wit_version: "0.5.3",
             ..SignedPluginSpec::example()
         },
     );
