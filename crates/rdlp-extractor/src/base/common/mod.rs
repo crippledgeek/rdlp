@@ -60,11 +60,15 @@ use regex::Regex;
 // Re-export selectors, patterns, and constants from submodule
 pub(crate) use protocol::protocol_for_url;
 pub(crate) use search::SearchOrigin;
-pub(crate) use search::{
+/// Reachable by the plugin host (`rdlp-plugin`): the `PagedSearch` scaffold a
+/// plugin's search extension answers against, plus its filter-validation types.
+pub use search::{
     FilterValidationError, KeyValidation, PAGE_RATE_LIMIT_MS, PagedSearch, SearchPage,
+    validate_against_descriptors,
+};
+pub(crate) use search::{
     SearchPageSpec, Termination, append_search_filters, filter_value, first_resolvable_media_attr,
     format_std_filter_error, is_not_a_data_uri, resolve_card_url, resolve_media_url,
-    validate_against_descriptors,
 };
 pub(crate) use selectors::*;
 

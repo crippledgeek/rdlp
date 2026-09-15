@@ -12,6 +12,8 @@ use rdlp_core::{ExtractionContext, RdlpError, Result, SearchExtractor};
 use rdlp_types::{
     SearchFilter, SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchResultPreview,
 };
+use std::collections::HashSet;
+use std::future::Future;
 use std::time::Duration;
 use url::{Url, form_urlencoded};
 
@@ -22,9 +24,12 @@ use crate::base::common::BaseExtractor;
 /// optional total-result estimate. Produced by a site's `parse` hook in a
 /// single pass (no re-scan of the body).
 #[derive(Debug)]
-pub(crate) struct SearchPage {
+pub struct SearchPage {
+    /// The rows parsed from this page.
     pub results: Vec<SearchResultPreview>,
+    /// Whether the site reports (or implies) a further page exists.
     pub has_more: bool,
+    /// A total-result estimate, when the page carries one.
     pub total_estimate: Option<u64>,
 }
 
@@ -142,7 +147,7 @@ pub(crate) fn log_tag(name: &str) -> String {
 /// [`PagedSearch::fetch_via_spec`]). All behavioral variation is a `fn`
 /// pointer (zero-alloc, `Copy`); config is plain data. Sites pass bare `fn`
 /// items or non-capturing closures (which coerce to `fn`).
-pub(crate) struct SearchPageSpec {
+pub struct SearchPageSpec {
     /// Extra request headers; `&[]` for none.
     pub headers: &'static [(&'static str, &'static str)],
     /// Build the page URL from the query and the (site-convention) page number.
@@ -153,7 +158,7 @@ pub(crate) struct SearchPageSpec {
 
 /// How one filter key's value is validated by [`validate_against_descriptors`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum KeyValidation {
+pub enum KeyValidation {
     /// Value must be one of the descriptor's `allowed_values` (the default).
     AllowedValues,
     /// Any value accepted (the site's API validates server-side); skip the check.
@@ -168,18 +173,28 @@ pub(crate) enum KeyValidation {
 /// numeric path's message ("Must be a number.") differs from the allowed-values
 /// message ("Allowed: …").
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum FilterValidationError {
+pub enum FilterValidationError {
+    /// The filter key does not appear in the site's descriptor set.
     UnknownKey {
+        /// The rejected key.
         key: String,
+        /// Every key the site's descriptors do recognize.
         available: Vec<String>,
     },
+    /// The key is known but the value is outside its `allowed_values` set.
     InvalidValue {
+        /// The key whose value failed validation.
         key: String,
+        /// The rejected value.
         value: String,
+        /// The values the descriptor allows for this key.
         allowed: Vec<String>,
     },
+    /// The key requires a `u32` value and the given value did not parse as one.
     NonNumeric {
+        /// The key whose value failed to parse.
         key: String,
+        /// The non-numeric value that was given.
         value: String,
     },
 }
@@ -190,7 +205,15 @@ pub(crate) enum FilterValidationError {
 ///
 /// Returns a typed error; the caller formats it. NOTE the explicit
 /// `std::result::Result` — `Result` is shadowed here by `rdlp_core::Result`.
-pub(crate) fn validate_against_descriptors(
+///
+/// # Errors
+///
+/// Returns [`FilterValidationError::UnknownKey`] when `filters` names a key
+/// absent from `descriptors`; [`FilterValidationError::InvalidValue`] when a
+/// key's value is not in its descriptor's `allowed_values`; and
+/// [`FilterValidationError::NonNumeric`] when a key overridden to
+/// [`KeyValidation::NumericU32`] carries a value that does not parse as `u32`.
+pub fn validate_against_descriptors(
     filters: &[SearchFilter],
     descriptors: &[SearchFilterDescriptor],
     overrides: &[(&str, KeyValidation)],
@@ -408,7 +431,7 @@ pub(crate) fn format_std_filter_error(site: &str, error: FilterValidationError) 
 
 /// Delay between successive search-page fetches. All API-paginated sites that
 /// share the [`PagedSearch`] scaffold rate-limit at this interval.
-pub(crate) const PAGE_RATE_LIMIT_MS: u64 = 500;
+pub const PAGE_RATE_LIMIT_MS: u64 = 500;
 
 /// How a paginated search knows when to stop.
 ///
@@ -497,7 +520,8 @@ pub(crate) fn append_search_filters(url: &mut String, filters: &[SearchFilter]) 
 /// Sites whose search fetches page N and learns whether another page exists
 /// from the same response share one pagination loop: fetch pages in order,
 /// accumulate previews, and stop at the first of — `max_results` reached, an
-/// empty page, `!has_more`, or a fetch error. A fetch error on the FIRST page
+/// empty page, a page that repeats only URLs already seen on earlier pages,
+/// `!has_more`, or a fetch error. A fetch error on the FIRST page
 /// is returned to the caller, because there is nothing collected to salvage
 /// and reporting a hard failure as "no results" hides each site's actionable
 /// message; a later-page error returns the results gathered so far.
@@ -510,11 +534,16 @@ pub(crate) fn append_search_filters(url: &mut String, filters: &[SearchFilter]) 
 /// Each `fetch_page` computes its own `has_more` (from a site page count via
 /// the [`Termination`] helper, or from result-emptiness). Per-page
 /// primary↔fallback fetching is a private concern of each site's `fetch_page`.
-pub(crate) trait PagedSearch: SearchExtractor {
+pub trait PagedSearch: SearchExtractor {
     // `search_log_tag` removed (#756) — the log tag is derived from
     // `SearchExtractor::name` via `log_tag`, so it cannot drift from it.
 
     /// Validate the query's filters against this site's supported filter set.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error describing the first unsupported key or out-of-range
+    /// value found in `filters`.
     fn validate_search_filters(&self, filters: &[SearchFilter]) -> Result<()>;
 
     /// Fetch + parse ONE page — the single behavioral hook. REQUIRED (no default).
@@ -524,12 +553,12 @@ pub(crate) trait PagedSearch: SearchExtractor {
     /// which also lets the crate keep `expect_used`/`unwrap_used` clean (no `.expect()`).
     ///
     /// [`fetch_via_spec`]: Self::fetch_via_spec
-    async fn fetch_page(
+    fn fetch_page(
         &self,
         query: &SearchQuery,
         page: u32,
         ctx: &ExtractionContext,
-    ) -> Result<SearchPage>;
+    ) -> impl Future<Output = Result<SearchPage>> + Send;
 
     /// Drive a single-GET [`SearchPageSpec`]: build URL → fetch (± headers) → parse.
     /// Provided method — single-GET sites call
@@ -539,20 +568,22 @@ pub(crate) trait PagedSearch: SearchExtractor {
     /// 4 params: `spec` is a parameter-object, `ctx` the threaded extraction
     /// context, `(query, page)` the trait's established pair — no same-type
     /// ambiguity.
-    async fn fetch_via_spec(
+    fn fetch_via_spec(
         &self,
         spec: SearchPageSpec,
         query: &SearchQuery,
         page: u32,
         ctx: &ExtractionContext,
-    ) -> Result<SearchPage> {
-        let url = (spec.build_url)(query, page);
-        let body = if spec.headers.is_empty() {
-            BaseExtractor::fetch_webpage(&url, ctx).await?
-        } else {
-            BaseExtractor::fetch_webpage_with_headers(&url, spec.headers, ctx).await?
-        };
-        (spec.parse)(&body, query, page)
+    ) -> impl Future<Output = Result<SearchPage>> + Send {
+        async move {
+            let url = (spec.build_url)(query, page);
+            let body = if spec.headers.is_empty() {
+                BaseExtractor::fetch_webpage(&url, ctx).await?
+            } else {
+                BaseExtractor::fetch_webpage_with_headers(&url, spec.headers, ctx).await?
+            };
+            (spec.parse)(&body, query, page)
+        }
     }
 
     /// The page a `None` `SearchQuery::page` defaults to (0 or 1 per site).
@@ -581,7 +612,8 @@ pub(crate) trait PagedSearch: SearchExtractor {
     }
 
     /// Collect results across pages until `max_results` / an empty page /
-    /// `!has_more` / a fetch error. Shared scaffold — do not override.
+    /// a page that repeats only URLs seen on earlier pages / `!has_more` /
+    /// a fetch error. Shared scaffold — do not override.
     ///
     /// Error handling is deliberately asymmetric, and a new site wiring itself
     /// onto this scaffold should not re-introduce the swallow it replaced: a
@@ -590,78 +622,92 @@ pub(crate) trait PagedSearch: SearchExtractor {
     /// instead of being reported as zero results. A failure on a later page
     /// returns the partial results already gathered. An empty-but-SUCCESSFUL
     /// first page is not an error and yields `Ok(vec![])`.
-    async fn search_all_pages(
+    fn search_all_pages(
         &self,
         query: &SearchQuery,
         ctx: &ExtractionContext,
-    ) -> Result<Vec<SearchResultPreview>> {
-        self.validate_search_filters(&query.filters)?;
+    ) -> impl Future<Output = Result<Vec<SearchResultPreview>>> + Send {
+        async move {
+            self.validate_search_filters(&query.filters)?;
 
-        let tag = log_tag(SearchExtractor::name(self));
-        let max_results = query.max_results.unwrap_or(self.max_results_default());
-        let mut all_results: Vec<SearchResultPreview> = Vec::new();
-        let mut page = self.first_page_index();
+            let tag = log_tag(SearchExtractor::name(self));
+            let max_results = query.max_results.unwrap_or(self.max_results_default());
+            let mut all_results: Vec<SearchResultPreview> = Vec::new();
+            let mut seen_urls: HashSet<String> = HashSet::new();
+            let mut page = self.first_page_index();
 
-        loop {
-            let SearchPage {
-                results, has_more, ..
-            } = match self.fetch_page(query, page, ctx).await {
-                Ok(p) => p,
-                // Nothing collected yet on the very first page: the request
-                // never got off the ground, so there are no partial results to
-                // salvage and "return what we have" would report a hard
-                // failure as "no results found". Each site maps its own
-                // actionable error here (a Cloudflare challenge naming
-                // `--cookies-from-browser`, a refusal to parse a 404 that
-                // carries a full grid of filler); swallowing it into a
-                // `debug!` the operator has not enabled discards the only
-                // thing that tells them what to do. An empty-but-SUCCESSFUL
-                // first page is a different case and still returns `Ok`.
-                // The conjunct is deliberate redundancy, kept because it is
-                // cheap and a gap here is not. `all_results.is_empty()` is the
-                // half that carries the meaning — "nothing salvageable" is the
-                // reason to propagate rather than break. The page check only
-                // restates it: the loop breaks on the first empty page, so
-                // past the first page `all_results` cannot be empty. The
-                // page check is not load-bearing alone; do not "simplify" by
-                // dropping the emptiness check.
-                Err(e) if all_results.is_empty() && page == self.first_page_index() => {
-                    debug!(page; "{tag} First search page failed, no partial results to return: {e}");
-                    return Err(e);
-                }
-                Err(e) => {
-                    debug!(page; "{tag} Failed to fetch search page, returning partial results: {e}");
+            loop {
+                let SearchPage {
+                    results, has_more, ..
+                } = match self.fetch_page(query, page, ctx).await {
+                    Ok(p) => p,
+                    // Nothing collected yet on the very first page: the request
+                    // never got off the ground, so there are no partial results to
+                    // salvage and "return what we have" would report a hard
+                    // failure as "no results found". Each site maps its own
+                    // actionable error here (a Cloudflare challenge naming
+                    // `--cookies-from-browser`, a refusal to parse a 404 that
+                    // carries a full grid of filler); swallowing it into a
+                    // `debug!` the operator has not enabled discards the only
+                    // thing that tells them what to do. An empty-but-SUCCESSFUL
+                    // first page is a different case and still returns `Ok`.
+                    // The conjunct is deliberate redundancy, kept because it is
+                    // cheap and a gap here is not. `all_results.is_empty()` is the
+                    // half that carries the meaning — "nothing salvageable" is the
+                    // reason to propagate rather than break. The page check only
+                    // restates it: the loop breaks on the first empty page, so
+                    // past the first page `all_results` cannot be empty. The
+                    // page check is not load-bearing alone; do not "simplify" by
+                    // dropping the emptiness check.
+                    Err(e) if all_results.is_empty() && page == self.first_page_index() => {
+                        debug!(page; "{tag} First search page failed, no partial results to return: {e}");
+                        return Err(e);
+                    }
+                    Err(e) => {
+                        debug!(page; "{tag} Failed to fetch search page, returning partial results: {e}");
+                        break;
+                    }
+                };
+
+                if results.is_empty() {
+                    debug!(page; "{tag} No results on page, stopping pagination");
                     break;
                 }
-            };
 
-            if results.is_empty() {
-                debug!(page; "{tag} No results on page, stopping pagination");
-                break;
+                // Filler/duplicate-page termination (host-side, shared by every
+                // site and by plugins). A page that brings NO url not already
+                // seen is the site repeating itself; stop before pacing another
+                // request. The first page cannot trip this (nothing seen yet).
+                if !seen_urls.is_empty() && results.iter().all(|r| seen_urls.contains(&r.video_url))
+                {
+                    debug!(page; "{tag} Page repeats earlier results, stopping pagination");
+                    break;
+                }
+                seen_urls.extend(results.iter().map(|r| r.video_url.clone()));
+
+                if all_results.is_empty() {
+                    all_results = results;
+                } else {
+                    all_results.extend(results);
+                }
+
+                if all_results.len() >= max_results {
+                    all_results.truncate(max_results);
+                    break;
+                }
+
+                if !has_more {
+                    break;
+                }
+
+                page += 1;
+                tokio::time::sleep(self.page_rate_limit()).await;
             }
 
-            if all_results.is_empty() {
-                all_results = results;
-            } else {
-                all_results.extend(results);
-            }
+            debug!(count = all_results.len(), pages = page; "{tag} Search complete");
 
-            if all_results.len() >= max_results {
-                all_results.truncate(max_results);
-                break;
-            }
-
-            if !has_more {
-                break;
-            }
-
-            page += 1;
-            tokio::time::sleep(self.page_rate_limit()).await;
+            Ok(all_results)
         }
-
-        debug!(count = all_results.len(), pages = page; "{tag} Search complete");
-
-        Ok(all_results)
     }
 
     /// Assemble a single-page `SearchPageResponse` from one [`fetch_page`]. Shared
@@ -669,26 +715,28 @@ pub(crate) trait PagedSearch: SearchExtractor {
     /// divergent single-page API-fallback semantics.
     ///
     /// [`fetch_page`]: Self::fetch_page
-    async fn search_page_response(
+    fn search_page_response(
         &self,
         query: &SearchQuery,
         ctx: &ExtractionContext,
-    ) -> Result<SearchPageResponse> {
-        self.validate_search_filters(&query.filters)?;
+    ) -> impl Future<Output = Result<SearchPageResponse>> + Send {
+        async move {
+            self.validate_search_filters(&query.filters)?;
 
-        let page = self.clamp_page(query.page.unwrap_or(self.first_page_index()));
-        let SearchPage {
-            results,
-            has_more,
-            total_estimate,
-        } = self.fetch_page(query, page, ctx).await?;
+            let page = self.clamp_page(query.page.unwrap_or(self.first_page_index()));
+            let SearchPage {
+                results,
+                has_more,
+                total_estimate,
+            } = self.fetch_page(query, page, ctx).await?;
 
-        Ok(SearchPageResponse {
-            results,
-            page,
-            has_more,
-            total_estimate,
-        })
+            Ok(SearchPageResponse {
+                results,
+                page,
+                has_more,
+                total_estimate,
+            })
+        }
     }
 }
 
@@ -817,6 +865,36 @@ mod tests {
 
     fn previews(n: usize) -> Vec<SearchResultPreview> {
         (0..n).map(preview).collect()
+    }
+
+    /// Like [`previews`], but numbered starting at `start` instead of 0.
+    /// `previews` always restarts at `v0`, so two calls describing two
+    /// genuinely distinct pages would otherwise collide on the same URLs —
+    /// which the duplicate-page termination in `search_all_pages` now reads
+    /// as the site repeating itself. Use this for the second-and-later page
+    /// in any multi-page test where the pages are meant to be distinct.
+    fn previews_from(start: usize, n: usize) -> Vec<SearchResultPreview> {
+        (start..start + n).map(preview).collect()
+    }
+
+    /// A preview identified only by its `video_url` tail, for pinning
+    /// duplicate-page termination against specific URLs rather than indices.
+    fn preview_id(id: &str) -> SearchResultPreview {
+        SearchResultPreview {
+            video_url: format!("https://x.test/{id}"),
+            title: id.to_string(),
+            thumbnail_url: None,
+            duration: None,
+            uploader: None,
+            uploader_url: None,
+            actors: Vec::new(),
+            view_count: None,
+            upload_date: None,
+        }
+    }
+
+    fn ids(list: &[&str]) -> Vec<SearchResultPreview> {
+        list.iter().map(|id| preview_id(id)).collect()
     }
 
     enum Page {
@@ -958,11 +1036,11 @@ mod tests {
 
     #[tokio::test]
     async fn accumulates_across_pages_then_truncates_to_max_results() {
-        // page1: 3, page2: 3, cap 4 → extend to 6, truncate to 4.
+        // page1: 3, page2: 3 (distinct urls), cap 4 → extend to 6, truncate to 4.
         let out = run(
             vec![
                 Page::Ok(previews(3), Termination::Pages(10)),
-                Page::Ok(previews(3), Termination::Pages(10)),
+                Page::Ok(previews_from(3, 3), Termination::Pages(10)),
             ],
             Some(4),
         )
@@ -1020,7 +1098,7 @@ mod tests {
         let out = run(
             vec![
                 Page::Ok(previews(3), Termination::Pages(2)),
-                Page::Ok(previews(2), Termination::Pages(2)),
+                Page::Ok(previews_from(3, 2), Termination::Pages(2)),
             ],
             None,
         )
@@ -1109,7 +1187,7 @@ mod tests {
         let out = run(
             vec![
                 Page::Ok(previews(3), Termination::UntilEmpty),
-                Page::Ok(previews(2), Termination::UntilEmpty),
+                Page::Ok(previews_from(3, 2), Termination::UntilEmpty),
                 Page::Ok(Vec::new(), Termination::UntilEmpty),
             ],
             None,
@@ -1125,7 +1203,7 @@ mod tests {
         let out = run(
             vec![
                 Page::Ok(previews(4), Termination::UntilEmpty),
-                Page::Ok(previews(4), Termination::UntilEmpty),
+                Page::Ok(previews_from(4, 4), Termination::UntilEmpty),
             ],
             Some(6),
         )
@@ -1142,13 +1220,86 @@ mod tests {
         let out = run(
             vec![
                 Page::Ok(previews(2), Termination::Pages(2)),
-                Page::Ok(previews(2), Termination::Pages(3)),
-                Page::Ok(previews(2), Termination::Pages(3)),
+                Page::Ok(previews_from(2, 2), Termination::Pages(3)),
+                Page::Ok(previews_from(4, 2), Termination::Pages(3)),
             ],
             None,
         )
         .await;
         assert_eq!(out.len(), 6, "all 3 pages fetched (latest count = 3)");
+    }
+
+    // ---- Filler/duplicate-page termination ----
+
+    /// Filler/duplicate-page termination: a page whose result-URL set is a
+    /// subset of the union of earlier pages ends pagination. Sites that serve
+    /// page 1 again past the last real page (or a fixed "no more results"
+    /// grid) otherwise loop until max_results.
+    #[tokio::test]
+    async fn stops_when_a_page_repeats_earlier_urls() {
+        // pages: [a,b] (has_more) → [b,a] (has_more) → [c] (never fetched)
+        let mock = MockSearch::new(vec![
+            Page::Ok(ids(&["a", "b"]), Termination::UntilEmpty),
+            Page::Ok(ids(&["b", "a"]), Termination::UntilEmpty),
+            Page::Ok(ids(&["c"]), Termination::UntilEmpty),
+        ]);
+        let out = mock
+            .search_all_pages(&query(None), &test_ctx())
+            .await
+            .expect("no fetch fails in this script");
+        assert_eq!(
+            out.iter().map(|r| r.video_url.clone()).collect::<Vec<_>>(),
+            vec!["https://x.test/a", "https://x.test/b"]
+        );
+        assert_eq!(
+            mock.fetches.load(Ordering::SeqCst),
+            2,
+            "the repeating page must stop pagination before page 3 is fetched"
+        );
+    }
+
+    #[tokio::test]
+    async fn continues_when_a_page_has_at_least_one_new_url() {
+        // pages: [a,b] → [b,c] → [] ; expect [a,b,b,c] (no row dedup, only
+        // termination), 3 fetches (the empty page is reached and fetched).
+        let mock = MockSearch::new(vec![
+            Page::Ok(ids(&["a", "b"]), Termination::UntilEmpty),
+            Page::Ok(ids(&["b", "c"]), Termination::UntilEmpty),
+            Page::Ok(Vec::new(), Termination::UntilEmpty),
+        ]);
+        let out = mock
+            .search_all_pages(&query(None), &test_ctx())
+            .await
+            .expect("no fetch fails in this script");
+        assert_eq!(
+            out.iter().map(|r| r.video_url.clone()).collect::<Vec<_>>(),
+            vec![
+                "https://x.test/a",
+                "https://x.test/b",
+                "https://x.test/b",
+                "https://x.test/c",
+            ]
+        );
+        assert_eq!(mock.fetches.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn first_page_is_never_treated_as_duplicate() {
+        // pages: [a,a] → [] ; the first page has nothing "earlier" to repeat,
+        // even though it repeats a URL against itself.
+        let mock = MockSearch::new(vec![
+            Page::Ok(ids(&["a", "a"]), Termination::UntilEmpty),
+            Page::Ok(Vec::new(), Termination::UntilEmpty),
+        ]);
+        let out = mock
+            .search_all_pages(&query(None), &test_ctx())
+            .await
+            .expect("no fetch fails in this script");
+        assert_eq!(
+            out.iter().map(|r| r.video_url.clone()).collect::<Vec<_>>(),
+            vec!["https://x.test/a", "https://x.test/a"]
+        );
+        assert_eq!(mock.fetches.load(Ordering::SeqCst), 2);
     }
 
     // ---- PaginatedSearch::search_page_response ----
