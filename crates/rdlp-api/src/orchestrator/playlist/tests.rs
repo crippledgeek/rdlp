@@ -128,10 +128,11 @@ fn test_extract_cdn_host_stickiness_sort() {
 /// rather than asserting on source text, so it stays valid however a future
 /// sweep might be spelled — including the existence-probe shape that
 /// `scripts/check-no-dir-sweep-delete.sh` cannot see.
-// The `mockito::Server` must stay alive for the whole body — it stops serving
-// when dropped — so its drop cannot be tightened. Same rationale as the
-// module-level allow in `orchestrator/tests/hls_e2e.rs`.
-#[allow(clippy::significant_drop_tightening)]
+// The `mockito::Server` must stay alive for the whole body — it stops
+// serving when dropped (`mockito::Server`'s `Drop` calls `reset()`). Rather
+// than allowing clippy's early-drop suggestion, `server` is dropped
+// explicitly as the LAST statement below, after every assertion — same
+// convention as `orchestrator/tests/hls_e2e.rs`.
 #[tokio::test]
 async fn foreign_part_files_survive_an_episode_download() {
     use crate::events::Event;
@@ -221,6 +222,7 @@ async fn foreign_part_files_survive_an_episode_download() {
         "a foreign bare .part file must survive (empty-suffix match)"
     );
     assert!(unrelated.exists(), "an unrelated file must survive");
+    drop(server);
 }
 
 // ---------------------------------------------------------------------------
@@ -244,8 +246,9 @@ async fn foreign_part_files_survive_an_episode_download() {
 /// RED against the unpatched `episode.rs` (no `PartLock::claim` at all):
 /// panics with "got: Err(DownloadFailed(..))" instead of `OutputBusy`.
 // The `mockito::Server` must stay alive for the whole body — same rationale
-// as `foreign_part_files_survive_an_episode_download` above.
-#[allow(clippy::significant_drop_tightening)]
+// as `foreign_part_files_survive_an_episode_download` above; `server` is
+// dropped explicitly as the LAST statement below instead of allowing
+// clippy's early-drop suggestion.
 #[tokio::test]
 async fn playlist_episode_collision_reports_output_busy() {
     use crate::events::Event;
@@ -309,4 +312,5 @@ async fn playlist_episode_collision_reports_output_busy() {
         "playlist episode download must be refused as OutputBusy when another \
          process already claims its .rdlp-part path, got: {result:?}"
     );
+    drop(server);
 }

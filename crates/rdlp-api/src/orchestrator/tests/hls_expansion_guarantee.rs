@@ -22,16 +22,19 @@
 //! The survivors' ids and order (`a`, `b`, `c`) are asserted together, so a
 //! regression that reorders or fails to drop the hostile row is caught by
 //! the same assertion that catches a missed expansion.
-
-// Same allow, same reason, as the sibling `tests/hls_e2e.rs` (its own module
-// doc, lines 20-26): `Fixture` holds a `mockito::ServerGuard` alive across
-// each test's `extract_*(...).await`, which the fetch inside that await
-// itself needs — `mockito::Server`'s `Drop` calls `reset()` and clears every
-// mock, so an early drop (clippy's suggested fix) would empty the server's
-// mocks before the request the test is waiting on. `_never_hit`'s `.expect(0)`
-// also only fires on drop, which must happen at the end of the test, not
-// before its assertions run.
-#![allow(clippy::significant_drop_tightening)]
+//!
+//! Every test below holds a `mockito::Server` for its full body and drops it
+//! explicitly as the LAST statement, after `assert_survivors`. Same
+//! convention, same reason, as `rdlp-plugin`'s
+//! `host/extract_helpers/tests.rs::hls_host_imports`: `clippy::
+//! significant-drop-tightening lint` would otherwise suggest dropping `server`
+//! right after its last field access inside `build_fixture` (`server.mock`),
+//! but `mockito::Server`'s `Drop` calls `reset()`, which clears its
+//! registered mocks — doing that before the awaited `extract_*` request and
+//! `assert_survivors` run would break the test, not just release a resource
+//! earlier. Moving the real last use (this explicit `drop`) to the true end
+//! of the function closes the gap the lint flags without changing when the
+//! server actually goes away.
 
 use crate::orchestrator::test_support::orchestrator_with_fake_extractor;
 use rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA;
@@ -43,24 +46,16 @@ use rdlp_types::{DownloadProtocol, Format, Fragment, InfoDict};
 /// reject it.
 const HOSTILE_HOST: &str = "169.254.169.254";
 
-/// The fixture shared by all three tests: an `InfoDict` carrying the four
-/// format shapes described on the module, plus the mockito server and mock
-/// handles the test depends on staying alive for its whole body — dropping
-/// the server clears every mock it holds (`mockito::Server`'s `Drop` calls
-/// `reset()`), and `_never_hit` panics on drop if its `.expect(0)` is
-/// violated. Held together in one struct (rather than as separate locals in
-/// each test) so a boundary's `extract_*` call always runs before either can
-/// be dropped.
+/// The `InfoDict` shared by all three tests, plus the mock handles needed to
+/// keep alive until each test's own explicit `drop(server)`.
 struct Fixture {
     info: InfoDict,
     already_resolved_seg_url: String,
-    _server: mockito::ServerGuard,
     _fragments_less: mockito::Mock,
     _never_hit: mockito::Mock,
 }
 
-async fn build_fixture() -> Fixture {
-    let mut server = mockito::Server::new_async().await;
+async fn build_fixture(server: &mut mockito::ServerGuard) -> Fixture {
     let base = server.url();
 
     // (a) fragments-less M3u8Native — must be fetched and expanded.
@@ -116,7 +111,6 @@ async fn build_fixture() -> Fixture {
     Fixture {
         info,
         already_resolved_seg_url,
-        _server: server,
         _fragments_less: fragments_less,
         _never_hit: never_hit,
     }
@@ -171,7 +165,8 @@ fn assert_survivors(result: &InfoDict, fixture: &Fixture) {
 
 #[tokio::test]
 async fn extract_video_expands_fragments_less_hls_rows_and_drops_hostile_ones() {
-    let fixture = build_fixture().await;
+    let mut server = mockito::Server::new_async().await;
+    let fixture = build_fixture(&mut server).await;
     let orch = orchestrator_with_fake_extractor(fixture.info.clone());
 
     let result = orch
@@ -180,11 +175,13 @@ async fn extract_video_expands_fragments_less_hls_rows_and_drops_hostile_ones() 
         .expect("the fake extractor never errors");
 
     assert_survivors(&result, &fixture);
+    drop(server);
 }
 
 #[tokio::test]
 async fn extract_lazy_formats_expands_fragments_less_hls_rows_and_drops_hostile_ones() {
-    let fixture = build_fixture().await;
+    let mut server = mockito::Server::new_async().await;
+    let fixture = build_fixture(&mut server).await;
     let orch = orchestrator_with_fake_extractor(fixture.info.clone());
 
     let result = orch
@@ -193,11 +190,13 @@ async fn extract_lazy_formats_expands_fragments_less_hls_rows_and_drops_hostile_
         .expect("the fake extractor never errors");
 
     assert_survivors(&result, &fixture);
+    drop(server);
 }
 
 #[tokio::test]
 async fn extract_playlist_expands_fragments_less_hls_rows_and_drops_hostile_ones() {
-    let fixture = build_fixture().await;
+    let mut server = mockito::Server::new_async().await;
+    let fixture = build_fixture(&mut server).await;
     let orch = orchestrator_with_fake_extractor(fixture.info.clone());
 
     let mut result = orch
@@ -211,4 +210,5 @@ async fn extract_playlist_expands_fragments_less_hls_rows_and_drops_hostile_ones
         "the default extract_playlist wraps extract() in a Vec of one"
     );
     assert_survivors(&result.remove(0), &fixture);
+    drop(server);
 }

@@ -20,9 +20,21 @@
 //! `FFmpeg` mux correctness is separately covered by the HLS downloader tests.
 
 // Test scope: large fixture-driven happy-path test exceeds the workspace's
-// strict per-fn line cap and holds a `mockito::Server` across the body so
-// `expect(0)` mocks fire on drop at end of scope.
-#![allow(clippy::too_many_lines, clippy::significant_drop_tightening)]
+// strict per-fn line cap.
+#![allow(clippy::too_many_lines)]
+
+// Every test below holds a `mockito::Server` for its full body and drops it
+// explicitly as the LAST statement, after its assertions run. Same
+// convention, same reason, as `rdlp-plugin`'s
+// `host/extract_helpers/tests.rs::hls_host_imports`: `clippy::
+// significant-drop-tightening lint` would otherwise suggest dropping `server`
+// right after its last field access (registering the mocks), but
+// `mockito::Server`'s `Drop` calls `reset()`, which clears its registered
+// mocks — doing that before the awaited request and the `.expect(N)`
+// mock-drop assertions run would break the test, not just release a
+// resource earlier. Moving the real last use (this explicit `drop`) to the
+// true end of the function closes the gap the lint flags without changing
+// when the server actually goes away.
 
 use crate::events::Event;
 use crate::handle::DownloadId;
@@ -291,6 +303,7 @@ async fn hls_bv_star_plus_ba_auto_pairs_separate_audio_rendition() {
     // Assertions B and C are enforced by mockito's `.expect(N)` guards: the
     // mock objects drop at end of scope and panic if the call count doesn't
     // match.
+    drop(server);
 }
 
 /// Regression guard — `bugfix/hls-cdn-fallback-drops-fragments`.
@@ -389,4 +402,5 @@ async fn hls_failed_primary_with_fallback_never_emits_fragmentless_internal_erro
         }
         other => panic!("expected a graceful DownloadFailed(Network), got: {other:?}"),
     }
+    drop(server);
 }
