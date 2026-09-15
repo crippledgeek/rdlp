@@ -553,6 +553,16 @@ pub trait PagedSearch: SearchExtractor {
     /// which also lets the crate keep `expect_used`/`unwrap_used` clean (no `.expect()`).
     ///
     /// [`fetch_via_spec`]: Self::fetch_via_spec
+    ///
+    /// # Errors
+    ///
+    /// Returns an error on any fetch/parse failure for `page`. `search_all_pages`
+    /// relies on this being distinguishable only by *when* it happens: an `Err`
+    /// on the first page propagates to the caller (nothing has been collected
+    /// yet, so there is no partial result to salvage); an `Err` on a later page
+    /// ends pagination and returns the results already gathered. Implementors
+    /// do not need to encode that distinction themselves — return `Err` on any
+    /// failure and the shared loop applies the right disposition.
     fn fetch_page(
         &self,
         query: &SearchQuery,

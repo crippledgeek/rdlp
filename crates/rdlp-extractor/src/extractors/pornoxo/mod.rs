@@ -237,7 +237,9 @@ impl PagedSearch for PornoxoExtractor {
             results: listing.results,
             // `?page=999` returning HTTP 200 with page 1's content means an
             // empty-grid stop condition never fires; the `Next` anchor is the
-            // only signal that terminates.
+            // only per-site signal — the shared scaffold's duplicate-page
+            // termination (`search_all_pages`) is the backstop for exactly
+            // that case (page 999 repeating page 1's rows).
             has_more: listing.has_next,
             // The site publishes no result count on either route.
             total_estimate: None,

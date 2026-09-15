@@ -62,12 +62,15 @@ pub(crate) use protocol::protocol_for_url;
 pub(crate) use search::SearchOrigin;
 /// Reachable by the plugin host (`rdlp-plugin`): the `PagedSearch` scaffold a
 /// plugin's search extension answers against, plus its filter-validation types.
+/// `SearchPageSpec` is included so an implementor can name the parameter type
+/// of `PagedSearch::fetch_via_spec` — `search` itself is a private module, so
+/// without this a caller could see the method but not spell its argument.
 pub use search::{
     FilterValidationError, KeyValidation, PAGE_RATE_LIMIT_MS, PagedSearch, SearchPage,
-    validate_against_descriptors,
+    SearchPageSpec, validate_against_descriptors,
 };
 pub(crate) use search::{
-    SearchPageSpec, Termination, append_search_filters, filter_value, first_resolvable_media_attr,
+    Termination, append_search_filters, filter_value, first_resolvable_media_attr,
     format_std_filter_error, is_not_a_data_uri, resolve_card_url, resolve_media_url,
 };
 pub(crate) use selectors::*;
