@@ -337,6 +337,27 @@ pub trait PagedPlaylist: Send + Sync {
         Duration::from_millis(PAGE_RATE_LIMIT_MS)
     }
 
+    /// Validate `Config::{playlist_start,playlist_end,playlist_items}` for
+    /// `url` without fetching anything — the same fail-fast-before-any-page
+    /// check [`extract_all_entries`](Self::extract_all_entries) makes
+    /// before its own first-page fetch. A caller that must probe a page
+    /// before it even knows whether `url` is this site's playlist at all
+    /// (the plugin host: an absent `extract-playlist` export or
+    /// `unsupported-url` on page one falls back to a single `extract`
+    /// call) calls this first, so a malformed range is reported the same
+    /// way on both paths — before that probe, not silently skipped by it.
+    /// Provided; do not override.
+    ///
+    /// # Errors
+    ///
+    /// An unparsable `Config::playlist_items` (start > end, or any other
+    /// shape [`rdlp_types::PlaylistItems::parse`] rejects) is an
+    /// `Extraction` error naming `url`.
+    fn validate_selection(&self, url: &str, ctx: &ExtractionContext) -> Result<()> {
+        PlaylistSelection::from_config(&ctx.config, url)?;
+        Ok(())
+    }
+
     /// Fetch the first page, then run the shared loop
     /// ([`extract_all_entries_from`](Self::extract_all_entries_from)).
     /// Shared scaffold — do not override.
@@ -344,18 +365,17 @@ pub trait PagedPlaylist: Send + Sync {
     /// # Errors
     ///
     /// An unparsable `Config::playlist_items` is an `Extraction` error
-    /// before the first page is fetched (the selection is parsed here to
-    /// fail fast, and again inside `extract_all_entries_from`, which is
-    /// also an entry point in its own right). A first-page failure
-    /// propagates as-is; see `extract_all_entries_from` for the loop's own
-    /// errors.
+    /// before the first page is fetched ([`validate_selection`](Self::validate_selection)
+    /// fails fast, and `extract_all_entries_from` — also an entry point in
+    /// its own right — validates again). A first-page failure propagates
+    /// as-is; see `extract_all_entries_from` for the loop's own errors.
     fn extract_all_entries(
         &self,
         url: &str,
         ctx: &ExtractionContext,
     ) -> impl Future<Output = Result<Vec<InfoDict>>> + Send {
         async move {
-            PlaylistSelection::from_config(&ctx.config, url)?;
+            self.validate_selection(url, ctx)?;
             let first_page = self
                 .fetch_playlist_page(url, self.first_page_index(), ctx)
                 .await?;

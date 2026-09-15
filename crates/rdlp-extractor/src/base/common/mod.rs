@@ -81,6 +81,11 @@ pub(crate) use search::{
     Termination, append_search_filters, filter_value, first_resolvable_media_attr,
     is_not_a_data_uri, resolve_card_url, resolve_media_url,
 };
+/// The playlist loop's own overall cap, reachable outside this crate so a
+/// caller that bounds a plugin-controlled row list at the WIT boundary
+/// (`rdlp-plugin`'s `cap_plugin_playlist_entries`) can cite the same
+/// literal rather than restating it (fix round 1, finding 2, refs #768).
+pub use selectors::MAX_PLAYLIST_SIZE;
 pub(crate) use selectors::*;
 
 /// Maximum URL length to prevent memory exhaustion attacks

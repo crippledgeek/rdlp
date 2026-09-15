@@ -28,16 +28,14 @@ use rdlp_types::DownloadProtocol;
 pub(crate) const MAX_PLUGIN_FORMATS: usize = 256;
 
 /// Upper bound on the entries one `extract-playlist` page may carry across
-/// the boundary. Mirrors `rdlp_extractor::base::common::MAX_PLAYLIST_SIZE`
-/// (`crates/rdlp-extractor/src/base/common/selectors.rs`) — the host-owned
-/// playlist loop's own overall cap across every page of one playlist — so a
-/// single plugin-controlled page can never itself exceed what the loop
-/// would ever keep. That constant is `pub(crate)` to `rdlp-extractor` and
-/// not reachable from here, so the value is restated rather than imported;
-/// the two are expected to move together. Excess rows are dropped from the
-/// tail with one warning on the plugin's log target, same as
+/// the boundary — the host-owned playlist loop's own overall cap
+/// (`rdlp_extractor::base::common::MAX_PLAYLIST_SIZE`) across every page of
+/// one playlist, so a single plugin-controlled page can never itself exceed
+/// what the loop would ever keep. Excess rows are dropped from the tail
+/// with one warning on the plugin's log target, same as
 /// [`MAX_PLUGIN_FORMATS`].
-pub(crate) const MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES: usize = 1000;
+pub(crate) const MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES: usize =
+    rdlp_extractor::base::common::MAX_PLAYLIST_SIZE;
 
 /// Whom a conversion's diagnostics name and where they go: the plugin's
 /// name for identity, its `log` target for the warning channel `host:log`

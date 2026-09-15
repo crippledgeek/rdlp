@@ -187,16 +187,28 @@ impl PluginExtractor {
     /// plumbing and the WIT→`PlaylistPage` conversion each exist once.
     /// `Ok(None)`: the component never declared the export.
     ///
+    /// The plugin's domain error (`WitPlaylistError`) is mapped to
+    /// [`PluginError`] *inside* the runner's closure — the same place
+    /// `call_search`/`call_plugin_extract` map theirs — so
+    /// [`counts_as_strike`] sees it and `internal` records a strike here
+    /// exactly like every other call kind (fix round 1, finding 1: mapping
+    /// it after `run_in_fresh_store` returned meant the closure's `Ok`
+    /// never let the runner's strike accounting see the domain error at
+    /// all).
+    ///
+    /// [`counts_as_strike`]: crate::adapter::counts_as_strike
+    ///
     /// # Errors
     ///
     /// The runner's errors ([`PluginError::Disabled`], `Timeout`,
-    /// `Trapped`), or `Trapped` when the export exists with an unexpected
-    /// signature or traps while running.
+    /// `Trapped`), `Trapped` when the export exists with an unexpected
+    /// signature or traps while running, or the plugin's own domain error
+    /// mapped via [`playlist_error_to_plugin_error`].
     async fn call_extract_playlist_page(
         &self,
         url: &str,
         page: u32,
-    ) -> Result<Option<Result<PlaylistPage, WitPlaylistError>>, PluginError> {
+    ) -> Result<Option<PlaylistPage>, PluginError> {
         let spec = CallSpec {
             subject_for_errors: url,
             timeout: SEARCH_TIMEOUT,
@@ -207,14 +219,30 @@ impl PluginExtractor {
         let owned = url.to_string();
         self.run_in_fresh_store(spec, move |store, inst| {
             Box::pin(async move {
+                // The by-name-call debug line: counted by
+                // `real_first_page_hands_off_to_the_scaffold_and_fetches_page_1_once`
+                // to prove the probe's page is reused by the scaffold
+                // rather than re-fetched.
+                log::debug!(
+                    target: &store.data().log_target,
+                    "{EXTRACT_PLAYLIST_EXPORT}: fetching page {page}"
+                );
                 let raw = call_extract_playlist(
                     store,
                     &inst.raw,
                     PlaylistPageRequest { url: &owned, page },
                 )
                 .await?;
-                let origin = store.data().origin();
-                Ok(raw.map(|r| r.map(|p| playlist_page_from_wit(p, &origin))))
+                match raw {
+                    None => Ok(None),
+                    Some(Ok(p)) => {
+                        let origin = store.data().origin();
+                        Ok(Some(playlist_page_from_wit(p, &origin)))
+                    }
+                    Some(Err(e)) => {
+                        Err(playlist_error_to_plugin_error(&store.data().plugin_name, e))
+                    }
+                }
             })
         })
         .await
@@ -230,6 +258,11 @@ impl PluginExtractor {
     /// successful page one is handed to
     /// [`PagedPlaylist::extract_all_entries_from`] rather than re-fetched,
     /// so a real playlist costs exactly the pages it has, not one extra.
+    /// `source` is built before the probe (rather than only once a real
+    /// playlist is confirmed) because both `validate_selection` — fail
+    /// fast on a malformed range before any network call, same as
+    /// `extract_all_entries` — and `first_page_index` are read from it
+    /// before that probe runs.
     ///
     /// # Errors
     ///
@@ -241,19 +274,16 @@ impl PluginExtractor {
         ctx: &ExtractionContext,
     ) -> RdlpResult<Vec<InfoDict>> {
         let source = PluginPlaylistSource { plugin: self };
+        source.validate_selection(url, ctx)?;
         let first = self
             .call_extract_playlist_page(url, source.first_page_index())
-            .await
-            .map_err(|e| plugin_error_to_rdlp(e, Some(url)))?;
+            .await;
         match first {
-            None | Some(Err(WitPlaylistError::UnsupportedUrl(_))) => {
+            Ok(None) | Err(PluginError::UnsupportedUrl { .. }) => {
                 Ok(vec![self.extract(url, ctx).await?])
             }
-            Some(Err(e)) => Err(plugin_error_to_rdlp(
-                playlist_error_to_plugin_error(&self.manifest.name, e),
-                Some(url),
-            )),
-            Some(Ok(first_page)) => {
+            Err(e) => Err(plugin_error_to_rdlp(e, Some(url))),
+            Ok(Some(first_page)) => {
                 source
                     .extract_all_entries_from(PlaylistStart { url, first_page }, ctx)
                     .await
@@ -283,21 +313,20 @@ impl PagedPlaylist for PluginPlaylistSource<'_> {
         page: u32,
         _ctx: &ExtractionContext,
     ) -> RdlpResult<PlaylistPage> {
-        match self
-            .plugin
-            .call_extract_playlist_page(url, page)
-            .await
-            .map_err(|e| plugin_error_to_rdlp(e, Some(url)))?
-        {
-            None => Err(RdlpError::extraction(
+        match self.plugin.call_extract_playlist_page(url, page).await {
+            // Unreachable in practice: `extract_playlist_via_plugin`'s
+            // probe already proved this component exports
+            // `extract-playlist` before this method is ever called (a
+            // component cannot un-export something between two calls on
+            // the same `PluginExtractor`). Kept for exhaustiveness and
+            // because `call_extract_playlist_page` has no other caller to
+            // prove that of.
+            Ok(None) => Err(RdlpError::extraction(
                 "plugin has no extract-playlist export",
                 url,
             )),
-            Some(Ok(page)) => Ok(page),
-            Some(Err(e)) => Err(plugin_error_to_rdlp(
-                playlist_error_to_plugin_error(&self.plugin.manifest.name, e),
-                Some(url),
-            )),
+            Ok(Some(page)) => Ok(page),
+            Err(e) => Err(plugin_error_to_rdlp(e, Some(url))),
         }
     }
 

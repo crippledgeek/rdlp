@@ -407,7 +407,12 @@ signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 entries: Arc::clone(&entries),
             }));
             log::set_logger(logger).expect("no other logger in the rdlp-plugin lib test binary");
-            log::set_max_level(log::LevelFilter::Warn);
+            // `Debug`, not `Warn`: `playlist_adapter`'s
+            // `real_first_page_hands_off_to_the_scaffold_and_fetches_page_1_once`
+            // counts a `debug!` by-name-call line to prove a page is
+            // fetched exactly once (fix round 1 finding 4) — `Warn` would
+            // silently drop it before it ever reached this logger.
+            log::set_max_level(log::LevelFilter::Debug);
             entries
         }))
     }
