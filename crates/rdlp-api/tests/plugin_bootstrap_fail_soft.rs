@@ -18,32 +18,15 @@
 )]
 
 use rdlp_api::RdlpClient;
+use rdlp_plugin::test_support::with_isolated_config_dir;
 use rdlp_types::Config;
-
-/// Run `f` with XDG_CONFIG_HOME and HOME both pointing at a fresh tempdir.
-///
-/// This prevents the bootstrap from reading or writing trust state into the
-/// user's real `~/.config/rdlp`. temp-env's internal mutex serialises against
-/// any other test that reads or writes these vars. The tempdir is cleaned up
-/// when the closure returns.
-fn with_isolated_xdg<F: FnOnce(&std::path::Path)>(f: F) {
-    let tmp = tempfile::TempDir::new().expect("tempdir creation");
-    let path_str = tmp.path().to_str().expect("tempdir path is utf-8");
-    temp_env::with_vars(
-        [
-            ("XDG_CONFIG_HOME", Some(path_str)),
-            ("HOME", Some(path_str)),
-        ],
-        || f(tmp.path()),
-    );
-}
 
 #[test]
 fn malformed_plugin_toml_does_not_break_client() {
-    with_isolated_xdg(|tmpdir| {
+    with_isolated_config_dir(|config_dir| {
         // Drop a directory that *looks* like a plugin but has a syntactically
         // invalid manifest. Bootstrap should warn-and-skip, not propagate.
-        let plug_dir = tmpdir.join("plugins").join("broken");
+        let plug_dir = config_dir.join("plugins").join("broken");
         std::fs::create_dir_all(&plug_dir).unwrap();
         std::fs::write(
             plug_dir.join("plugin.toml"),
@@ -53,7 +36,7 @@ fn malformed_plugin_toml_does_not_break_client() {
         std::fs::write(plug_dir.join("plugin.wasm"), b"not actual wasm").unwrap();
 
         let config = Config {
-            plugin_directories: vec![tmpdir.join("plugins")],
+            plugin_directories: vec![config_dir.join("plugins")],
             ..Default::default()
         };
 
@@ -67,8 +50,8 @@ fn malformed_plugin_toml_does_not_break_client() {
 
 #[test]
 fn missing_plugin_dir_does_not_break_client() {
-    with_isolated_xdg(|tmpdir| {
-        let nonexistent = tmpdir.join("does-not-exist");
+    with_isolated_config_dir(|config_dir| {
+        let nonexistent = config_dir.join("does-not-exist");
 
         let config = Config {
             plugin_directories: vec![nonexistent],
@@ -85,8 +68,13 @@ fn corrupted_disabled_list_blocks_bootstrap() {
     // Inverse of fail-soft: a corrupted disabled-plugins TOML MUST be
     // surfaced loudly. Silently treating it as empty would silently
     // re-enable any previously-blocked plugin (security regression).
-    with_isolated_xdg(|tmpdir| {
-        let rdlp_dir = tmpdir.join("rdlp");
+    with_isolated_config_dir(|config_dir| {
+        // `bootstrap_plugins` resolves this path itself as
+        // `config_dir()?.join("rdlp")`, where `config_dir()` reads
+        // `XDG_CONFIG_HOME` — which `with_isolated_config_dir` points at
+        // this same directory, so the fixture and the code under test
+        // agree on where the disabled list lives.
+        let rdlp_dir = config_dir.join("rdlp");
         std::fs::create_dir_all(&rdlp_dir).unwrap();
         std::fs::write(
             rdlp_dir.join("plugin-disabled.toml"),
@@ -94,7 +82,7 @@ fn corrupted_disabled_list_blocks_bootstrap() {
         )
         .unwrap();
 
-        let plug_dir = tmpdir.join("plugins");
+        let plug_dir = config_dir.join("plugins");
         std::fs::create_dir_all(&plug_dir).unwrap();
 
         let config = Config {

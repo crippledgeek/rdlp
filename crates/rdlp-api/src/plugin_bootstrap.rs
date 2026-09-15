@@ -294,7 +294,7 @@ mod tests {
 
     #[test]
     fn search_only_plugin_registers_only_as_a_search_extractor() {
-        with_isolated_config_dir(|| {
+        with_isolated_config_dir(|_config_dir| {
             let (config, _tempdir) = config_with_signed_plugin(&Capabilities {
                 extract: false,
                 search: true,
@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn plugin_supporting_both_registers_in_both_lists() {
-        with_isolated_config_dir(|| {
+        with_isolated_config_dir(|_config_dir| {
             let (config, _tempdir) = config_with_signed_plugin(&Capabilities {
                 extract: true,
                 search: true,
@@ -335,7 +335,7 @@ mod tests {
     /// mirroring the search-only test's own negative assertion.
     #[test]
     fn extract_only_plugin_is_absent_from_search_extractors() {
-        with_isolated_config_dir(|| {
+        with_isolated_config_dir(|_config_dir| {
             let (config, _tempdir) = config_with_signed_plugin(&Capabilities {
                 extract: true,
                 search: false,

@@ -48,7 +48,9 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util"] }
-temp-env = { workspace = true }
+# temp-env itself is no longer a direct dependency: the isolation wrapper
+# it backs (`with_isolated_config_dir`) now lives once in
+# `rdlp_plugin::test_support`, which depends on it instead.
 tempfile = { workspace = true }
 proptest = "1.4"
 mockito = "1.7"

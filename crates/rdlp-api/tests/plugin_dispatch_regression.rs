@@ -51,7 +51,7 @@ fn list_extractors_includes_loaded_plugin() {
         return;
     }
 
-    with_isolated_config_dir(|| {
+    with_isolated_config_dir(|_config_dir| {
         let tempdir = tempfile::tempdir().expect("tempdir");
         let wasm_bytes = std::fs::read(&wasm_src).expect("read example wasm");
 

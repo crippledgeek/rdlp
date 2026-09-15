@@ -177,9 +177,12 @@ pub fn trusted_identity_for(key: &SigningKey) -> String {
 /// pointing all of them at the same tempdir guarantees a clean slate.
 /// `temp-env`'s internal mutex serialises this against any other test in
 /// the same process that reads or writes these vars; the tempdir is
-/// cleaned up when `f` returns.
+/// cleaned up when `f` returns. `f` receives the tempdir's path so a test
+/// that needs to write directly under `$XDG_CONFIG_HOME` (e.g. a
+/// `<config_dir>/rdlp/plugin-disabled.toml` fixture) can do so without
+/// creating a second, unrelated tempdir.
 #[doc(hidden)]
-pub fn with_isolated_config_dir<R>(f: impl FnOnce() -> R) -> R {
+pub fn with_isolated_config_dir<R>(f: impl FnOnce(&Path) -> R) -> R {
     let tempdir = tempfile::tempdir().unwrap_or_else(|e| panic!("tempdir: {e}"));
     let path_str = tempdir
         .path()
@@ -190,6 +193,6 @@ pub fn with_isolated_config_dir<R>(f: impl FnOnce() -> R) -> R {
             ("XDG_CONFIG_HOME", Some(path_str)),
             ("HOME", Some(path_str)),
         ],
-        f,
+        || f(tempdir.path()),
     )
 }
