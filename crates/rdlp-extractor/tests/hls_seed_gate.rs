@@ -127,8 +127,10 @@ async fn https_loopback_seed_rejected_in_production_build() {
 }
 
 /// Link-local, including the cloud-metadata address. Covered by a unit test
-/// too; repeated here because the unit-test version runs against a build whose
-/// gate has an exemption compiled into it, and this one does not.
+/// too; repeated here because link-local carries no exemption in either build
+/// configuration (`loopback-test-exemption` only ever widens the *loopback*
+/// check), so this proves the real gate fires in an integration build
+/// regardless of the feature.
 #[tokio::test]
 async fn link_local_seed_rejected_in_production_build() {
     let url = "http://169.254.169.254/latest/meta-data/";
