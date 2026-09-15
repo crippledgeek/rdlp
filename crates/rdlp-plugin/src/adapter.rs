@@ -37,7 +37,7 @@ use crate::loader::LoadedPlugin;
 use crate::manifest::Manifest;
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError};
 use rdlp_http::wreq;
-use rdlp_types::{DownloadProtocol, InfoDict};
+use rdlp_types::InfoDict;
 
 /// Number of traps before a plugin is automatically disabled for the session.
 const TRAP_DISABLE_THRESHOLD: u32 = 3;
@@ -376,7 +376,7 @@ async fn call_plugin_extract(
             })?;
 
     match wit_result {
-        Ok(info) => Ok(convert_info_dict(info, url, plugin_name)),
+        Ok(info) => Ok(crate::convert::info_dict_from_wit(info, url, plugin_name)),
         Err(extract_err) => Err(extract_error_to_plugin_error(plugin_name, extract_err)),
     }
 }
@@ -406,181 +406,5 @@ fn extract_error_to_plugin_error(
         W::Parse(detail) => PluginError::ExtractParse { plugin, detail },
         W::Cancelled => PluginError::Cancelled { plugin },
         W::Internal(detail) => PluginError::Internal(format!("plugin {plugin}: {detail}")),
-    }
-}
-
-/// Convert a bindgen-generated `InfoDict` to the rdlp-types `InfoDict`.
-///
-/// The WIT `InfoDict` does not carry `extractor` or `webpage_url` — those are
-/// filled in from the call context (`plugin_name` and `url`).
-fn convert_info_dict(
-    w: crate::bindings::rdlp::plugin::types::InfoDict,
-    url: &str,
-    plugin_name: &str,
-) -> InfoDict {
-    let mut out = InfoDict::new(
-        w.id,
-        w.title,
-        plugin_name,
-        // Prefer the URL the plugin returned; fall back to the request URL.
-        w.url.as_deref().unwrap_or(url),
-    );
-    out.thumbnail = w.thumbnail;
-    out.description = w.description;
-    out.uploader = w.uploader;
-    out.uploader_id = w.uploader_id;
-    out.upload_date = w.upload_date;
-    // WIT duration is Option<u32> (whole seconds); rdlp-types uses Option<f64>.
-    out.duration = w.duration.map(f64::from);
-    out.view_count = w.view_count;
-    out.like_count = w.like_count;
-    out.tags = if w.tags.is_empty() {
-        None
-    } else {
-        Some(w.tags)
-    };
-    out.categories = if w.categories.is_empty() {
-        None
-    } else {
-        Some(w.categories)
-    };
-    out.formats = w.formats.into_iter().map(convert_format).collect();
-    // Convert subtitle list → InfoDict's `HashMap<lang, Vec<Subtitle>>` format.
-    if !w.subtitles.is_empty() {
-        use rdlp_types::info_dict::Subtitle;
-        use std::collections::HashMap;
-        let mut map: HashMap<String, Vec<Subtitle>> = HashMap::new();
-        for s in w.subtitles {
-            map.entry(s.language).or_default().push(Subtitle {
-                url: s.url,
-                ext: s.ext,
-                name: None,
-            });
-        }
-        out.subtitles = Some(map);
-    }
-    out
-}
-
-/// Sanitise a plugin-supplied string before it enters a filesystem path.
-///
-/// Plugin output is untrusted: a malicious extractor could return
-/// `format_id = "/etc/cron.d/evil"` or `ext = "../../../home/user/.bashrc"`
-/// to escape the configured output directory via downstream
-/// `PathBuf::join` (which on POSIX *replaces* the buffer when the joined
-/// segment is absolute — exactly the path-injection vector security review
-/// M1 of PR #221 flagged).
-///
-/// Strip:
-/// - Path separators (`/`, `\`) — neutralises both POSIX and Windows
-///   traversal.
-/// - Drive-letter prefix (`C:` etc) and namespace prefix (`\\?\`) — Windows
-///   absolute-path forms.
-/// - Null bytes — defensive against C-string truncation in any FFI path.
-/// - Leading dots and whitespace — collapse `..`, `.foo`, ` foo` to safe
-///   forms before joining.
-///
-/// Empty results collapse to a single underscore so downstream filename
-/// formatters never receive a zero-length component.
-///
-/// This mirrors yt-dlp's `sanitize_filename` semantics conservatively
-/// (strict-only mode; no Unicode look-alike substitution) since these
-/// strings flow into rdlp's archive identity, not into user-visible
-/// titles.
-fn sanitise_for_path(s: String) -> String {
-    if s.is_empty() {
-        return "_".to_string();
-    }
-    let cleaned: String = s
-        .chars()
-        .filter(|c| !matches!(*c, '/' | '\\' | '\0' | ':'))
-        .collect();
-    let trimmed = cleaned.trim_matches(|c: char| c.is_whitespace() || c == '.');
-    if trimmed.is_empty() {
-        "_".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-/// Convert a WIT `Format` to `rdlp_types::Format`.
-///
-/// Numeric widening: WIT uses `f32` for `fps`/`tbr`/`vbr`/`abr`; rdlp-types
-/// uses `f64`. `format_id` and `ext` are sanitised before they enter the
-/// type — they're consumed by downstream filename formatters and must not
-/// carry path separators or drive-letter prefixes (security review M1).
-fn convert_format(w: crate::bindings::rdlp::plugin::types::Format) -> rdlp_types::Format {
-    let protocol = w
-        .protocol
-        .parse::<DownloadProtocol>()
-        .unwrap_or(DownloadProtocol::Https);
-    let format_id = sanitise_for_path(w.format_id);
-    let ext = sanitise_for_path(w.ext);
-    let mut f = rdlp_types::Format::new(format_id, w.url, ext, protocol);
-    f.width = w.width;
-    f.height = w.height;
-    f.fps = w.fps.map(f64::from);
-    f.tbr = w.tbr.map(f64::from);
-    f.vbr = w.vbr.map(f64::from);
-    f.abr = w.abr.map(f64::from);
-    f.vcodec = rdlp_types::Codec::from(w.vcodec);
-    f.acodec = rdlp_types::Codec::from(w.acodec);
-    f.container = w.container.map(sanitise_for_path);
-    f.filesize = w.filesize;
-    f.format_note = w.format_note;
-    f
-}
-
-#[cfg(test)]
-mod sanitise_for_path_tests {
-    use super::sanitise_for_path;
-
-    #[test]
-    fn empty_collapses_to_underscore() {
-        assert_eq!(sanitise_for_path(String::new()), "_");
-    }
-
-    #[test]
-    fn pure_dots_or_whitespace_collapse_to_underscore() {
-        assert_eq!(sanitise_for_path("...".into()), "_");
-        assert_eq!(sanitise_for_path("   ".into()), "_");
-        assert_eq!(sanitise_for_path(". . . ".into()), "_");
-    }
-
-    #[test]
-    fn leading_slash_stripped_blocks_absolute_path_injection() {
-        // The motivating M1 attack: malicious format_id = "/etc/passwd".
-        // After sanitisation, downstream PathBuf::join cannot escape.
-        assert_eq!(sanitise_for_path("/etc/passwd".into()), "etcpasswd");
-        assert_eq!(sanitise_for_path("/".into()), "_");
-    }
-
-    #[test]
-    fn windows_drive_letter_neutralised() {
-        // `C:\Windows\System32` would PathBuf::join as an absolute Windows
-        // path. Stripping `:` plus separators reduces it to a relative segment.
-        assert_eq!(
-            sanitise_for_path("C:\\Windows\\System32".into()),
-            "CWindowsSystem32"
-        );
-    }
-
-    #[test]
-    fn null_bytes_stripped() {
-        assert_eq!(sanitise_for_path("foo\0bar".into()), "foobar");
-    }
-
-    #[test]
-    fn parent_directory_traversal_neutralised() {
-        // "../../etc/passwd" — separators removed, leading dots stripped.
-        assert_eq!(sanitise_for_path("../../etc/passwd".into()), "etcpasswd");
-    }
-
-    #[test]
-    fn legitimate_format_ids_unchanged() {
-        assert_eq!(sanitise_for_path("hls-1280".into()), "hls-1280");
-        assert_eq!(sanitise_for_path("video-720p".into()), "video-720p");
-        assert_eq!(sanitise_for_path("dash-fragments".into()), "dash-fragments");
-        assert_eq!(sanitise_for_path("h264_aac_128k".into()), "h264_aac_128k");
     }
 }

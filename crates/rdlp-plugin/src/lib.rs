@@ -103,6 +103,7 @@
 #![warn(missing_docs)]
 
 pub mod adapter;
+pub mod convert;
 pub mod disabled_list;
 pub mod dispatch;
 pub mod engine;
