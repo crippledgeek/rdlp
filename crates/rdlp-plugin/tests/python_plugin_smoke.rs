@@ -26,32 +26,22 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use common::{SignedPluginSpec, write_signed_plugin};
+use common::{SignedPluginSpec, extraction_ctx, write_signed_plugin};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
-use rdlp_core::{ExtractionContext, InfoExtractor};
+use rdlp_core::InfoExtractor;
 use rdlp_http::HttpClientFactory;
-use rdlp_jsinterp::BoaJsEngine;
 use rdlp_plugin::adapter::{HostResources, PluginExtractor};
 use rdlp_plugin::engine::{Engine, EngineConfig};
 use rdlp_plugin::loader::Loader;
 use rdlp_plugin::prompt::AlwaysApprove;
 use rdlp_plugin::trust_store::TrustStore;
-use rdlp_types::Config;
 use tempfile::TempDir;
 
 const WASM_PATH: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/../../examples/plugins/ytdlp-hello-world/out/plugin.wasm"
 );
-
-fn make_extraction_ctx() -> ExtractionContext {
-    let http = Arc::new(HttpClientFactory::default().build());
-    let js = Arc::new(BoaJsEngine::new());
-    let cookies = Arc::new(rdlp_cookies::SimpleCookieJar::new());
-    let cfg = Arc::new(Config::default());
-    ExtractionContext::new(http, js, cookies, cfg)
-}
 
 /// Measures cold-start (load+sign+discover) — the load-bearing deliverable for
 /// Task 2. Does not call `extract`; that path hits Phase 1 host limits
@@ -200,7 +190,7 @@ async fn python_hello_world_extract_succeeds() {
     let adapter = PluginExtractor::new(loaded, engine.clone(), host_resources)
         .expect("adapter construction must succeed");
 
-    let ctx = make_extraction_ctx();
+    let ctx = extraction_ctx();
 
     let extract_start = Instant::now();
     let result = adapter.extract("https://example.com/foo", &ctx).await;

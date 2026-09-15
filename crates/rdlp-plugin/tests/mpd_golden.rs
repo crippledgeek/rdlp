@@ -37,19 +37,17 @@ mod common;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use common::{SignedPluginSpec, write_signed_plugin};
+use common::{SignedPluginSpec, extraction_ctx, write_signed_plugin};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
-use rdlp_core::{ExtractionContext, InfoExtractor};
+use rdlp_core::InfoExtractor;
 use rdlp_http::HttpClientFactory;
-use rdlp_jsinterp::BoaJsEngine;
 use rdlp_plugin::adapter::{HostResources, PluginExtractor};
 use rdlp_plugin::engine::{Engine, EngineConfig};
 use rdlp_plugin::host::fetch_fixtures::{FetchFixtures, FixtureResponse};
 use rdlp_plugin::loader::Loader;
 use rdlp_plugin::prompt::AlwaysApprove;
 use rdlp_plugin::trust_store::TrustStore;
-use rdlp_types::Config;
 use tempfile::TempDir;
 
 const TEST_URL: &str = "https://mpd-test.example.com/abc123";
@@ -136,14 +134,6 @@ fn build_mpd_fixtures() -> FetchFixtures {
         )
 }
 
-fn make_extraction_ctx() -> ExtractionContext {
-    let http = Arc::new(HttpClientFactory::default().build());
-    let js = Arc::new(BoaJsEngine::new());
-    let cookies = Arc::new(rdlp_cookies::SimpleCookieJar::new());
-    let cfg = Arc::new(Config::default());
-    ExtractionContext::new(http, js, cookies, cfg)
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "slow: builds ~35MB mpd-golden wasm via componentize-py (~30s) and \
             requires tools/ytdlp-compat/.venv populated"]
@@ -209,7 +199,7 @@ async fn mpd_golden_extract_returns_formats_via_fixture() {
         .expect("adapter construction must succeed");
 
     // ── dispatch + assert ──────────────────────────────────────────────────
-    let ctx = make_extraction_ctx();
+    let ctx = extraction_ctx();
     let info = match adapter.extract(TEST_URL, &ctx).await {
         Ok(info) => info,
         Err(err) => panic!("extract returned Err: {err}"),

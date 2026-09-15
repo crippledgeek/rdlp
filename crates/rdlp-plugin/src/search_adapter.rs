@@ -10,18 +10,37 @@
 //! `search` is a frozen 0.5.0 export and goes through the generated
 //! bindings like `extract` does. Both calls run inside
 //! `PluginExtractor::run_in_fresh_store` under `SEARCH_TIMEOUT`.
+//!
+//! [`PluginSearchExtractor`] is what the registry holds: it presents a
+//! plugin as a `SearchExtractor` and answers the host's shared
+//! `PagedSearch` scaffold, so filter validation, paging, `max_results`,
+//! pacing and duplicate-page termination happen host-side exactly as they
+//! do for a built-in site — the plugin only ever sees one page request.
 
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use tokio::sync::OnceCell;
 use wasmtime::Store;
 
 use crate::PluginError;
 use crate::adapter::{
     CallSpec, CommonPluginErr, FreshInstance, PluginExtractor, SEARCH_TIMEOUT, common_plugin_error,
+    plugin_error_to_rdlp,
 };
 use crate::bindings::rdlp::plugin::types::{
     SearchError as WitSearchError, SearchPage as WitSearchPage, SearchQuery as WitSearchQuery,
+    SearchResult as WitSearchResult,
 };
 use crate::instance::PluginStoreData;
-use rdlp_types::{SearchFilterDescriptor, SearchFilterValue};
+use rdlp_core::{ExtractionContext, RdlpError, SearchExtractor};
+use rdlp_extractor::base::common::{
+    PagedSearch, SearchPage, format_std_filter_error, validate_against_descriptors,
+};
+use rdlp_types::{
+    SearchFilter, SearchFilterDescriptor, SearchFilterValue, SearchPageResponse, SearchQuery,
+    SearchResultPreview,
+};
 use wasmtime::component::{ComponentType, Lift};
 
 /// Name of the optional world export, as declared in `wit/extractor.wit`.
@@ -177,6 +196,188 @@ fn descriptor_from_wit(d: WitSearchFilterDescriptor) -> SearchFilterDescriptor {
     SearchFilterDescriptor::new(d.key, d.display_name, allowed, d.default.as_deref())
 }
 
+/// The host's page request for the plugin: the scaffold has already chosen
+/// `page`, so `SearchQuery::page` (which may be `None` for "all pages") is
+/// replaced rather than forwarded. Filters keep their CLI order.
+pub(crate) fn search_query_to_wit(q: &SearchQuery, page: u32) -> WitSearchQuery {
+    WitSearchQuery {
+        query: q.query.clone(),
+        page: Some(page),
+        filters: q
+            .filters
+            .iter()
+            .map(|f| (f.key.clone(), f.value.clone()))
+            .collect(),
+    }
+}
+
+/// The plugin's page as the scaffold consumes it. The WIT page's own
+/// `page` number is dropped: the scaffold echoes the page it asked for, so
+/// a plugin cannot report a different one.
+pub(crate) fn search_page_from_wit(p: WitSearchPage) -> SearchPage {
+    SearchPage {
+        results: p.results.into_iter().map(result_from_wit).collect(),
+        has_more: p.has_more,
+        total_estimate: p.total_estimate,
+    }
+}
+
+/// The WIT `search-result` carries the five preview fields a card can
+/// show; the rest of the preview stays unset for `enrich` to fill.
+fn result_from_wit(r: WitSearchResult) -> SearchResultPreview {
+    SearchResultPreview {
+        video_url: r.url,
+        title: r.title,
+        thumbnail_url: r.thumbnail,
+        duration: r.duration.map(f64::from),
+        uploader: r.uploader,
+        uploader_url: None,
+        actors: Vec::new(),
+        view_count: None,
+        upload_date: None,
+    }
+}
+
+/// A search call's failure as the scaffold reports it. Every `PluginError`
+/// already renders its own operator message — including
+/// [`PluginError::SearchUnsupported`], whose `Display` names the plugin —
+/// so one mapping covers them all. No URL: a search has no subject URL.
+fn search_call_error(e: PluginError) -> RdlpError {
+    plugin_error_to_rdlp(e, None)
+}
+
+/// A loaded plugin presented as a search site.
+///
+/// Implements `SearchExtractor` for the registry and [`PagedSearch`] for the
+/// shared scaffold, which supplies everything a built-in site gets:
+/// filter validation against the plugin's own descriptors, page iteration
+/// from page 1, `max_results`, inter-page pacing, duplicate-page
+/// termination, and the first-page/later-page error asymmetry. The plugin
+/// itself only answers `search` for one page at a time.
+///
+/// `filters` caches the plugin's `search-filters` descriptors. The cache
+/// exists because [`PagedSearch::validate_search_filters`] is synchronous
+/// (every built-in's descriptor table is static) while a plugin's
+/// descriptors come from an async wasm call. `search` and `search_page`
+/// prime it before delegating to the scaffold, so by the time the
+/// scaffold validates, the sync method reads a populated cell; a call that
+/// bypasses those entry points sees no descriptors and rejects any filter
+/// as unknown rather than reaching into wasm from a sync context.
+pub struct PluginSearchExtractor {
+    inner: Arc<PluginExtractor>,
+    filters: OnceCell<Vec<SearchFilterDescriptor>>,
+}
+
+impl PluginSearchExtractor {
+    /// Wrap a loaded plugin; descriptors are fetched on first use.
+    #[must_use]
+    pub fn new(inner: Arc<PluginExtractor>) -> Self {
+        Self {
+            inner,
+            filters: OnceCell::new(),
+        }
+    }
+
+    /// A wrapper whose descriptor cache is already populated, so the
+    /// validator can be exercised without a component that exports
+    /// `search-filters`.
+    #[cfg(test)]
+    fn with_filters(inner: Arc<PluginExtractor>, filters: Vec<SearchFilterDescriptor>) -> Self {
+        Self {
+            inner,
+            filters: OnceCell::new_with(Some(filters)),
+        }
+    }
+
+    /// The cached descriptors, fetching them from the plugin on the first
+    /// call. A failed fetch is reported as no filters and NOT cached, so a
+    /// transient failure is retried next time; a plugin that traps here
+    /// keeps paying strikes through the runner until the 3-strike rule
+    /// disables it.
+    async fn filters_or_fetch(&self) -> Vec<SearchFilterDescriptor> {
+        let fetched = self
+            .filters
+            .get_or_try_init(|| self.inner.call_search_filters())
+            .await;
+        match fetched {
+            Ok(filters) => filters.clone(),
+            Err(e) => {
+                log::warn!(
+                    "plugin '{}' search-filters failed; treating as no filters: {e:#}",
+                    self.inner.manifest.name
+                );
+                Vec::new()
+            }
+        }
+    }
+}
+
+#[async_trait]
+impl SearchExtractor for PluginSearchExtractor {
+    fn name(&self) -> &str {
+        self.inner.manifest.search_site_name()
+    }
+
+    async fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
+        self.filters_or_fetch().await
+    }
+
+    async fn search(
+        &self,
+        query: &SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> rdlp_core::Result<Vec<SearchResultPreview>> {
+        self.filters_or_fetch().await;
+        self.search_all_pages(query, ctx).await
+    }
+
+    async fn search_page(
+        &self,
+        query: &SearchQuery,
+        ctx: &ExtractionContext,
+    ) -> rdlp_core::Result<SearchPageResponse> {
+        self.filters_or_fetch().await;
+        self.search_page_response(query, ctx).await
+    }
+
+    fn is_plugin(&self) -> bool {
+        true
+    }
+
+    fn search_priority(&self) -> i32 {
+        self.inner.plugin_priority()
+    }
+
+    fn overrides_builtin(&self) -> bool {
+        !self.inner.manifest.claims_override.is_empty()
+    }
+}
+
+impl PagedSearch for PluginSearchExtractor {
+    /// Validates against whatever the cache holds; see the type docs for
+    /// why the cache, not the plugin, is consulted here. Wording is the
+    /// shared Family-1 form with the manifest's site name.
+    fn validate_search_filters(&self, filters: &[SearchFilter]) -> rdlp_core::Result<()> {
+        let descriptors = self.filters.get().map_or(&[][..], Vec::as_slice);
+        validate_against_descriptors(filters, descriptors, &[])
+            .map_err(|e| format_std_filter_error(SearchExtractor::name(self), e))
+    }
+
+    async fn fetch_page(
+        &self,
+        query: &SearchQuery,
+        page: u32,
+        _ctx: &ExtractionContext,
+    ) -> rdlp_core::Result<SearchPage> {
+        let page = self
+            .inner
+            .call_search(search_query_to_wit(query, page))
+            .await
+            .map_err(search_call_error)?;
+        Ok(search_page_from_wit(page))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -276,6 +477,217 @@ mod tests {
             d.allowed_values,
             SearchFilterValue::list([("newest", "newest"), ("views", "views")])
         );
+    }
+
+    // ── PluginSearchExtractor ─────────────────────────────────────────────
+
+    use crate::adapter::tests::{
+        FIXTURE_MANIFEST, fixture_extractor, fixture_extractor_with_manifest,
+    };
+
+    fn host_query(filters: &[(&str, &str)]) -> SearchQuery {
+        SearchQuery {
+            query: "kittens".into(),
+            filters: filters
+                .iter()
+                .map(|(k, v)| SearchFilter {
+                    key: (*k).into(),
+                    value: (*v).into(),
+                })
+                .collect(),
+            max_results: None,
+            page: None,
+        }
+    }
+
+    #[test]
+    fn query_to_wit_sets_the_page_and_keeps_filter_tuples_in_order() {
+        let q = host_query(&[("sort", "top"), ("period", "week")]);
+        let wit = search_query_to_wit(&q, 3);
+        assert_eq!(wit.query, "kittens");
+        assert_eq!(wit.page, Some(3));
+        assert_eq!(
+            wit.filters,
+            vec![
+                ("sort".to_string(), "top".to_string()),
+                ("period".to_string(), "week".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn page_from_wit_maps_every_result_field_and_the_page_flags() {
+        let page = search_page_from_wit(WitSearchPage {
+            results: vec![WitSearchResult {
+                url: "https://example.com/video/1".into(),
+                title: "One".into(),
+                thumbnail: Some("https://example.com/1.jpg".into()),
+                duration: Some(90),
+                uploader: Some("someone".into()),
+            }],
+            page: 1,
+            has_more: true,
+            total_estimate: Some(42),
+        });
+        assert!(page.has_more);
+        assert_eq!(page.total_estimate, Some(42));
+        let [r] = page.results.as_slice() else {
+            panic!("one result expected: {:?}", page.results)
+        };
+        assert_eq!(r.video_url, "https://example.com/video/1");
+        assert_eq!(r.title, "One");
+        assert_eq!(
+            r.thumbnail_url.as_deref(),
+            Some("https://example.com/1.jpg")
+        );
+        assert_eq!(r.duration, Some(90.0));
+        assert_eq!(r.uploader.as_deref(), Some("someone"));
+        // The WIT record carries none of these; they must stay unset.
+        assert_eq!(r.uploader_url, None);
+        assert!(r.actors.is_empty());
+        assert_eq!(r.view_count, None);
+        assert_eq!(r.upload_date, None);
+    }
+
+    #[test]
+    fn page_from_wit_keeps_absent_optionals_absent() {
+        let page = search_page_from_wit(WitSearchPage {
+            results: vec![WitSearchResult {
+                url: "https://example.com/video/2".into(),
+                title: "Two".into(),
+                thumbnail: None,
+                duration: None,
+                uploader: None,
+            }],
+            page: 2,
+            has_more: false,
+            total_estimate: None,
+        });
+        assert!(!page.has_more);
+        assert_eq!(page.total_estimate, None);
+        let [r] = page.results.as_slice() else {
+            panic!("one result expected: {:?}", page.results)
+        };
+        assert_eq!(r.thumbnail_url, None);
+        assert_eq!(r.duration, None);
+        assert_eq!(r.uploader, None);
+    }
+
+    fn sort_descriptor() -> SearchFilterDescriptor {
+        SearchFilterDescriptor::new(
+            "sort",
+            "Sort",
+            SearchFilterValue::list([("top", "top")]),
+            None,
+        )
+    }
+
+    /// The fixture is a 0.5.0 component with NO `search-filters` export, so
+    /// a validator that reached the wasm would see zero descriptors and
+    /// report `sort` as an unknown key. `InvalidValue` proves the cached
+    /// descriptors were consulted instead.
+    #[test]
+    fn validation_reads_the_cached_descriptors_not_the_component() {
+        let ext = PluginSearchExtractor::with_filters(
+            Arc::new(fixture_extractor()),
+            vec![sort_descriptor()],
+        );
+        let err = ext
+            .validate_search_filters(&host_query(&[("sort", "new")]).filters)
+            .expect_err("out-of-set value");
+        match err {
+            RdlpError::Extraction { message, url } => {
+                assert_eq!(
+                    message,
+                    "Invalid value 'new' for filter 'sort'. Allowed: top"
+                );
+                assert_eq!(url, None);
+            }
+            other => panic!("got {other:?}"),
+        }
+        assert_eq!(ext.inner.test_trap_count(), 0);
+    }
+
+    #[test]
+    fn validation_rejects_an_unknown_key_naming_the_site() {
+        let ext = PluginSearchExtractor::with_filters(
+            Arc::new(fixture_extractor()),
+            vec![sort_descriptor()],
+        );
+        let err = ext
+            .validate_search_filters(&host_query(&[("foo", "x")]).filters)
+            .expect_err("unknown key");
+        match err {
+            RdlpError::Extraction { message, .. } => {
+                assert_eq!(message, "Unknown filter 'foo' for example. Available: sort");
+            }
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validation_accepts_an_allowed_value_and_no_filters() {
+        let ext = PluginSearchExtractor::with_filters(
+            Arc::new(fixture_extractor()),
+            vec![sort_descriptor()],
+        );
+        ext.validate_search_filters(&host_query(&[("sort", "top")]).filters)
+            .expect("allowed value");
+        ext.validate_search_filters(&[]).expect("no filters");
+    }
+
+    /// Before `search`/`search_page` prime the cache, the sync validator
+    /// has no descriptors: every filter is unknown, none is not.
+    #[test]
+    fn an_unprimed_cache_treats_every_filter_as_unknown() {
+        let ext = PluginSearchExtractor::new(Arc::new(fixture_extractor()));
+        ext.validate_search_filters(&[]).expect("no filters");
+        let err = ext
+            .validate_search_filters(&host_query(&[("sort", "top")]).filters)
+            .expect_err("nothing is known yet");
+        match err {
+            RdlpError::Extraction { message, .. } => {
+                assert_eq!(message, "Unknown filter 'sort' for example. Available: ");
+            }
+            other => panic!("got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn identity_and_arbitration_come_from_the_manifest() {
+        let plain = PluginSearchExtractor::new(Arc::new(fixture_extractor()));
+        assert_eq!(SearchExtractor::name(&plain), "example");
+        assert!(plain.is_plugin());
+        assert_eq!(plain.search_priority(), 150);
+        assert!(!plain.overrides_builtin());
+        assert_eq!(plain.first_page_index(), 1);
+
+        let overriding = FIXTURE_MANIFEST.replace(
+            "capabilities = []",
+            "capabilities = []\nclaims_override = [\"example.com\"]\nsearch_site = \"examplesite\"",
+        );
+        let ext =
+            PluginSearchExtractor::new(Arc::new(fixture_extractor_with_manifest(&overriding)));
+        assert_eq!(SearchExtractor::name(&ext), "examplesite");
+        assert!(ext.overrides_builtin());
+    }
+
+    /// `SearchUnsupported`'s `Display` IS the operator message, so the
+    /// generic mapper needs no special arm; this pins the wording the
+    /// operator sees for a plugin that exports `search` only to satisfy
+    /// the world.
+    #[test]
+    fn search_unsupported_reaches_the_operator_by_name() {
+        let err = search_call_error(PluginError::SearchUnsupported {
+            plugin: "example".into(),
+        });
+        match err {
+            RdlpError::Extraction { message, url } => {
+                assert_eq!(message, "plugin 'example' does not support search");
+                assert_eq!(url, None);
+            }
+            other => panic!("got {other:?}"),
+        }
     }
 
     #[test]

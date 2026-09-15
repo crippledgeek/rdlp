@@ -40,6 +40,12 @@ use bindings::rdlp::plugin::types::{
 
 const URL_PREFIX: &str = "https://example.com/video/";
 
+/// Results on every canned search page (videos `1..=CANNED_RESULTS`).
+const CANNED_RESULTS: u32 = 2;
+
+/// Pages the canned search claims to have; the last one repeats the first.
+const CANNED_PAGES: u32 = 2;
+
 struct Component;
 
 impl Guest for Component {
@@ -100,20 +106,27 @@ impl Guest for Component {
         })
     }
 
-    /// Canned single-result page so the host's search path can be exercised
+    /// Canned two-result page so the host's search path can be exercised
     /// end-to-end without a network; echoes the requested page number.
+    /// Page 1 claims a further page exists and page 2 repeats the same two
+    /// results, so a host that terminates on a duplicate page stops at two
+    /// results while one that trusts `has-more` alone would loop.
     fn search(q: SearchQuery) -> Result<SearchPage, SearchError> {
-        Ok(SearchPage {
-            results: vec![SearchResult {
-                url: format!("{URL_PREFIX}1"),
-                title: format!("Example result for {}", q.query),
+        let page = q.page.unwrap_or(1);
+        let results = (1..=CANNED_RESULTS)
+            .map(|i| SearchResult {
+                url: format!("{URL_PREFIX}{i}"),
+                title: format!("Example result {i} for {}", q.query),
                 thumbnail: None,
                 duration: Some(60),
                 uploader: None,
-            }],
-            page: q.page.unwrap_or(1),
-            has_more: false,
-            total_estimate: Some(1),
+            })
+            .collect();
+        Ok(SearchPage {
+            results,
+            page,
+            has_more: page < CANNED_PAGES,
+            total_estimate: Some(CANNED_RESULTS.into()),
         })
     }
 

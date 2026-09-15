@@ -11,19 +11,16 @@
 
 mod common;
 
-use common::{SignedPluginSpec, write_signed_plugin};
+use common::{SignedPluginSpec, extraction_ctx, write_signed_plugin};
 use ed25519_dalek::SigningKey;
 use rand::rngs::OsRng;
-use rdlp_core::{ExtractionContext, InfoExtractor};
-use rdlp_http::HttpClientFactory;
-use rdlp_jsinterp::BoaJsEngine;
+use rdlp_core::InfoExtractor;
 use rdlp_plugin::PluginError;
 use rdlp_plugin::adapter::{HostResources, PluginExtractor};
 use rdlp_plugin::engine::{Engine, EngineConfig};
 use rdlp_plugin::loader::Loader;
 use rdlp_plugin::prompt::{AlwaysApprove, AlwaysDeny};
 use rdlp_plugin::trust_store::TrustStore;
-use rdlp_types::Config;
 use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -334,14 +331,6 @@ fn make_loader_args_arc(
     (Arc::new(engine), trust, prompter)
 }
 
-fn make_extraction_ctx() -> ExtractionContext {
-    let http = Arc::new(HttpClientFactory::default().build());
-    let js = Arc::new(BoaJsEngine::new());
-    let cookies = Arc::new(rdlp_cookies::SimpleCookieJar::new());
-    let cfg = Arc::new(Config::default());
-    ExtractionContext::new(http, js, cookies, cfg)
-}
-
 /// D1 positive compat test: a component built against 0.5.0 (Task 1
 /// fixture) loads through the real loader on this 0.5.1 host and answers
 /// `metadata` + `extract`. `wit_version = "0.5.0"` in its manifest takes
@@ -389,7 +378,7 @@ async fn a_0_5_0_component_loads_on_the_0_5_1_host() {
     let adapter = PluginExtractor::new(loaded, engine.clone(), host_resources)
         .expect("adapter construction must succeed");
 
-    let ctx = make_extraction_ctx();
+    let ctx = extraction_ctx();
     let result = adapter.extract("https://example.com/video/1", &ctx).await;
     match result {
         Ok(info) => assert_eq!(info.id, "1"),

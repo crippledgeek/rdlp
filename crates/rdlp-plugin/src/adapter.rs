@@ -288,7 +288,7 @@ impl InfoExtractor for PluginExtractor {
             Box::pin(async move { call_plugin_extract(store, inst, &owned_url).await })
         })
         .await
-        .map_err(|e| plugin_error_to_rdlp(e, url))
+        .map_err(|e| plugin_error_to_rdlp(e, Some(url)))
     }
 }
 
@@ -413,10 +413,11 @@ impl PluginExtractor {
 /// Convert a `PluginError` into an `RdlpError` for the orchestrator.
 /// Domain errors carry the same trapping/non-trapping flag at the call
 /// site; this conversion only shapes the user-facing message.
-fn plugin_error_to_rdlp(e: PluginError, url: &str) -> RdlpError {
+/// `url` is the subject URL of an `extract`; a search call has none.
+pub(crate) fn plugin_error_to_rdlp(e: PluginError, url: Option<&str>) -> RdlpError {
     RdlpError::Extraction {
         message: format!("{e:#}"),
-        url: Some(RedactedUrlBuf::from(url)),
+        url: url.map(RedactedUrlBuf::from),
     }
 }
 
@@ -516,7 +517,7 @@ fn extract_error_to_plugin_error(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::engine::EngineConfig;
     use crate::manifest::parse_manifest_str;
@@ -528,11 +529,32 @@ mod tests {
     const FIXTURE_0_5_0: &[u8] =
         include_bytes!("../tests/fixtures/example-extractor-0.5.0/plugin.wasm");
 
-    fn fixture_extractor() -> PluginExtractor {
+    /// The 0.5.0 fixture wrapped in an adapter, on a manifest with no
+    /// `search_site` and no `claims_override`.
+    pub fn fixture_extractor() -> PluginExtractor {
+        fixture_extractor_with_manifest(FIXTURE_MANIFEST)
+    }
+
+    /// The 0.5.0 fixture on `toml` — for tests that need a manifest field
+    /// (a `search_site`, a `claims_override`) the default fixture lacks.
+    pub fn fixture_extractor_with_manifest(toml: &str) -> PluginExtractor {
         let engine = Arc::new(Engine::new(EngineConfig::default()).expect("engine"));
         let component = wasmtime::component::Component::from_binary(engine.raw(), FIXTURE_0_5_0)
             .expect("component");
-        let toml = r#"
+        let manifest = parse_manifest_str(toml).expect("manifest");
+        let identity = manifest.signature.identity_string();
+        let loaded = LoadedPlugin {
+            manifest,
+            identity,
+            component,
+            origin_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures"),
+        };
+        PluginExtractor::new(loaded, engine, HostResources::default()).expect("adapter")
+    }
+
+    /// Placeholder signature: `parse_manifest_str` checks shape only;
+    /// verification happens in the loader, which this fixture bypasses.
+    pub const FIXTURE_MANIFEST: &str = r#"
 name = "example"
 version = "0.0.1"
 wit_version = "0.5.0"
@@ -545,16 +567,6 @@ type = "ed25519"
 pubkey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 "#;
-        let manifest = parse_manifest_str(toml).expect("manifest");
-        let identity = manifest.signature.identity_string();
-        let loaded = LoadedPlugin {
-            manifest,
-            identity,
-            component,
-            origin_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures"),
-        };
-        PluginExtractor::new(loaded, engine, HostResources::default()).expect("adapter")
-    }
 
     fn spec(timeout: Duration) -> CallSpec<'static> {
         CallSpec {

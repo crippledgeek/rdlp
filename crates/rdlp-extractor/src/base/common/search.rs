@@ -408,7 +408,13 @@ fn resolve_reference(origin: &str, reference: &str) -> Option<(Url, Url)> {
 /// Family-2 sites (TNAFlix / MovieFap) phrase these errors differently
 /// (`Unknown {Site} search filter key '{key}'`, etc.) and MUST NOT use this
 /// helper — their wording legitimately diverges (see #442).
-pub(crate) fn format_std_filter_error(site: &str, error: FilterValidationError) -> RdlpError {
+///
+/// `pub` because the plugin host (`rdlp-plugin`) validates a plugin's
+/// filters against the descriptors the plugin declares and reports them in
+/// this same wording — a plugin site is a Family-1 site whose name comes
+/// from its manifest.
+#[must_use]
+pub fn format_std_filter_error(site: &str, error: FilterValidationError) -> RdlpError {
     let message = match error {
         FilterValidationError::UnknownKey { key, available } => format!(
             "Unknown filter '{key}' for {site}. Available: {}",
