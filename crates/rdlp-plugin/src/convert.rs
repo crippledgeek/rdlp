@@ -2,9 +2,11 @@
 //!
 //! Shared by [`crate::adapter`] (guest `extract` results) and
 //! [`crate::host::extract_helpers`] (host-side `extract-mpd` fragment map).
-//! Previously three of these functions were duplicated inline across both
-//! call sites; this module is the single source of truth so a fix to one
-//! conversion reaches every caller.
+//! Before this module existed, `adapter.rs` held its own `Format`/`InfoDict`
+//! conversions inline, and `extract_mpd` (plus its own regression test)
+//! separately built an `MpdFragment` struct literal by hand — two divergent
+//! copies of the same WIT record construction. This module converges both
+//! onto one path, so a fix to a conversion reaches every caller.
 
 use crate::bindings::rdlp::plugin::host_extract_helpers::MpdFragment;
 use crate::bindings::rdlp::plugin::types::Format as WitFormat;
@@ -13,26 +15,18 @@ use rdlp_types::DownloadProtocol;
 /// Narrow an `f64` to `f32` at the WIT boundary.
 ///
 /// `types.wit` declares `fps`/`tbr`/`vbr`/`abr` as `f32`; rdlp-types uses
-/// `f64` internally. This is the one site the narrowing happens, so
-/// `clippy::cast_possible_truncation` has one rationale to check rather than
-/// one per call site.
-///
-/// Only `format_to_wit` calls this today (production caller: the search
-/// adapter, a later task); the `dead_code` `#[expect]` is self-cleaning so a
-/// real caller turns the unfulfilled expectation into a `-D warnings` error
-/// rather than silently staying suppressed like `#[allow]` would.
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "first production caller: search adapter task")
-)]
+/// `f64` internally. Both `format_to_wit` and `extract_mpd`'s `MpdFormat`
+/// construction route their narrowing through this one function, so it is
+/// genuinely the one site the cast happens — `clippy::cast_possible_truncation`
+/// has one rationale to check rather than one per call site.
 #[expect(
     clippy::cast_possible_truncation,
-    reason = "WIT `types.format` declares fps/tbr/vbr/abr as f32 \
-              (crates/rdlp-plugin/wit/types.wit); narrowing at the boundary \
-              is the contract, and `expect` fails the build if the lint \
-              ever stops firing"
+    reason = "the `record format` in `interface types` \
+              (crates/rdlp-plugin/wit/types.wit) declares fps/tbr/vbr/abr as \
+              f32; narrowing at the boundary is the contract, and `expect` \
+              fails the build if the lint ever stops firing"
 )]
-const fn narrow_f64(v: f64) -> f32 {
+pub(crate) const fn narrow_f64(v: f64) -> f32 {
     v as f32
 }
 
@@ -166,13 +160,12 @@ pub(crate) fn format_from_wit(w: WitFormat) -> rdlp_types::Format {
     f
 }
 
-/// Convert `rdlp_types::Format` to the WIT `Format` (used by the search
-/// adapter and by tests that round-trip a format through the boundary).
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "first production caller: search adapter task")
-)]
-pub(crate) fn format_to_wit(f: &rdlp_types::Format) -> WitFormat {
+/// Convert `rdlp_types::Format` to the WIT `Format`.
+///
+/// Intended for the host imports / search adapter that later tasks add;
+/// exercised today by the round-trip tests below.
+#[must_use]
+pub fn format_to_wit(f: &rdlp_types::Format) -> WitFormat {
     WitFormat {
         format_id: f.format_id.clone(),
         url: f.url.clone(),
@@ -215,14 +208,11 @@ pub(crate) fn fragment_to_wit(fr: rdlp_types::Fragment) -> MpdFragment {
 /// `mpd-fragment` has no `filesize` field, so the round-tripped `Fragment`
 /// always carries `filesize: None` — pre-known segment size is rarely
 /// populated and is not part of this boundary's contract.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "first production caller: a future guest-side extract-mpd consumer"
-    )
-)]
-pub(crate) fn fragment_from_wit(w: MpdFragment) -> rdlp_types::Fragment {
+///
+/// Intended for the host imports that later tasks add; exercised today by
+/// the round-trip tests below.
+#[must_use]
+pub fn fragment_from_wit(w: MpdFragment) -> rdlp_types::Fragment {
     rdlp_types::Fragment {
         url: w.url,
         byte_range: w.byte_range,
@@ -248,7 +238,12 @@ mod tests {
         f.width = Some(1280);
         f.height = Some(720);
         f.fps = Some(29.97);
-        f.tbr = Some(1280.0);
+        // Four distinct fractional values so a mixed-up mapping (e.g. a
+        // vbr/abr swap in `format_to_wit`) fails this test instead of
+        // silently passing on a coincidental equal value.
+        f.tbr = Some(1280.11);
+        f.vbr = Some(1000.22);
+        f.abr = Some(128.33);
         f.vcodec = rdlp_types::Codec::from(Some("avc1.64001f".to_string()));
         f.acodec = rdlp_types::Codec::from(Some("mp4a.40.2".to_string()));
         f.filesize = Some(1234);
@@ -257,6 +252,7 @@ mod tests {
         let back = format_from_wit(format_to_wit(&f));
         assert_eq!(back.format_id, f.format_id);
         assert_eq!(back.url, f.url);
+        assert_eq!(back.ext, f.ext);
         assert_eq!(back.protocol, f.protocol);
         assert_eq!(back.width, f.width);
         assert_eq!(back.height, f.height);
@@ -264,10 +260,12 @@ mod tests {
         assert_eq!(back.acodec, f.acodec);
         assert_eq!(back.filesize, f.filesize);
         assert_eq!(back.format_note, f.format_note);
-        assert!(
-            (back.fps.unwrap() - 29.97).abs() < 1e-3,
-            "f32 narrowing at the boundary"
-        );
+        assert_eq!(back.container, f.container);
+        // f32 narrowing at the boundary: tolerance, not exact equality.
+        assert!((back.fps.unwrap() - 29.97).abs() < 1e-3, "fps");
+        assert!((back.tbr.unwrap() - 1280.11).abs() < 1e-1, "tbr");
+        assert!((back.vbr.unwrap() - 1000.22).abs() < 1e-1, "vbr");
+        assert!((back.abr.unwrap() - 128.33).abs() < 1e-1, "abr");
     }
 
     #[test]

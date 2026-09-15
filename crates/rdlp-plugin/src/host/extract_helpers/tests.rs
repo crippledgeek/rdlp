@@ -1059,8 +1059,8 @@ async fn extract_mpd_returns_subtitles_via_fixture() {
 /// Regression guard for #274 (PR D-3): the `MpdFragment` WIT record must
 /// carry `byte_range`, `init_url`, `init_byte_range` so plugins receive
 /// DASH byte-range info (init segments + ranged media segments) from the
-/// host's MPD expansion. Goes through `convert::fragment_to_wit` (the sole
-/// `MpdFragment` construction site, per Task 5's dedup) rather than
+/// host's MPD expansion. Goes through `convert::fragment_to_wit` (the
+/// crate's single `MpdFragment` construction site) rather than
 /// constructing the bindgen type directly; the test still fails to compile
 /// if the WIT contract drops any of the three fields, because
 /// `fragment_to_wit`'s own struct literal would.
