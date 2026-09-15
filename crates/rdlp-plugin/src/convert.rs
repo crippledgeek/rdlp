@@ -10,7 +10,8 @@
 
 use crate::bindings::rdlp::plugin::host_extract_helpers::MpdFragment;
 use crate::bindings::rdlp::plugin::types::Format as WitFormat;
-use crate::metadata_adapter::{MetadataCaps, extras_from_wit};
+use crate::metadata_adapter::MetadataCaps;
+use crate::metadata_adapter::extras::extras_from_wit;
 use rdlp_types::DownloadProtocol;
 
 /// Upper bound on the `format` rows one WIT call may carry across the
