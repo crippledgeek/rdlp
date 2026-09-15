@@ -126,8 +126,8 @@ pub struct Manifest {
 
 impl Manifest {
     /// Site name this plugin's `search` export serves — the `search_site`
-    /// override when set, else `name`. Callers route `--search-site <value>`
-    /// against this, not `name` directly, so a search-only plugin can be
+    /// override when set, else `name`. `--search-site` routing compares
+    /// against this value, never `name`, so a search-only plugin can be
     /// named independently of the site it searches.
     #[must_use]
     pub fn search_site_name(&self) -> &str {
@@ -400,6 +400,9 @@ fn invalid(reason: &str) -> Result<(), ManifestError> {
 /// - `signature` block excluded (the signature signs everything except itself)
 /// - LF line endings, single space around `=`
 /// - optional fields included only when present
+/// - fields introduced after 0.5.0 (`supports_extract`, `search_site`)
+///   appear only when non-default (`false` / present respectively), so every
+///   pre-0.5.1 manifest keeps its exact bytes and signature
 ///
 /// Reference implementation in another language must produce identical bytes
 /// for an equivalent manifest. Test fixtures live in
