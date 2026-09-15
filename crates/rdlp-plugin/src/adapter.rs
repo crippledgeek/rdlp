@@ -46,7 +46,7 @@ use rdlp_types::InfoDict;
 const TRAP_DISABLE_THRESHOLD: u32 = 3;
 
 /// Wall-clock cap on one `extract` call — the "30 s extract" default the
-/// crate doc and `wit/COMPATIBILITY.md` promise plugin authors. Bounds the
+/// crate doc (`lib.rs`, "Per-call execution") promises. Bounds the
 /// per-call epoch deadline AND the host-side `tokio::time::timeout`, so a
 /// plugin looping in `host:fetch` (host time, which the epoch never sees)
 /// is still stopped.
@@ -59,11 +59,13 @@ pub(crate) const EXTRACT_TIMEOUT: Duration = Duration::from_secs(30);
 pub(crate) const SEARCH_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Per-call parameters for [`PluginExtractor::run_in_fresh_store`]: the
-/// wall-clock cap and the URL to name in operator-facing diagnostics
-/// (always rendered through [`RedactedUrl`]).
+/// wall-clock cap and what the call was about, for the strike log line.
 pub(crate) struct CallSpec<'a> {
-    /// URL (or search-site URL) reported alongside a timeout or strike.
-    pub url_for_errors: &'a str,
+    /// What the call was handling, named in the strike log line: the URL
+    /// for `extract`, the search-site name for search calls. Rendered
+    /// through [`RedactedUrl`] regardless, since only `extract` can prove
+    /// the value carries no credentials.
+    pub subject_for_errors: &'a str,
     /// Wall-clock cap for the whole call, instantiation included.
     pub timeout: Duration,
 }
@@ -275,7 +277,7 @@ impl InfoExtractor for PluginExtractor {
 
     async fn extract(&self, url: &str, _ctx: &ExtractionContext) -> rdlp_core::Result<InfoDict> {
         let spec = CallSpec {
-            url_for_errors: url,
+            subject_for_errors: url,
             timeout: EXTRACT_TIMEOUT,
         };
         // An owned copy moves into the future: the runner's closure is
@@ -364,7 +366,7 @@ impl PluginExtractor {
         {
             log::warn!(
                 "plugin {plugin} strike ({e}) while handling {}",
-                RedactedUrl::new(spec.url_for_errors)
+                RedactedUrl::new(spec.subject_for_errors)
             );
             self.record_trap();
         }
@@ -556,7 +558,7 @@ signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
 
     fn spec(timeout: Duration) -> CallSpec<'static> {
         CallSpec {
-            url_for_errors: "https://example.com/video/42",
+            subject_for_errors: "https://example.com/video/42",
             timeout,
         }
     }
@@ -581,6 +583,70 @@ signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
             .expect_err("closure error propagates");
         assert!(matches!(err, PluginError::Internal(_)), "got {err:?}");
         assert_eq!(ext.test_trap_count(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn runner_counts_a_trap_as_a_strike() {
+        let ext = fixture_extractor();
+        let err = ext
+            .run_in_fresh_store(spec(EXTRACT_TIMEOUT), |_store, _inst| {
+                Box::pin(async {
+                    Err::<(), _>(PluginError::Trapped {
+                        plugin: "example".into(),
+                        reason: "unreachable".into(),
+                    })
+                })
+            })
+            .await
+            .expect_err("closure error propagates");
+        assert!(matches!(err, PluginError::Trapped { .. }), "got {err:?}");
+        assert_eq!(ext.test_trap_count(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn runner_counts_a_linker_wire_error_as_a_strike() {
+        let ext = fixture_extractor();
+        let err = ext
+            .run_in_fresh_store(spec(EXTRACT_TIMEOUT), |_store, _inst| {
+                Box::pin(async {
+                    Err::<(), _>(PluginError::LinkerWire {
+                        plugin: "example".into(),
+                        reason: "missing import".into(),
+                    })
+                })
+            })
+            .await
+            .expect_err("closure error propagates");
+        assert!(matches!(err, PluginError::LinkerWire { .. }), "got {err:?}");
+        assert_eq!(ext.test_trap_count(), 1);
+    }
+
+    /// Moved here from the former `tests/adapter_trap_disable.rs`, which
+    /// returned early whenever its gitignored wasip1 artefact was absent
+    /// and so proved nothing on a fresh checkout.
+    #[test]
+    fn third_trap_disables_plugin() {
+        let ext = fixture_extractor();
+        assert!(!ext.test_is_disabled());
+        assert_eq!(ext.test_trap_count(), 0);
+        ext.test_record_trap();
+        assert!(!ext.test_is_disabled(), "1 strike does not disable");
+        ext.test_record_trap();
+        assert!(!ext.test_is_disabled(), "2 strikes does not disable");
+        ext.test_record_trap();
+        assert!(ext.test_is_disabled(), "3 strikes MUST disable the adapter");
+        assert_eq!(ext.test_trap_count(), TRAP_DISABLE_THRESHOLD);
+    }
+
+    #[test]
+    fn additional_traps_after_disable_are_idempotent() {
+        let ext = fixture_extractor();
+        for _ in 0..TRAP_DISABLE_THRESHOLD + 2 {
+            ext.test_record_trap();
+        }
+        // The counter keeps climbing; the disabled flag stays latched.
+        assert!(ext.test_is_disabled());
+        assert_eq!(ext.test_trap_count(), TRAP_DISABLE_THRESHOLD + 2);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

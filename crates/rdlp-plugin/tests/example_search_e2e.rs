@@ -172,8 +172,9 @@ async fn search_filters_and_search_round_trip_through_the_runner() {
     assert_eq!(adapter.test_trap_count(), 0);
 }
 
+/// Not `#[ignore]`d: needs only the committed fixture, so the default gate
+/// proves the absent-export path every run.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-#[ignore = "pairs with the build-based test above; runs against the committed 0.5.0 fixture"]
 async fn a_0_5_0_component_without_the_export_answers_no_filters() {
     // (b) absent-export path: the manual lookup — not the bindings —
     // resolves `search-filters`, so a component that never declared it

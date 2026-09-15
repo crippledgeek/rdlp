@@ -140,7 +140,7 @@ pub use error::PluginError;
 /// - `bindings::ExtractorPluginHost` — the generated host-side instance type
 /// - `bindings::types::*` — record/variant types from `wit/types.wit`
 /// - `bindings::host_*::Host` traits — one per imported interface, implemented
-///   by the host on `PluginStoreData` (Task 11+).
+///   by the host on `PluginStoreData`.
 ///
 /// Async support is enabled (matching the engine's `async_support(true)`),
 /// but only for the imports that actually await — the network fetch, the JS

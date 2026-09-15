@@ -32,6 +32,9 @@ const SEARCH_FILTERS_EXPORT: &str = "search-filters";
 /// `extractor-plugin-host` world references, and that world deliberately
 /// omits `search-filters` — so the record it returns is not generated and
 /// must be declared here, field-for-field, for the typed by-name call.
+/// `tests::lift_mirrors_the_wit_record_field_for_field` pins this struct
+/// to the record text in `wit/types.wit`; a drifted field order or type
+/// fails there before it can mis-lift at runtime.
 #[derive(Debug, Clone, PartialEq, Eq, ComponentType, Lift)]
 #[component(record)]
 pub(crate) struct WitSearchFilterDescriptor {
@@ -62,7 +65,7 @@ impl PluginExtractor {
     /// signature or traps while running.
     pub async fn call_search_filters(&self) -> Result<Vec<SearchFilterDescriptor>, PluginError> {
         let spec = CallSpec {
-            url_for_errors: self.manifest.search_site_name(),
+            subject_for_errors: self.manifest.search_site_name(),
             timeout: SEARCH_TIMEOUT,
         };
         self.run_in_fresh_store(spec, |store, inst| {
@@ -84,7 +87,7 @@ impl PluginExtractor {
     /// [`PluginError::SearchUnsupported`], which is not a strike.
     pub async fn call_search(&self, query: WitSearchQuery) -> Result<WitSearchPage, PluginError> {
         let spec = CallSpec {
-            url_for_errors: self.manifest.search_site_name(),
+            subject_for_errors: self.manifest.search_site_name(),
             timeout: SEARCH_TIMEOUT,
         };
         // The query moves into the future: the runner's closure is
@@ -228,6 +231,34 @@ mod tests {
             let mapped = search_error_to_plugin_error("example", err);
             assert_eq!(counts_as_strike(&mapped), strike, "{mapped:?}");
         }
+    }
+
+    /// Drift guard for the hand-written lift: the record's field lines in
+    /// `wit/types.wit` must be exactly these, in this order — the component
+    /// canonical ABI lifts records positionally, so a reordered or retyped
+    /// field would lift garbage without a type error.
+    #[test]
+    fn lift_mirrors_the_wit_record_field_for_field() {
+        const TYPES_WIT: &str = include_str!("../wit/types.wit");
+        let expected = [
+            "key: string,",
+            "display-name: string,",
+            "allowed-values: list<string>,",
+            "default: option<string>,",
+        ];
+        let (_, after) = TYPES_WIT
+            .split_once("record search-filter-descriptor {")
+            .expect("types.wit declares search-filter-descriptor");
+        let (body, _) = after.split_once('}').expect("record body is closed");
+        let fields: Vec<&str> = body
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.is_empty())
+            .collect();
+        assert_eq!(
+            fields, expected,
+            "search-filter-descriptor drifted from the Rust lift"
+        );
     }
 
     #[test]
