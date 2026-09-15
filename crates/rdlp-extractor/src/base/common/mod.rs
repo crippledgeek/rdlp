@@ -39,6 +39,7 @@ pub mod json_ld;
 pub(crate) mod manifest_url;
 mod metadata;
 mod parsing;
+mod playlist;
 pub(crate) mod protocol;
 mod search;
 pub mod selector_macro;
@@ -58,6 +59,13 @@ use rdlp_types::Format;
 use regex::Regex;
 
 // Re-export selectors, patterns, and constants from submodule
+/// The sibling scaffold for playlists (rdlp#762 slice C): the host-owned
+/// listing/range/resolution loop a plugin's playlist extension answers
+/// against, plus the page/entry records it exchanges.
+pub use playlist::{
+    DEFAULT_PLAYLIST_CONCURRENCY, DEFAULT_PLAYLIST_ITEM_TIMEOUT_SECS, PagedPlaylist, PlaylistEntry,
+    PlaylistPage, PlaylistResolution, PlaylistStart,
+};
 pub(crate) use protocol::protocol_for_url;
 pub(crate) use search::SearchOrigin;
 /// Reachable by the plugin host (`rdlp-plugin`): the `PagedSearch` scaffold a
