@@ -328,8 +328,11 @@ mod tests {
     use super::{HOST_WIT_VERSION, check_wit_version, check_wit_version_against};
     use crate::PluginError;
 
-    /// Pull the version out of a `package rdlp:plugin@X.Y.Z;` directive.
-    fn package_version(wit_source: &str, file: &str) -> String {
+    /// Pull the version out of a `package rdlp:plugin@X.Y.Z;` directive by
+    /// scanning lines — an oracle independent of the `const fn` byte walk
+    /// in `crate::wit_version::package_version` that produces
+    /// `HOST_WIT_VERSION`, so the two can disagree and be caught.
+    fn package_version_by_lines(wit_source: &str, file: &str) -> String {
         wit_source
             .lines()
             .find_map(|line| {
@@ -359,7 +362,7 @@ mod tests {
             ("extractor.wit", include_str!("../wit/extractor.wit")),
         ] {
             assert_eq!(
-                package_version(source, file),
+                package_version_by_lines(source, file),
                 HOST_WIT_VERSION,
                 "HOST_WIT_VERSION must track `package rdlp:plugin@X.Y.Z` in crates/rdlp-plugin/wit/{file}"
             );

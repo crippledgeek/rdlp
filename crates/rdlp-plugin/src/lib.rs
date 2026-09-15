@@ -108,7 +108,9 @@
 // compile instead of shipping test-only code. `cargo test --release` is
 // not used anywhere in this repository (see BUILDING.md).
 #[cfg(all(feature = "test-support", not(any(test, debug_assertions))))]
-compile_error!("the `test-support` feature is test-only and must not be enabled in a release build");
+compile_error!(
+    "the `test-support` feature is test-only and must not be enabled in a release build"
+);
 
 pub mod adapter;
 pub mod convert;
@@ -128,7 +130,7 @@ pub mod signature;
 #[doc(hidden)]
 pub mod test_support;
 pub mod trust_store;
-pub mod wit_version;
+pub(crate) mod wit_version;
 
 pub use error::PluginError;
 

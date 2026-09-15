@@ -400,7 +400,7 @@ async fn a_0_5_0_component_reports_unsupported_search_to_the_operator() {
         .expect_err("no descriptors, so no filter is known");
     assert_eq!(
         extraction_message(err),
-        "Unknown filter 'ordering' for example. Available: "
+        "Unknown filter 'ordering' for example. Available: (none)"
     );
 
     assert_eq!(adapter.test_trap_count(), 0);

@@ -418,7 +418,11 @@ pub fn format_std_filter_error(site: &str, error: FilterValidationError) -> Rdlp
     let message = match error {
         FilterValidationError::UnknownKey { key, available } => format!(
             "Unknown filter '{key}' for {site}. Available: {}",
-            available.join(", ")
+            if available.is_empty() {
+                "(none)".to_string()
+            } else {
+                available.join(", ")
+            }
         ),
         FilterValidationError::InvalidValue {
             key,
