@@ -251,6 +251,26 @@ Plugins must be signed (Sigstore keyless via GitHub Actions OIDC, or Ed25519 fal
 
 Reference plugin example (in Rust + cargo-component) and full plugin author guide are tracked in [issue #213](https://github.com/crippledgeek/rdlp/issues/213) — pending Task 28. For the design rationale and security model, see `docs/superpowers/specs/2026-04-28-plugin-system-mvp-design.md` (local).
 
+### WIT 0.5.1 additions
+
+`rdlp:plugin@0.5.1` is additive over `@0.5.0` — see
+`crates/rdlp-plugin/wit/COMPATIBILITY.md` for the version policy (what
+"additive" means, and why an 0.5.0-built plugin still loads on a 0.5.1 host).
+It adds:
+
+- **`expand-hls` / `probe-format-sizes` host imports** — extract-time helpers
+  a plugin can call to expand an HLS master playlist into per-variant formats,
+  or probe format byte sizes over a ranged `HEAD`/partial `GET`, without
+  reimplementing HTTP fetch logic itself.
+- **`search-filters` export (optional)** — a search-capable plugin may declare
+  its supported `--search-filter` keys/values; the host resolves this export
+  by name rather than through the generated bindings, so a plugin built
+  before 0.5.1 still instantiates and is treated as declaring no filters.
+- **`supports_extract` / `search_site` manifest fields** — `supports_extract`
+  lets a search-only plugin opt out of extract dispatch (defaults `true`);
+  `search_site` names the site a search-capable plugin serves for
+  `--search-site` routing, defaulting to the plugin's own name.
+
 ## Policy: yt-dlp-ported plugins stay byte-identical
 
 Plugins built via `rdlp plugin build-from-ytdlp` MUST keep their `.py` source byte-identical to the upstream `yt_dlp/extractor/<name>.py` they were ported from. Local edits (regex broadening, helper substitution, behavior tweaks) are explicitly forbidden, even when the upstream source has a known defect.

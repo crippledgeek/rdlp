@@ -278,6 +278,9 @@ class ExtractorPlugin(_ExtractorPluginProtocol):
         raise Err(SearchError_Unsupported())
 
     def search_filters(self):
+        # yt-dlp modules carry no filter vocabulary; the host validates any
+        # `--search-filter` against this list, so `[]` rejects them all
+        # before a fetch.
         return []
 
 

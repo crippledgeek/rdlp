@@ -225,4 +225,14 @@ async fn python_hello_world_extract_succeeds() {
         "format url mismatch: {:?}",
         info.formats[0]
     );
+
+    // `search_filters` (Task 2's stub in entry.py) returns `[]` — the
+    // present-export path for a real componentize-py-built component,
+    // sibling to `example_search_e2e.rs`'s absent-export (0.5.0 fixture)
+    // and present-export (Rust example) coverage.
+    let filters = adapter
+        .call_search_filters()
+        .await
+        .expect("search-filters export must resolve on a 0.5.1 component");
+    assert!(filters.is_empty(), "got {filters:?}");
 }
