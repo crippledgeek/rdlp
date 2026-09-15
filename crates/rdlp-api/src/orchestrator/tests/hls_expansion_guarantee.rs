@@ -50,7 +50,10 @@
 //! true end of the function closes the gap the lint flags without changing
 //! when the server actually goes away.
 
-use crate::orchestrator::test_support::orchestrator_with_fake_extractor;
+use crate::orchestrator::test_support::{
+    fast_failing_config, orchestrator_with_fake_extractor,
+    orchestrator_with_fake_extractor_and_config,
+};
 use rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA;
 use rdlp_types::{DownloadProtocol, Format, Fragment, InfoDict};
 
@@ -233,5 +236,76 @@ async fn extract_playlist_expands_fragments_less_hls_rows_and_drops_hostile_ones
         "the default extract_playlist wraps extract() in a Vec of one"
     );
     assert_survivors(&result.remove(0), &fixture);
+    drop(server);
+}
+
+/// `Config::hls_expansion_timeout` is read at the call site, not merely
+/// stored: with a 1 s budget and a master that answers only after 3 s, the
+/// fragments-less HLS row is dropped and `extract_video` returns before the
+/// master would have answered. Under the 60 s default the same fixture
+/// waits for the slow master and keeps the row.
+#[tokio::test]
+async fn hls_expansion_timeout_override_is_read_at_the_boundary() {
+    use std::time::{Duration, Instant};
+
+    const SERVER_DELAY: Duration = Duration::from_secs(3);
+
+    let mut server = mockito::Server::new_async().await;
+    let _slow = server
+        .mock("GET", "/slow.m3u8")
+        .with_chunked_body(|w| {
+            std::thread::sleep(SERVER_DELAY);
+            w.write_all(VARIANT_MEDIA.as_bytes())
+        })
+        .create_async()
+        .await;
+
+    let slow = Format::new(
+        "slow",
+        format!("{}/slow.m3u8", server.url()),
+        "mp4",
+        DownloadProtocol::M3u8Native,
+    );
+    let plain = Format::new(
+        "c",
+        "https://example.test/c.mp4",
+        "mp4",
+        DownloadProtocol::Https,
+    );
+    let mut info = InfoDict::new("budget-test", "t", "test", WEBPAGE_URL);
+    info.formats = vec![slow, plain];
+
+    // `read_timeout` is raised above `SERVER_DELAY` so the only thing that
+    // can cut the slow fetch short is the expansion budget — with the
+    // fast-failing 2 s read timeout, the client's own timeout would drop the
+    // row on its own and this test would pass with the budget ignored.
+    let config = rdlp_types::Config {
+        hls_expansion_timeout: Some(1),
+        read_timeout: Some(10),
+        ..fast_failing_config()
+    };
+    let orch = orchestrator_with_fake_extractor_and_config(info, config);
+
+    let started = Instant::now();
+    let result = orch
+        .extract_video(WEBPAGE_URL)
+        .await
+        .expect("the fake extractor never errors");
+    let elapsed = started.elapsed();
+
+    let ids: Vec<&str> = result
+        .formats
+        .iter()
+        .map(|f| f.format_id.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        vec!["c"],
+        "the unexpanded HLS row must be dropped when the configured budget runs out"
+    );
+    assert!(
+        elapsed < SERVER_DELAY,
+        "the configured 1 s budget must cut the pass short; took {elapsed:?}"
+    );
     drop(server);
 }

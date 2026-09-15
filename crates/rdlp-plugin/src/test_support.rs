@@ -19,6 +19,14 @@ use ed25519_dalek::{Signer, SigningKey};
 use rdlp_core::ExtractionContext;
 use sha2::{Digest, Sha256};
 
+/// The committed 0.5.0 example component (`tests/fixtures/example-extractor-0.5.0`):
+/// WASI-free, no capabilities, implements `extract` and `search`, instantiates
+/// on the host world — see its README. The one copy of the fixture's bytes
+/// every test in this crate and `rdlp-api` loads.
+#[doc(hidden)]
+pub const EXAMPLE_0_5_0_WASM: &[u8] =
+    include_bytes!("../tests/fixtures/example-extractor-0.5.0/plugin.wasm");
+
 /// The default extraction context a plugin test hands to `extract` /
 /// `search`: a stock HTTP client, the boa engine, an empty cookie jar and
 /// default config. Formerly six identical copies (the adapter unit tests
@@ -195,6 +203,125 @@ pub fn with_isolated_config_dir<R>(f: impl FnOnce(&Path) -> R) -> R {
         ],
         || f(tempdir.path()),
     )
+}
+
+/// Unit-test-only seams shared by more than one `#[cfg(test)]` module in
+/// this crate (the adapter, search adapter, conversion, and host-import
+/// tests), so no test module has to reach into a sibling's `mod tests`.
+#[cfg(test)]
+pub(crate) mod unit {
+    use std::sync::Arc;
+
+    use crate::adapter::{HostResources, PluginExtractor};
+    use crate::convert::PluginOrigin;
+    use crate::engine::{Engine, EngineConfig};
+    use crate::loader::LoadedPlugin;
+    use crate::manifest::parse_manifest_str;
+
+    /// Placeholder signature: `parse_manifest_str` checks shape only;
+    /// verification happens in the loader, which these fixtures bypass.
+    pub const FIXTURE_MANIFEST: &str = r#"
+name = "example"
+version = "0.0.1"
+wit_version = "0.5.0"
+matches = ["https://example.com/*"]
+priority = 150
+capabilities = []
+
+[signature]
+type = "ed25519"
+pubkey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+"#;
+
+    /// The 0.5.0 fixture wrapped in an adapter, on a manifest with no
+    /// `search_site` and no override claim of either kind.
+    pub fn fixture_extractor() -> PluginExtractor {
+        fixture_extractor_with_manifest(FIXTURE_MANIFEST)
+    }
+
+    /// The 0.5.0 fixture on `toml` — for tests that need a manifest field
+    /// (a `search_site`, an override claim) the default fixture lacks.
+    pub fn fixture_extractor_with_manifest(toml: &str) -> PluginExtractor {
+        let engine = Arc::new(Engine::new(EngineConfig::default()).expect("engine"));
+        let component =
+            wasmtime::component::Component::from_binary(engine.raw(), super::EXAMPLE_0_5_0_WASM)
+                .expect("component");
+        let manifest = parse_manifest_str(toml).expect("manifest");
+        let identity = manifest.signature.identity_string();
+        let loaded = LoadedPlugin {
+            manifest,
+            identity,
+            component,
+            origin_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures"),
+        };
+        PluginExtractor::new(loaded, engine, HostResources::default()).expect("adapter")
+    }
+
+    /// The plugin name every unit-test `PluginStoreData` carries, and the
+    /// log target derived from it (`PluginStoreData::new`).
+    pub const TEST_PLUGIN_NAME: &str = "test";
+    pub const TEST_LOG_TARGET: &str = "plugin::test";
+
+    /// The diagnostics origin matching [`TEST_PLUGIN_NAME`].
+    pub const fn test_origin() -> PluginOrigin<'static> {
+        PluginOrigin {
+            plugin_name: TEST_PLUGIN_NAME,
+            log_target: TEST_LOG_TARGET,
+        }
+    }
+
+    /// `(target, message)` pairs captured from the `log` facade.
+    pub type LogEntries = Arc<std::sync::Mutex<Vec<(String, String)>>>;
+
+    /// Minimal `log::Log` sink so a test can assert a refusal was reported
+    /// to the plugin's own log target. Mirrors the capturing-logger harness
+    /// in `rdlp-cookies`; `log::set_logger` accepts one logger per process,
+    /// so the buffer is process-global and never cleared — each assertion
+    /// looks for its own distinctive message instead.
+    struct CapturingLogger {
+        entries: LogEntries,
+    }
+
+    impl log::Log for CapturingLogger {
+        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+            true
+        }
+        fn log(&self, record: &log::Record<'_>) {
+            self.entries
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push((record.target().to_string(), record.args().to_string()));
+        }
+        fn flush(&self) {}
+    }
+
+    /// The process-global capture buffer, installing the logger on first use.
+    pub fn captured_logs() -> LogEntries {
+        static CAPTURED: std::sync::OnceLock<LogEntries> = std::sync::OnceLock::new();
+        Arc::clone(CAPTURED.get_or_init(|| {
+            let entries: LogEntries = Arc::new(std::sync::Mutex::new(Vec::new()));
+            let logger: &'static CapturingLogger = Box::leak(Box::new(CapturingLogger {
+                entries: Arc::clone(&entries),
+            }));
+            log::set_logger(logger).expect("no other logger in the rdlp-plugin lib test binary");
+            log::set_max_level(log::LevelFilter::Warn);
+            entries
+        }))
+    }
+
+    /// First captured entry whose message contains `needle`, cloned out so
+    /// the lock is released before any assertion panics.
+    pub fn captured_entry_containing(logs: &LogEntries, needle: &str) -> (String, String) {
+        let entries = logs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        entries
+            .iter()
+            .find(|(_, m)| m.contains(needle))
+            .cloned()
+            .unwrap_or_else(|| panic!("no entry containing {needle:?} among {entries:?}"))
+    }
 }
 
 #[cfg(test)]

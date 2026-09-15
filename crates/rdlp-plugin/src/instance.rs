@@ -49,6 +49,15 @@ pub struct PluginStoreData {
 }
 
 impl PluginStoreData {
+    /// This store's plugin as the conversion layer names it in diagnostics.
+    #[must_use]
+    pub(crate) fn origin(&self) -> crate::convert::PluginOrigin<'_> {
+        crate::convert::PluginOrigin {
+            plugin_name: &self.plugin_name,
+            log_target: &self.log_target,
+        }
+    }
+
     /// Build store data with the given plugin name + cancellation token.
     /// Capability fields default to `None` — the loader populates the ones it
     /// granted.

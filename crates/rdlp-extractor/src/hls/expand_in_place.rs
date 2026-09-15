@@ -25,6 +25,7 @@
 //! See issue #269 for the audit and remediation history.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use rdlp_types::{DownloadProtocol, Format};
 
@@ -68,22 +69,55 @@ pub async fn expand_hls_in_place(formats: Vec<Format>, http: Arc<wreq::Client>) 
 /// through the WIT `format` record — still yields downloadable HLS rows,
 /// while in-tree rows (already expanded by the extractor itself) are never
 /// re-fetched. Order is preserved because expansion is per-row in place.
+///
+/// The whole pass runs under `budget`: the rows are extractor-controlled
+/// (a plugin's, in particular) and each expansion is a network round trip
+/// that runs outside any per-call plugin timeout. Once the budget is spent,
+/// every remaining fragments-less HLS row is dropped — a row without
+/// fragments cannot be downloaded anyway — with one warning naming how many
+/// were dropped; rows already expanded and rows that never needed expansion
+/// are kept as they are.
 pub async fn expand_missing_hls_fragments(
     formats: Vec<Format>,
     http: Arc<wreq::Client>,
+    budget: Duration,
 ) -> Vec<Format> {
+    let deadline = tokio::time::Instant::now() + budget;
     let mut out = Vec::with_capacity(formats.len());
+    let mut dropped_unexpanded = 0usize;
+    let mut first_dropped: Option<String> = None;
     for f in formats {
         let needs_expansion = f.fragments.is_none()
             && matches!(
                 f.protocol,
                 DownloadProtocol::M3u8 | DownloadProtocol::M3u8Native
             );
-        if needs_expansion {
-            out.extend(expand_hls_in_place(vec![f], Arc::clone(&http)).await);
-        } else {
+        if !needs_expansion {
             out.push(f);
+            continue;
         }
+        if dropped_unexpanded > 0 {
+            // The budget is already spent; no point starting another fetch.
+            dropped_unexpanded += 1;
+            continue;
+        }
+        let url = f.url.clone();
+        match tokio::time::timeout_at(deadline, expand_hls_in_place(vec![f], Arc::clone(&http)))
+            .await
+        {
+            Ok(rows) => out.extend(rows),
+            Err(_elapsed) => {
+                dropped_unexpanded = 1;
+                first_dropped = Some(url);
+            }
+        }
+    }
+    if let Some(url) = first_dropped {
+        log::warn!(
+            "HLS expansion budget of {budget:?} exhausted — dropping {dropped_unexpanded} \
+             unexpanded HLS format row(s) (first: {})",
+            rdlp_redact::RedactedUrl::new(&url)
+        );
     }
     out
 }
@@ -91,6 +125,10 @@ pub async fn expand_missing_hls_fragments(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Ample for a loopback mockito round trip; only the budget test below
+    /// deliberately runs out of time.
+    const TEST_BUDGET: Duration = Duration::from_secs(30);
 
     #[tokio::test]
     async fn replaces_m3u8_rows_with_fragments() {
@@ -360,7 +398,8 @@ mod tests {
             duration: Some(6.0),
             filesize: None,
         }]);
-        let out = expand_missing_hls_fragments(vec![f], Arc::new(wreq::Client::new())).await;
+        let out =
+            expand_missing_hls_fragments(vec![f], Arc::new(wreq::Client::new()), TEST_BUDGET).await;
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].fragments.as_ref().unwrap().len(), 1);
         never.assert_async().await;
@@ -386,13 +425,95 @@ mod tests {
             "m3u8",
             DownloadProtocol::M3u8Native,
         );
-        let out = expand_missing_hls_fragments(vec![mp4, hls], Arc::new(wreq::Client::new())).await;
+        let out = expand_missing_hls_fragments(
+            vec![mp4, hls],
+            Arc::new(wreq::Client::new()),
+            TEST_BUDGET,
+        )
+        .await;
         assert_eq!(
             out.iter().map(|f| f.format_id.as_str()).collect::<Vec<_>>(),
             ["1080p", "hls"]
         );
         assert!(out[0].fragments.is_none());
         assert_eq!(out[1].fragments.as_ref().unwrap().len(), 2);
+    }
+
+    /// The budget bounds the WHOLE pass, not each row: with a master that
+    /// answers only after the budget is spent, the first HLS row's fetch
+    /// times out, every later fragments-less HLS row is dropped without a
+    /// fetch, and the rows that never needed expansion survive in order.
+    /// The elapsed time pins that the pass did not wait for the slow
+    /// master (or a second one) to answer.
+    #[tokio::test]
+    async fn budget_exhaustion_drops_the_unexpanded_hls_rows_and_keeps_the_rest() {
+        const BUDGET: Duration = Duration::from_millis(200);
+        const SERVER_DELAY: Duration = Duration::from_millis(1_000);
+
+        let mut server = mockito::Server::new_async().await;
+        let slow = server
+            .mock("GET", "/slow.m3u8")
+            .with_chunked_body(|w| {
+                std::thread::sleep(SERVER_DELAY);
+                w.write_all(crate::hls::test_support::VARIANT_MEDIA.as_bytes())
+            })
+            .expect(1)
+            .create_async()
+            .await;
+        let never = server
+            .mock("GET", "/never.m3u8")
+            .with_body(crate::hls::test_support::VARIANT_MEDIA)
+            .expect(0)
+            .create_async()
+            .await;
+
+        let mp4 = Format::new(
+            "1080p",
+            "https://h.com/x.mp4",
+            "mp4",
+            DownloadProtocol::Https,
+        );
+        let slow_hls = Format::new(
+            "slow",
+            format!("{}/slow.m3u8", server.url()),
+            "m3u8",
+            DownloadProtocol::M3u8,
+        );
+        let later_hls = Format::new(
+            "later",
+            format!("{}/never.m3u8", server.url()),
+            "m3u8",
+            DownloadProtocol::M3u8Native,
+        );
+        let mut resolved = Format::new(
+            "resolved",
+            format!("{}/resolved.m3u8", server.url()),
+            "m3u8",
+            DownloadProtocol::M3u8,
+        );
+        resolved.fragments = Some(vec![]);
+
+        let started = std::time::Instant::now();
+        let out = expand_missing_hls_fragments(
+            vec![mp4, slow_hls, later_hls, resolved],
+            Arc::new(wreq::Client::new()),
+            BUDGET,
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        assert_eq!(
+            out.iter().map(|f| f.format_id.as_str()).collect::<Vec<_>>(),
+            ["1080p", "resolved"],
+            "both fragments-less HLS rows must be dropped; the others kept in order"
+        );
+        assert!(
+            elapsed < SERVER_DELAY,
+            "the pass must stop at the budget, not wait for the slow master: {elapsed:?}"
+        );
+        slow.assert_async().await;
+        never.assert_async().await;
+        drop(server);
     }
 
     /// Static regression guard for issue #279.

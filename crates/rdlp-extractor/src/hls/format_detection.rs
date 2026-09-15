@@ -196,8 +196,8 @@ pub async fn detect_format_sizes_lazy(
 }
 
 /// [`detect_format_sizes_lazy`] for a caller that has no `ExtractionContext` —
-/// the plugin host, which holds an HTTP client and a `Config` but never
-/// constructs the full extractor context.
+/// the plugin host, which holds the plugin's granted HTTP client but no
+/// operator `Config` and never constructs the full extractor context.
 pub async fn detect_format_sizes_lazy_in(
     formats: Vec<rdlp_types::Format>,
     probe: &SizeProbeEnv<'_>,
@@ -206,9 +206,9 @@ pub async fn detect_format_sizes_lazy_in(
 }
 
 /// Everything `detect_format_sizes_inner` reads from an `ExtractionContext`.
-/// A parameter object so the plugin host (which has a client and a `Config`
-/// but no `ExtractionContext`) can drive the same probe without a stub
-/// context — one mechanism shared by the in-tree extractor callers
+/// A parameter object so the plugin host (which has a client but neither an
+/// operator `Config` nor an `ExtractionContext`) can drive the same probe
+/// without a stub context — one mechanism shared by the in-tree extractor callers
 /// (`detect_format_sizes`, `detect_format_sizes_lazy`) and the plugin-host
 /// caller (`detect_format_sizes_lazy_in`).
 pub struct SizeProbeEnv<'a> {
@@ -587,12 +587,22 @@ fn aggregate_results(
     (formats, flags)
 }
 
+/// Probe every format, at most [`MAX_CONCURRENT_VARIANT_FETCHES`] at a time.
+///
+/// `buffered` (not `buffer_unordered`) so results keep the input order:
+/// `aggregate_results` dedups HLS mirrors per `(height, vcodec, acodec,
+/// language)` key with the earlier row as primary unless a later one
+/// estimates strictly larger, so reordering would change which URL wins a
+/// tie. The row list is plugin-controllable through
+/// the `probe-format-sizes` host import, which is why the fan-out is
+/// bounded here rather than left to `join_all`.
 async fn detect_format_sizes_inner(
     formats: Vec<rdlp_types::Format>,
     probe: &SizeProbeEnv<'_>,
     detect_sizes: bool,
 ) -> (Vec<rdlp_types::Format>, HlsStreamFlags) {
-    use futures::future::join_all;
+    use super::expand::MAX_CONCURRENT_VARIANT_FETCHES;
+    use futures::StreamExt as _;
 
     let verbose = probe.config.verbose;
     let head_timeout = probe.head_timeout();
@@ -618,8 +628,7 @@ async fn detect_format_sizes_inner(
     let http_client = Arc::clone(&probe.http_client);
     let extractor_name = probe.extractor_name.to_string();
 
-    let detection_futures: Vec<_> = formats
-        .into_iter()
+    let results: Vec<Vec<DetectionEntry>> = futures::stream::iter(formats)
         .map(|format| {
             let detection_ctx = FormatDetectionCtx {
                 hls_detector: hls_detector.clone(),
@@ -631,9 +640,9 @@ async fn detect_format_sizes_inner(
             };
             build_format_detection_future(format, detection_ctx)
         })
-        .collect();
-
-    let results = join_all(detection_futures).await;
+        .buffered(MAX_CONCURRENT_VARIANT_FETCHES)
+        .collect()
+        .await;
     aggregate_results(results)
 }
 
@@ -801,5 +810,74 @@ mod size_probe_env_tests {
             extractor_name: "test",
         };
         assert_eq!(probe.head_timeout(), Duration::from_secs(1));
+    }
+}
+
+#[cfg(test)]
+mod fan_out_bound_tests {
+    use super::{SizeProbeEnv, detect_format_sizes_lazy_in};
+    use crate::hls::expand::MAX_CONCURRENT_VARIANT_FETCHES;
+    use crate::hls::test_support::test_ctx;
+    use rdlp_types::{DownloadProtocol, Format};
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    /// Long enough that every probe admitted at once is still in flight
+    /// when the next one arrives, so the in-flight high-water mark reflects
+    /// the fan-out bound and not request latency.
+    const HOLD: Duration = Duration::from_millis(100);
+
+    /// The per-format probes are issued at most
+    /// `MAX_CONCURRENT_VARIANT_FETCHES` at a time. Every seed points at one
+    /// mockito route whose handler holds the request open for `HOLD` while
+    /// counting how many are in flight; an unbounded `join_all` over twice
+    /// that many seeds drives the high-water mark to the seed count.
+    #[tokio::test]
+    async fn probes_are_issued_at_most_the_bound_at_a_time() {
+        let in_flight = Arc::new(AtomicUsize::new(0));
+        let high_water = Arc::new(AtomicUsize::new(0));
+        let (inf, hw) = (Arc::clone(&in_flight), Arc::clone(&high_water));
+
+        let mut server = mockito::Server::new_async().await;
+        let _media = server
+            .mock("GET", mockito::Matcher::Regex(r"^/v\d+\.m3u8$".into()))
+            .with_chunked_body(move |w| {
+                let now = inf.fetch_add(1, Ordering::SeqCst) + 1;
+                hw.fetch_max(now, Ordering::SeqCst);
+                std::thread::sleep(HOLD);
+                inf.fetch_sub(1, Ordering::SeqCst);
+                w.write_all(crate::hls::test_support::VARIANT_MEDIA.as_bytes())
+            })
+            .expect_at_least(1)
+            .create_async()
+            .await;
+
+        let seeds: Vec<Format> = (0..MAX_CONCURRENT_VARIANT_FETCHES * 2)
+            .map(|i| {
+                Format::new(
+                    format!("hls-{i}"),
+                    format!("{}/v{i}.m3u8", server.url()),
+                    "m3u8",
+                    DownloadProtocol::M3u8,
+                )
+            })
+            .collect();
+
+        let ctx = test_ctx();
+        let probe = SizeProbeEnv::from_context(&ctx, "test");
+        let (out, _flags) = detect_format_sizes_lazy_in(seeds, &probe).await;
+        assert!(!out.is_empty(), "the probes must have run");
+
+        let peak = high_water.load(Ordering::SeqCst);
+        assert!(
+            peak > 1,
+            "the server must have seen concurrent probes for this test to discriminate; peak {peak}"
+        );
+        assert!(
+            peak <= MAX_CONCURRENT_VARIANT_FETCHES,
+            "in-flight probes peaked at {peak}, above the {MAX_CONCURRENT_VARIANT_FETCHES} bound"
+        );
+        drop(server);
     }
 }

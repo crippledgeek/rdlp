@@ -12,6 +12,53 @@ use crate::bindings::rdlp::plugin::host_extract_helpers::MpdFragment;
 use crate::bindings::rdlp::plugin::types::Format as WitFormat;
 use rdlp_types::DownloadProtocol;
 
+/// Upper bound on the `format` rows one WIT call may carry across the
+/// boundary — a plugin's `extract` result, or the input list of the
+/// `expand-hls` / `probe-format-sizes` host imports.
+///
+/// The rows are plugin-controlled and every one of them costs host work
+/// downstream that runs OUTSIDE the plugin's own per-call timeout: the
+/// orchestrator's `finish_extracted_formats` boundary fetches a playlist
+/// for each fragments-less HLS row, and the host imports fan out one probe
+/// per row. 256 is headroom over the largest ladder in common use —
+/// yt-dlp's `YouTube` extractor lists on the order of a hundred formats for
+/// one video — while keeping that downstream work bounded by a constant
+/// rather than by the plugin. Excess rows are dropped from the tail with
+/// one warning on the plugin's log target.
+pub(crate) const MAX_PLUGIN_FORMATS: usize = 256;
+
+/// Whom a conversion's diagnostics name and where they go: the plugin's
+/// name for identity, its `log` target for the warning channel `host:log`
+/// already uses (so a plugin author reading their plugin's log sees the
+/// host's refusals next to their own lines).
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PluginOrigin<'a> {
+    /// The plugin's manifest name.
+    pub plugin_name: &'a str,
+    /// The plugin's `log` target (`PluginStoreData::log_target`).
+    pub log_target: &'a str,
+}
+
+/// Enforce [`MAX_PLUGIN_FORMATS`] on a plugin-supplied row list, keeping
+/// the first `MAX_PLUGIN_FORMATS` rows. `import` names the WIT call in the
+/// warning so an author can tell which list was cut.
+pub(crate) fn cap_plugin_formats<T>(
+    mut rows: Vec<T>,
+    import: &str,
+    origin: &PluginOrigin<'_>,
+) -> Vec<T> {
+    if rows.len() > MAX_PLUGIN_FORMATS {
+        log::warn!(
+            target: origin.log_target,
+            "{import}: plugin {} supplied {} format rows; keeping the first {MAX_PLUGIN_FORMATS} and dropping the rest",
+            origin.plugin_name,
+            rows.len()
+        );
+        rows.truncate(MAX_PLUGIN_FORMATS);
+    }
+    rows
+}
+
 /// Narrow an `f64` to `f32` at the WIT boundary.
 ///
 /// `types.wit` declares `fps`/`tbr`/`vbr`/`abr` as `f32`; rdlp-types uses
@@ -33,16 +80,18 @@ pub(crate) const fn narrow_f64(v: f64) -> f32 {
 /// Convert a bindgen-generated `InfoDict` to the rdlp-types `InfoDict`.
 ///
 /// The WIT `InfoDict` does not carry `extractor` or `webpage_url` — those are
-/// filled in from the call context (`plugin_name` and `url`).
+/// filled in from the call context (`origin.plugin_name` and `url`). The
+/// format list is capped at [`MAX_PLUGIN_FORMATS`] here, at the boundary,
+/// so nothing downstream ever sees more rows than that from a plugin.
 pub(crate) fn info_dict_from_wit(
     w: crate::bindings::rdlp::plugin::types::InfoDict,
     url: &str,
-    plugin_name: &str,
+    origin: &PluginOrigin<'_>,
 ) -> rdlp_types::InfoDict {
     let mut out = rdlp_types::InfoDict::new(
         w.id,
         w.title,
-        plugin_name,
+        origin.plugin_name,
         // Prefer the URL the plugin returned; fall back to the request URL.
         w.url.as_deref().unwrap_or(url),
     );
@@ -65,7 +114,10 @@ pub(crate) fn info_dict_from_wit(
     } else {
         Some(w.categories)
     };
-    out.formats = w.formats.into_iter().map(format_from_wit).collect();
+    out.formats = cap_plugin_formats(w.formats, "extract", origin)
+        .into_iter()
+        .map(format_from_wit)
+        .collect();
     // Convert subtitle list → InfoDict's `HashMap<lang, Vec<Subtitle>>` format.
     if !w.subtitles.is_empty() {
         use rdlp_types::info_dict::Subtitle;
@@ -135,14 +187,9 @@ pub(crate) fn sanitise_for_path(s: &str) -> String {
 /// `rdlp_types::protocol::DownloadProtocol::from_str`): any string not
 /// matching one of the five named variants becomes `Other(s)`, verbatim, by
 /// design — that's how a plugin-supplied protocol like `"rtmp"` survives
-/// this boundary at all. The `.unwrap_or(Https)` below therefore has no
-/// live `Err` branch to fall back from; it is dead code, unchanged from the
-/// pre-Task-5 `adapter.rs::convert_format` it was moved from.
+/// this boundary at all.
 pub(crate) fn format_from_wit(w: WitFormat) -> rdlp_types::Format {
-    let protocol = w
-        .protocol
-        .parse::<DownloadProtocol>()
-        .unwrap_or(DownloadProtocol::Https);
+    let Ok(protocol) = w.protocol.parse::<DownloadProtocol>();
     let format_id = sanitise_for_path(&w.format_id);
     let ext = sanitise_for_path(&w.ext);
     let mut f = rdlp_types::Format::new(format_id, w.url, ext, protocol);
@@ -162,10 +209,10 @@ pub(crate) fn format_from_wit(w: WitFormat) -> rdlp_types::Format {
 
 /// Convert `rdlp_types::Format` to the WIT `Format`.
 ///
-/// Intended for the host imports / search adapter that later tasks add;
-/// exercised today by the round-trip tests below.
+/// The outbound half of the boundary: `expand-hls` and `probe-format-sizes`
+/// return their rows through it (`host::extract_helpers`).
 #[must_use]
-pub fn format_to_wit(f: &rdlp_types::Format) -> WitFormat {
+pub(crate) fn format_to_wit(f: &rdlp_types::Format) -> WitFormat {
     WitFormat {
         format_id: f.format_id.clone(),
         url: f.url.clone(),
@@ -203,29 +250,9 @@ pub(crate) fn fragment_to_wit(fr: rdlp_types::Fragment) -> MpdFragment {
     }
 }
 
-/// Convert the WIT `mpd-fragment` record back to `rdlp_types::Fragment`.
-///
-/// `mpd-fragment` has no `filesize` field, so the round-tripped `Fragment`
-/// always carries `filesize: None` — pre-known segment size is rarely
-/// populated and is not part of this boundary's contract.
-///
-/// Intended for the host imports that later tasks add; exercised today by
-/// the round-trip tests below.
-#[must_use]
-pub fn fragment_from_wit(w: MpdFragment) -> rdlp_types::Fragment {
-    rdlp_types::Fragment {
-        url: w.url,
-        byte_range: w.byte_range,
-        init_url: w.init_url,
-        init_byte_range: w.init_byte_range,
-        duration: w.duration,
-        filesize: None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{format_from_wit, format_to_wit, fragment_from_wit, fragment_to_wit};
+    use super::{format_from_wit, format_to_wit, fragment_to_wit};
 
     #[test]
     fn format_round_trips_through_wit_except_sanitised_fields() {
@@ -269,7 +296,7 @@ mod tests {
     }
 
     #[test]
-    fn fragment_round_trips_including_ranges() {
+    fn fragment_to_wit_passes_every_field_through_verbatim() {
         let fr = rdlp_types::Fragment {
             url: "https://cdn.example/s1.m4s".into(),
             byte_range: Some((0, 100)),
@@ -278,12 +305,12 @@ mod tests {
             duration: Some(6.0),
             filesize: None,
         };
-        let back = fragment_from_wit(fragment_to_wit(fr.clone()));
-        assert_eq!(back.url, fr.url);
-        assert_eq!(back.byte_range, fr.byte_range);
-        assert_eq!(back.init_url, fr.init_url);
-        assert_eq!(back.init_byte_range, fr.init_byte_range);
-        assert_eq!(back.duration, fr.duration);
+        let wit = fragment_to_wit(fr.clone());
+        assert_eq!(wit.url, fr.url);
+        assert_eq!(wit.byte_range, fr.byte_range);
+        assert_eq!(wit.init_url, fr.init_url);
+        assert_eq!(wit.init_byte_range, fr.init_byte_range);
+        assert_eq!(wit.duration, fr.duration);
     }
 
     #[test]
@@ -293,10 +320,8 @@ mod tests {
         // variants becomes `Other(s)`, verbatim, by design — that's how a
         // plugin-supplied protocol like "rtmp" survives the boundary at all
         // (`rdlp_types::protocol`'s own tests assert `Other("rtmp")` as the
-        // intended outcome). `format_from_wit`'s `.unwrap_or(Https)` can
-        // never fire for that reason and is not a live fallback; asserting
-        // the round-trip preserves the unrecognised string, rather than
-        // asserting it collapses to `Https`, is the correct invariant here.
+        // intended outcome), so the invariant is that the round-trip
+        // preserves the unrecognised string rather than collapsing it.
         let mut w = format_to_wit(&rdlp_types::Format::new(
             "x",
             "https://h/x",
@@ -308,6 +333,82 @@ mod tests {
             format_from_wit(w).protocol,
             rdlp_types::DownloadProtocol::Other("not-a-protocol".to_string())
         );
+    }
+}
+
+#[cfg(test)]
+mod format_cap_tests {
+    use super::{MAX_PLUGIN_FORMATS, format_to_wit, info_dict_from_wit};
+    use crate::test_support::unit::{
+        TEST_LOG_TARGET, captured_entry_containing, captured_logs, test_origin,
+    };
+
+    fn wit_info_with_formats(n: usize) -> crate::bindings::rdlp::plugin::types::InfoDict {
+        let formats = (0..n)
+            .map(|i| {
+                format_to_wit(&rdlp_types::Format::new(
+                    format!("f{i}"),
+                    format!("https://cdn.example/{i}.mp4"),
+                    "mp4",
+                    rdlp_types::DownloadProtocol::Https,
+                ))
+            })
+            .collect();
+        crate::bindings::rdlp::plugin::types::InfoDict {
+            id: "1".into(),
+            title: "t".into(),
+            url: None,
+            thumbnail: None,
+            description: None,
+            uploader: None,
+            uploader_id: None,
+            upload_date: None,
+            duration: None,
+            view_count: None,
+            like_count: None,
+            tags: vec![],
+            categories: vec![],
+            formats,
+            subtitles: vec![],
+        }
+    }
+
+    /// Exactly `MAX_PLUGIN_FORMATS` rows all cross the boundary; one more is
+    /// cut back to the bound (first rows kept) and reported on the plugin's
+    /// log target, naming the call and the plugin.
+    #[test]
+    fn extract_result_formats_are_capped_at_the_bound_inclusive() {
+        let logs = captured_logs();
+        let at = info_dict_from_wit(
+            wit_info_with_formats(MAX_PLUGIN_FORMATS),
+            "https://example.com/v",
+            &test_origin(),
+        );
+        assert_eq!(at.formats.len(), MAX_PLUGIN_FORMATS);
+
+        let over = info_dict_from_wit(
+            wit_info_with_formats(MAX_PLUGIN_FORMATS + 1),
+            "https://example.com/v",
+            &test_origin(),
+        );
+        assert_eq!(over.formats.len(), MAX_PLUGIN_FORMATS);
+        assert_eq!(
+            over.formats.first().map(|f| f.format_id.as_str()),
+            Some("f0")
+        );
+        assert_eq!(
+            over.formats.last().map(|f| f.format_id.as_str()),
+            Some(format!("f{}", MAX_PLUGIN_FORMATS - 1).as_str())
+        );
+        let (target, msg) = captured_entry_containing(
+            &logs,
+            &format!(
+                "extract: plugin test supplied {} format rows",
+                MAX_PLUGIN_FORMATS + 1
+            ),
+        );
+        assert_eq!(target, TEST_LOG_TARGET);
+        assert!(msg.contains(&MAX_PLUGIN_FORMATS.to_string()), "{msg}");
     }
 }
 

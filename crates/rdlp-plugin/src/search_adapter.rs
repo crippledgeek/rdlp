@@ -32,6 +32,7 @@ use crate::bindings::rdlp::plugin::types::{
     SearchError as WitSearchError, SearchPage as WitSearchPage, SearchQuery as WitSearchQuery,
     SearchResult as WitSearchResult,
 };
+use crate::convert::PluginOrigin;
 use crate::instance::PluginStoreData;
 use rdlp_core::{ExtractionContext, RdlpError, SearchExtractor};
 use rdlp_extractor::base::common::{
@@ -45,6 +46,24 @@ use wasmtime::component::{ComponentType, Lift};
 
 /// Name of the optional world export, as declared in `wit/extractor.wit`.
 const SEARCH_FILTERS_EXPORT: &str = "search-filters";
+
+/// Upper bound on the descriptors one `search-filters` answer may declare.
+/// The largest in-tree table (`RedTube`) has four; 32 leaves room for a far
+/// richer site while keeping the `Available:` list the host renders on an
+/// unknown-key error bounded by a constant, not by the plugin.
+const MAX_SEARCH_FILTER_DESCRIPTORS: usize = 32;
+
+/// Upper bound on one descriptor's `allowed-values`. `RedTube`'s category
+/// list, the largest in-tree, is ~90 entries; 256 is headroom over that and
+/// bounds the `Allowed:` list an invalid-value error renders.
+const MAX_SEARCH_FILTER_VALUES: usize = 256;
+
+/// Upper bound, in bytes, on any single descriptor string (key, display
+/// name, default, or one allowed value). These are identifiers and short
+/// labels — the longest in-tree value is under 32 bytes — and every one of
+/// them is echoed into operator-facing error text, so a plugin must not be
+/// able to make that text arbitrarily long.
+const MAX_SEARCH_FILTER_STRING_BYTES: usize = 256;
 
 /// Hand-written lift of the `search-filter-descriptor` record from
 /// `wit/types.wit`. `bindgen!` emits only the types the bound
@@ -151,7 +170,36 @@ pub(crate) async fn call_search_filters(
     func.post_return_async(&mut *store)
         .await
         .map_err(|e| trapped("post-return", e))?;
-    Ok(descs.into_iter().map(descriptor_from_wit).collect())
+    Ok(descriptors_from_wit(descs, &store.data().origin()))
+}
+
+/// Convert a plugin's descriptor list, enforcing the three bounds above:
+/// descriptors past [`MAX_SEARCH_FILTER_DESCRIPTORS`] are dropped, a
+/// descriptor with an over-long key/name/default is dropped whole, and an
+/// over-long or over-count allowed value is dropped from its descriptor.
+/// Each refusal warns once on the plugin's log target, naming the bound.
+fn descriptors_from_wit(
+    descs: Vec<WitSearchFilterDescriptor>,
+    origin: &PluginOrigin<'_>,
+) -> Vec<SearchFilterDescriptor> {
+    let total = descs.len();
+    if total > MAX_SEARCH_FILTER_DESCRIPTORS {
+        log::warn!(
+            target: origin.log_target,
+            "search-filters: plugin {} declared {total} descriptors; keeping the first {MAX_SEARCH_FILTER_DESCRIPTORS}",
+            origin.plugin_name
+        );
+    }
+    descs
+        .into_iter()
+        .take(MAX_SEARCH_FILTER_DESCRIPTORS)
+        .filter_map(|d| descriptor_from_wit(d, origin))
+        .collect()
+}
+
+/// Whether a descriptor string fits [`MAX_SEARCH_FILTER_STRING_BYTES`].
+const fn fits(s: &str) -> bool {
+    s.len() <= MAX_SEARCH_FILTER_STRING_BYTES
 }
 
 /// Call the generated `search` export and map its `search-error`.
@@ -189,11 +237,53 @@ fn search_error_to_plugin_error(plugin: &str, err: WitSearchError) -> PluginErro
 }
 
 /// The WIT record carries values only; the host renders each label as its
-/// value (documented on the `search-filter-descriptor` record).
-fn descriptor_from_wit(d: WitSearchFilterDescriptor) -> SearchFilterDescriptor {
-    let allowed =
-        SearchFilterValue::list(d.allowed_values.iter().map(|v| (v.as_str(), v.as_str())));
-    SearchFilterDescriptor::new(d.key, d.display_name, allowed, d.default.as_deref())
+/// value (documented on the `search-filter-descriptor` record). `None` when
+/// the descriptor's key, display name, or default exceeds
+/// [`MAX_SEARCH_FILTER_STRING_BYTES`] — such a descriptor is dropped whole,
+/// since every one of those strings is echoed into operator-facing text.
+fn descriptor_from_wit(
+    d: WitSearchFilterDescriptor,
+    origin: &PluginOrigin<'_>,
+) -> Option<SearchFilterDescriptor> {
+    if !fits(&d.key) || !fits(&d.display_name) || !d.default.as_deref().is_none_or(fits) {
+        log::warn!(
+            target: origin.log_target,
+            "search-filters: plugin {} declared a descriptor with a key, display name, or default over {MAX_SEARCH_FILTER_STRING_BYTES} bytes; dropping it",
+            origin.plugin_name
+        );
+        return None;
+    }
+    let declared = d.allowed_values.len();
+    let mut kept = 0usize;
+    let mut oversize = 0usize;
+    let allowed = SearchFilterValue::list(
+        d.allowed_values
+            .iter()
+            .filter(|v| {
+                let ok = fits(v);
+                if !ok {
+                    oversize += 1;
+                }
+                ok
+            })
+            .take(MAX_SEARCH_FILTER_VALUES)
+            .inspect(|_| kept += 1)
+            .map(|v| (v.as_str(), v.as_str())),
+    );
+    if oversize > 0 || declared - oversize > kept {
+        log::warn!(
+            target: origin.log_target,
+            "search-filters: plugin {} filter '{}' declared {declared} allowed values; kept {kept} (dropped {oversize} over {MAX_SEARCH_FILTER_STRING_BYTES} bytes, the rest past {MAX_SEARCH_FILTER_VALUES})",
+            origin.plugin_name,
+            d.key
+        );
+    }
+    Some(SearchFilterDescriptor::new(
+        d.key,
+        d.display_name,
+        allowed,
+        d.default.as_deref(),
+    ))
 }
 
 /// The host's page request for the plugin: the scaffold has already chosen
@@ -465,12 +555,16 @@ mod tests {
 
     #[test]
     fn descriptor_labels_are_the_values() {
-        let d = descriptor_from_wit(WitSearchFilterDescriptor {
-            key: "ordering".into(),
-            display_name: "Ordering".into(),
-            allowed_values: vec!["newest".into(), "views".into()],
-            default: Some("newest".into()),
-        });
+        let d = descriptor_from_wit(
+            WitSearchFilterDescriptor {
+                key: "ordering".into(),
+                display_name: "Ordering".into(),
+                allowed_values: vec!["newest".into(), "views".into()],
+                default: Some("newest".into()),
+            },
+            &test_origin(),
+        )
+        .expect("within every bound");
         assert_eq!(d.key, "ordering");
         assert_eq!(d.display_name, "Ordering");
         assert_eq!(d.default.as_deref(), Some("newest"));
@@ -482,8 +576,9 @@ mod tests {
 
     // ── PluginSearchExtractor ─────────────────────────────────────────────
 
-    use crate::adapter::tests::{
-        FIXTURE_MANIFEST, fixture_extractor, fixture_extractor_with_manifest,
+    use crate::test_support::unit::{
+        FIXTURE_MANIFEST, TEST_LOG_TARGET, captured_entry_containing, captured_logs,
+        fixture_extractor, fixture_extractor_with_manifest, test_origin,
     };
 
     fn host_query(filters: &[(&str, &str)]) -> SearchQuery {
@@ -708,13 +803,142 @@ mod tests {
 
     #[test]
     fn descriptor_without_default_or_values_is_preserved() {
-        let d = descriptor_from_wit(WitSearchFilterDescriptor {
-            key: "k".into(),
-            display_name: "K".into(),
-            allowed_values: vec![],
-            default: None,
-        });
+        let d = descriptor_from_wit(
+            WitSearchFilterDescriptor {
+                key: "k".into(),
+                display_name: "K".into(),
+                allowed_values: vec![],
+                default: None,
+            },
+            &test_origin(),
+        )
+        .expect("within every bound");
         assert!(d.allowed_values.is_empty());
         assert_eq!(d.default, None);
+    }
+
+    // ── descriptor bounds (security L3) ───────────────────────────────────
+
+    fn descriptor(key: &str, values: usize) -> WitSearchFilterDescriptor {
+        WitSearchFilterDescriptor {
+            key: key.into(),
+            display_name: key.to_uppercase(),
+            allowed_values: (0..values).map(|i| format!("v{i}")).collect(),
+            default: None,
+        }
+    }
+
+    /// Exactly `MAX_SEARCH_FILTER_DESCRIPTORS` descriptors all survive; one
+    /// more is cut back to the bound, with the first ones kept, and the cut
+    /// is reported on the plugin's log target.
+    #[test]
+    fn descriptor_count_is_capped_at_the_bound_inclusive() {
+        let logs = captured_logs();
+        let at = descriptors_from_wit(
+            (0..MAX_SEARCH_FILTER_DESCRIPTORS)
+                .map(|i| descriptor(&format!("k{i}"), 1))
+                .collect(),
+            &test_origin(),
+        );
+        assert_eq!(at.len(), MAX_SEARCH_FILTER_DESCRIPTORS);
+
+        let over = descriptors_from_wit(
+            (0..=MAX_SEARCH_FILTER_DESCRIPTORS)
+                .map(|i| descriptor(&format!("k{i}"), 1))
+                .collect(),
+            &test_origin(),
+        );
+        assert_eq!(over.len(), MAX_SEARCH_FILTER_DESCRIPTORS);
+        assert_eq!(
+            over.first().map(|d| d.key.as_str()),
+            Some("k0"),
+            "the first descriptors are the ones kept"
+        );
+        let (target, msg) = captured_entry_containing(
+            &logs,
+            &format!("declared {} descriptors", MAX_SEARCH_FILTER_DESCRIPTORS + 1),
+        );
+        assert_eq!(target, TEST_LOG_TARGET);
+        assert!(
+            msg.contains(&MAX_SEARCH_FILTER_DESCRIPTORS.to_string()),
+            "{msg}"
+        );
+    }
+
+    /// Exactly `MAX_SEARCH_FILTER_VALUES` allowed values survive; one more is
+    /// cut back to the bound (first ones kept) with a warning naming the key.
+    #[test]
+    fn allowed_values_are_capped_at_the_bound_inclusive() {
+        let logs = captured_logs();
+        let at = descriptor_from_wit(descriptor("at", MAX_SEARCH_FILTER_VALUES), &test_origin())
+            .expect("a full list is within the bound");
+        assert_eq!(at.allowed_values.len(), MAX_SEARCH_FILTER_VALUES);
+
+        let over = descriptor_from_wit(
+            descriptor("over", MAX_SEARCH_FILTER_VALUES + 1),
+            &test_origin(),
+        )
+        .expect("an over-long list is cut, not refused");
+        assert_eq!(over.allowed_values.len(), MAX_SEARCH_FILTER_VALUES);
+        assert_eq!(
+            over.allowed_values.first().map(|v| v.value.as_str()),
+            Some("v0")
+        );
+        let (target, msg) = captured_entry_containing(
+            &logs,
+            &format!(
+                "filter 'over' declared {} allowed values",
+                MAX_SEARCH_FILTER_VALUES + 1
+            ),
+        );
+        assert_eq!(target, TEST_LOG_TARGET);
+        assert!(
+            msg.contains(&format!("kept {MAX_SEARCH_FILTER_VALUES}")),
+            "{msg}"
+        );
+    }
+
+    /// A key of exactly `MAX_SEARCH_FILTER_STRING_BYTES` is accepted; one
+    /// byte more drops the whole descriptor. Same bound, applied per field:
+    /// the display name and the default are checked the same way.
+    #[test]
+    fn descriptor_strings_are_bounded_inclusive_per_field() {
+        let logs = captured_logs();
+        let at = "k".repeat(MAX_SEARCH_FILTER_STRING_BYTES);
+        let over = "k".repeat(MAX_SEARCH_FILTER_STRING_BYTES + 1);
+        assert!(descriptor_from_wit(descriptor(&at, 1), &test_origin()).is_some());
+        assert!(descriptor_from_wit(descriptor(&over, 1), &test_origin()).is_none());
+
+        let mut long_name = descriptor("k", 1);
+        long_name.display_name = over.clone();
+        assert!(descriptor_from_wit(long_name, &test_origin()).is_none());
+
+        let mut long_default = descriptor("k", 1);
+        long_default.default = Some(over);
+        assert!(descriptor_from_wit(long_default, &test_origin()).is_none());
+
+        let (target, msg) = captured_entry_containing(&logs, "key, display name, or default over");
+        assert_eq!(target, TEST_LOG_TARGET);
+        assert!(
+            msg.contains(&MAX_SEARCH_FILTER_STRING_BYTES.to_string()),
+            "{msg}"
+        );
+    }
+
+    /// An over-long allowed value drops only itself, not the descriptor.
+    #[test]
+    fn an_over_long_allowed_value_is_dropped_from_its_descriptor() {
+        let mut d = descriptor("k", 2);
+        d.allowed_values
+            .push("x".repeat(MAX_SEARCH_FILTER_STRING_BYTES + 1));
+        let converted = descriptor_from_wit(d, &test_origin()).expect("descriptor survives");
+        assert_eq!(
+            converted
+                .allowed_values
+                .iter()
+                .map(|v| v.value.as_str())
+                .collect::<Vec<_>>(),
+            ["v0", "v1"]
+        );
     }
 }

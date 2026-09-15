@@ -454,7 +454,11 @@ pub(crate) async fn call_plugin_extract(
         })?;
 
     match wit_result {
-        Ok(info) => Ok(crate::convert::info_dict_from_wit(info, url, &plugin_name)),
+        Ok(info) => Ok(crate::convert::info_dict_from_wit(
+            info,
+            url,
+            &store.data().origin(),
+        )),
         Err(extract_err) => Err(extract_error_to_plugin_error(&plugin_name, extract_err)),
     }
 }
@@ -517,56 +521,11 @@ fn extract_error_to_plugin_error(
 }
 
 #[cfg(test)]
-pub(crate) mod tests {
+mod tests {
     use super::*;
-    use crate::engine::EngineConfig;
-    use crate::manifest::parse_manifest_str;
     use crate::test_support::extraction_ctx;
+    use crate::test_support::unit::fixture_extractor;
     use std::sync::atomic::AtomicBool;
-
-    /// The committed 0.5.0 example component: WASI-free, no capabilities,
-    /// instantiates on the host world (see its README).
-    const FIXTURE_0_5_0: &[u8] =
-        include_bytes!("../tests/fixtures/example-extractor-0.5.0/plugin.wasm");
-
-    /// The 0.5.0 fixture wrapped in an adapter, on a manifest with no
-    /// `search_site` and no `claims_override`.
-    pub fn fixture_extractor() -> PluginExtractor {
-        fixture_extractor_with_manifest(FIXTURE_MANIFEST)
-    }
-
-    /// The 0.5.0 fixture on `toml` — for tests that need a manifest field
-    /// (a `search_site`, a `claims_override`) the default fixture lacks.
-    pub fn fixture_extractor_with_manifest(toml: &str) -> PluginExtractor {
-        let engine = Arc::new(Engine::new(EngineConfig::default()).expect("engine"));
-        let component = wasmtime::component::Component::from_binary(engine.raw(), FIXTURE_0_5_0)
-            .expect("component");
-        let manifest = parse_manifest_str(toml).expect("manifest");
-        let identity = manifest.signature.identity_string();
-        let loaded = LoadedPlugin {
-            manifest,
-            identity,
-            component,
-            origin_dir: std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures"),
-        };
-        PluginExtractor::new(loaded, engine, HostResources::default()).expect("adapter")
-    }
-
-    /// Placeholder signature: `parse_manifest_str` checks shape only;
-    /// verification happens in the loader, which this fixture bypasses.
-    pub const FIXTURE_MANIFEST: &str = r#"
-name = "example"
-version = "0.0.1"
-wit_version = "0.5.0"
-matches = ["https://example.com/*"]
-priority = 150
-capabilities = []
-
-[signature]
-type = "ed25519"
-pubkey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
-"#;
 
     fn spec(timeout: Duration) -> CallSpec<'static> {
         CallSpec {

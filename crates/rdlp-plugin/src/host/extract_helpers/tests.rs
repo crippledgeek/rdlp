@@ -1218,56 +1218,7 @@ async fn manifest_fetches_share_one_timeout() {
 
 // ---- refused patterns are observable ---------------------------------------
 
-/// `(target, message)` pairs captured from the `log` facade.
-type LogEntries = std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>;
-
-/// Minimal `log::Log` sink so a test can assert a refusal was reported to
-/// the plugin's own log target. Mirrors the capturing-logger harness in
-/// `rdlp-cookies`; `log::set_logger` accepts one logger per process, so the
-/// buffer is process-global and never cleared — each assertion looks for
-/// its own distinctive message instead.
-struct CapturingLogger {
-    entries: LogEntries,
-}
-
-impl log::Log for CapturingLogger {
-    fn enabled(&self, _: &log::Metadata<'_>) -> bool {
-        true
-    }
-    fn log(&self, record: &log::Record<'_>) {
-        self.entries
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .push((record.target().to_string(), record.args().to_string()));
-    }
-    fn flush(&self) {}
-}
-
-fn captured_logs() -> LogEntries {
-    static CAPTURED: std::sync::OnceLock<LogEntries> = std::sync::OnceLock::new();
-    std::sync::Arc::clone(CAPTURED.get_or_init(|| {
-        let entries: LogEntries = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let logger: &'static CapturingLogger = Box::leak(Box::new(CapturingLogger {
-            entries: std::sync::Arc::clone(&entries),
-        }));
-        log::set_logger(logger).expect("no other logger in the rdlp-plugin lib test binary");
-        log::set_max_level(log::LevelFilter::Warn);
-        entries
-    }))
-}
-
-/// First captured entry whose message contains `needle`, cloned out so the
-/// lock is released before any assertion panics.
-fn captured_entry_containing(logs: &LogEntries, needle: &str) -> (String, String) {
-    let entries = logs
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    entries
-        .iter()
-        .find(|(_, m)| m.contains(needle))
-        .cloned()
-        .unwrap_or_else(|| panic!("no entry containing {needle:?} among {entries:?}"))
-}
+use crate::test_support::unit::{captured_entry_containing, captured_logs};
 
 /// A plugin author must be able to tell "pattern refused" from "no match":
 /// the length-bound rejection warns on the plugin's log target with the
@@ -1402,27 +1353,64 @@ mod hls_host_imports {
         }
     }
 
+    /// The master + two variant mocks every expansion test in this module
+    /// starts from, on one fresh server: `/master.m3u8` → two variants,
+    /// `/v720.m3u8` and `/v360.m3u8` → the same two-segment media playlist.
+    /// The mocks are returned alongside the server so a test can assert on
+    /// them (`.assert_async()`), and so they live exactly as long as it.
+    struct TwoVariantServer {
+        server: mockito::ServerGuard,
+        master: mockito::Mock,
+        v720: mockito::Mock,
+        v360: mockito::Mock,
+    }
+
+    impl TwoVariantServer {
+        fn master_url(&self) -> String {
+            format!("{}/master.m3u8", self.server.url())
+        }
+    }
+
+    /// `expect` is applied to every mock; a test that needs a per-mock
+    /// count adjusts the returned handles' expectations itself.
+    async fn two_variant_server(
+        configure_master: impl FnOnce(mockito::Mock) -> mockito::Mock,
+        expect_variants: usize,
+    ) -> TwoVariantServer {
+        let mut server = mockito::Server::new_async().await;
+        let master = configure_master(
+            server
+                .mock("GET", "/master.m3u8")
+                .with_body(rdlp_extractor::hls::test_fixtures::MASTER_TWO_VARIANTS),
+        )
+        .create_async()
+        .await;
+        let v720 = server
+            .mock("GET", "/v720.m3u8")
+            .with_body(rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA)
+            .expect_at_least(expect_variants)
+            .create_async()
+            .await;
+        let v360 = server
+            .mock("GET", "/v360.m3u8")
+            .with_body(rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA)
+            .expect_at_least(expect_variants)
+            .create_async()
+            .await;
+        TwoVariantServer {
+            server,
+            master,
+            v720,
+            v360,
+        }
+    }
+
     /// D2 positive: one M3u8 seed → per-variant rows carrying fragments.
     #[tokio::test]
     async fn expand_hls_returns_variant_rows_with_fragments() {
-        let mut server = mockito::Server::new_async().await;
-        let _master = server
-            .mock("GET", "/master.m3u8")
-            .with_body(rdlp_extractor::hls::test_fixtures::MASTER_TWO_VARIANTS)
-            .create_async()
-            .await;
-        let _v720 = server
-            .mock("GET", "/v720.m3u8")
-            .with_body(rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA)
-            .create_async()
-            .await;
-        let _v360 = server
-            .mock("GET", "/v360.m3u8")
-            .with_body(rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA)
-            .create_async()
-            .await;
+        let server = two_variant_server(|m| m, 1).await;
         let mut data = store_data_with_fetch();
-        let seed = wit_format("hls", &format!("{}/master.m3u8", server.url()), "m3u8");
+        let seed = wit_format("hls", &server.master_url(), "m3u8");
         let out = data
             .expand_hls(vec![seed], empty_fetch_options())
             .await
@@ -1452,25 +1440,9 @@ mod hls_host_imports {
     /// `169.254.169.254` rather than hanging the suite.
     #[tokio::test]
     async fn expand_hls_drops_a_failing_seed_and_keeps_the_rest() {
-        let mut server = mockito::Server::new_async().await;
-        let _master = server
-            .mock("GET", "/master.m3u8")
-            .with_body(rdlp_extractor::hls::test_fixtures::MASTER_TWO_VARIANTS)
-            .create_async()
-            .await;
-        let _v720 = server
-            .mock("GET", "/v720.m3u8")
-            .with_body(rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA)
-            .create_async()
-            .await;
-        let _v360 = server
-            .mock("GET", "/v360.m3u8")
-            .with_body(rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA)
-            .create_async()
-            .await;
-
+        let server = two_variant_server(|m| m, 1).await;
         let mut data = store_data_with_fetch();
-        let good_seed = wit_format("hls", &format!("{}/master.m3u8", server.url()), "m3u8");
+        let good_seed = wit_format("hls", &server.master_url(), "m3u8");
         let ssrf_seed = wit_format("hls-bad", "http://169.254.169.254/x.m3u8", "m3u8");
         let mut non_hls_seed = wit_format("plain", "https://example.com/x.mp4", "mp4");
         non_hls_seed.protocol = "https".to_string();
@@ -1513,26 +1485,13 @@ mod hls_host_imports {
     /// row, and `out.len()` would be 0 instead of 2.
     #[tokio::test]
     async fn expand_hls_query_reaches_the_master_request() {
-        let mut server = mockito::Server::new_async().await;
-        let master = server
-            .mock("GET", "/master.m3u8")
-            .match_query(mockito::Matcher::UrlEncoded("tok".into(), "abc".into()))
-            .with_body(rdlp_extractor::hls::test_fixtures::MASTER_TWO_VARIANTS)
-            .create_async()
-            .await;
-        let _v720 = server
-            .mock("GET", "/v720.m3u8")
-            .with_body(rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA)
-            .create_async()
-            .await;
-        let _v360 = server
-            .mock("GET", "/v360.m3u8")
-            .with_body(rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA)
-            .create_async()
-            .await;
-
+        let server = two_variant_server(
+            |m| m.match_query(mockito::Matcher::UrlEncoded("tok".into(), "abc".into())),
+            1,
+        )
+        .await;
         let mut data = store_data_with_fetch();
-        let seed = wit_format("hls", &format!("{}/master.m3u8", server.url()), "m3u8");
+        let seed = wit_format("hls", &server.master_url(), "m3u8");
         let fetch = FetchOptions {
             headers: vec![],
             query: vec![("tok".to_string(), "abc".to_string())],
@@ -1540,8 +1499,170 @@ mod hls_host_imports {
         };
         let out = data.expand_hls(vec![seed], fetch).await.unwrap();
         assert_eq!(out.len(), 2, "query must reach the master request: {out:?}");
-        master.assert_async().await;
+        server.master.assert_async().await;
         drop(server);
+    }
+
+    /// `fetch-options.headers` must reach the request too: the master mock
+    /// only matches a request carrying exactly this `Referer`, the same
+    /// channel an in-tree extractor uses for a Referer-gated CDN.
+    #[tokio::test]
+    async fn expand_hls_headers_reach_the_master_request() {
+        let server = two_variant_server(
+            |m| m.match_header("Referer", "https://site.example/page"),
+            1,
+        )
+        .await;
+        let mut data = store_data_with_fetch();
+        let seed = wit_format("hls", &server.master_url(), "m3u8");
+        let fetch = FetchOptions {
+            headers: vec![(
+                "Referer".to_string(),
+                "https://site.example/page".to_string(),
+            )],
+            query: vec![],
+            body: None,
+        };
+        let out = data.expand_hls(vec![seed], fetch).await.unwrap();
+        assert_eq!(
+            out.len(),
+            2,
+            "the header must reach the master request: {out:?}"
+        );
+        server.master.assert_async().await;
+        drop(server);
+    }
+
+    /// Duplicate header keys collapse to the LAST value (the WIT doc's
+    /// stated contract for these two imports): the master mock matches only
+    /// the second `Referer`, so a first-wins collapse would 501 and drop
+    /// the row.
+    #[tokio::test]
+    async fn expand_hls_duplicate_header_keys_collapse_to_the_last_value() {
+        let server = two_variant_server(
+            |m| m.match_header("Referer", "https://site.example/second"),
+            1,
+        )
+        .await;
+        let mut data = store_data_with_fetch();
+        let seed = wit_format("hls", &server.master_url(), "m3u8");
+        let fetch = FetchOptions {
+            headers: vec![
+                (
+                    "Referer".to_string(),
+                    "https://site.example/first".to_string(),
+                ),
+                (
+                    "Referer".to_string(),
+                    "https://site.example/second".to_string(),
+                ),
+            ],
+            query: vec![],
+            body: None,
+        };
+        let out = data.expand_hls(vec![seed], fetch).await.unwrap();
+        assert_eq!(out.len(), 2, "the last duplicate must win: {out:?}");
+        server.master.assert_async().await;
+        drop(server);
+    }
+
+    /// `probe-format-sizes` never fetches a non-HLS row on this lazy path,
+    /// so a list of plain rows is the one input whose output length shows
+    /// the cap directly: exactly `MAX_PLUGIN_FORMATS` rows pass through;
+    /// one more is cut back to the bound with a warning naming the import.
+    #[tokio::test]
+    async fn probe_format_sizes_input_is_capped_at_the_bound_inclusive() {
+        use crate::convert::MAX_PLUGIN_FORMATS;
+        use crate::test_support::unit::{
+            TEST_LOG_TARGET, captured_entry_containing, captured_logs,
+        };
+
+        let logs = captured_logs();
+        let plain = |n: usize| -> Vec<crate::bindings::rdlp::plugin::types::Format> {
+            (0..n)
+                .map(|i| {
+                    let mut f = wit_format(&format!("p{i}"), &format!("https://h/{i}.mp4"), "mp4");
+                    f.protocol = "https".to_string();
+                    f
+                })
+                .collect()
+        };
+
+        let mut data = store_data_with_fetch();
+        let at = data
+            .probe_format_sizes(plain(MAX_PLUGIN_FORMATS), empty_fetch_options())
+            .await
+            .unwrap();
+        assert_eq!(at.formats.len(), MAX_PLUGIN_FORMATS);
+
+        let over = data
+            .probe_format_sizes(plain(MAX_PLUGIN_FORMATS + 1), empty_fetch_options())
+            .await
+            .unwrap();
+        assert_eq!(over.formats.len(), MAX_PLUGIN_FORMATS);
+        assert_eq!(
+            over.formats.first().map(|f| f.format_id.as_str()),
+            Some("p0")
+        );
+        let (target, msg) = captured_entry_containing(
+            &logs,
+            &format!(
+                "probe-format-sizes: plugin test supplied {} format rows",
+                MAX_PLUGIN_FORMATS + 1
+            ),
+        );
+        assert_eq!(target, TEST_LOG_TARGET);
+        assert!(msg.contains(&MAX_PLUGIN_FORMATS.to_string()), "{msg}");
+    }
+
+    /// `expand-hls` filters non-HLS rows out of its output, so the cap is
+    /// observed through its warning: `MAX_PLUGIN_FORMATS` plain rows warn
+    /// nothing, one more warns naming this import.
+    #[tokio::test]
+    async fn expand_hls_input_is_capped_at_the_bound_inclusive() {
+        use crate::convert::MAX_PLUGIN_FORMATS;
+        use crate::test_support::unit::{
+            TEST_LOG_TARGET, captured_entry_containing, captured_logs,
+        };
+
+        let logs = captured_logs();
+        let plain = |n: usize| -> Vec<crate::bindings::rdlp::plugin::types::Format> {
+            (0..n)
+                .map(|i| {
+                    let mut f = wit_format(&format!("e{i}"), &format!("https://h/{i}.mp4"), "mp4");
+                    f.protocol = "https".to_string();
+                    f
+                })
+                .collect()
+        };
+
+        let mut data = store_data_with_fetch();
+        data.expand_hls(plain(MAX_PLUGIN_FORMATS), empty_fetch_options())
+            .await
+            .unwrap();
+        let at_bound_warned = logs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .any(|(_, m)| {
+                m.contains(&format!(
+                    "expand-hls: plugin test supplied {MAX_PLUGIN_FORMATS} "
+                ))
+            });
+        assert!(!at_bound_warned, "exactly the bound must not warn");
+
+        data.expand_hls(plain(MAX_PLUGIN_FORMATS + 1), empty_fetch_options())
+            .await
+            .unwrap();
+        let (target, msg) = captured_entry_containing(
+            &logs,
+            &format!(
+                "expand-hls: plugin test supplied {} format rows",
+                MAX_PLUGIN_FORMATS + 1
+            ),
+        );
+        assert_eq!(target, TEST_LOG_TARGET);
+        assert!(msg.contains(&MAX_PLUGIN_FORMATS.to_string()), "{msg}");
     }
 
     /// probe-format-sizes re-fetches each row's OWN playlist — it does NOT
@@ -1564,28 +1685,12 @@ mod hls_host_imports {
     /// all, only the per-variant ones `expand_hls` produced.
     #[tokio::test]
     async fn probe_format_sizes_refetches_each_rows_playlist() {
-        let mut server = mockito::Server::new_async().await;
-        let master = server
-            .mock("GET", "/master.m3u8")
-            .with_body(rdlp_extractor::hls::test_fixtures::MASTER_TWO_VARIANTS)
-            .expect(1)
-            .create_async()
-            .await;
-        let v720 = server
-            .mock("GET", "/v720.m3u8")
-            .with_body(rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA)
-            .expect(3)
-            .create_async()
-            .await;
-        let v360 = server
-            .mock("GET", "/v360.m3u8")
-            .with_body(rdlp_extractor::hls::test_fixtures::VARIANT_MEDIA)
-            .expect(3)
-            .create_async()
-            .await;
+        let mut server = two_variant_server(|m| m.expect(1), 0).await;
+        server.v720 = server.v720.expect(3);
+        server.v360 = server.v360.expect(3);
 
         let mut data = store_data_with_fetch();
-        let seed = wit_format("hls", &format!("{}/master.m3u8", server.url()), "m3u8");
+        let seed = wit_format("hls", &server.master_url(), "m3u8");
         let expanded = data
             .expand_hls(vec![seed], empty_fetch_options())
             .await
@@ -1616,9 +1721,9 @@ mod hls_host_imports {
                 .collect::<Vec<_>>(),
             expected_ids
         );
-        master.assert_async().await;
-        v720.assert_async().await;
-        v360.assert_async().await;
+        server.master.assert_async().await;
+        server.v720.assert_async().await;
+        server.v360.assert_async().await;
         drop(server);
     }
 

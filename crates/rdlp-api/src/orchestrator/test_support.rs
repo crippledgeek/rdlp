@@ -155,11 +155,26 @@ const HOSTILE_FETCH_BOUND_SECS: u64 = 2;
 /// deliberately unresolvable URL, fails fast instead of hanging on a real
 /// network round trip if that URL is ever mistakenly reached.
 pub(super) fn orchestrator_with_fake_extractor(info: InfoDict) -> Orchestrator {
-    let config = Config {
+    orchestrator_with_fake_extractor_and_config(info, fast_failing_config())
+}
+
+/// The `Config` [`orchestrator_with_fake_extractor`] uses: fast-failing
+/// HTTP timeouts, everything else default. A test that needs one more
+/// field set (e.g. `hls_expansion_timeout`) starts from this and hands the
+/// result to [`orchestrator_with_fake_extractor_and_config`].
+pub(super) fn fast_failing_config() -> Config {
+    Config {
         socket_timeout: Some(HOSTILE_FETCH_BOUND_SECS),
         read_timeout: Some(HOSTILE_FETCH_BOUND_SECS),
         ..Config::default()
-    };
+    }
+}
+
+/// [`orchestrator_with_fake_extractor`] with the caller's `config`.
+pub(super) fn orchestrator_with_fake_extractor_and_config(
+    info: InfoDict,
+    config: Config,
+) -> Orchestrator {
     let mut orchestrator = orchestrator_with_config(config);
     orchestrator.extractor_registry = Arc::new(FakeRegistry {
         extractor: Arc::new(FakeExtractor { info }),

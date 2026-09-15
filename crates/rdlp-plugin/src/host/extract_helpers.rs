@@ -190,6 +190,25 @@ impl PluginStoreData {
             .map(|c| Arc::new(c.client.clone()))
             .ok_or_else(|| FetchError::Network(FETCH_NOT_GRANTED.into()))
     }
+
+    /// The prologue `expand-hls` and `probe-format-sizes` share: the granted
+    /// client, and the plugin's rows — capped at
+    /// [`crate::convert::MAX_PLUGIN_FORMATS`] before any of them costs a
+    /// fetch — converted and stamped with `fetch`. `import` names the
+    /// caller in the cap's warning.
+    fn hls_seeds(
+        &self,
+        formats: Vec<WitFormat>,
+        fetch: &FetchOptions,
+        import: &str,
+    ) -> Result<(Arc<wreq::Client>, Vec<rdlp_types::Format>), FetchError> {
+        let http = self.hls_http_client()?;
+        let seeds = crate::convert::cap_plugin_formats(formats, import, &self.origin())
+            .into_iter()
+            .map(|w| apply_fetch_headers(crate::convert::format_from_wit(w), fetch))
+            .collect();
+        Ok((http, seeds))
+    }
 }
 
 /// Apply `fetch-options` to one `expand-hls` / `probe-format-sizes` seed
@@ -578,11 +597,7 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         formats: Vec<WitFormat>,
         fetch: FetchOptions,
     ) -> Result<Vec<HlsFormat>, FetchError> {
-        let http = self.hls_http_client()?;
-        let seeds: Vec<rdlp_types::Format> = formats
-            .into_iter()
-            .map(|w| apply_fetch_headers(crate::convert::format_from_wit(w), &fetch))
-            .collect();
+        let (http, seeds) = self.hls_seeds(formats, &fetch, "expand-hls")?;
         let expanded = rdlp_extractor::hls::expand_hls_in_place(seeds, http).await;
         Ok(expanded
             .iter()
@@ -603,19 +618,16 @@ impl crate::bindings::rdlp::plugin::host_extract_helpers::Host for PluginStoreDa
         formats: Vec<WitFormat>,
         fetch: FetchOptions,
     ) -> Result<SizeProbe, FetchError> {
-        let http = self.hls_http_client()?;
-        let seeds: Vec<rdlp_types::Format> = formats
-            .into_iter()
-            .map(|w| apply_fetch_headers(crate::convert::format_from_wit(w), &fetch))
-            .collect();
-        // No `ExtractionContext` exists at the plugin host, so `SizeProbeEnv`
-        // needs a `Config` from somewhere. `Config::default()` is fine
-        // because nothing this lazy probe does reads it: `detect_sizes` is
-        // hardcoded `false` by `detect_format_sizes_lazy_in`, so the
-        // non-HLS HEAD-probe branch (the only reader of
-        // `hls_head_probe_timeout`) never runs. The only `Config` field this
-        // path is sensitive to is `verbose` (debug-log detail), which
-        // defaults to `false` either way.
+        let (http, seeds) = self.hls_seeds(formats, &fetch, "probe-format-sizes")?;
+        // The plugin host has no operator `Config` on this path (the store
+        // carries a client and capability contexts, not the orchestrator's
+        // configuration), so `SizeProbeEnv` gets `Config::default()`. That
+        // is sound because nothing this lazy probe does reads it:
+        // `detect_sizes` is hardcoded `false` by
+        // `detect_format_sizes_lazy_in`, so the non-HLS HEAD-probe branch
+        // (the only reader of `hls_head_probe_timeout`) never runs. The only
+        // `Config` field this path is sensitive to is `verbose` (debug-log
+        // detail), which defaults to `false` either way.
         let config = rdlp_types::Config::default();
         let probe = rdlp_extractor::hls::SizeProbeEnv {
             http_client: http,

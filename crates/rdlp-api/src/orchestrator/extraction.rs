@@ -8,7 +8,20 @@ use log::{debug, info};
 use rdlp_redact::RedactedUrlBuf;
 use rdlp_types::{SearchFilterDescriptor, SearchPageResponse, SearchQuery, SearchResultPreview};
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::instrument;
+
+/// Wall-clock budget for `Orchestrator::finish_extracted_formats`'s HLS
+/// expansion pass when `Config::hls_expansion_timeout` is unset.
+///
+/// 60 s equals the largest per-call budget a plugin itself gets
+/// (`rdlp_plugin::adapter::SEARCH_TIMEOUT`, the `plugin_timeout_search_s`
+/// default): this pass is host work a plugin's rows trigger after its own
+/// call has returned, so it is held to the same ceiling rather than left
+/// open-ended. Comfortably above a healthy ladder — each row is one
+/// playlist round trip, and the rows are capped at the WIT boundary
+/// (`rdlp_plugin::convert::MAX_PLUGIN_FORMATS`).
+const DEFAULT_HLS_EXPANSION_TIMEOUT_SECS: u64 = 60;
 
 /// Apply the decode boundary to a page of search previews.
 ///
@@ -69,8 +82,20 @@ impl Orchestrator {
         info.formats = rdlp_extractor::hls::expand_missing_hls_fragments(
             std::mem::take(&mut info.formats),
             Arc::clone(&self.extraction_context.http_client),
+            self.hls_expansion_budget(),
         )
         .await;
+    }
+
+    /// `Config::hls_expansion_timeout`, or [`DEFAULT_HLS_EXPANSION_TIMEOUT_SECS`]
+    /// when unset.
+    fn hls_expansion_budget(&self) -> Duration {
+        Duration::from_secs(
+            self.extraction_context
+                .config
+                .hls_expansion_timeout
+                .unwrap_or(DEFAULT_HLS_EXPANSION_TIMEOUT_SECS),
+        )
     }
 
     /// Extract video information from URL
