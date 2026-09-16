@@ -35,7 +35,7 @@ pub const SCALAR_VALUE_BYTES: usize = 8;
 pub const METADATA_LIST_ITEM_BYTES: usize = SCALAR_VALUE_BYTES;
 
 /// Whether `key` matches `^[a-z][a-z0-9-]{0,62}$` — the Kubernetes-label
-/// key shape `wit/types.wit` documents for `extras` — as a byte loop,
+/// key shape `wit/COMPATIBILITY.md` §9 fixes for `extras` — as a byte loop,
 /// since every admissible byte is ASCII and a multi-byte char can only
 /// ever fail.
 fn key_is_well_formed(key: &str) -> bool {

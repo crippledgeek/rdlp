@@ -30,13 +30,19 @@ patch bump must not touch their fields.
 full `extractor-plugin` world, which fails with exactly:
 `no function export `search-filters` found`. `extractor.wit` splits the
 contract in two: `extractor-plugin-host` (the frozen 0.5.0 exports) and
-`extractor-plugin` (`include`s the host world, adds
-`@since(version = 0.5.1) search-filters`). `lib.rs` binds only the smaller
-host world at compile time — this is what lets a 0.5.0 component instantiate
-on a 0.5.1 host at all. `search_adapter::call_search_filters` looks
-`search-filters` up by name on the live instance at call time and answers `[]`
-when the plugin never declared it, so the absent export is a normal outcome,
-not an error.
+`extractor-plugin` (`include`s the host world, adds every post-0.5.0
+export: `@since(version = 0.5.1) search-filters`, `@since(version = 0.5.2)
+extract-playlist` and `extract-with-metadata`). `lib.rs` binds only the
+smaller host world at compile time — this is what lets a 0.5.0 component
+instantiate on the current host at all. Each optional export is looked up
+by name on the live instance at call time through one shared mechanism,
+`adapter::call_export_by_name`, which answers `None` when the component
+never declared it; the call site attaches the meaning:
+`search_adapter::call_search_filters` answers `[]`,
+`playlist_adapter::call_extract_playlist` and
+`metadata_adapter::call_extract_with_metadata` hand `None` back so their
+caller tries the frozen export instead (§8, §9). The absent export is a
+normal outcome, not an error.
 
 ## 4. `@since` toolchain acceptance (measured 2026-09-15)
 
@@ -72,3 +78,142 @@ plugin's own search site). Canonical manifest bytes include
 `supports_extract` only when `false`, `search_site` only when present, and
 `search_claims_override` only when non-empty — so a 0.5.0 manifest's
 canonical bytes, and its signature over them, stay valid unchanged.
+
+## 8. Playlist (0.5.2)
+
+`extract-playlist: func(url: string, page: u32) -> result<playlist-page,
+playlist-error>` (`@since(version = 0.5.2)`, full world only, §3). The
+plugin *lists*; the host *resolves*. A `playlist-page` carries `entries`
+(`playlist-entry`: `url`, optional `id`/`title`), a 1-indexed `page`,
+`has-more`, and the optional playlist-level `playlist-id`,
+`playlist-title`, `total-estimate` — read from page one only. Each entry is
+resolved by the host through this plugin's own `extract` (yt-dlp
+`url_result`, gallery-dl `Message.Queue`); a plugin never resolves items
+itself. `playlist-error` is `search-error`'s vocabulary minus `unsupported`
+(an absent export already says that) and `cancelled` (the host cancels the
+whole call).
+
+**Optional, by name.** `playlist_adapter::call_extract_playlist` resolves
+the export on the live instance. `PluginExtractor::extract_playlist_via_plugin`
+fetches page one as a probe: an absent export, or `unsupported-url` on that
+page, means "not a playlist for this plugin" and the host falls back to a
+single `extract` — the `InfoExtractor::extract_playlist` trait default. A
+successful page one is handed to the loop, not re-fetched. Every other
+domain error on page one propagates (`not-found` stays `not-found`); only
+`internal` records a strike (`playlist_error_to_plugin_error`).
+
+**The host loop owns everything after listing**
+(`rdlp_extractor::base::common::PagedPlaylist`, `playlist.rs`; the plugin
+host is `playlist_adapter::PluginPlaylistSource`). Nothing about range,
+concurrency, timeout, or failure policy crosses the WIT boundary:
+
+- *Range.* `Config::{playlist_start, playlist_end, playlist_items}` select
+  1-based listing positions; the selection is validated before the probe
+  (`validate_selection`), so a malformed `playlist_items` fails before any
+  network call. Listing stops at the last needed position, at `!has-more`,
+  at an empty page, or at `MAX_PLAYLIST_SIZE` (1000) entries overall. One
+  page is additionally capped at `MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES`
+  (= `MAX_PLAYLIST_SIZE`) rows, truncated from the tail with one warning.
+  Pages after the first are paced by `PAGE_RATE_LIMIT_MS` (500 ms), and
+  each page call runs in a fresh store under `SEARCH_TIMEOUT` (60 s).
+- *Concurrency.* `Config::playlist_concurrency`, default
+  `DEFAULT_PLAYLIST_CONCURRENCY` = 1 (validated `1..=16`).
+- *Per-item timeout.* `Config::playlist_item_timeout` seconds, default
+  `DEFAULT_PLAYLIST_ITEM_TIMEOUT_SECS` = 30 (validated `1..=600`).
+- *Failure.* `Config::playlist_ignore_errors`, default `true`: a failed or
+  timed-out entry is skipped with a warning. `false`: the first failed entry
+  *by listing position* returns its own error (a timeout becomes an
+  `Extraction` error naming the entry) and nothing is returned. A later
+  page's listing failure is not an error: the entries listed so far are
+  resolved.
+- *Stamping.* Every resolved `InfoDict` gets `playlist`/`playlist_id` from
+  `playlist-id`, `playlist_title`, `playlist_index` = its 1-based listing
+  position, and `playlist_count` = the site's `total-estimate` from page
+  one when present (never below the listed count — a site total smaller
+  than what was listed is wrong by construction), else the number of
+  entries listed (yt-dlp `n_entries`) — never the number selected or
+  resolved.
+
+## 9. Metadata (0.5.2)
+
+`extract-with-metadata: func(url: string) -> result<extraction,
+extract-error>` (`@since(version = 0.5.2)`, full world only, §3; the error
+is spelled `metadata-extract-error` in `extractor.wit` — a local alias of
+`types.extract-error`, the same wire type, because `include` already
+imports the bare name). `extract-error` is **not** extended. `extraction`
+is the frozen 0.5.0 `info-dict` as `core` plus `info-dict-extra`: the typed
+fields `info-dict` cannot carry (`actors`, `channel`, `channel-url`,
+`age-limit`, `thumbnails` — `thumbnail` mirrors rdlp's native `Thumbnail`)
+and the open tail `extras: list<tuple<string, meta-value>>`. `meta-value`
+is typed — `text`, `integer(s64)`, `number(f64)`, `flag`, `text-list` — the
+OpenTelemetry stable-attribute subset, never a nested map. A plugin
+exporting this implements `extract` as `extract-with-metadata(url).core`.
+
+**Host routing.** `PluginExtractor::extract` tries `extract-with-metadata`
+first (`metadata_adapter::call_extract_with_metadata`, by name). Absent →
+the frozen `extract`, unchanged. Present → its answer is final: the
+extraction is converted (`convert::info_dict_from_extraction`, which
+reuses `info_dict_from_wit` for the core and copies the typed fields
+across; an empty `thumbnails` becomes `None`), and a domain error maps
+through the same `extract_error_to_plugin_error` as `extract` — it is not
+a fallback trigger.
+
+**`extras` rules** (`metadata_adapter/extras.rs::extras_from_wit`), applied
+in the plugin's order; the first admissible entries are kept:
+
+- *Key.* `^[a-z][a-z0-9-]{0,62}$`, i.e. at most `MAX_METADATA_KEY_BYTES`
+  (63) bytes — the DNS-label / Kubernetes-label shape. A duplicate of an
+  already-admitted key is refused (first wins).
+- *Reserved.* A key that, after folding `-` to `_`, names a typed `InfoDict`
+  field is refused with a warning. `InfoDict::extra` is
+  `#[serde(flatten)]`, so an admitted key becomes a **top-level key of the
+  dict's JSON** (not nested under an `extra` object) and a reserved one
+  would overwrite the typed field in every rendering. Reservation is
+  decided by a serde probe (`key_is_reserved`), not a hand-kept list, so it
+  cannot drift from the struct.
+- *Value.* `number` must be finite (JSON has no NaN/∞). A `text` value is
+  charged its byte length; a `text-list` is charged the sum of its strings'
+  bytes plus `METADATA_LIST_ITEM_BYTES` (8) per element, so its element
+  count is bounded too; `integer`/`number`/`flag` are charged
+  `SCALAR_VALUE_BYTES` (8) toward the aggregate and are exempt from the
+  per-value bound (their size is fixed by the type). Per-value bound:
+  `Config::max_metadata_value_bytes`, default
+  `DEFAULT_MAX_METADATA_VALUE_BYTES` = 4096 (validated `1..=1_048_576`).
+- *Count and aggregate.* At most `Config::max_metadata_extras` entries,
+  default `DEFAULT_MAX_METADATA_EXTRAS` = 64 (validated `1..=1024`); key
+  bytes plus value bytes of every kept entry at most
+  `Config::max_metadata_extras_bytes`, default
+  `DEFAULT_MAX_METADATA_EXTRAS_BYTES` = 65 536 (validated
+  `1..=16_777_216`). Once the aggregate is crossed no later entry is
+  admitted. Both bounds are checked *before* any key or value work on an
+  entry, so the reserved-name probe runs at most `max_metadata_extras`
+  times per extraction however many entries a plugin supplies.
+- *Diagnostics.* One warning per refusal class per extraction on the
+  plugin's log target, naming the bound — never the key or value.
+
+The three caps are `MetadataCaps`, built from the call's `Config`
+(`MetadataCaps::from(&Config)`; an unset field keeps its default) and set on
+the store by `PluginExtractor::extract` before the export runs.
+
+## 10. `display_name` manifest field (0.5.2)
+
+A fourth TOML-only field (`plugin-info` stays frozen, §2/§7):
+`display_name: Option<String>`. `Manifest::display_name()` returns it when
+set, else `name`. Canonical manifest bytes include it only when set, so
+every earlier manifest's bytes and signature stay valid unchanged.
+Validation (`validate_display_name`): non-empty, at most
+`DISPLAY_NAME_MAX_BYTES` (64) **bytes**, no control characters; spaces and
+mixed case are fine — unlike `name` it is never a path component or
+namespace key.
+
+It feeds display surfaces only: `InfoExtractor::name`
+(`PluginExtractor::name`), `InfoDict::extractor` and therefore
+`%(extractor)s` (`convert::PluginOrigin::display_name`), and the playlist
+loop's log tag (`PagedPlaylist::name`). Identity, URL and search routing,
+the trust store, the disabled list, the `host-store-kv` namespace, and the
+download-archive token stay on `name`. The archive token is written ASCII-lowercased and matched
+case-insensitively (`rdlp_api::orchestrator::archive::archive_key`; legacy
+cased lines are normalised on read), mirroring yt-dlp's `make_archive_id`
+(`f'{ie_key.lower()} {video_id}'`) — so a `display_name` such as
+`XHamster` reaching `InfoDict::extractor` can never split an archive. The
+id half stays case-sensitive.

@@ -34,7 +34,7 @@ pub const KNOWN_CAPABILITIES: &[&str] = &[
 const URL_REGEX_MAX_BYTES: usize = 2048;
 
 /// Maximum byte length of `display_name`. It is display-only — rendered in
-/// `%(extractor)s`, log tags, and the first-install prompt — so the bound
+/// `%(extractor)s` and log tags — so the bound
 /// exists to keep those surfaces readable, not to encode any protocol limit;
 /// 64 matches the identifier-length cap already applied to `name` and
 /// `search_site` by [`validate_plugin_name`], giving plugin authors one
@@ -434,12 +434,12 @@ fn validate(m: &Manifest) -> Result<(), ManifestError> {
     Ok(())
 }
 
-/// `display_name` is rendered directly into `%(extractor)s`, log tags, and
-/// the first-install prompt, so it is held to plain-display-text rules
-/// rather than the filesystem-safe shape `validate_plugin_name` enforces on
-/// `name`/`search_site`: any non-empty, non-control, ≤64-byte string is
-/// fine — spaces and mixed case included (unlike `name`, it is never used
-/// as a path component or namespace key).
+/// `display_name` is rendered directly into `%(extractor)s` and log tags
+/// (the first-install prompt shows `name`), so it is held to
+/// plain-display-text rules rather than the filesystem-safe shape
+/// `validate_plugin_name` enforces on `name`/`search_site`: any non-empty,
+/// non-control, ≤64-byte string is fine — spaces and mixed case included
+/// (unlike `name`, it is never used as a path component or namespace key).
 fn validate_display_name(m: &Manifest) -> Result<(), ManifestError> {
     let Some(d) = &m.display_name else {
         return Ok(());

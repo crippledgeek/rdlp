@@ -59,8 +59,9 @@ pub struct PlaylistPage {
     /// The playlist's title, stamped into every resolved entry's
     /// `playlist_title`.
     pub playlist_title: Option<String>,
-    /// A total-entry estimate, when the page carries one. Informational —
-    /// `playlist_count` is the number actually listed, not this.
+    /// The site's own total, when page one carries one. Stamped as
+    /// `playlist_count` when present (never below the number actually
+    /// listed); without it `playlist_count` is the listed count.
     pub total_estimate: Option<u64>,
 }
 

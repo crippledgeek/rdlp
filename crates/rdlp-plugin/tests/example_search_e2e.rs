@@ -9,11 +9,12 @@
     missing_docs
 )]
 
-//! End-to-end proof of the host side of the 0.5.1 search contract
-//! (rdlp#762 slice B, decision D3): `search-filters` is resolved by a
-//! manual export lookup rather than by the generated bindings, so a
-//! 0.5.1 component answers with its descriptors while a 0.5.0 component —
-//! which never declared the export — instantiates and answers `[]`.
+//! End-to-end proof of the host side of the search-filters contract added
+//! in 0.5.1 (rdlp#762 slice B, decision D3): `search-filters` is resolved
+//! by a manual export lookup rather than by the generated bindings, so the
+//! example component — now built against 0.5.2, which keeps the export —
+//! answers with its descriptors while a 0.5.0 component, which never
+//! declared it, instantiates and answers `[]`.
 //!
 //! Builds `examples/plugins/example-extractor` with the production-loadable
 //! recipe (plain `cargo build` for `wasm32-unknown-unknown`, then

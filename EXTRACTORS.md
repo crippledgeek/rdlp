@@ -280,6 +280,38 @@ It adds:
   The claim is signed, shown at first install, and re-confirmed if a later
   version changes it.
 
+### WIT 0.5.2 additions
+
+`rdlp:plugin@0.5.2` is additive over `@0.5.1` in the same way (a 0.5.0- or
+0.5.1-built plugin still loads); `crates/rdlp-plugin/wit/COMPATIBILITY.md`
+§8–§10 is the full contract. It adds:
+
+- **`extract-playlist` export (optional)** — `func(url, page) ->
+  result<playlist-page, playlist-error>`. The plugin only *lists*: a page of
+  entries (`url`, optional `id`/`title`), `has-more`, and the playlist's
+  id/title/total on page one. The host resolves every entry through the
+  plugin's own `extract` and owns the range (`Config::playlist_start` /
+  `playlist_end` / `playlist_items`), concurrency, per-item timeout,
+  skip-or-abort policy, and the stamped
+  `playlist_*` fields. A plugin without playlists omits the export or
+  answers `unsupported-url`; either way the host falls back to a single
+  `extract` on the URL.
+- **`extract-with-metadata` export (optional)** — `func(url) ->
+  result<extraction, extract-error>`, where `extraction` is the frozen
+  `info-dict` as `core` plus an `info-dict-extra` (`actors`, `channel`,
+  `channel-url`, `age-limit`, `thumbnails`, and an open `extras` list of
+  typed `meta-value`s). The host prefers it over `extract` when present; a
+  plugin exporting it should implement `extract` as
+  `extract-with-metadata(url).core`. An `extras` key must match
+  `^[a-z][a-z0-9-]{0,62}$` and must not name an existing `InfoDict` field;
+  entries are capped in count, per-value bytes, and total bytes (defaults
+  64 / 4096 / 65 536, tunable in `Config`), and each kept key lands as a
+  top-level key of the video's JSON.
+- **`display_name` manifest field** — an optional human-readable name (≤ 64
+  bytes, no control characters, spaces and case allowed) used for
+  `%(extractor)s` and log tags only; identity, routing, the trust store, and
+  the download-archive token stay on `name`.
+
 ## Policy: yt-dlp-ported plugins stay byte-identical
 
 Plugins built via `rdlp plugin build-from-ytdlp` MUST keep their `.py` source byte-identical to the upstream `yt_dlp/extractor/<name>.py` they were ported from. Local edits (regex broadening, helper substitution, behavior tweaks) are explicitly forbidden, even when the upstream source has a known defect.

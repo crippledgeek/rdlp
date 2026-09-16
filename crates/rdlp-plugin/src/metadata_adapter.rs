@@ -1,6 +1,6 @@
 //! By-name resolution of the 0.5.2 `extract-with-metadata` export.
 //!
-//! `wit/COMPATIBILITY.md` §3/§8. Same mechanism as
+//! `wit/COMPATIBILITY.md` §3/§9. Same mechanism as
 //! [`crate::playlist_adapter`] — see its module doc for why
 //! `WitExtraction`/`WitInfoDictExtra`/`WitMetaValue`/`WitThumbnail` are
 //! hand-declared: `bindgen!` only emits types reachable from a bound-world
