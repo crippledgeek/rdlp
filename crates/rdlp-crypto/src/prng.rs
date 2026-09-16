@@ -192,19 +192,15 @@ pub fn fmix32(mut s: i32) -> i32 {
 /// constants, not tunables: the rotation is what a variant of this scrambler
 /// changes, and no second user asks for different constants — parameterising
 /// them would be an API with a single caller.
-#[allow(
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation
-)]
+#[allow(clippy::cast_sign_loss, clippy::cast_possible_wrap)]
 #[inline]
 #[must_use]
 pub const fn rotate_scramble(s: i32, rotation: Rotation) -> i32 {
+    // `as u32` widens losslessly; `u32::from` is not callable in a `const fn`.
     let mut x = (s as u32).rotate_left(rotation.0 as u32) as i32;
     x = x.wrapping_add(PHI as i32);
     x ^= (x as u32 >> 11) as i32;
-    // Intentional: JS-emulation truncation from i64 to i32
-    (i64::wrapping_mul(x as i64, ROL_SCRAMBLE_MULT as i64)) as i32
+    x.wrapping_mul(ROL_SCRAMBLE_MULT as i32)
 }
 
 /// PCG's XSH-RS output permutation, lifted out of `ByteGenerator::lcg_pcg`.
