@@ -16,7 +16,7 @@
 //! not per-variant size; per-variant size estimation requires the
 //! `Fragment` list this helper produces.
 //!
-//! Reference call shape (xhamster, the model):
+//! Reference call shape (pornhub, redtube, xtits and others):
 //! ```ignore
 //! let formats = expand_hls_in_place(formats, http_client).await;
 //! let (formats, flags) = detect_format_sizes_lazy(formats, ctx, name).await;

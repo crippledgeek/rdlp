@@ -157,7 +157,6 @@ toml = "0.9.11"
 
 # Plugin system
 libloading = "0.8"
-inventory = "0.3"
 
 # Cookie extraction
 aes = "0.8"

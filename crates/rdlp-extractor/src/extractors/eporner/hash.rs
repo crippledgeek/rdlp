@@ -5,6 +5,8 @@
 //! split into 4×8-char chunks, parse each as hex → u32, base-36 encode,
 //! concatenate with no separator.
 
+use rdlp_crypto::radix::to_base36;
+
 /// Transform the raw 32-char hex page hash into the value expected by the XHR endpoint.
 ///
 /// Returns `None` if `raw` is not exactly 32 ASCII hex digits.
@@ -21,33 +23,9 @@ pub fn calc_hash(raw: &str) -> Option<String> {
     Some(out)
 }
 
-fn to_base36(mut n: u32) -> String {
-    if n == 0 {
-        return "0".to_string();
-    }
-    const ALPHA: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
-    let mut bytes = Vec::with_capacity(8);
-    while n > 0 {
-        bytes.push(ALPHA[(n % 36) as usize]);
-        n /= 36;
-    }
-    bytes.reverse();
-    // INVARIANT: `bytes` is built exclusively from the ASCII-only `ALPHA` slice,
-    // so it is always valid UTF-8.
-    #[allow(clippy::expect_used)]
-    String::from_utf8(bytes).expect("ascii")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn base36_small_values() {
-        assert_eq!(to_base36(0), "0");
-        assert_eq!(to_base36(35), "z");
-        assert_eq!(to_base36(36), "10");
-    }
 
     #[test]
     fn calc_hash_rejects_wrong_length() {

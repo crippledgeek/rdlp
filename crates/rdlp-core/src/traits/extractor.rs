@@ -202,7 +202,7 @@ pub trait SearchExtractor: Send + Sync {
     ///
     /// # Default
     /// Returns the input unchanged. Sites whose search-card markup is
-    /// already complete (e.g. `XHamster`'s JSON `videoThumbProps`) need no
+    /// already complete (e.g. the xhamster site's JSON `videoThumbProps`) need no
     /// override.
     ///
     /// # Arguments

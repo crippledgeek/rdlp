@@ -7,7 +7,7 @@
 //! 1. **Cyrillic homoglyph substitution.** Some Latin characters (`E`, `M`, `C`,
 //!    `A`, `P`, `B`, `X`, `K`, `H`, `T`, `O`) are replaced by visually identical
 //!    Cyrillic codepoints to defeat naïve scrapers that grep for base64 alphabet.
-//!    The substitutions are reversible.
+//!    The substitutions are reversible, folded by `rdlp_crypto::homoglyph`.
 //! 2. **Comma-separated halves.** The string contains a single `,` which
 //!    separates the base64-encoded path from the base64-encoded query string.
 //!    After decoding both, the canonical URL is `<host><path>?<query>`.
@@ -15,28 +15,7 @@
 //! This module owns the decode and is intentionally narrow — no HTTP, no I/O.
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-
-/// Reverse Cyrillic homoglyph substitution used in ABXXX's `video_url`.
-fn deobfuscate(input: &str) -> String {
-    input
-        .chars()
-        .map(|c| match c {
-            // Cyrillic uppercase that visually matches Latin uppercase
-            '\u{0410}' => 'A', // А
-            '\u{0412}' => 'B', // В
-            '\u{0421}' => 'C', // С
-            '\u{0415}' => 'E', // Е
-            '\u{041D}' => 'H', // Н
-            '\u{041A}' => 'K', // К
-            '\u{041C}' => 'M', // М
-            '\u{041E}' => 'O', // О
-            '\u{0420}' => 'P', // Р
-            '\u{0422}' => 'T', // Т
-            '\u{0425}' => 'X', // Х
-            other => other,
-        })
-        .collect()
-}
+use rdlp_crypto::homoglyph::CYRILLIC_UPPERCASE_TO_LATIN;
 
 /// Decode an obfuscated `video_url` into `(path, query)`.
 ///
@@ -45,7 +24,7 @@ fn deobfuscate(input: &str) -> String {
 /// single-half encodings).
 #[must_use]
 pub(crate) fn decode_video_url(encoded: &str) -> Option<(String, Option<String>)> {
-    let cleaned = deobfuscate(encoded);
+    let cleaned = CYRILLIC_UPPERCASE_TO_LATIN.fold(encoded);
     let (path_b64, query_b64) = match cleaned.split_once(',') {
         Some((p, q)) => (p, Some(q)),
         None => (cleaned.as_str(), None),
@@ -100,11 +79,5 @@ mod tests {
     #[test]
     fn rejects_garbage() {
         assert!(decode_video_url("not~valid~base64!@#").is_none());
-    }
-
-    #[test]
-    fn deobfuscate_replaces_all_known_homoglyphs() {
-        let input = "\u{0410}\u{0412}\u{0421}\u{0415}\u{041D}\u{041A}\u{041C}\u{041E}\u{0420}\u{0422}\u{0425}";
-        assert_eq!(deobfuscate(input), "ABCEHKMOPTX");
     }
 }

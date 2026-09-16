@@ -95,9 +95,6 @@ pub enum ExtractorName {
     /// tnaflix.com
     #[strum(serialize = "TNAFlix")]
     TnaFlix,
-    /// xhamster.com
-    #[strum(serialize = "XHamster")]
-    XHamster,
     /// xnxx.com
     #[strum(serialize = "XNXX")]
     Xnxx,
@@ -155,7 +152,6 @@ mod tests {
         (ExtractorName::RedTube, "RedTube"),
         (ExtractorName::SpankBang, "SpankBang"),
         (ExtractorName::TnaFlix, "TNAFlix"),
-        (ExtractorName::XHamster, "XHamster"),
         (ExtractorName::Xnxx, "XNXX"),
         (ExtractorName::XTits, "XTits"),
         (ExtractorName::XVideos, "XVideos"),
@@ -186,6 +182,16 @@ mod tests {
             "9ANIME".parse::<ExtractorName>().ok(),
             Some(ExtractorName::NineAnime)
         );
+    }
+
+    /// xhamster left the built-in set for the rdlp-plugins plugin (#771;
+    /// landing as rdlp#762 slice C1-b);
+    /// a plugin-served site must not also be a closed-set variant, or the
+    /// vocabulary would claim a site the binary no longer implements.
+    #[test]
+    fn extractor_name_has_no_xhamster() {
+        assert!(ExtractorName::iter().all(|n| n.to_string() != "XHamster"));
+        assert!("xhamster".parse::<ExtractorName>().is_err());
     }
 
     #[test]

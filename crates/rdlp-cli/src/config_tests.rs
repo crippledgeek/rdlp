@@ -555,15 +555,15 @@ fn test_search_args_parse() {
         "--search",
         "test query",
         "--search-site",
-        "xhamster",
+        "pornhub",
         "--search-filter",
-        "quality=1080p",
+        "ordering=mostviewed",
         "--search-filter",
-        "sort=newest",
+        "period=monthly",
     ])
     .unwrap();
     assert_eq!(args.search.as_deref(), Some("test query"));
-    assert_eq!(args.search_site.as_deref(), Some("xhamster"));
+    assert_eq!(args.search_site.as_deref(), Some("pornhub"));
     assert_eq!(args.search_filter.len(), 2);
 }
 

@@ -57,10 +57,41 @@ D1 research note).
 
 ## 5. What does NOT belong in the host surface
 
-Site-specific obfuscation. XHamster's PRNG-based URL decryption stays
-plugin-side, linked as the `rdlp-crypto` crate (no I/O, wasm-clean) rather
-than a host import — a host import would freeze one site's decryption
+Site-specific obfuscation. `rdlp-crypto` is a **library** a plugin links as
+an ordinary crate dependency (no I/O, zero dependencies, wasm-clean),
+never a host import — a host import would freeze one site's decryption
 scheme into every future ABI version, for every plugin, forever.
+
+The crate ships the small primitives that recur across
+video-hosting sites' client-side URL/source obfuscation, each public as "a
+number plus its parameters" (mirrors `crates/rdlp-crypto/src/lib.rs`'s own
+module list):
+
+- `hash` — `hash::java_string_hash32` (Java-style `String.hashCode` folding
+  hash); `hash::fmix32` re-exported from `prng`
+- `shuffle` — `shuffle::seeded_shuffle` (seeded Fisher-Yates permutation,
+  caller supplies the PRNG draw)
+- `transposition` — `transposition::columnar_transpose` /
+  `transposition::columnar_untranspose` (columnar transposition cipher)
+- `radix` — `radix::to_radix` (arbitrary-base integer encoding, `2..=36`)
+  and `radix::Radix` (the validated base); `radix::to_base36` is
+  `to_radix(n, Radix::BASE36)`
+- `homoglyph` — `homoglyph::HomoglyphTable` and the
+  `CYRILLIC_UPPERCASE_TO_LATIN` table (visually-identical character
+  substitution)
+- `js_int` — `js_int::to_signed_32` (the JS `|0` coercion the
+  i64-arithmetic PRNG steps use)
+- `prng` — the PRNG algorithm variants: `prng::lcg_step`,
+  `prng::weyl_step`, `prng::xorshift` (+ `prng::XorshiftShifts`),
+  `prng::rotate_scramble` (+ `prng::Rotation`), `prng::fmix32`,
+  `prng::pcg_xsh_rs`, `prng::mxs_mix`, and the composed 7-algorithm
+  `ByteGenerator` façade
+
+Site wiring — which algorithm id, which byte offsets, which key
+derivation, which homoglyph table — stays in the plugin. The `xhamster`
+plugin in rdlp-plugins (landing as rdlp#762 slice C1-b) is the first
+consumer: it links this crate to reconstruct its PRNG-based URL decryption,
+exactly as the in-tree `megacloud`, `eporner`, and `kvs` decoders do today.
 
 ## 6. Deferred to the next minor
 

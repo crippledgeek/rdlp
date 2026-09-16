@@ -78,7 +78,7 @@ const MAX_VARIANTS: usize = 50;
 /// The N per-variant media playlists are fetched in parallel (was sequential)
 /// but bounded so a 50-variant master cannot open 50 simultaneous connections.
 /// 4 matches the project's existing per-host extraction concurrency defaults
-/// (e.g. `CONCURRENT_EXTRACTIONS` in the pornhub/xhamster playlist modules).
+/// (e.g. `CONCURRENT_EXTRACTIONS` in the pornhub playlist module).
 /// Shared with `format_detection::detect_format_sizes_inner`, whose
 /// per-format probes fan out to the same origins and are bounded by the same
 /// number for the same reason.

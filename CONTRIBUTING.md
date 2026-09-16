@@ -83,7 +83,7 @@ cargo fmt
 | `rdlp-ffmpeg` | FFmpeg library bindings (probe, remux, merge, transcode, metadata, thumbnail) via `ffmpeg-the-third` |
 | `rdlp-ratelimit` | Async token-bucket rate limiter (per-extractor throttling) |
 | `rdlp-table` | Responsive CLI table renderer with column-budget algorithm |
-| `rdlp-crypto` | PRNG-based URL decryption (XHamster — retained for cross-validation tests) |
+| `rdlp-crypto` | Site-agnostic obfuscation toolkit (PRNG steps, hashes, shuffle, transposition, radix, homoglyph fold) that WASM plugins link as a library; zero deps, wasm-clean |
 | `rdlp-desktop` (`src-tauri`) | Tauri v2 desktop GUI (React/TypeScript frontend + Rust IPC backend) |
 | `rdlp-probe` | Optional CLI authoring toolkit for extractor contributors (excluded from `default-members`) |
 
@@ -103,7 +103,7 @@ Tier 2: TnaFlixNetworkBase     (shared logic for site families)
 Tier 3: Site Extractors        (individual site implementations)
 ```
 
-**Currently supported extractors:** 16 site extractors (14 extractor modules — the TNAFlix family shares one module for TNAFlix/EMPFlix/MovieFap) + a Generic fallback. See [`crates/rdlp-extractor/src/extractors/`](crates/rdlp-extractor/src/extractors/) for the canonical list. Sites include TNAFlix family (TNAFlix/EMPFlix/MovieFap), RedTube, PornHub, SpankBang, XHamster, HQPorner, 9anime, KoreanPornMovie, XVideos, XNXX, EPorner, XTits, ABXXX, PornoXO.
+**Currently supported extractors:** 16 site extractors (14 extractor modules — the TNAFlix family shares one module for TNAFlix/EMPFlix/MovieFap) + a Generic fallback. See [`crates/rdlp-extractor/src/extractors/`](crates/rdlp-extractor/src/extractors/) for the canonical list. Sites include TNAFlix family (TNAFlix/EMPFlix/MovieFap), RedTube, PornHub, SpankBang, HQPorner, 9anime, KoreanPornMovie, XVideos, XNXX, EPorner, XTits, ABXXX, PornoXO, PornOne.
 
 ## Development Workflow
 
