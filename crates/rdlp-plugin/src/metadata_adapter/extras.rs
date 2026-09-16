@@ -138,7 +138,8 @@ impl Refusal {
                     .to_string()
             }
             Self::ValueTooLarge => format!(
-                "whose value exceeds {} bytes (text bytes, plus {METADATA_LIST_ITEM_BYTES} per text-list item); dropping them",
+                "whose value exceeds {} bytes (text bytes, plus {METADATA_LIST_ITEM_BYTES} \
+                 per text-list item); dropping them",
                 caps.value_bytes
             ),
             Self::OverCount => format!("past the {}-entry bound; dropping them", caps.extras),

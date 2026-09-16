@@ -247,7 +247,8 @@ pub enum Signature {
     Ed25519 {
         /// Base64-encoded 32-byte Ed25519 public key.
         pubkey: String,
-        /// Base64-encoded 64-byte Ed25519 signature over (`canonical_bytes(manifest)` || `wasm_bytes`).
+        /// Base64-encoded 64-byte Ed25519 signature over
+        /// (`canonical_bytes(manifest)` || `wasm_bytes`).
         signature: String,
     },
 }
@@ -304,7 +305,8 @@ pub fn parse_manifest_str(s: &str) -> Result<Manifest, ManifestError> {
 /// - All error variants from [`parse_manifest_str`] when the file contents fail
 ///   validation; in that case the error is wrapped as
 ///   [`ManifestError::InvalidManifest`] with the file path attached.
-#[allow(clippy::disallowed_methods)] // startup/load-time sync I/O — acceptable per clippy.toml policy
+// Startup/load-time sync I/O — acceptable per the clippy.toml policy.
+#[allow(clippy::disallowed_methods)]
 pub fn parse_manifest_file(path: &Path) -> Result<Manifest, ManifestError> {
     let s = std::fs::read_to_string(path)?;
     parse_manifest_str(&s).map_err(|e| match e {
