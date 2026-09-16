@@ -271,7 +271,7 @@ const LINE_CONTROL_PLACEHOLDER: char = '_';
 /// Return a copy of `s` fit to be ONE token of a line-oriented text record,
 /// with every control character (the Unicode general-category `Cc` set —
 /// see [`sanitize_for_terminal`] for the ranges) replaced by
-/// [`LINE_CONTROL_PLACEHOLDER`].
+/// `LINE_CONTROL_PLACEHOLDER` (`_`).
 ///
 /// The sink this exists for is the download archive: one `{extractor} {id}`
 /// record per line, read back with `BufRead::lines` and split on the first

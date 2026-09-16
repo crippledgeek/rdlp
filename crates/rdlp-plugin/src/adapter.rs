@@ -382,7 +382,7 @@ impl InfoExtractor for PluginExtractor {
         p as i32
     }
 
-    /// One `extract` call under [`PluginExtractor::extract_spec`] — the
+    /// One `extract` call under `PluginExtractor::extract_spec` — the
     /// crate's default extract budget (`EXTRACT_TIMEOUT`, 30 s), every
     /// timeout a strike. See `PluginExtractor::extract_within` for the
     /// call itself; the playlist loop uses that entry point with its own
