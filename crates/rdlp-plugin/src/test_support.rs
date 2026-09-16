@@ -420,6 +420,19 @@ pubkey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 "#;
 
+    /// [`FIXTURE_MANIFEST`] with `extra_top_level_lines` spliced into its
+    /// top-level key block, after `capabilities = []`. The fixture ends
+    /// with a `[signature]` table, so appending after the text would land
+    /// the lines inside that table — invalid TOML; splicing above it keeps
+    /// the fixture valid whatever the lines are (`display_name`,
+    /// `search_site`, an override claim).
+    pub fn fixture_manifest_with(extra_top_level_lines: &str) -> String {
+        FIXTURE_MANIFEST.replace(
+            "capabilities = []",
+            &format!("capabilities = []\n{extra_top_level_lines}"),
+        )
+    }
+
     /// The 0.5.0 fixture wrapped in an adapter, on a manifest with no
     /// `search_site` and no override claim of either kind.
     pub fn fixture_extractor() -> PluginExtractor {
@@ -501,11 +514,9 @@ signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
                 entries: Arc::clone(&entries),
             }));
             log::set_logger(logger).expect("no other logger in the rdlp-plugin lib test binary");
-            // `Debug`, not `Warn`: `playlist_adapter`'s
-            // `real_first_page_hands_off_to_the_scaffold_and_fetches_page_1_once`
-            // counts a `debug!` by-name-call line to prove a page is
-            // fetched exactly once (fix round 1 finding 4) — `Warn` would
-            // silently drop it before it ever reached this logger.
+            // `Debug`, not `Warn`: the page-fetch and per-call budget
+            // lines the playlist tests count are `debug!` — `Warn` would
+            // silently drop them before they ever reached this logger.
             log::set_max_level(log::LevelFilter::Debug);
             entries
         }))

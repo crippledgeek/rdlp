@@ -211,10 +211,9 @@ impl PluginExtractor {
     /// [`PluginError`] *inside* the runner's closure — the same place
     /// `call_search`/`call_plugin_extract` map theirs — so
     /// [`counts_as_strike`] sees it and `internal` records a strike here
-    /// exactly like every other call kind (fix round 1, finding 1: mapping
-    /// it after `run_in_fresh_store` returned meant the closure's `Ok`
-    /// never let the runner's strike accounting see the domain error at
-    /// all).
+    /// exactly like every other call kind. Mapping it after
+    /// `run_in_fresh_store` returned would hand the runner an `Ok` and its
+    /// strike accounting would never see the domain error (#768).
     ///
     /// [`counts_as_strike`]: crate::adapter::counts_as_strike
     ///
@@ -239,14 +238,12 @@ impl PluginExtractor {
         let owned = url.to_string();
         self.run_in_fresh_store(spec, move |store, inst| {
             Box::pin(async move {
-                // The by-name-call debug line: counted by
-                // `real_first_page_hands_off_to_the_scaffold_and_fetches_page_1_once`
-                // to prove the probe's page is reused by the scaffold
-                // rather than re-fetched. The URL is part of the line
-                // because that test reads a process-global log buffer
-                // shared with every other playlist test in the binary —
-                // without it, the count is the whole process's page-1
-                // probes (measured: 5), not this playlist's.
+                // Which page of which playlist each call listed, on the
+                // plugin's own target: paired with the runner's per-call
+                // budget line it is how an operator sees a listing walk
+                // page by page, and how a re-fetched page (the probe's
+                // page one listed twice) would show. The URL is in the
+                // line because one plugin lists many playlists.
                 log::debug!(
                     target: &store.data().log_target,
                     "{EXTRACT_PLAYLIST_EXPORT}: fetching page {page} of {}",

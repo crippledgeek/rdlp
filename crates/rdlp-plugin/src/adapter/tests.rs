@@ -1,7 +1,70 @@
 use super::*;
+use crate::test_harness::{EMPTY_COMPONENT_WAT, instantiate};
 use crate::test_support::extraction_ctx;
 use crate::test_support::unit::fixture_extractor;
 use std::sync::atomic::AtomicBool;
+
+// ── `call_export_by_name`: the mechanism every optional export shares ────
+
+/// An export `probe` whose type is not what a caller asks for (`u32`,
+/// asked for as a `string`). The one wrong-typed fixture for the one
+/// typecheck path; each adapter's own tests keep only what "absent" means
+/// to them.
+const WRONG_TYPE_EXPORT_WAT: &str = r#"(component
+  (core module $m
+    (func (export "probe") (result i32) (i32.const 7))
+  )
+  (core instance $i (instantiate $m))
+  (func (export "probe") (result u32)
+    (canon lift (core func $i "probe")))
+)"#;
+
+/// A component that never declared the export is `Ok(None)`, logged once
+/// at debug — the pre-export path for every optional export.
+#[tokio::test]
+async fn by_name_absent_export_is_ok_none() {
+    let (mut store, inst) = instantiate(EMPTY_COMPONENT_WAT).await;
+    let r = call_export_by_name::<(), (u32,)>(
+        &mut store,
+        &inst,
+        ExportCall {
+            name: "probe",
+            params: (),
+        },
+    )
+    .await
+    .expect("absent is not an error");
+    assert!(r.is_none());
+}
+
+/// An export present under the name but with another signature is a
+/// `Trapped` (the typed lookup refuses it before any wasm runs) naming
+/// the export, and therefore a strike — never mistaken for absence.
+#[tokio::test]
+async fn by_name_mis_typed_export_is_a_trap_and_a_strike() {
+    let (mut store, inst) = instantiate(WRONG_TYPE_EXPORT_WAT).await;
+    let err = call_export_by_name::<(), (String,)>(
+        &mut store,
+        &inst,
+        ExportCall {
+            name: "probe",
+            params: (),
+        },
+    )
+    .await
+    .expect_err("wrong signature");
+    match &err {
+        PluginError::Trapped { plugin, reason } => {
+            assert_eq!(plugin, "test");
+            assert!(reason.starts_with("signature of probe:"), "{reason}");
+        }
+        other => panic!("expected Trapped, got {other:?}"),
+    }
+    assert!(
+        counts_as_strike(&err),
+        "a mis-typed export must count against the plugin"
+    );
+}
 
 fn spec(timeout: Duration) -> CallSpec<'static> {
     CallSpec {
@@ -234,7 +297,7 @@ fn extract_error_mapping_keeps_the_plugin_name_on_internal() {
     ));
 }
 
-/// Task 6 fix round 1: `call_plugin_extract`'s `Some(Err(_))` arm — a
+/// `call_plugin_extract`'s `Some(Err(_))` arm — a
 /// plugin that answers `extract-with-metadata` with a domain error must
 /// map through `extract_error_to_plugin_error` and short-circuit, never
 /// silently fall through to the typed `extract` path. Exercises
@@ -278,16 +341,9 @@ fn some_err_from_metadata_short_circuits_without_falling_through() {
     );
 }
 
-/// A manifest carrying `display_name` on top of `test_support::unit::FIXTURE_MANIFEST`.
-/// `FIXTURE_MANIFEST` ends with a `[signature]` table, so appending the new
-/// key after that text would land it inside (or after) that table — invalid
-/// TOML. Splicing it into the top-level key block above `[signature]` keeps
-/// the fixture valid.
+/// The fixture manifest carrying `display_name`.
 fn fixture_manifest_with_display_name(display_name: &str) -> String {
-    crate::test_support::unit::FIXTURE_MANIFEST.replace(
-        "capabilities = []",
-        &format!("capabilities = []\ndisplay_name = \"{display_name}\""),
-    )
+    crate::test_support::unit::fixture_manifest_with(&format!("display_name = \"{display_name}\""))
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

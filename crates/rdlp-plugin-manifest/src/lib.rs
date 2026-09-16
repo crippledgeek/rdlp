@@ -598,7 +598,6 @@ fn string_list(v: &[String]) -> String {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // test code — panicking on unexpected errors is intentional
 mod display_name_tests {
     use super::{ManifestError, parse_manifest_str};
 
@@ -717,7 +716,6 @@ signature = "ZA"
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // test code — panicking on unexpected errors is intentional
 mod validate_plugin_name_tests {
     use super::{ManifestError, validate_plugin_name};
 

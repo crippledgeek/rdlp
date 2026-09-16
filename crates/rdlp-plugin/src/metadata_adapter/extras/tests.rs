@@ -213,7 +213,7 @@ fn max_extras_boundary() {
     );
 }
 
-/// Fix round 1, finding 1: once the count bound is reached, later entries
+/// Once the count bound is reached, later entries
 /// are refused BEFORE the reserved-key probe (or any other per-entry
 /// work) runs — observable here because reserved keys past the bound are
 /// tallied as over-count, not as reserved. Three reserved keys under a
@@ -319,7 +319,7 @@ fn value_bytes_boundary() {
     );
 }
 
-/// Fix round 1, finding 2: a `text-list`'s element COUNT is bounded even
+/// A `text-list`'s element COUNT is bounded even
 /// when every element is empty — `value_bytes / METADATA_LIST_ITEM_BYTES`
 /// empty strings are accepted, one more is refused. Summed string bytes
 /// alone would have admitted any number of them.

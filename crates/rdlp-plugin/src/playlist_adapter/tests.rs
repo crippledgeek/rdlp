@@ -1,37 +1,18 @@
 use super::*;
 use crate::convert::MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES;
-use crate::test_harness::instantiate;
+use crate::test_harness::{EMPTY_COMPONENT_WAT, instantiate, wit_body_lines};
 use crate::test_support::unit::{
     FIXTURE_MANIFEST, TEST_LOG_TARGET, captured_count_containing, captured_entry_containing,
     captured_logs, fixture_extractor, fixture_extractor_from, test_origin,
 };
 use crate::test_support::{EXAMPLE_0_5_2_WASM, extraction_ctx};
 
-/// A component with no `extract-playlist` export at all.
-const NO_PLAYLIST_WAT: &str = r#"(component
-  (core module $m (func (export "noop")))
-  (core instance $i (instantiate $m))
-)"#;
-
-/// `extract-playlist` exported with the wrong type (`u32` instead of the
-/// result). Needs `memory`/`realloc` exports because the component-level
-/// signature still declares a `string` param — the canonical ABI must be
-/// able to lower it into guest memory even though the call is expected to
-/// fail typecheck before the core function ever runs.
-const PLAYLIST_WRONG_TYPE_WAT: &str = r#"(component
-  (core module $m
-    (memory (export "mem") 1)
-    (func (export "realloc") (param i32 i32 i32 i32) (result i32) (i32.const 200))
-    (func (export "extract-playlist") (param i32 i32 i32) (result i32) (i32.const 7)))
-  (core instance $i (instantiate $m))
-  (func (export "extract-playlist") (param "url" string) (param "page" u32) (result u32)
-    (canon lift (core func $i "extract-playlist") (memory $i "mem") (realloc (func $i "realloc"))
-      string-encoding=utf8))
-)"#;
-
+/// This export's "absent" meaning: a component without `extract-playlist`
+/// is `Ok(None)` for the caller to fall back on. The lookup/typecheck/trap
+/// mechanism itself is `adapter::tests::by_name_*`.
 #[tokio::test]
 async fn absent_export_is_ok_none() {
-    let (mut store, inst) = instantiate(NO_PLAYLIST_WAT).await;
+    let (mut store, inst) = instantiate(EMPTY_COMPONENT_WAT).await;
     let r = call_extract_playlist(
         &mut store,
         &inst,
@@ -45,100 +26,52 @@ async fn absent_export_is_ok_none() {
     assert!(r.is_none());
 }
 
-#[tokio::test]
-async fn mis_typed_export_is_a_trap_and_a_strike() {
-    use crate::adapter::counts_as_strike;
-    let (mut store, inst) = instantiate(PLAYLIST_WRONG_TYPE_WAT).await;
-    let err = call_extract_playlist(
-        &mut store,
-        &inst,
-        PlaylistPageRequest {
-            url: "https://x.example/u/a",
-            page: 1,
-        },
-    )
-    .await
-    .unwrap_err();
-    assert!(matches!(err, PluginError::Trapped { .. }), "{err:?}");
-    assert!(counts_as_strike(&err));
-}
-
-/// Drift guard for the hand-written lifts, mirroring
-/// `search_adapter::tests::lift_mirrors_the_wit_record_field_for_field`:
-/// each record/variant's field lines in `wit/types.wit` must be exactly
-/// these, in this order. wasmtime typechecks the lift by field/case
-/// name, type, AND order at `get_typed_func`
-/// (`wasmtime::component::func::typed::typecheck_record`/`typecheck_variant`,
-/// wasmtime 30.0.2) — a drifted hand-lift would trap, and strike, every
-/// plugin at call time rather than fail silently, so this test exists to
-/// catch the drift here, at test time, before that happens.
+/// Drift guards for the hand-written lifts (`test_harness::wit_body_lines`
+/// says why): each record/variant's lines in `wit/types.wit` must be
+/// exactly these, in this order.
 #[test]
 fn playlist_entry_lift_mirrors_the_wit_record_field_for_field() {
-    const TYPES_WIT: &str = include_str!("../../wit/types.wit");
-    let expected = [
-        "url: string,",
-        "id: option<string>,",
-        "title: option<string>,",
-    ];
-    let (_, after) = TYPES_WIT
-        .split_once("record playlist-entry {")
-        .expect("types.wit declares playlist-entry");
-    let (body, _) = after.split_once('}').expect("record body is closed");
-    let fields: Vec<&str> = body
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .collect();
     assert_eq!(
-        fields, expected,
+        wit_body_lines("record", "playlist-entry"),
+        [
+            "url: string,",
+            "id: option<string>,",
+            "title: option<string>,",
+        ],
         "playlist-entry drifted from the Rust lift"
     );
 }
 
 #[test]
 fn playlist_page_lift_mirrors_the_wit_record_field_for_field() {
-    const TYPES_WIT: &str = include_str!("../../wit/types.wit");
-    let expected = [
-        "entries: list<playlist-entry>,",
-        "page: u32,",
-        "has-more: bool,",
-        "playlist-id: option<string>,",
-        "playlist-title: option<string>,",
-        "total-estimate: option<u64>,",
-    ];
-    let (_, after) = TYPES_WIT
-        .split_once("record playlist-page {")
-        .expect("types.wit declares playlist-page");
-    let (body, _) = after.split_once('}').expect("record body is closed");
-    let fields: Vec<&str> = body
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .collect();
-    assert_eq!(fields, expected, "playlist-page drifted from the Rust lift");
+    assert_eq!(
+        wit_body_lines("record", "playlist-page"),
+        [
+            "entries: list<playlist-entry>,",
+            "page: u32,",
+            "has-more: bool,",
+            "playlist-id: option<string>,",
+            "playlist-title: option<string>,",
+            "total-estimate: option<u64>,",
+        ],
+        "playlist-page drifted from the Rust lift"
+    );
 }
 
 #[test]
 fn playlist_error_lift_mirrors_the_wit_variant_case_for_case() {
-    const TYPES_WIT: &str = include_str!("../../wit/types.wit");
-    let expected = [
-        "unsupported-url(string),",
-        "not-found(string),",
-        "rate-limited(option<u32>),",
-        "network(string),",
-        "parse(string),",
-        "internal(string),",
-    ];
-    let (_, after) = TYPES_WIT
-        .split_once("variant playlist-error {")
-        .expect("types.wit declares playlist-error");
-    let (body, _) = after.split_once('}').expect("variant body is closed");
-    let cases: Vec<&str> = body
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .collect();
-    assert_eq!(cases, expected, "playlist-error drifted from the Rust lift");
+    assert_eq!(
+        wit_body_lines("variant", "playlist-error"),
+        [
+            "unsupported-url(string),",
+            "not-found(string),",
+            "rate-limited(option<u32>),",
+            "network(string),",
+            "parse(string),",
+            "internal(string),",
+        ],
+        "playlist-error drifted from the Rust lift"
+    );
 }
 
 #[test]
@@ -294,9 +227,9 @@ fn page_fetch_caps_entries_and_warns() {
 
 /// The N-side of the boundary `page_fetch_caps_entries_and_warns` pins
 /// from N+1: exactly `MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES` entries pass
-/// through unchanged and must NOT be reported as capped (fix round 1
-/// finding 6 — the `>=`-instead-of-`>` off-by-one this pins would
-/// false-positive exactly here). The log buffer is process-global,
+/// through unchanged and must NOT be reported as capped (a
+/// `>=`-instead-of-`>` off-by-one would false-positive exactly here).
+/// The log buffer is process-global,
 /// never cleared, and shared with concurrently-running tests, so this
 /// asserts the ABSENCE of the one message text only a wrong comparison at
 /// this exact count would produce, rather than a before/after length
@@ -427,11 +360,10 @@ async fn unsupported_url_falls_back_to_single_extract() {
 }
 
 /// `internal` from `extract-playlist` on page one strikes exactly like any
-/// other `PluginError::Internal` — regression coverage for fix round 1
-/// finding 1 (mapping the domain error INSIDE the runner's closure, where
-/// `counts_as_strike` can see it, instead of after `run_in_fresh_store`
-/// already returned). The 0.5.2 fixture's `extract-playlist` answers
-/// `err(internal(...))` for this URL.
+/// other `PluginError::Internal`: the domain error is mapped INSIDE the
+/// runner's closure, where `counts_as_strike` can see it — mapped after
+/// `run_in_fresh_store` returned it would not be (#768). The 0.5.2
+/// fixture's `extract-playlist` answers `err(internal(...))` for this URL.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn internal_playlist_error_on_page_1_strikes() {
     let ext = fixture_extractor_from(FIXTURE_MANIFEST, EXAMPLE_0_5_2_WASM);

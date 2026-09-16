@@ -1,10 +1,9 @@
 //! Validation, bounds, and JSON mapping of the open `extras` tail of a
 //! 0.5.2 `info-dict-extra` ([`extras_from_wit`]).
 //!
-//! Split out of `metadata_adapter.rs` (fix round 1, finding 4) so that
-//! file keeps the hand-lifted WIT types, the export call, and
-//! `MetadataCaps`, while everything that decides which entries survive
-//! the boundary lives here.
+//! Split out of `metadata_adapter.rs` so that file keeps the hand-lifted
+//! WIT types, the export call, and `MetadataCaps`, while everything that
+//! decides which entries survive the boundary lives here.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -189,13 +188,12 @@ impl ExtrasTally {
         }
     }
 
-    /// Admit an entry of `bytes` (key plus value) under the count and
-    /// aggregate bounds, recording the refusal otherwise.
+    /// Admit an entry of `bytes` (key plus value) under the aggregate
+    /// bound, recording the refusal otherwise. The count bound and an
+    /// already-crossed aggregate are [`saturated_by`](Self::saturated_by)'s,
+    /// checked by the caller before any per-entry work — so this is the
+    /// one site the aggregate is crossed, and the one that records it.
     const fn admit(&mut self, bytes: usize, caps: &MetadataCaps) -> bool {
-        if let Some(why) = self.saturated_by(caps) {
-            self.refuse(why);
-            return false;
-        }
         let next = self.kept_bytes.saturating_add(bytes);
         if next > caps.total_bytes {
             self.total_crossed = true;
