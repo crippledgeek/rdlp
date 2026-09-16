@@ -238,9 +238,9 @@ pub(crate) fn info_dict_from_wit(
 /// `extraction` payload: the request URL and diagnostics origin
 /// [`info_dict_from_wit`] already takes, plus the metadata caps
 /// [`extras_from_wit`] bounds `WitInfoDictExtra::extras` with. Grouped
-/// into one value so the function stays at two positional parameters
-/// instead of growing a fourth: three same-shaped borrowed arguments in a
-/// row are easy to pass in the wrong order, and a named struct cannot be.
+/// into one value so the function stays within the three-positional-
+/// parameter ceiling instead of growing a fourth, and so the call site
+/// names each part.
 pub(crate) struct ExtractionSite<'a> {
     /// The request URL, passed through to [`info_dict_from_wit`].
     pub url: &'a str,

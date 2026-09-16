@@ -82,11 +82,13 @@ pub const MAX_PLAYLIST_CONCURRENCY: usize = 16;
 /// to.
 pub const MAX_PLAYLIST_ITEM_TIMEOUT_SECS: u64 = 600;
 
-// The `OutOfRange` reasons for the five bounds above, formatted at compile
+// The `OutOfRange` reasons for the six bounds above, formatted at compile
 // time so each cites its constant rather than restating the literal. Module
 // consts rather than inline in `validate`: `formatcp!` expands to an
 // `unsafe` block, and a method body containing one makes clippy's
 // `unsafe_derive_deserialize` fire on `Config`'s derive.
+const MAX_FRAGMENT_BYTES_REASON: &str =
+    formatcp!("must be 1..={MAX_FRAGMENT_BYTES_UPPER_BOUND} bytes (2 GiB)");
 const MAX_METADATA_EXTRAS_REASON: &str = formatcp!("must be 1..={MAX_METADATA_EXTRAS_UPPER_BOUND}");
 const MAX_METADATA_VALUE_BYTES_REASON: &str =
     formatcp!("must be 1..={MAX_METADATA_VALUE_BYTES_UPPER_BOUND} bytes (1 MiB)");
@@ -887,7 +889,7 @@ impl Config {
         {
             return Err(ConfigValidationError::OutOfRange {
                 field: "max_fragment_bytes",
-                reason: "must be 1..=2_147_483_648 bytes (2 GiB)",
+                reason: MAX_FRAGMENT_BYTES_REASON,
             });
         }
         if let Some(n) = self.max_metadata_extras

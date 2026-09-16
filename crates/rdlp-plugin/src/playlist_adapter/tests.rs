@@ -91,11 +91,13 @@ fn playlist_error_mapping_strikes_only_internal() {
     }
 }
 
-/// The end-to-end lift of a real `playlist-page` needs a fixture component
-/// (Task 10); this pins the hand-lift's field shape by constructing one
-/// plainly and reading it back, so every `WitPlaylistPage`/`WitPlaylistEntry`
-/// field — including `total_estimate`, which no other test in this module
-/// touches — is exercised without a WASM round trip.
+/// The end-to-end lift of a real `playlist-page` is
+/// `real_first_page_hands_off_to_the_scaffold_and_fetches_page_1_once`
+/// over the 0.5.2 fixture; this pins the hand-lift's field shape by
+/// constructing one plainly and reading it back, so every
+/// `WitPlaylistPage`/`WitPlaylistEntry` field — including `total_estimate`,
+/// which no other test in this module touches — is exercised without a
+/// WASM round trip.
 #[test]
 fn playlist_page_carries_every_field_through() {
     let entry = WitPlaylistEntry {

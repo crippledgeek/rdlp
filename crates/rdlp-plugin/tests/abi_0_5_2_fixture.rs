@@ -64,7 +64,7 @@ async fn fixture_0_5_2_loads_and_extract_with_metadata_lifts() {
 /// `extract-with-metadata` answering `err(unsupported-url)` maps to the
 /// same `PluginError::UnsupportedUrl` the frozen `extract` path produces —
 /// an `RdlpError::Extraction` whose message names it — and is a domain
-/// outcome, so it is NOT a strike (Task 6 review obligation).
+/// outcome, so it is NOT a strike (#768).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn extract_with_metadata_domain_error_maps_without_a_strike() {
     let td = TempDir::new().unwrap();
@@ -87,7 +87,7 @@ async fn extract_with_metadata_domain_error_maps_without_a_strike() {
 }
 
 /// A `Config` cap reaches the extras validator end-to-end through the
-/// `store.data_mut().metadata_caps` seam (Task 7 review obligation): with
+/// `store.data_mut().metadata_caps` seam (#768): with
 /// `max_metadata_extras = Some(1)` exactly one of the fixture's two extras
 /// survives — the first one listed — where the default-cap test above
 /// keeps both.

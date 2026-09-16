@@ -19,6 +19,11 @@ use crate::convert::PluginOrigin;
 /// from a label lands inside the bound.
 pub const MAX_METADATA_KEY_BYTES: usize = 63;
 
+/// The bytes an `extras` key may carry after its first: the `{0,N}` of
+/// the key shape's tail, derived so the regex quoted in diagnostics and
+/// the byte bound above cannot drift apart.
+const KEY_TAIL_MAX: usize = MAX_METADATA_KEY_BYTES - 1;
+
 /// What an `integer`, `number`, or `flag` value counts toward the aggregate
 /// byte bound: the 8 bytes an `i64`/`f64` occupies. A `bool` is charged the
 /// same rather than 1 so the accounting has one scalar size, not three;
@@ -33,10 +38,11 @@ pub const SCALAR_VALUE_BYTES: usize = 8;
 /// strings is not free — so it is charged the same figure scalars are.
 pub const METADATA_LIST_ITEM_BYTES: usize = SCALAR_VALUE_BYTES;
 
-/// Whether `key` matches `^[a-z][a-z0-9-]{0,62}$` — the Kubernetes-label
-/// key shape `wit/COMPATIBILITY.md` §9 fixes for `extras` — as a byte loop,
-/// since every admissible byte is ASCII and a multi-byte char can only
-/// ever fail.
+/// Whether `key` matches `^[a-z][a-z0-9-]{0,KEY_TAIL_MAX}$` (a lowercase
+/// letter, then up to [`KEY_TAIL_MAX`] of `[a-z0-9-]`; [`MAX_METADATA_KEY_BYTES`]
+/// in all) — the Kubernetes-label key shape `wit/COMPATIBILITY.md` §9 fixes
+/// for `extras` — as a byte loop, since every admissible byte is ASCII and
+/// a multi-byte char can only ever fail.
 fn key_is_well_formed(key: &str) -> bool {
     let bytes = key.as_bytes();
     let Some((&first, rest)) = bytes.split_first() else {
@@ -97,7 +103,7 @@ fn key_is_reserved(snake: &str) -> bool {
 /// the very thing being refused (an escape sequence, a megabyte of text).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Refusal {
-    /// Key outside `^[a-z][a-z0-9-]{0,62}$`.
+    /// Key outside `^[a-z][a-z0-9-]{0,KEY_TAIL_MAX}$` ([`key_is_well_formed`]).
     MalformedKey,
     /// Key names a typed `InfoDict` field (after `-` → `_`).
     ReservedKey,
@@ -122,7 +128,8 @@ impl Refusal {
     fn describe(self, caps: &MetadataCaps) -> String {
         match self {
             Self::MalformedKey => format!(
-                "whose key is not `^[a-z][a-z0-9-]{{0,62}}$` (1..={MAX_METADATA_KEY_BYTES} bytes); dropping them"
+                "whose key is not `^[a-z][a-z0-9-]{{0,{KEY_TAIL_MAX}}}$` \
+                 (1..={MAX_METADATA_KEY_BYTES} bytes); dropping them"
             ),
             Self::ReservedKey => "whose key shadows an info-dict field; dropping them".to_string(),
             Self::DuplicateKey => "repeating an earlier key; keeping the first of each".to_string(),

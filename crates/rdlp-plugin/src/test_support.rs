@@ -453,12 +453,11 @@ signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         fixture_extractor_from(toml, super::EXAMPLE_0_5_0_WASM)
     }
 
-    /// Build an adapter from `toml` and `wasm` directly — the seam
-    /// [`fixture_extractor_with_manifest`] uses for the committed 0.5.0
-    /// fixture. A future fixture on a later WIT contract version (e.g. a
-    /// 0.5.2 component with an `extract-playlist` export) uses this
-    /// directly rather than a second hand-rolled copy of the same
-    /// engine/component/loader wiring.
+    /// Build an adapter from `toml` and `wasm` directly — the one
+    /// engine/component/loader wiring every unit-test adapter shares:
+    /// [`fixture_extractor_with_manifest`] uses it for the committed 0.5.0
+    /// fixture, and the playlist/metadata tests call it with
+    /// `EXAMPLE_0_5_2_WASM` for the 0.5.2 one.
     pub fn fixture_extractor_from(toml: &str, wasm: &[u8]) -> PluginExtractor {
         let engine = Arc::new(Engine::new(EngineConfig::default()).expect("engine"));
         let component =

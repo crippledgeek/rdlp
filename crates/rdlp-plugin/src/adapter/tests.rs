@@ -194,7 +194,7 @@ async fn runner_hands_the_closure_a_live_instance() {
     assert_eq!(ext.test_trap_count(), 0);
 }
 
-/// Task 6: `call_plugin_extract` tries `extract-with-metadata` first; on
+/// `call_plugin_extract` tries `extract-with-metadata` first; on
 /// the committed 0.5.0 fixture (which predates that export) it must fall
 /// back to the typed `extract` path unchanged — same title, no strike.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

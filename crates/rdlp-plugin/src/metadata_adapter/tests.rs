@@ -98,8 +98,9 @@ fn extraction_lift_mirrors_the_wit_record_field_for_field() {
     );
 }
 
-/// The end-to-end lift of a real `extraction` record needs a fixture
-/// component (Task 10); this pins every hand-lift's field shape by
+/// The end-to-end lift of a real `extraction` record is
+/// `tests/abi_0_5_2_fixture.rs` (`fixture_0_5_2_loads_and_extract_with_metadata_lifts`);
+/// this pins every hand-lift's field shape by
 /// constructing one of each plainly and reading every field back — so
 /// `WitThumbnail.preference`, `WitInfoDictExtra.{channel_url,age_limit,
 /// thumbnails}`, and every `WitMetaValue` variant (none of which any other
@@ -171,7 +172,7 @@ fn extraction_carries_every_field_through() {
     assert_eq!(extraction.extra.extras.len(), 1);
 }
 
-/// Task 6: `info_dict_from_extraction` copies every typed `info-dict-extra`
+/// `info_dict_from_extraction` copies every typed `info-dict-extra`
 /// field onto the `InfoDict` it builds around [`info_dict_from_wit`]'s core
 /// conversion — `actors`/`channel`/`channel_url`/`age_limit` verbatim, and
 /// a non-empty thumbnail list wrapped in `Some`.
@@ -246,7 +247,7 @@ fn empty_thumbnails_is_none() {
     assert!(out.thumbnails.is_none());
 }
 
-// ---- Task 7: `extras` reach `InfoDict::extra` through `info_dict_from_extraction` ----
+// ---- `extras` reach `InfoDict::extra` through `info_dict_from_extraction` (#768) ----
 
 /// End to end through `info_dict_from_extraction`: a kept extra is a
 /// TOP-LEVEL key of the serialized `InfoDict` (`extra` is

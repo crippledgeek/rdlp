@@ -152,11 +152,13 @@ signature = "ZA"
 #[test]
 fn canonical_bytes_of_a_pre_0_5_1_manifest_are_unchanged() {
     // Same fixture as `canonical_form_excludes_signature_field` above, with no
-    // `supports_extract`/`search_site` set — a manifest written before those
-    // fields existed. Pinned by running this exact parse+encode against the
-    // pre-0.5.1 code (before Task 10's fields were added) and copying its
-    // real output, so a regression here means an existing plugin's signature
-    // silently stops verifying.
+    // `supports_extract`/`search_site` (0.5.1) and no `display_name` (0.5.2)
+    // set — a manifest written before any of those fields existed. Pinned by
+    // running this exact parse+encode against the pre-0.5.1 code (before
+    // `supports_extract`/`search_site` were added) and copying its real
+    // output, so a regression here means an existing plugin's signature
+    // silently stops verifying; the unset `display_name` adding nothing is
+    // pinned by the same bytes.
     let toml = r#"
 name = "x"
 version = "1.0.0"
@@ -314,34 +316,6 @@ signature = "ZA"
     assert!(
         !s.contains("search_claims_override"),
         "an empty (default) claim must leave pre-0.5.1 bytes untouched: {s}"
-    );
-}
-
-/// Same fixture as `canonical_bytes_of_a_pre_0_5_1_manifest_are_unchanged`
-/// above, restated under its own name for Task 8: a manifest with no
-/// `display_name` set must keep byte-identical canonical output, so an
-/// existing plugin's signature does not silently stop verifying just
-/// because the field was added to the schema.
-#[test]
-fn canonical_bytes_unchanged_when_display_name_unset() {
-    let toml = r#"
-name = "x"
-version = "1.0.0"
-wit_version = "0.5.0"
-matches = ["https://x.com/*"]
-priority = 150
-capabilities = ["log"]
-
-[signature]
-type = "ed25519"
-pubkey = "ZA"
-signature = "ZA"
-"#;
-    let m = parse_manifest_str(toml).unwrap();
-    let s = String::from_utf8(canonical_bytes(&m)).unwrap();
-    assert_eq!(
-        s,
-        "capabilities = [\"log\"]\nclaims_override = []\nmatches = [\"https://x.com/*\"]\nname = \"x\"\npriority = 150\nsupports_search = false\nversion = \"1.0.0\"\nwit_version = \"0.5.0\"\n"
     );
 }
 
