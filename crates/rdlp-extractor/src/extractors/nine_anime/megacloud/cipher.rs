@@ -26,6 +26,11 @@ use rdlp_crypto::transposition::columnar_untranspose;
 const LAYERS: u32 = 3;
 
 /// glibc-style LCG the aniwatch `seedRand` uses: `(s * 1103515245 + 12345) & 0x7FFF_FFFF`.
+///
+/// `rdlp_crypto::prng::lcg_step` is deliberately NOT used here: that primitive
+/// wraps its state as a JS `i32` (32-bit, sign-preserving), while this cipher's
+/// `seedRand` masks to 31 bits (`& 0x7FFF_FFFF`, always non-negative) — a
+/// different modulus, not an instance of the same shape.
 const GLIBC_LCG_MULT: u64 = 1_103_515_245;
 const GLIBC_LCG_INC: u64 = 12345;
 const GLIBC_LCG_MASK: u64 = 0x7FFF_FFFF;
@@ -124,11 +129,12 @@ fn reverse_layer(dec_src: &mut Vec<char>, layer_key: &str, chars: &[char]) {
     *dec_src = columnar_untranspose(dec_src, layer_key);
 
     // Step 3: Reverse seed-based character shift
+    let alphabet = chars.len() as u64;
     let mut seed = u64::from(java_string_hash32(layer_key));
     for ch in dec_src.iter_mut() {
         if let Some(idx) = chars.iter().position(|&c| c == *ch) {
-            let rand_num = glibc_lcg_step(&mut seed, 95);
-            let new_idx = (idx as i64 - rand_num as i64 + 95) % 95;
+            let rand_num = glibc_lcg_step(&mut seed, alphabet);
+            let new_idx = (idx as i64 - rand_num as i64 + alphabet as i64) % alphabet as i64;
             *ch = chars[new_idx as usize];
         }
     }
@@ -216,13 +222,32 @@ mod tests {
     }
 
     #[test]
-    fn test_seed_rand_deterministic() {
-        let mut s1 = 42;
-        let mut s2 = 42;
-        let r1 = glibc_lcg_step(&mut s1, 100);
-        let r2 = glibc_lcg_step(&mut s2, 100);
-        assert_eq!(r1, r2);
-        assert_eq!(s1, s2);
+    fn glibc_lcg_step_matches_reference() {
+        // Reference values computed independently: seed=(42*1103515245+12345)&0x7FFF_FFFF.
+        // `r1 == r2` alone is a tautology (true for any multiplier/increment); pin the
+        // literal outputs so a wrong constant (e.g. INC=12346 -> 28 / 1_250_496_028) is
+        // caught rather than silently accepted.
+        let mut seed = 42;
+        let draw = glibc_lcg_step(&mut seed, 100);
+        assert_eq!(draw, 27);
+        assert_eq!(seed, 1_250_496_027);
+    }
+
+    #[test]
+    fn decrypt_src_recovers_pinned_fixture() {
+        // Characterization pin generated from commit d6fb9736's implementation
+        // (pre-rewrite `hash_key`/`seed_rand`/`seed_shuffle`/`columnar_cipher`,
+        // via a throwaway forward encoder run in a scratch worktree — see the
+        // C0-b Task 2 fix-round-1 report). Certifies this rewrite decrypts what
+        // the pre-rewrite code encrypted; a captured site ciphertext would
+        // upgrade it to a correctness oracle.
+        const CLIENT_KEY: &str = "c0b-client-key";
+        const MEGACLOUD_KEY: &str = "c0b-megacloud-key";
+        const FIXTURE_B64: &str = "LC95eks9JGZjJFg+RSNcWGQ3VTtMXVZAJlhXdWleWCJcZ0lNZ3BAQSU6XjBQQTkiWCshJzkmQHJfT3xsaXxLTCJgfGFCNmtVTVtKej4oL1p1dTk6RlFYSFQ5Nnw=";
+        const EXPECTED_PAYLOAD: &str = " !~}Hello, world! This pins C0-b Task 2.~} ";
+
+        let decrypted = decrypt_src(FIXTURE_B64, CLIENT_KEY, MEGACLOUD_KEY).unwrap();
+        assert_eq!(decrypted, EXPECTED_PAYLOAD);
     }
 
     #[test]
