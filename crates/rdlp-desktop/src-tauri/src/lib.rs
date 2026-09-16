@@ -96,8 +96,9 @@ fn restrict_log_dir(_app: &tauri::App) {}
 /// # Panics
 ///
 /// Panics if the Tauri application cannot be built (e.g. invalid
-/// `tauri.conf.json`) or if the main webview window cannot be opened.
-/// These are unrecoverable startup failures.
+/// `tauri.conf.json`), if the main webview window cannot be opened, or if
+/// the application state cannot be initialised during setup
+/// ([`AppState::new`]). These are unrecoverable startup failures.
 pub fn run() {
     // Route panics through `log` so they reach the same targets as every other
     // record. Panics in async command handlers are the reason this matters: a
@@ -259,8 +260,22 @@ pub fn run() {
 
     restrict_log_dir(&app);
 
-    app.run(|app, event| {
-        if let tauri::RunEvent::ExitRequested { .. } = event {
+    app.run(|app, event| match event {
+        // Delivered after the setup hook, so the state exists and the plugin
+        // bootstrap it runs has finished. The windows are configured
+        // `visible: false` (tauri.conf.json) because Tauri creates them
+        // before that hook: shown here, the user sees a painted window
+        // instead of a blank frame for as long as the bootstrap blocks the
+        // main thread. Startup work that needs the state belongs here too.
+        tauri::RunEvent::Ready => {
+            let windows = app.webview_windows();
+            show_windows(
+                windows
+                    .iter()
+                    .map(|(label, window)| (label.as_str(), window)),
+            );
+        }
+        tauri::RunEvent::ExitRequested { .. } => {
             let state = app.state::<AppState>();
             let output_dir = state
                 .settings
@@ -273,6 +288,7 @@ pub fn run() {
             // Also sweep for orphans left by a prior crash (SIGKILL, etc.).
             TempRegistry::cleanup_stale(&output_dir);
         }
+        _ => {}
     });
 }
 
@@ -284,8 +300,12 @@ pub fn run() {
 /// and bootstraps plugins — runs with `tauri-plugin-log`'s backend already
 /// installed. `.manage(AppState::new())` evaluated the factory before any
 /// plugin existed; every record it emitted, the plugin-load outcomes among
-/// them, went to `log`'s no-op logger (#777). Replaces the builder's setup
-/// hook, so it must stay the only `.setup` in the chain.
+/// them, went to `log`'s no-op logger (#777).
+///
+/// This installs the app's setup hook (`Builder::setup` keeps only the
+/// last one). It is deliberately the whole hook: work that must follow
+/// the state goes in `run`'s `RunEvent::Ready` arm, which Tauri delivers
+/// once setup has returned.
 fn manage_after_plugins<R, T>(
     builder: tauri::Builder<R>,
     make: impl FnOnce() -> T + Send + 'static,
@@ -298,6 +318,28 @@ where
         app.manage(make());
         Ok(())
     })
+}
+
+/// What [`show_windows`] needs from a window.
+trait Showable {
+    fn show(&self) -> tauri::Result<()>;
+}
+
+impl<R: tauri::Runtime> Showable for tauri::WebviewWindow<R> {
+    fn show(&self) -> tauri::Result<()> {
+        Self::show(self)
+    }
+}
+
+/// Show every window, recording the ones that refuse rather than stopping
+/// at the first: the windows start hidden (`visible: false`), so one left
+/// hidden is invisible to the user, and the log is the only trace.
+fn show_windows<'a, W: Showable + 'a>(windows: impl IntoIterator<Item = (&'a str, &'a W)>) {
+    for (label, window) in windows {
+        if let Err(e) = window.show() {
+            log::error!("window '{label}' could not be shown: {e}");
+        }
+    }
 }
 
 #[cfg(test)]
@@ -344,6 +386,61 @@ mod tests {
             assert!(
                 bodies.contains(&"state built"),
                 "the factory's record must reach the plugin-installed logger; got {bodies:?}"
+            );
+        });
+    }
+
+    /// A window double: counts `show` calls and fails on demand.
+    struct FakeWindow {
+        shown: std::cell::Cell<u32>,
+        fails: bool,
+    }
+
+    impl FakeWindow {
+        fn new(fails: bool) -> Self {
+            Self {
+                shown: std::cell::Cell::new(0),
+                fails,
+            }
+        }
+    }
+
+    impl Showable for FakeWindow {
+        fn show(&self) -> tauri::Result<()> {
+            self.shown.set(self.shown.get() + 1);
+            if self.fails {
+                Err(tauri::Error::WindowNotFound)
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    /// One failing window is recorded and does not stop the others from
+    /// being shown — a hidden-by-config window that stays hidden is the
+    /// whole app being invisible.
+    #[test]
+    fn show_windows_shows_every_window_and_records_a_failure() {
+        testing_logger::setup();
+        let main = FakeWindow::new(false);
+        let aux = FakeWindow::new(true);
+        let last = FakeWindow::new(false);
+
+        show_windows([("main", &main), ("aux", &aux), ("last", &last)]);
+
+        assert_eq!(
+            (main.shown.get(), aux.shown.get(), last.shown.get()),
+            (1, 1, 1)
+        );
+        testing_logger::validate(|captured| {
+            let errors: Vec<&str> = captured
+                .iter()
+                .filter(|r| r.level == log::Level::Error)
+                .map(|r| r.body.as_str())
+                .collect();
+            assert!(
+                matches!(errors.as_slice(), [only] if only.contains("'aux'")),
+                "exactly the failing window is recorded, by name: {errors:?}"
             );
         });
     }
