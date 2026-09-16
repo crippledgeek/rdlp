@@ -453,27 +453,7 @@ impl RdlpClient {
     /// A list of `SearchSiteInfo` with name and display name.
     #[must_use]
     pub fn list_search_sites(&self) -> Vec<rdlp_types::SearchSiteInfo> {
-        let id = DownloadId::next();
-        let (tx, _rx) = mpsc::channel::<Event>(1);
-        let cancel_token = CancellationToken::new();
-
-        let orchestrator = Orchestrator::new_with_registry(
-            Arc::clone(&self.config),
-            tx,
-            id,
-            cancel_token,
-            None,
-            None,
-            Some(Arc::clone(&self.extractor_registry)),
-        );
-        orchestrator
-            .list_search_extractors()
-            .into_iter()
-            .map(|name| rdlp_types::SearchSiteInfo {
-                name: name.to_lowercase(),
-                display_name: name.to_string(),
-            })
-            .collect()
+        self.extractor_registry.list_search_sites()
     }
 
     /// Get available search filters for a site.

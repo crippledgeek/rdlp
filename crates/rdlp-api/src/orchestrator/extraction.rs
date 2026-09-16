@@ -380,11 +380,6 @@ impl Orchestrator {
         Ok(response)
     }
 
-    /// List names of all search-capable extractors.
-    pub fn list_search_extractors(&self) -> Vec<&str> {
-        self.extractor_registry.list_search_extractors()
-    }
-
     /// Lazily enrich a single previously-returned `SearchResultPreview`.
     ///
     /// Frontends call this on demand (e.g. when a row scrolls into view)

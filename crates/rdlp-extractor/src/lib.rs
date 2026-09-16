@@ -89,6 +89,7 @@ pub use base::tnaflix_network::TnaFlixNetworkBase;
 pub use base::wgcz_network::WgczNetworkBase;
 
 use rdlp_core::{InfoExtractor, SearchExtractor};
+use rdlp_types::SearchSiteInfo;
 use std::sync::Arc;
 
 /// Trait for extractor registries to enable mocking in tests
@@ -305,6 +306,21 @@ impl ExtractorRegistry {
             .cloned()
     }
 
+    /// The search extractors with one entry per site name, compared
+    /// case-insensitively so a name shared by a built-in and a plugin
+    /// yields whichever registered first (its casing, its position).
+    fn distinct_search_extractors(&self) -> impl Iterator<Item = &Arc<dyn SearchExtractor>> {
+        let mut seen: Vec<&str> = Vec::with_capacity(self.search_extractors.len());
+        self.search_extractors.iter().filter(move |extractor| {
+            let name = extractor.name();
+            if seen.iter().any(|s| s.eq_ignore_ascii_case(name)) {
+                return false;
+            }
+            seen.push(name);
+            true
+        })
+    }
+
     /// List all registered search extractor names, deduplicated
     /// case-insensitively so a name shared by a built-in and a plugin is
     /// listed once (keeping the casing and position of whichever
@@ -314,14 +330,23 @@ impl ExtractorRegistry {
     /// A vector of site names that support search
     #[must_use]
     pub fn list_search_extractors(&self) -> Vec<&str> {
-        let mut names: Vec<&str> = Vec::with_capacity(self.search_extractors.len());
-        for extractor in &self.search_extractors {
-            let name = extractor.name();
-            if !names.iter().any(|seen| seen.eq_ignore_ascii_case(name)) {
-                names.push(name);
-            }
-        }
-        names
+        self.distinct_search_extractors()
+            .map(|extractor| extractor.name())
+            .collect()
+    }
+
+    /// The searchable sites as frontends list them: `name` is the
+    /// lowercased routing key, `display_name` the provider's own label
+    /// ([`SearchExtractor::display_name`]). Same dedup as
+    /// [`list_search_extractors`](Self::list_search_extractors).
+    #[must_use]
+    pub fn list_search_sites(&self) -> Vec<SearchSiteInfo> {
+        self.distinct_search_extractors()
+            .map(|extractor| SearchSiteInfo {
+                name: extractor.name().to_lowercase(),
+                display_name: extractor.display_name().to_string(),
+            })
+            .collect()
     }
 }
 

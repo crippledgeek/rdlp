@@ -253,6 +253,8 @@ mod registry_search_arbitration_tests {
     /// be pinned without a real site.
     struct FakeSearch {
         name: &'static str,
+        /// `None` = the trait default (`display_name()` echoes `name()`).
+        display: Option<&'static str>,
         plugin: bool,
         prio: i32,
         overrides: bool,
@@ -262,6 +264,10 @@ mod registry_search_arbitration_tests {
     impl SearchExtractor for FakeSearch {
         fn name(&self) -> &str {
             self.name
+        }
+
+        fn display_name(&self) -> &str {
+            self.display.unwrap_or(self.name)
         }
 
         async fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
@@ -305,6 +311,7 @@ mod registry_search_arbitration_tests {
     fn builtin(name: &'static str) -> FakeSearch {
         FakeSearch {
             name,
+            display: None,
             plugin: false,
             prio: 0,
             overrides: false,
@@ -314,6 +321,7 @@ mod registry_search_arbitration_tests {
     fn plugin(name: &'static str, prio: i32, overrides: bool) -> FakeSearch {
         FakeSearch {
             name,
+            display: None,
             plugin: true,
             prio,
             overrides,
@@ -440,5 +448,33 @@ mod registry_search_arbitration_tests {
         ]);
         let names = reg.list_search_extractors();
         assert_eq!(names, vec!["PornHub", "other"]);
+    }
+
+    /// A plugin's `name()` is its `search_site` routing key (`xhamster`)
+    /// while its `display_name()` is the manifest's human label
+    /// (`XHamster`); the site list must carry BOTH, not derive the label
+    /// from the key. In-tree extractors satisfy both roles with one
+    /// string, which is why this only shows with a plugin-shaped double.
+    #[test]
+    fn list_search_sites_carries_display_name_separately_from_routing_key() {
+        let reg = registry_of(vec![
+            builtin("PornHub"),
+            FakeSearch {
+                name: "xhamster",
+                display: Some("XHamster"),
+                plugin: true,
+                prio: 150,
+                overrides: false,
+            },
+        ]);
+        let sites = reg.list_search_sites();
+        let names: Vec<(&str, &str)> = sites
+            .iter()
+            .map(|s| (s.name.as_str(), s.display_name.as_str()))
+            .collect();
+        assert_eq!(
+            names,
+            vec![("pornhub", "PornHub"), ("xhamster", "XHamster")]
+        );
     }
 }
