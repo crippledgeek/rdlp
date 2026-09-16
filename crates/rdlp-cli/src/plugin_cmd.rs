@@ -7,8 +7,8 @@ mod build_from_ytdlp;
 pub use build_from_ytdlp::run as run_build_from_ytdlp;
 
 use anyhow::{Context, Result};
-use rdlp_plugin::manifest::validate_plugin_name;
-use rdlp_plugin::trust_store::TrustStore;
+use rdlp_plugin::manifest::{Manifest, validate_plugin_name};
+use rdlp_plugin::trust_store::{IdentityCheck, TrustStore};
 use rdlp_types::Config;
 use std::path::PathBuf;
 
@@ -46,6 +46,41 @@ pub fn disabled_list_path() -> Result<PathBuf> {
     Ok(config_path()?.join("plugin-disabled.toml"))
 }
 
+/// How an untrusted plugin gets trusted. The default prompter denies an
+/// unknown publisher, so nothing prompts: the operator passes the identity
+/// and the loader records it the first time the plugin loads — which
+/// `plugin list` / `plugin info` never do.
+fn trust_hint(identity: &str) -> String {
+    format!(
+        "not loaded until trusted: run rdlp with `--trust-publisher {identity}` \
+         (recorded on the first successful load)"
+    )
+}
+
+/// One line for the trust column: the recorded identity checked against
+/// the one the manifest presents (`identity`), with the way forward.
+fn trust_state(check: &IdentityCheck, name: &str, identity: &str) -> String {
+    match check {
+        IdentityCheck::Match => "TRUSTED".into(),
+        IdentityCheck::NewName => format!("UNTRUSTED — {}", trust_hint(identity)),
+        IdentityCheck::Mismatch { recorded, .. } => format!(
+            "IDENTITY CHANGED — recorded {recorded}; after verifying the publisher, \
+             run `rdlp plugin retrust {name}`"
+        ),
+    }
+}
+
+/// The manifest's own publisher identity, and its trust state in `trust`.
+fn identity_and_state(m: &Manifest, trust: &TrustStore) -> (String, String) {
+    let identity = m.signature.identity_string();
+    let state = trust_state(
+        &trust.check_identity_match(&m.name, &identity),
+        &m.name,
+        &identity,
+    );
+    (identity, state)
+}
+
 /// `rdlp plugin list` — list all installed plugins with their trust state.
 ///
 /// # Errors
@@ -75,14 +110,11 @@ pub fn run_list(config: &Config) -> Result<()> {
             match rdlp_plugin::manifest::parse_manifest_file(&manifest_path) {
                 Ok(m) => {
                     found += 1;
-                    let trust_state = trust
-                        .lookup(&m.name)
-                        .map_or_else(|| "(untrusted)".into(), |e| e.identity.clone());
+                    let (identity, state) = identity_and_state(&m, &trust);
                     println!(
-                        "{}  v{}  identity={}  caps=[{}]",
+                        "{}  v{}  identity={identity}  caps=[{}]  {state}",
                         m.name,
                         m.version,
-                        trust_state,
                         m.capabilities.join(", ")
                     );
                 }
@@ -105,13 +137,8 @@ pub fn run_list(config: &Config) -> Result<()> {
 /// Returns an error if the plugin name is invalid or the manifest cannot be parsed.
 pub fn run_info(name: &str, config: &Config) -> Result<()> {
     require_valid_name(name)?;
-    for dir in &config.plugin_directories {
-        let plugin_dir = dir.join(name);
-        let manifest_path = plugin_dir.join("plugin.toml");
-        if !manifest_path.exists() {
-            continue;
-        }
-        let m = rdlp_plugin::manifest::parse_manifest_file(&manifest_path)?;
+    if let Some(plugin_dir) = installed_plugin_dir(name, config) {
+        let m = rdlp_plugin::manifest::parse_manifest_file(&plugin_dir.join("plugin.toml"))?;
         let trust = TrustStore::open(trust_store_path()?)?;
         let trust_entry = trust.lookup(name);
 
@@ -130,13 +157,12 @@ pub fn run_info(name: &str, config: &Config) -> Result<()> {
             }
         }
         println!("Capabilities: {}", m.capabilities.join(", "));
-        match trust_entry {
-            Some(e) => {
-                println!("Trust state: TRUSTED ({})", e.identity);
-                let caps: Vec<_> = e.approved_capabilities.iter().cloned().collect();
-                println!("Approved capabilities: {}", caps.join(", "));
-            }
-            None => println!("Trust state: UNTRUSTED (will prompt on next load)"),
+        let (identity, state) = identity_and_state(&m, &trust);
+        println!("Identity: {identity}");
+        println!("Trust state: {state}");
+        if let Some(e) = trust_entry {
+            let caps: Vec<_> = e.approved_capabilities.iter().cloned().collect();
+            println!("Approved capabilities: {}", caps.join(", "));
         }
         println!("Origin: {}", plugin_dir.display());
         return Ok(());
@@ -144,16 +170,43 @@ pub fn run_info(name: &str, config: &Config) -> Result<()> {
     anyhow::bail!("plugin '{name}' not found in any configured plugin directory")
 }
 
-/// `rdlp plugin retrust <name>` — clear the recorded identity so the next load re-prompts.
+/// The directory of the installed plugin `name`: the first configured
+/// plugin directory holding `<name>/plugin.toml`.
+fn installed_plugin_dir(name: &str, config: &Config) -> Option<PathBuf> {
+    config
+        .plugin_directories
+        .iter()
+        .map(|dir| dir.join(name))
+        .find(|plugin_dir| plugin_dir.join("plugin.toml").exists())
+}
+
+/// `rdlp plugin retrust <name>` — clear the recorded identity so the
+/// plugin's current identity can be trusted afresh.
 ///
 /// # Errors
 ///
-/// Returns an error if the trust store cannot be opened or written.
-pub fn run_retrust(name: &str) -> Result<()> {
+/// Returns an error if the plugin name is invalid or the trust store
+/// cannot be opened or written.
+pub fn run_retrust(name: &str, config: &Config) -> Result<()> {
+    require_valid_name(name)?;
     let mut trust = TrustStore::open(trust_store_path()?)?;
     if trust.lookup(name).is_some() {
         trust.forget(name)?;
-        println!("Trust forgotten for plugin '{name}'. Next load will prompt for approval.");
+        // Nothing prompts: name the exact flag, with the identity when the
+        // manifest is on disk to read it from.
+        let how = installed_plugin_dir(name, config)
+            .and_then(|dir| {
+                rdlp_plugin::manifest::parse_manifest_file(&dir.join("plugin.toml")).ok()
+            })
+            .map_or_else(
+                || {
+                    "not loaded until trusted: run rdlp with `--trust-publisher <identity>` \
+                     (see `rdlp plugin info`)"
+                        .into()
+                },
+                |m| trust_hint(&m.signature.identity_string()),
+            );
+        println!("Trust forgotten for plugin '{name}'; {how}");
     } else {
         println!("Plugin '{name}' was not in the trust store; nothing to forget.");
     }
@@ -272,4 +325,53 @@ fn write_disabled(path: &PathBuf, list: &[String]) -> Result<()> {
     #[allow(clippy::disallowed_methods)] // CLI command — sync I/O acceptable
     std::fs::rename(&tmp_path, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rdlp_plugin::trust_store::IdentityCheck;
+
+    const ID: &str = "ed25519:838282c38f97f6b28c8a8d9a272a415f9f7c2db422d6435d8e8dd7865df8e523";
+
+    /// The identity is the operator's input to `--trust-publisher`; the
+    /// hint must carry it verbatim, name the flag, and say when the trust
+    /// is actually recorded (on a successful load — not by `plugin list`).
+    #[test]
+    fn trust_hint_names_the_flag_the_identity_and_when_it_is_recorded() {
+        let hint = trust_hint(ID);
+        assert!(hint.contains("--trust-publisher"), "{hint}");
+        assert!(hint.contains(ID), "{hint}");
+        assert!(hint.contains("first successful load"), "{hint}");
+    }
+
+    #[test]
+    fn trust_state_of_a_new_name_is_untrusted_with_the_hint() {
+        let line = trust_state(&IdentityCheck::NewName, "foo", ID);
+        assert!(line.starts_with("UNTRUSTED"), "{line}");
+        assert!(line.contains("--trust-publisher"), "{line}");
+    }
+
+    #[test]
+    fn trust_state_of_a_match_is_trusted() {
+        assert_eq!(trust_state(&IdentityCheck::Match, "foo", ID), "TRUSTED");
+    }
+
+    /// A changed identity names the recorded one and the way out
+    /// (`retrust`), never a "will prompt" that the default prompter denies.
+    #[test]
+    fn trust_state_of_a_mismatch_names_the_recorded_identity_and_retrust() {
+        let line = trust_state(
+            &IdentityCheck::Mismatch {
+                recorded: "ed25519:0000".into(),
+                presented: ID.into(),
+            },
+            "foo",
+            ID,
+        );
+        assert!(line.starts_with("IDENTITY CHANGED"), "{line}");
+        assert!(line.contains("ed25519:0000"), "{line}");
+        assert!(line.contains("rdlp plugin retrust foo"), "{line}");
+        assert!(!line.contains("prompt"), "{line}");
+    }
 }
