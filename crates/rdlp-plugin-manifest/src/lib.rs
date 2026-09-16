@@ -41,6 +41,19 @@ const URL_REGEX_MAX_BYTES: usize = 2048;
 /// length rule to remember across both fields.
 const DISPLAY_NAME_MAX_BYTES: usize = 64;
 
+/// The Unicode bidi embedding/override (`U+202A..=U+202E`) and isolate
+/// (`U+2066..=U+2069`) controls — the nine code points behind the
+/// Trojan-Source visual-reordering attack (CVE-2021-42574), and exactly the
+/// set `rustc`'s `text_direction_codepoint_in_literal` lint denies. They
+/// are general-category `Cf`, not `Cc`, so [`char::is_control`] does not
+/// see them; `display_name` is rendered into every log tag and
+/// `%(extractor)s`, where `X\u{202E}Y` would display reordered. Refused at
+/// the source. Inline rather than `rdlp_redact::text::is_bidi_control`
+/// (the same set) because this leaf crate deliberately carries no rdlp
+/// dependency — author tooling links it alone.
+const BIDI_CONTROLS: [std::ops::RangeInclusive<char>; 2] =
+    ['\u{202A}'..='\u{202E}', '\u{2066}'..='\u{2069}'];
+
 /// Errors that can be produced while parsing or validating a manifest.
 ///
 /// `rdlp-plugin::PluginError` provides a `From<ManifestError>` conversion so
@@ -102,8 +115,9 @@ pub struct Manifest {
     /// routing, the trust store, or the archive token; those stay on
     /// `name` (which also travels as `InfoDict::extractor_key`). Because
     /// `%(extractor)s` renders it into one output-path component, it may
-    /// not contain a path separator (`/`, `\`). Defaults to `name` when
-    /// unset (see [`Manifest::display_name`]).
+    /// not contain a path separator (`/`, `\`), nor a control or bidi
+    /// control character (see `validate_display_name`). Defaults to `name`
+    /// when unset (see [`Manifest::display_name`]).
     #[serde(default)]
     pub display_name: Option<String>,
     /// Plugin semver version.
@@ -441,11 +455,13 @@ fn validate(m: &Manifest) -> Result<(), ManifestError> {
 /// (the first-install prompt shows `name`), so it is held to
 /// plain-display-text rules rather than the filesystem-safe shape
 /// `validate_plugin_name` enforces on `name`/`search_site`: any non-empty,
-/// non-control, ≤64-byte string is fine — spaces and mixed case included.
-/// The one path rule it keeps: `%(extractor)s` is ONE output-path
-/// component (the template renderer splits on `/`), so a separator would
-/// create or escape a directory and is rejected. Namespace keys (the
-/// archive token, `host-store-kv`) stay on `name`.
+/// ≤64-byte string free of control and bidi-control characters
+/// ([`BIDI_CONTROLS`]) is fine — spaces and mixed case included. The one
+/// path rule it keeps: `%(extractor)s` is ONE output-path component, and
+/// although the template renderer already maps `/` and `\` to `_` when it
+/// renders a field, refusing them here keeps the display name an author
+/// wrote the one the user sees — defence in depth at the source. Namespace
+/// keys (the archive token, `host-store-kv`) stay on `name`.
 fn validate_display_name(m: &Manifest) -> Result<(), ManifestError> {
     let Some(d) = &m.display_name else {
         return Ok(());
@@ -460,6 +476,11 @@ fn validate_display_name(m: &Manifest) -> Result<(), ManifestError> {
     }
     if d.chars().any(char::is_control) {
         return invalid("display_name contains a control character");
+    }
+    if d.chars()
+        .any(|c| BIDI_CONTROLS.iter().any(|block| block.contains(&c)))
+    {
+        return invalid("display_name contains a bidi control character");
     }
     if d.contains(['/', '\\']) {
         return invalid("display_name contains a path separator");
@@ -695,8 +716,9 @@ signature = "ZA"
     }
 
     /// `display_name` is `InfoDict::extractor`, which `%(extractor)s`
-    /// renders into an output path (`paths.rs` splits the template on
-    /// `/`), so a separator in it would create or escape a directory.
+    /// renders into one output-path component; the renderer would map a
+    /// separator to `_` itself, so this refusal is defence in depth at the
+    /// source rather than the only thing between the name and a directory.
     #[test]
     fn display_name_with_a_path_separator_rejected() {
         // TOML-escaped: `\\` in the file is one backslash in the value.
@@ -705,6 +727,28 @@ signature = "ZA"
                 &manifest_with(&format!("display_name = \"{name}\"")),
                 "path separator",
             );
+        }
+    }
+
+    /// A bidi override or isolate is `Cf`, not `Cc`, so the control-character
+    /// check above does not see it — yet `X\u{202E}Y` renders visually
+    /// reordered in every log tag and `%(extractor)s` (Trojan Source,
+    /// CVE-2021-42574). All nine hostile code points are refused; the
+    /// neighbours just outside each block, and ordinary non-ASCII text, are
+    /// still accepted.
+    #[test]
+    fn display_name_with_a_bidi_control_rejected() {
+        for c in ('\u{202A}'..='\u{202E}').chain('\u{2066}'..='\u{2069}') {
+            assert_invalid_reason_contains(
+                &manifest_with(&format!("display_name = \"X{c}Y\"")),
+                "bidi",
+            );
+        }
+        for c in ['\u{2029}', '\u{202F}', '\u{2065}', '\u{206A}', 'é', '日'] {
+            let name = format!("X{c}Y");
+            let m = parse_manifest_str(&manifest_with(&format!("display_name = \"{name}\"")))
+                .unwrap_or_else(|e| panic!("{name:?} (U+{:04X}) must be accepted: {e}", c as u32));
+            assert_eq!(m.display_name(), name);
         }
     }
 

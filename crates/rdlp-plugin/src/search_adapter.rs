@@ -26,7 +26,7 @@ use wasmtime::Store;
 use crate::PluginError;
 use crate::adapter::{
     CallSpec, CommonPluginErr, ExportCall, FreshInstance, PluginExtractor, SEARCH_TIMEOUT,
-    call_export_by_name, common_plugin_error, plugin_error_to_rdlp,
+    TimeoutStrikes, call_export_by_name, common_plugin_error, plugin_error_to_rdlp,
 };
 use crate::bindings::rdlp::plugin::types::{
     SearchError as WitSearchError, SearchPage as WitSearchPage, SearchQuery as WitSearchQuery,
@@ -109,6 +109,7 @@ impl PluginExtractor {
         let spec = CallSpec {
             subject_for_errors: self.manifest.search_site_name(),
             timeout: SEARCH_TIMEOUT,
+            timeout_strikes: TimeoutStrikes::Always,
         };
         self.run_in_fresh_store(spec, |store, inst| {
             Box::pin(call_search_filters(store, &inst.raw))
@@ -131,6 +132,7 @@ impl PluginExtractor {
         let spec = CallSpec {
             subject_for_errors: self.manifest.search_site_name(),
             timeout: SEARCH_TIMEOUT,
+            timeout_strikes: TimeoutStrikes::Always,
         };
         // The query moves into the future: the runner's closure is
         // higher-ranked over the store borrow, so it cannot return a future

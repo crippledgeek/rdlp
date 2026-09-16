@@ -446,3 +446,114 @@ fn unset_config_fields_keep_the_defaults() {
     assert_eq!(d.value_bytes, DEFAULT_MAX_METADATA_VALUE_BYTES);
     assert_eq!(d.total_bytes, DEFAULT_MAX_METADATA_EXTRAS_BYTES);
 }
+
+// ---- Probe cost: the reserved-key probe is bounded by the caps, not by ----
+// ---- the entry count a plugin chooses (#768 pre-push S1)               ----
+
+/// [`admit_extras`] without the report, plus the tally's probe count.
+fn run_counting(
+    extras: Vec<(&str, WitMetaValue)>,
+    caps: &MetadataCaps,
+) -> (HashMap<String, Value>, usize) {
+    let (out, tally) = admit_extras(
+        extras
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), v))
+            .collect(),
+        caps,
+    );
+    (out, tally.probes)
+}
+
+/// The same reserved key repeated never re-runs the probe: the verdict is
+/// memoised per distinct key for the call, so 10 000 × `title` costs one
+/// `InfoDict` deserialisation, not 10 000 on the extraction's worker
+/// thread.
+#[test]
+fn a_repeated_reserved_key_is_probed_once() {
+    let (out, probes) = run_counting(vec![("title", WitMetaValue::Flag(true)); 10_000], &LOOSE);
+    assert!(out.is_empty(), "{out:?}");
+    assert_eq!(probes, 1, "one probe per distinct reserved key");
+}
+
+/// A duplicate of an already-admitted key is refused BEFORE the probe —
+/// the first `a` is probed once when admitted, the 10 000 repeats never
+/// are.
+#[test]
+fn duplicates_of_an_admitted_key_are_never_probed() {
+    let (out, probes) = run_counting(vec![("a", WitMetaValue::Flag(true)); 10_001], &LOOSE);
+    assert_eq!(out.len(), 1);
+    assert_eq!(probes, 1, "only the admitted first `a` is probed");
+}
+
+/// The refusal budget, at its boundary. Every refusal that cost per-entry
+/// work counts toward `caps.extras`; once that many have been spent, the
+/// rest of the list is refused as over-count with no further work. With
+/// `extras: 3`, three distinct reserved keys leave a later legitimate key
+/// admissible (four probes in all, the legitimate key's included); four
+/// exhaust the budget and the legitimate key after them is refused
+/// without a probe — four probes again, but `keep` is not among them.
+#[test]
+fn distinct_reserved_keys_boundary_of_the_refusal_budget() {
+    let caps = MetadataCaps { extras: 3, ..LOOSE };
+    let flag = WitMetaValue::Flag(true);
+    let (at, probes) = run_counting(
+        vec![
+            ("title", flag.clone()),
+            ("id", flag.clone()),
+            ("extractor", flag.clone()),
+            ("keep", flag.clone()),
+        ],
+        &caps,
+    );
+    assert!(at.contains_key("keep"), "{at:?}");
+    assert_eq!(probes, 4);
+
+    let logs = captured_logs();
+    let (over, probes) = run_counting(
+        vec![
+            ("title", flag.clone()),
+            ("id", flag.clone()),
+            ("extractor", flag.clone()),
+            ("formats", flag.clone()),
+            ("keep", flag),
+        ],
+        &caps,
+    );
+    assert!(over.is_empty(), "{over:?}");
+    assert_eq!(probes, 4, "the fifth entry is refused without a probe");
+    // Through the reporting entry point, so the class the budget files
+    // the refusal under is pinned too.
+    run(
+        vec![
+            ("title", WitMetaValue::Flag(true)),
+            ("id", WitMetaValue::Flag(true)),
+            ("extractor", WitMetaValue::Flag(true)),
+            ("formats", WitMetaValue::Flag(true)),
+            ("keep", WitMetaValue::Flag(true)),
+        ],
+        &caps,
+    );
+    captured_entry_containing(&logs, "1 extras past the 3-entry bound");
+}
+
+/// A value refusal costs work too, so it spends the same budget — and the
+/// value is checked before the probe, so a refused value never buys a
+/// probe. Three distinct keys with a NaN value under `extras: 2` exhaust
+/// the budget without one probe, and the legitimate key after them is
+/// refused.
+#[test]
+fn value_refusals_spend_the_budget_and_skip_the_probe() {
+    let caps = MetadataCaps { extras: 2, ..LOOSE };
+    let (out, probes) = run_counting(
+        vec![
+            ("n1", WitMetaValue::Number(f64::NAN)),
+            ("n2", WitMetaValue::Number(f64::NAN)),
+            ("n3", WitMetaValue::Number(f64::NAN)),
+            ("keep", WitMetaValue::Flag(true)),
+        ],
+        &caps,
+    );
+    assert!(out.is_empty(), "{out:?}");
+    assert_eq!(probes, 0);
+}

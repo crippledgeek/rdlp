@@ -28,6 +28,7 @@
 //! is released when the file handle drops.
 
 use fs4::fs_std::FileExt;
+use rdlp_redact::text::sanitize_for_line;
 use rdlp_types::InfoDict;
 use std::collections::HashSet;
 use std::fs::OpenOptions;
@@ -50,11 +51,23 @@ pub fn archive_token_for(info: &InfoDict) -> &str {
 /// The extractor token is ASCII-lowercased before formatting — safe because
 /// plugin extractor names are constrained to `[a-z0-9][a-z0-9-]{0,63}` by
 /// `validate_plugin_name`, and every built-in `ExtractorName` spelling is
-/// plain ASCII too, so no non-ASCII casing rule is ever in play. The id is
-/// left untouched: unlike extractor names, ids are opaque site identifiers
-/// that may be legitimately case-sensitive.
+/// plain ASCII too, so no non-ASCII casing rule is ever in play. The id's
+/// case is left untouched: unlike extractor names, ids are opaque site
+/// identifiers that may be legitimately case-sensitive. Its control
+/// characters are not: a plugin-supplied id is untrusted, and a line break
+/// in it would end this record early and write a second one under whatever
+/// extractor token follows (`"1\nxvideos 456"` marks `xvideos 456` as
+/// already downloaded). [`sanitize_for_line`] maps every control character
+/// to `_` — here, at the one formatting point every read and write shares,
+/// so a lookup and the record it is compared against sanitise identically;
+/// the plugin boundary (`rdlp_plugin::convert::info_dict_from_wit`) applies
+/// the same helper first, so this is the defence in depth.
 pub fn archive_key(extractor: &str, id: &str) -> String {
-    format!("{} {id}", extractor.to_ascii_lowercase())
+    format!(
+        "{} {}",
+        extractor.to_ascii_lowercase(),
+        sanitize_for_line(id)
+    )
 }
 
 /// Load archive entries from a file into a `HashSet`.
@@ -274,6 +287,55 @@ mod tests {
         assert!(archive.contains("XHamster\t123"));
         assert!(!is_in_archive(&archive, "xhamster", "123"));
         assert!(!is_in_archive(&archive, "XHamster", "123"));
+    }
+
+    /// An id carrying a line break must not split the record: the
+    /// archive is line-oriented, so `"1\nxvideos 456"` written verbatim
+    /// would put `xvideos 456` on its own line and mark ANOTHER
+    /// extractor's video as already downloaded. `archive_key` maps every
+    /// control character to `_` (`rdlp_redact::text::sanitize_for_line`),
+    /// so exactly one line is written and the injected key never matches
+    /// — while the sanitised id still matches its own lookup, since the
+    /// lookup goes through the same `archive_key`.
+    #[tokio::test]
+    async fn id_with_a_line_break_writes_one_record_and_injects_nothing() {
+        let tmp = NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        let injected = "1\nxvideos 456";
+
+        record_in_archive(&path, "p", injected).unwrap();
+
+        let contents = tokio::fs::read_to_string(&path).await.unwrap();
+        assert_eq!(contents.lines().count(), 1, "one record: {contents:?}");
+        assert_eq!(contents, "p 1_xvideos 456\n");
+        let archive = load_archive(&path);
+        assert!(
+            !is_in_archive(&archive, "xvideos", "456"),
+            "the injected second record must not exist"
+        );
+        assert!(
+            is_in_archive(&archive, "p", injected),
+            "the sanitised id still matches its own lookup"
+        );
+    }
+
+    /// CR and TAB are `Cc` too and get the same placeholder; a space is
+    /// not (`load_archive` splits on the FIRST space, so an id with one
+    /// round-trips today and must keep doing so).
+    #[tokio::test]
+    async fn id_control_characters_become_placeholders_but_a_space_survives() {
+        for (id, expected_line) in [
+            ("1\rxvideos 456", "p 1_xvideos 456\n"),
+            ("1\txvideos 456", "p 1_xvideos 456\n"),
+            ("1 two", "p 1 two\n"),
+        ] {
+            let tmp = NamedTempFile::new().unwrap();
+            let path = tmp.path().to_path_buf();
+            record_in_archive(&path, "p", id).unwrap();
+            let contents = tokio::fs::read_to_string(&path).await.unwrap();
+            assert_eq!(contents, expected_line, "id {id:?}");
+            assert!(is_in_archive(&load_archive(&path), "p", id), "id {id:?}");
+        }
     }
 
     /// A plugin's `InfoDict` carries its manifest `name` as

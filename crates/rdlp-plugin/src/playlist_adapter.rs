@@ -19,13 +19,15 @@
 //! `search-filter-descriptor`. Each carries a source-text pin test in
 //! `tests.rs` against `wit/types.wit`.
 
+use std::sync::atomic::AtomicBool;
+
 use wasmtime::Store;
 use wasmtime::component::{ComponentType, Lift};
 
 use crate::PluginError;
 use crate::adapter::{
-    CallSpec, CommonPluginErr, ExportCall, PluginExtractor, SEARCH_TIMEOUT, call_export_by_name,
-    common_plugin_error, plugin_error_to_rdlp,
+    CallSpec, CommonPluginErr, ExportCall, LISTING_TIMEOUT, PluginExtractor, TimeoutStrikes,
+    call_export_by_name, common_plugin_error, plugin_detail, plugin_error_to_rdlp,
 };
 use crate::convert::{PluginOrigin, cap_plugin_playlist_entries};
 use crate::instance::PluginStoreData;
@@ -133,18 +135,20 @@ pub(crate) async fn call_extract_playlist(
 
 /// `unsupported-url`/`not-found` are domain outcomes (no strike); the shared
 /// cases map through `common_plugin_error` so `internal` alone strikes.
+/// Every plugin-authored `detail` goes through `plugin_detail`, here for
+/// the two early-return arms and inside `common_plugin_error` for the rest.
 pub(crate) fn playlist_error_to_plugin_error(plugin: &str, e: WitPlaylistError) -> PluginError {
     let common = match e {
         WitPlaylistError::UnsupportedUrl(detail) => {
             return PluginError::UnsupportedUrl {
                 plugin: plugin.to_string(),
-                detail,
+                detail: plugin_detail(&detail),
             };
         }
         WitPlaylistError::NotFound(detail) => {
             return PluginError::NotFound {
                 plugin: plugin.to_string(),
-                detail,
+                detail: plugin_detail(&detail),
             };
         }
         WitPlaylistError::RateLimited(retry_after) => CommonPluginErr::RateLimited(retry_after),
@@ -230,7 +234,11 @@ impl PluginExtractor {
     ) -> Result<Option<PlaylistPage>, PluginError> {
         let spec = CallSpec {
             subject_for_errors: url,
-            timeout: SEARCH_TIMEOUT,
+            timeout: LISTING_TIMEOUT,
+            // Pages are fetched one at a time and rate-limited, so a
+            // page timeout is never amplified the way entries under
+            // concurrency are: every one counts.
+            timeout_strikes: TimeoutStrikes::Always,
         };
         // The URL moves into the future: the runner's closure is
         // higher-ranked over the store borrow, so it cannot return a
@@ -302,7 +310,7 @@ impl PluginExtractor {
         if !self.has_extract_playlist || !ctx.config.extract_playlist {
             return Ok(vec![self.extract(url, ctx).await?]);
         }
-        let source = PluginPlaylistSource { plugin: self };
+        let source = PluginPlaylistSource::new(self);
         source.validate_selection(url, ctx)?;
         let first = self
             .call_extract_playlist_page(url, source.first_page_index())
@@ -322,11 +330,38 @@ impl PluginExtractor {
 }
 
 /// `PagedPlaylist` over one plugin: each page is one `extract-playlist`
-/// call in a fresh store under `SEARCH_TIMEOUT` ([`PluginExtractor::call_extract_playlist_page`]);
+/// call in a fresh store under `LISTING_TIMEOUT` ([`PluginExtractor::call_extract_playlist_page`]);
 /// each entry resolves via the plugin's own `extract` under the loop's
-/// per-item budget ([`PluginExtractor::extract_within`]).
+/// per-item budget ([`PluginExtractor::extract_within`]) and this batch's
+/// one timeout gate.
 pub(crate) struct PluginPlaylistSource<'a> {
-    pub plugin: &'a PluginExtractor,
+    plugin: &'a PluginExtractor,
+    /// The batch's [`TimeoutStrikes::OncePer`] gate: set by the first
+    /// entry whose `extract` times out, so under
+    /// `Config::playlist_concurrency` a dead upstream costs the plugin one
+    /// strike per batch rather than one per in-flight entry. One source is
+    /// built per `extract_playlist` call, so each batch starts unclaimed.
+    timeout_struck: AtomicBool,
+}
+
+impl<'a> PluginPlaylistSource<'a> {
+    /// A source for one batch over `plugin`, its timeout gate unclaimed.
+    pub(crate) const fn new(plugin: &'a PluginExtractor) -> Self {
+        Self {
+            plugin,
+            timeout_struck: AtomicBool::new(false),
+        }
+    }
+
+    /// The spec one entry's `extract` runs under: the loop's per-item
+    /// budget, the entry URL as the subject, and this batch's timeout gate.
+    pub(crate) const fn entry_spec<'r>(&'r self, request: &'r ResolveRequest<'r>) -> CallSpec<'r> {
+        CallSpec {
+            subject_for_errors: request.entry.url.as_str(),
+            timeout: request.budget,
+            timeout_strikes: TimeoutStrikes::OncePer(&self.timeout_struck),
+        }
+    }
 }
 
 impl PagedPlaylist for PluginPlaylistSource<'_> {
@@ -359,16 +394,16 @@ impl PagedPlaylist for PluginPlaylistSource<'_> {
     }
 
     /// The budget is the plugin call's own tokio timeout and epoch
-    /// deadline, so a slow entry is a `PluginError::Timeout` (a strike,
-    /// exactly as for a single `extract`) and the loop's guard never
-    /// competes with it.
+    /// deadline, so a slow entry is a `PluginError::Timeout` and the
+    /// loop's guard never competes with it; the timeout is a strike at
+    /// most once per batch ([`PluginPlaylistSource::entry_spec`]).
     async fn resolve_entry(
         &self,
         request: ResolveRequest<'_>,
         ctx: &ExtractionContext,
     ) -> RdlpResult<InfoDict> {
         self.plugin
-            .extract_within(&request.entry.url, ctx, request.budget)
+            .extract_within(ctx, self.entry_spec(&request))
             .await
     }
 }

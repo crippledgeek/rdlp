@@ -123,7 +123,8 @@ concurrency, timeout, or failure policy crosses the WIT boundary:
   page is additionally capped at `MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES`
   (= `MAX_PLAYLIST_SIZE`) rows, truncated from the tail with one warning.
   Pages after the first are paced by `PAGE_RATE_LIMIT_MS` (500 ms), and
-  each page call runs in a fresh store under `SEARCH_TIMEOUT` (60 s).
+  each page call runs in a fresh store under `LISTING_TIMEOUT` (=
+  `SEARCH_TIMEOUT`, 60 s).
 - *Concurrency.* `Config::playlist_concurrency`, default
   `DEFAULT_PLAYLIST_CONCURRENCY` = 1 (validated `1..=16`).
 - *Per-item timeout.* `Config::playlist_item_timeout` seconds, default
@@ -131,10 +132,20 @@ concurrency, timeout, or failure policy crosses the WIT boundary:
   the budget of the entry's `extract` call itself
   (`PluginExtractor::extract_within`: the runner's tokio timeout AND epoch
   deadline), so an entry has ONE timer; a slow entry is a
-  `PluginError::Timeout`, which is a strike exactly as for a single
-  `extract`. The loop's own guard sits `PLAYLIST_ITEM_TIMEOUT_GRACE` (5 s)
-  behind the budget and fires only for an implementor that ignores it —
-  never for a plugin.
+  `PluginError::Timeout`. The loop's own guard sits
+  `PLAYLIST_ITEM_TIMEOUT_GRACE` (5 s) behind the budget and fires only for
+  an implementor that ignores it — never for a plugin.
+- *Timeout strikes, once per batch.* A timed-out entry is a strike AT MOST
+  ONCE per `extract_playlist` call: the batch's `PluginPlaylistSource`
+  holds one gate (`adapter::TimeoutStrikes::OncePer`) that the first
+  timed-out entry claims; later timeouts in the same batch still fail
+  their entry but are not counted, so a dead upstream under
+  `playlist_concurrency = 16` costs the plugin one strike rather than
+  disabling it in a single batch. The next batch starts unclaimed, so a
+  plugin that keeps timing out across batches still strikes out. Traps and
+  `internal` errors are counted every time regardless; a standalone
+  `extract`, a search call, and a page fetch run under
+  `TimeoutStrikes::Always`.
 - *Failure.* `Config::playlist_ignore_errors`, default `true`: a failed or
   timed-out entry is skipped with a warning, and a later page's listing
   failure is warned about and the entries listed so far are resolved.
@@ -203,8 +214,25 @@ in the plugin's order; the first admissible entries are kept:
   `DEFAULT_MAX_METADATA_EXTRAS_BYTES` = 65 536 (validated
   `1..=16_777_216`). Once the aggregate is crossed no later entry is
   admitted. Both bounds are checked *before* any key or value work on an
-  entry, so the reserved-name probe runs at most `max_metadata_extras`
-  times per extraction however many entries a plugin supplies.
+  entry, and so is a refusal budget: once more than `max_metadata_extras`
+  entries have been refused after per-entry work (malformed, duplicate,
+  reserved, or a bad value), the rest of the list is refused as over-count
+  with no further work. The reserved-name probe (one `InfoDict`
+  deserialisation) runs only after the cheaper checks, once per distinct
+  key — so at most `2 × max_metadata_extras + 1` times per extraction
+  however many entries a plugin supplies.
+- *Lists.* `actors` is capped at `MAX_PLUGIN_ACTORS` (64) and `thumbnails`
+  at `MAX_PLUGIN_THUMBNAILS` (64), truncated from the tail with one warning
+  each, the same way `extract`'s `formats` is capped.
+- *Error text.* Every plugin-authored `detail` in an `extract-error` /
+  `playlist-error` / `search-error` case is made sink-safe at the one
+  mapping site (`adapter::plugin_detail`): control characters stripped,
+  credentials redacted, then cut to `MAX_PLUGIN_ERROR_DETAIL_BYTES` (512).
+- *Ids.* `info-dict.id` has every control character replaced by `_` at the
+  boundary (`rdlp_redact::text::sanitize_for_line`), and the download
+  archive's `archive_key` does the same again: the archive is one
+  `{extractor} {id}` record per line, so a line break in an id would write
+  a record for another extractor's video.
 - *Diagnostics.* One warning per refusal class per extraction on the
   plugin's log target, naming the bound — never the key or value.
 
@@ -219,16 +247,20 @@ A fourth TOML-only field (`plugin-info` stays frozen, §2/§7):
 set, else `name`. Canonical manifest bytes include it only when set, so
 every earlier manifest's bytes and signature stay valid unchanged.
 Validation (`validate_display_name`): non-empty, at most
-`DISPLAY_NAME_MAX_BYTES` (64) **bytes**, no control characters, no path
-separator (`/`, `\`); spaces and mixed case are fine.
+`DISPLAY_NAME_MAX_BYTES` (64) **bytes**, no control characters, no bidi
+embedding/override/isolate controls (`U+202A..=U+202E`,
+`U+2066..=U+2069` — Trojan Source), no path separator (`/`, `\`); spaces
+and mixed case are fine.
 
 It feeds display surfaces: `InfoExtractor::name`
 (`PluginExtractor::name`), `InfoDict::extractor` and therefore
 `%(extractor)s` (`convert::PluginOrigin::display_name`), and the playlist
 loop's log tag (`PagedPlaylist::name`). `%(extractor)s` is the one place a
 display surface touches disk — the template renderer makes it ONE output
-path component — which is why a separator is refused; the value is not
-otherwise a path or a namespace key.
+path component, mapping `/` and `\` to `_` itself — so refusing a
+separator at the source is defence in depth, keeping the name an author
+wrote the one the user sees; the value is not otherwise a path or a
+namespace key.
 
 Identity travels beside it: `convert::info_dict_from_wit` sets
 `InfoDict::extractor_key` (yt-dlp `extractor_key`) to the manifest `name`,

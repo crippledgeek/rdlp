@@ -29,7 +29,9 @@ use crate::bindings::rdlp::plugin::types::{
 };
 use crate::instance::PluginStoreData;
 
-const EXTRACT_WITH_METADATA_EXPORT: &str = "extract-with-metadata";
+/// The 0.5.2 export this module resolves by name (`wit/COMPATIBILITY.md`
+/// §3), and the call every diagnostic about its payload is filed under.
+pub(crate) const EXTRACT_WITH_METADATA_EXPORT: &str = "extract-with-metadata";
 
 /// Hand-lift of `wit/types.wit`'s `thumbnail` record.
 #[derive(Debug, Clone, PartialEq, Eq, ComponentType, Lift)]

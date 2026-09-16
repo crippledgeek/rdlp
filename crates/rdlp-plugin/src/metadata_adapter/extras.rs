@@ -5,7 +5,7 @@
 //! WIT types, the export call, and `MetadataCaps`, while everything that
 //! decides which entries survive the boundary lives here.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use serde_json::Value;
@@ -79,10 +79,9 @@ static REQUIRED_INFO_DICT_JSON: LazyLock<serde_json::Map<String, Value>> =
 /// drifts. Deserialising `{required fields…, snake: null}` instead routes
 /// the key exactly as the flatten does — to a typed field (which either
 /// accepts `null` or rejects it: reserved either way) or into `extra`
-/// (free). The cost is one small deserialisation per candidate key;
-/// [`extras_from_wit`] only reaches this once the count and aggregate
-/// bounds have been checked, so at most `MetadataCaps::extras` probes run
-/// per extraction however many entries the plugin supplies.
+/// (free). The cost is one small deserialisation per candidate key —
+/// bounded per extraction by [`admit_extras`], not by the plugin: see
+/// [`extras_from_wit`] for the `2 × caps.extras + 1` derivation.
 fn key_is_reserved(snake: &str) -> bool {
     let mut probe = REQUIRED_INFO_DICT_JSON.clone();
     probe.insert(snake.to_string(), Value::Null);
@@ -108,7 +107,9 @@ enum Refusal {
     NonFiniteNumber,
     /// Text-carrying value over `MetadataCaps::value_bytes`.
     ValueTooLarge,
-    /// Entry past `MetadataCaps::extras` admitted entries.
+    /// Entry past `MetadataCaps::extras` admitted entries — or past
+    /// `MetadataCaps::extras` refusals that each cost per-entry work (the
+    /// refusal budget, see [`ExtrasTally::saturated_by`]).
     OverCount,
     /// Entry that would take the aggregate past `MetadataCaps::total_bytes`
     /// — or any entry after one that did.
@@ -151,6 +152,19 @@ struct ExtrasTally {
     kept: usize,
     kept_bytes: usize,
     total_crossed: bool,
+    /// Refusals that were reached only after per-entry work (a key scan,
+    /// a value conversion, a probe): every class except the two
+    /// saturation classes, plus the one entry that crosses the aggregate
+    /// bound (probed, then refused in [`admit`](Self::admit)). Spends
+    /// the refusal budget.
+    worked_refusals: usize,
+    /// Snake-cased keys the probe has already found reserved, so a key
+    /// repeated a million times is probed once. Bounded by the refusal
+    /// budget: at most `caps.extras + 1` distinct keys ever land here.
+    reserved_seen: HashSet<String>,
+    /// How many times [`key_is_reserved`] ran — the cost the tests bound.
+    #[cfg(test)]
+    probes: usize,
     malformed_key: usize,
     reserved_key: usize,
     duplicate_key: usize,
@@ -172,20 +186,48 @@ impl ExtrasTally {
             Refusal::OverTotal => &mut self.over_total,
         };
         *counter += 1;
+        if !matches!(why, Refusal::OverCount | Refusal::OverTotal) {
+            self.worked_refusals += 1;
+        }
     }
 
     /// The bound that already refuses every further entry, if any: the
-    /// aggregate once crossed, else the count once reached. Checked
-    /// before any per-entry work so a plugin supplying a million entries
-    /// costs the host a million counter increments, not a million probes.
+    /// aggregate once crossed, else the count once reached by admissions
+    /// — or exceeded by refusals that each cost per-entry work. Checked
+    /// before any per-entry work, so a plugin supplying a million entries
+    /// costs the host a million counter increments, not a million probes,
+    /// whether those entries are admissible, malformed, reserved,
+    /// duplicated, or carry a refused value: the per-entry work a plugin
+    /// can buy is `caps.extras` admissions plus `caps.extras + 1`
+    /// refusals, however long its list.
     const fn saturated_by(&self, caps: &MetadataCaps) -> Option<Refusal> {
         if self.total_crossed {
             Some(Refusal::OverTotal)
-        } else if self.kept >= caps.extras {
+        } else if self.kept >= caps.extras || self.worked_refusals > caps.extras {
             Some(Refusal::OverCount)
         } else {
             None
         }
+    }
+
+    /// Whether `snake` names a typed `InfoDict` field, asking
+    /// [`key_is_reserved`] once per distinct key and answering repeats
+    /// from `reserved_seen`. A key found NOT reserved is admitted by the
+    /// caller, so its repeats are caught as duplicates before ever
+    /// reaching here — the memo only needs the refused side.
+    fn reserved(&mut self, snake: &str) -> bool {
+        if self.reserved_seen.contains(snake) {
+            return true;
+        }
+        #[cfg(test)]
+        {
+            self.probes += 1;
+        }
+        if key_is_reserved(snake) {
+            self.reserved_seen.insert(snake.to_string());
+            return true;
+        }
+        false
     }
 
     /// Admit an entry of `bytes` (key plus value) under the aggregate
@@ -198,6 +240,9 @@ impl ExtrasTally {
         if next > caps.total_bytes {
             self.total_crossed = true;
             self.refuse(Refusal::OverTotal);
+            // The crossing entry paid for its checks and its probe; the
+            // entries after it are refused by `saturated_by` before any.
+            self.worked_refusals += 1;
             return false;
         }
         self.kept += 1;
@@ -274,26 +319,48 @@ fn value_to_json(v: WitMetaValue, caps: &MetadataCaps) -> Result<(usize, Value),
 /// the first `caps.extras` admissible ones are kept; each refusal class
 /// warns once on `origin`'s log target (see [`Refusal`]).
 ///
-/// Per entry, in order: once the count bound is reached or the aggregate
-/// bound has been crossed, the entry is refused outright — before any key
-/// or value work, so the per-entry cost past the bounds is a counter
-/// increment and the serde probe in [`key_is_reserved`] runs at most
-/// `caps.extras` times. Otherwise the key must be well-formed
-/// ([`key_is_well_formed`]), must not shadow a typed `InfoDict` field
-/// after `-` → `_` ([`key_is_reserved`] — `extra` is flattened into the
-/// top level of every JSON rendering, so a shadowing key would overwrite
-/// the field), and must not repeat an admitted key; the value must be
-/// finite and, when text-carrying, within `caps.value_bytes` (a
+/// Per entry, in order: once the count bound is reached, the aggregate
+/// bound has been crossed, or more than `caps.extras` refusals have each
+/// cost per-entry work, the entry is refused outright — before any key or
+/// value work, so the per-entry cost past the bounds is a counter
+/// increment. Otherwise the key must be well-formed
+/// ([`key_is_well_formed`]) and must not repeat an admitted key; the value
+/// must be finite and, when text-carrying, within `caps.value_bytes` (a
 /// `text-list` charged [`METADATA_LIST_ITEM_BYTES`] per element on top of
-/// its bytes); then the aggregate bound applies, charging key bytes plus
-/// value bytes with scalars at [`SCALAR_VALUE_BYTES`]. Once the aggregate
-/// bound is crossed no later entry is admitted, so a plugin cannot fill
-/// the remaining budget with whatever happens to fit after a large entry.
+/// its bytes); only then is the key probed for shadowing a typed
+/// `InfoDict` field after `-` → `_` ([`key_is_reserved`] — `extra` is
+/// flattened into the top level of every JSON rendering, so a shadowing
+/// key would overwrite the field), with the verdict memoised per distinct
+/// key; then the aggregate bound applies, charging key bytes plus value
+/// bytes with scalars at [`SCALAR_VALUE_BYTES`]. Once the aggregate bound
+/// is crossed no later entry is admitted, so a plugin cannot fill the
+/// remaining budget with whatever happens to fit after a large entry.
+///
+/// The serde probe therefore runs at most `2 × caps.extras + 1` times per
+/// extraction however many entries a plugin supplies: once per admitted
+/// key (at most `caps.extras`) plus once per probed-then-refused entry — a
+/// distinct reserved key, or the one entry that crosses the aggregate
+/// bound — each a worked refusal, of which at most `caps.extras + 1`
+/// happen before the budget saturates; every cheaper refusal is decided
+/// before the probe and a repeated reserved key is answered from the
+/// memo.
 pub fn extras_from_wit(
     extras: Vec<(String, WitMetaValue)>,
     caps: &MetadataCaps,
     origin: &PluginOrigin<'_>,
 ) -> HashMap<String, Value> {
+    let (out, tally) = admit_extras(extras, caps);
+    tally.report(caps, origin);
+    out
+}
+
+/// The admission loop behind [`extras_from_wit`], returning the tally so a
+/// test can read what the loop cost (`probes`) rather than only what it
+/// kept.
+fn admit_extras(
+    extras: Vec<(String, WitMetaValue)>,
+    caps: &MetadataCaps,
+) -> (HashMap<String, Value>, ExtrasTally) {
     let mut out = HashMap::new();
     let mut tally = ExtrasTally::default();
     for (key, value) in extras {
@@ -303,10 +370,6 @@ pub fn extras_from_wit(
         }
         if !key_is_well_formed(&key) {
             tally.refuse(Refusal::MalformedKey);
-            continue;
-        }
-        if key_is_reserved(&key.replace('-', "_")) {
-            tally.refuse(Refusal::ReservedKey);
             continue;
         }
         if out.contains_key(&key) {
@@ -320,12 +383,15 @@ pub fn extras_from_wit(
                 continue;
             }
         };
+        if tally.reserved(&key.replace('-', "_")) {
+            tally.refuse(Refusal::ReservedKey);
+            continue;
+        }
         if tally.admit(key.len().saturating_add(value_bytes), caps) {
             out.insert(key, json);
         }
     }
-    tally.report(caps, origin);
-    out
+    (out, tally)
 }
 
 #[cfg(test)]

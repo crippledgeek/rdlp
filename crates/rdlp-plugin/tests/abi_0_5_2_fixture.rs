@@ -184,31 +184,47 @@ fn refusals_after(tamper: impl Fn(&Path) + Copy) -> Vec<(&'static str, PluginErr
     refusals_of(committed_fixtures(), tamper)
 }
 
-/// Rewrite one line of the signed `plugin.toml`: the line starting with
-/// `prefix` becomes `replacement`. Panics if no line matches — a tamper
-/// that changed nothing would make a refusal test vacuous.
+/// Edit one line of the signed `plugin.toml`: the line starting with
+/// `prefix` becomes `edit(line)`. Panics if no line matches — a tamper
+/// that changed nothing would make a refusal test vacuous. The mechanism
+/// behind [`rewrite_manifest_line`] (replace the line) and
+/// [`append_after_manifest_line`] (keep it, add one after it).
 ///
 /// Sync `std::fs` is the test-fixture carve-out (c) in `clippy.toml`: this
 /// runs in a plain closure between write and discover, never on an async
 /// path.
 #[allow(clippy::disallowed_methods)]
-fn rewrite_manifest_line(dir: &Path, prefix: &str, replacement: &str) {
+fn edit_manifest_line(dir: &Path, prefix: &str, edit: impl Fn(&str) -> String) {
     let path = dir.join("plugin.toml");
     let text = std::fs::read_to_string(&path).unwrap();
     let mut hit = false;
-    let rewritten: Vec<&str> = text
+    let rewritten: Vec<String> = text
         .lines()
         .map(|line| {
             if line.starts_with(prefix) {
                 hit = true;
-                replacement
+                edit(line)
             } else {
-                line
+                line.to_string()
             }
         })
         .collect();
     assert!(hit, "no `{prefix}` line in the written manifest:\n{text}");
     std::fs::write(&path, rewritten.join("\n")).unwrap();
+}
+
+/// Rewrite one line of the signed `plugin.toml`: the line starting with
+/// `prefix` becomes `replacement`.
+fn rewrite_manifest_line(dir: &Path, prefix: &str, replacement: &str) {
+    edit_manifest_line(dir, prefix, |_| replacement.to_string());
+}
+
+/// Insert `added` as a new line right after the one starting with
+/// `prefix` — for a field the signed manifest did not carry, placed inside
+/// the top-level key block rather than appended after the `[signature]`
+/// table where it would be a different (invalid) manifest altogether.
+fn append_after_manifest_line(dir: &Path, prefix: &str, added: &str) {
+    edit_manifest_line(dir, prefix, |line| format!("{line}\n{added}"));
 }
 
 /// Flip the LAST byte of the signed `plugin.wasm` — past the wasm header,
@@ -266,6 +282,23 @@ async fn tampered_wasm_is_refused() {
 async fn tampered_manifest_is_refused() {
     for (label, err) in refusals_after(|dir| {
         rewrite_manifest_line(dir, "priority = ", "priority = 151");
+    }) {
+        assert!(
+            matches!(err, PluginError::SignatureInvalid { .. }),
+            "{label}: expected SignatureInvalid, got {err:?}"
+        );
+    }
+}
+
+/// ADD a `display_name` to a manifest signed without one: canonical bytes
+/// include the field whenever it is set, so the signature no longer
+/// verifies — a distributor cannot re-brand a signed plugin's display
+/// surface without re-signing. Both fixtures, since neither was signed
+/// with the field.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn display_name_added_after_signing_is_refused() {
+    for (label, err) in refusals_after(|dir| {
+        append_after_manifest_line(dir, "name = ", "display_name = \"XHamster\"");
     }) {
         assert!(
             matches!(err, PluginError::SignatureInvalid { .. }),

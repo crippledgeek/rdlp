@@ -12,6 +12,7 @@ use crate::bindings::rdlp::plugin::host_extract_helpers::MpdFragment;
 use crate::bindings::rdlp::plugin::types::Format as WitFormat;
 use crate::metadata_adapter::MetadataCaps;
 use crate::metadata_adapter::extras::extras_from_wit;
+use rdlp_redact::text::sanitize_for_line;
 use rdlp_types::DownloadProtocol;
 
 /// Upper bound on the `format` rows one WIT call may carry across the
@@ -39,6 +40,26 @@ pub(crate) const MAX_PLUGIN_FORMATS: usize = 256;
 pub(crate) const MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES: usize =
     rdlp_extractor::base::common::MAX_PLAYLIST_SIZE;
 
+/// Upper bound on the `thumbnails` rows one `extract-with-metadata` result
+/// may carry across the boundary. Every row is serialised into each
+/// `--dump-json` line and archive record and is a candidate the thumbnail
+/// post-processing stage ranks; 64 is headroom over the largest set a
+/// mainstream site publishes (yt-dlp's `YouTube` extractor emits on the
+/// order of forty variants for one video) while keeping that per-download
+/// cost bounded by a constant rather than by the plugin. Excess rows are
+/// dropped from the tail with one warning on the plugin's log target, same
+/// as [`MAX_PLUGIN_FORMATS`].
+pub(crate) const MAX_PLUGIN_THUMBNAILS: usize = 64;
+
+/// Upper bound on the `actors` names one `extract-with-metadata` result
+/// may carry across the boundary. A cast list is rendered into every
+/// record and into `%(actors)s`; a scene credits a handful of performers
+/// and a feature-length title a few dozen, so 64 admits any real credits
+/// list while stopping a plugin from attaching a page of names to each
+/// video. Excess names are dropped from the tail with one warning on the
+/// plugin's log target, same as [`MAX_PLUGIN_FORMATS`].
+pub(crate) const MAX_PLUGIN_ACTORS: usize = 64;
+
 /// Whom a conversion's diagnostics name and where they go: the plugin's
 /// name for identity, its `log` target for the warning channel `host:log`
 /// already uses (so a plugin author reading their plugin's log sees the
@@ -56,10 +77,11 @@ pub(crate) struct PluginOrigin<'a> {
     pub display_name: &'a str,
 }
 
-/// What varies between [`cap_plugin_formats`] and
-/// [`cap_plugin_playlist_entries`]: which WIT call is reporting the row
-/// count, how many rows are kept, and what to call a row in the warning.
-/// The truncate-then-warn-once mechanism itself is shared in [`cap_rows`].
+/// What varies between the capped lists — [`cap_plugin_formats`],
+/// [`cap_plugin_playlist_entries`], and [`info_dict_from_extraction`]'s
+/// `actors`/`thumbnails`: which WIT call is reporting the row count, how
+/// many rows are kept, and what to call a row in the warning. The
+/// truncate-then-warn-once mechanism itself is shared in [`cap_rows`].
 struct CapSpec<'a> {
     /// Names the WIT call in the warning, so an author can tell which list
     /// was cut.
@@ -153,14 +175,19 @@ pub(crate) const fn narrow_f64(v: f64) -> f32 {
 /// `origin.display_name` is the display surface, `origin.plugin_name` the
 /// identity key the archive token is built from, `url` the page. The
 /// format list is capped at [`MAX_PLUGIN_FORMATS`] here, at the boundary,
-/// so nothing downstream ever sees more rows than that from a plugin.
+/// so nothing downstream ever sees more rows than that from a plugin, and
+/// `id` — the second token of the download archive's one-line-per-record
+/// `{extractor} {id}` format — has its control characters replaced by `_`
+/// ([`sanitize_for_line`]) so a plugin cannot write a line break into the
+/// archive and record another extractor's video as done; `archive_key`
+/// applies the same helper again as defence in depth.
 pub(crate) fn info_dict_from_wit(
     w: crate::bindings::rdlp::plugin::types::InfoDict,
     url: &str,
     origin: &PluginOrigin<'_>,
 ) -> rdlp_types::InfoDict {
     let mut out = rdlp_types::InfoDict::new(
-        w.id,
+        sanitize_for_line(&w.id),
         w.title,
         origin.display_name,
         // Prefer the URL the plugin returned; fall back to the request URL.
@@ -241,8 +268,11 @@ fn thumbnail_from_wit(t: crate::metadata_adapter::WitThumbnail) -> rdlp_types::T
 ///
 /// Reuses [`info_dict_from_wit`] for the core so that conversion continues
 /// to exist in exactly one place; the extra's typed fields are then copied
-/// onto the result directly. `actors` is a bare `Vec` on both sides;
-/// `thumbnails` collapses an empty list to `None`, matching
+/// onto the result directly. The two plugin-sized lists are bounded here
+/// the way `formats` is: `actors` at [`MAX_PLUGIN_ACTORS`] and
+/// `thumbnails` at [`MAX_PLUGIN_THUMBNAILS`], each truncated from the tail
+/// with one warning ([`cap_rows`]). `actors` is a bare `Vec` on both
+/// sides; `thumbnails` collapses an empty list to `None`, matching
 /// [`info_dict_from_wit`]'s existing `tags`/`categories` convention. The
 /// open `extras` key/value tail goes through [`extras_from_wit`] under
 /// `site.caps`, landing in `InfoDict::extra` — which is
@@ -252,21 +282,33 @@ pub(crate) fn info_dict_from_extraction(
     w: crate::metadata_adapter::WitExtraction,
     site: &ExtractionSite<'_>,
 ) -> rdlp_types::InfoDict {
+    let export = crate::metadata_adapter::EXTRACT_WITH_METADATA_EXPORT;
     let mut out = info_dict_from_wit(w.core, site.url, &site.origin);
-    out.actors = w.extra.actors;
+    out.actors = cap_rows(
+        w.extra.actors,
+        &CapSpec {
+            import: export,
+            bound: MAX_PLUGIN_ACTORS,
+            noun: "actors",
+        },
+        &site.origin,
+    );
     out.channel = w.extra.channel;
     out.channel_url = w.extra.channel_url;
     out.age_limit = w.extra.age_limit;
-    out.thumbnails = if w.extra.thumbnails.is_empty() {
+    let thumbnails = cap_rows(
+        w.extra.thumbnails,
+        &CapSpec {
+            import: export,
+            bound: MAX_PLUGIN_THUMBNAILS,
+            noun: "thumbnails",
+        },
+        &site.origin,
+    );
+    out.thumbnails = if thumbnails.is_empty() {
         None
     } else {
-        Some(
-            w.extra
-                .thumbnails
-                .into_iter()
-                .map(thumbnail_from_wit)
-                .collect(),
-        )
+        Some(thumbnails.into_iter().map(thumbnail_from_wit).collect())
     };
     out.extra = extras_from_wit(w.extra.extras, site.caps, &site.origin);
     out
@@ -546,6 +588,56 @@ mod format_cap_tests {
         );
         assert_eq!(target, TEST_LOG_TARGET);
         assert!(msg.contains(&MAX_PLUGIN_FORMATS.to_string()), "{msg}");
+    }
+}
+
+#[cfg(test)]
+mod id_sanitisation_tests {
+    use super::info_dict_from_wit;
+    use crate::test_support::unit::test_origin;
+
+    fn wit_info_with_id(id: &str) -> crate::bindings::rdlp::plugin::types::InfoDict {
+        crate::bindings::rdlp::plugin::types::InfoDict {
+            id: id.into(),
+            title: "t".into(),
+            url: None,
+            thumbnail: None,
+            description: None,
+            uploader: None,
+            uploader_id: None,
+            upload_date: None,
+            duration: None,
+            view_count: None,
+            like_count: None,
+            tags: vec![],
+            categories: vec![],
+            formats: vec![],
+            subtitles: vec![],
+        }
+    }
+
+    /// `id` is the second token of the download archive's `{extractor}
+    /// {id}` line, so a plugin-supplied line break in it would inject a
+    /// record for ANOTHER extractor's video. Sanitised here at the WIT
+    /// boundary (and again in `archive_key`, defence in depth): every
+    /// control character becomes `_`, a space is kept.
+    #[test]
+    fn id_control_characters_are_neutralised_at_the_boundary() {
+        for (id, expected) in [
+            ("1\nxvideos 456", "1_xvideos 456"),
+            ("1\rxvideos 456", "1_xvideos 456"),
+            ("1\txvideos 456", "1_xvideos 456"),
+            ("\u{1b}[2J", "_[2J"),
+            ("1 two", "1 two"),
+            ("plain-42", "plain-42"),
+        ] {
+            let out = info_dict_from_wit(
+                wit_info_with_id(id),
+                "https://example.com/v",
+                &test_origin(),
+            );
+            assert_eq!(out.id, expected, "id {id:?}");
+        }
     }
 }
 

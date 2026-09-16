@@ -309,9 +309,10 @@ It adds:
   64 / 4096 / 65 536, tunable in `Config`), and each kept key lands as a
   top-level key of the video's JSON.
 - **`display_name` manifest field** — an optional human-readable name (≤ 64
-  bytes, no control characters, no `/` or `\` since `%(extractor)s` is one
-  output-path component; spaces and case allowed) used for `%(extractor)s`
-  and log tags. Identity, routing, the trust store, and the download-archive
+  bytes; no control or bidi-control characters; no `/` or `\` — the
+  template renderer would map them to `_` anyway, since `%(extractor)s` is
+  one output-path component, so the refusal is defence in depth at the
+  source; spaces and case allowed) used for `%(extractor)s` and log tags. Identity, routing, the trust store, and the download-archive
   token stay on `name`, which the host also stamps into every plugin
   `InfoDict` as `extractor_key`.
 

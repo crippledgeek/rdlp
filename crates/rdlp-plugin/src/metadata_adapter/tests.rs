@@ -316,3 +316,114 @@ fn info_dict_from_extraction_applies_the_site_caps() {
     assert_eq!(info.extra.len(), 1);
     assert!(info.extra.contains_key("a"));
 }
+
+// ---- `thumbnails` / `actors` are capped at the boundary (#768 pre-push S6) ----
+
+/// An `extraction` whose extra carries `thumbnails` thumbnails and `actors`
+/// actor names, nothing else.
+fn extraction_with_rows(thumbnails: usize, actors: usize) -> WitExtraction {
+    WitExtraction {
+        core: minimal_core(),
+        extra: WitInfoDictExtra {
+            actors: (0..actors).map(|i| format!("actor {i}")).collect(),
+            channel: None,
+            channel_url: None,
+            age_limit: None,
+            thumbnails: (0..thumbnails)
+                .map(|i| WitThumbnail {
+                    url: format!("https://x.example/t/{i}.jpg"),
+                    id: Some(format!("t{i}")),
+                    width: None,
+                    height: None,
+                    preference: None,
+                })
+                .collect(),
+            extras: Vec::new(),
+        },
+    }
+}
+
+fn convert_rows(extraction: WitExtraction) -> rdlp_types::InfoDict {
+    let caps = MetadataCaps::default();
+    let site = ExtractionSite {
+        url: "https://x.example/v/1",
+        origin: test_origin(),
+        caps: &caps,
+    };
+    info_dict_from_extraction(extraction, &site)
+}
+
+/// Exactly `MAX_PLUGIN_THUMBNAILS` rows all cross the boundary with no
+/// warning; one more is cut back to the bound (first rows kept) and
+/// reported once on the plugin's log target, naming the call.
+#[test]
+fn thumbnails_are_capped_at_the_bound_inclusive() {
+    use crate::convert::MAX_PLUGIN_THUMBNAILS;
+    use crate::test_support::unit::{
+        TEST_LOG_TARGET, captured_count_containing, captured_entry_containing, captured_logs,
+    };
+    let logs = captured_logs();
+    let at = convert_rows(extraction_with_rows(MAX_PLUGIN_THUMBNAILS, 0));
+    assert_eq!(
+        at.thumbnails.as_ref().map(Vec::len),
+        Some(MAX_PLUGIN_THUMBNAILS)
+    );
+    assert_eq!(
+        captured_count_containing(
+            &logs,
+            &format!("supplied {MAX_PLUGIN_THUMBNAILS} thumbnails")
+        ),
+        0,
+        "exactly the bound must not warn"
+    );
+
+    let over = convert_rows(extraction_with_rows(MAX_PLUGIN_THUMBNAILS + 1, 0));
+    let thumbs = over.thumbnails.expect("non-empty");
+    assert_eq!(thumbs.len(), MAX_PLUGIN_THUMBNAILS);
+    assert_eq!(thumbs.first().and_then(|t| t.id.as_deref()), Some("t0"));
+    assert_eq!(
+        thumbs.last().and_then(|t| t.id.as_deref()),
+        Some(format!("t{}", MAX_PLUGIN_THUMBNAILS - 1).as_str())
+    );
+    let needle = format!(
+        "extract-with-metadata: plugin test supplied {} thumbnails",
+        MAX_PLUGIN_THUMBNAILS + 1
+    );
+    let (target, msg) = captured_entry_containing(&logs, &needle);
+    assert_eq!(target, TEST_LOG_TARGET);
+    assert!(msg.contains(&MAX_PLUGIN_THUMBNAILS.to_string()), "{msg}");
+    assert_eq!(captured_count_containing(&logs, &needle), 1, "warn once");
+}
+
+/// The same boundary pair for `actors`.
+#[test]
+fn actors_are_capped_at_the_bound_inclusive() {
+    use crate::convert::MAX_PLUGIN_ACTORS;
+    use crate::test_support::unit::{
+        TEST_LOG_TARGET, captured_count_containing, captured_entry_containing, captured_logs,
+    };
+    let logs = captured_logs();
+    let at = convert_rows(extraction_with_rows(0, MAX_PLUGIN_ACTORS));
+    assert_eq!(at.actors.len(), MAX_PLUGIN_ACTORS);
+    assert_eq!(
+        captured_count_containing(&logs, &format!("supplied {MAX_PLUGIN_ACTORS} actors")),
+        0,
+        "exactly the bound must not warn"
+    );
+
+    let over = convert_rows(extraction_with_rows(0, MAX_PLUGIN_ACTORS + 1));
+    assert_eq!(over.actors.len(), MAX_PLUGIN_ACTORS);
+    assert_eq!(over.actors.first().map(String::as_str), Some("actor 0"));
+    assert_eq!(
+        over.actors.last().map(String::as_str),
+        Some(format!("actor {}", MAX_PLUGIN_ACTORS - 1).as_str())
+    );
+    let needle = format!(
+        "extract-with-metadata: plugin test supplied {} actors",
+        MAX_PLUGIN_ACTORS + 1
+    );
+    let (target, msg) = captured_entry_containing(&logs, &needle);
+    assert_eq!(target, TEST_LOG_TARGET);
+    assert!(msg.contains(&MAX_PLUGIN_ACTORS.to_string()), "{msg}");
+    assert_eq!(captured_count_containing(&logs, &needle), 1, "warn once");
+}

@@ -265,6 +265,47 @@ fn page_fetch_does_not_cap_or_warn_at_exactly_the_bound() {
     );
 }
 
+/// Every entry of one batch resolves under the SAME timeout gate — the
+/// source's own — with the loop's budget and the entry URL as subject, so
+/// `adapter::tests::timeouts_under_one_gate_strike_once_per_gate` is what
+/// a batch of timed-out entries does: one strike, not one per entry.
+#[test]
+fn entry_spec_shares_the_batch_gate() {
+    use crate::adapter::TimeoutStrikes;
+    use std::time::Duration;
+
+    let ext = fixture_extractor();
+    let source = PluginPlaylistSource::new(&ext);
+    let entries = [
+        PlaylistEntry {
+            url: "https://example.com/video/1".into(),
+            id: None,
+            title: None,
+        },
+        PlaylistEntry {
+            url: "https://example.com/video/2".into(),
+            id: None,
+            title: None,
+        },
+    ];
+    for entry in &entries {
+        let request = ResolveRequest {
+            entry,
+            budget: Duration::from_secs(31),
+        };
+        let spec = source.entry_spec(&request);
+        assert_eq!(spec.subject_for_errors, entry.url);
+        assert_eq!(spec.timeout, Duration::from_secs(31));
+        let TimeoutStrikes::OncePer(gate) = spec.timeout_strikes else {
+            panic!("an entry's timeout must be gated per batch");
+        };
+        assert!(
+            std::ptr::eq(gate, &raw const source.timeout_struck),
+            "every entry must share the source's one gate"
+        );
+    }
+}
+
 // ── `PluginExtractor::extract_playlist` (the probe + fallback) ───────────
 
 /// A plugin whose component never declared `extract-playlist` (the

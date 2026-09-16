@@ -70,6 +70,16 @@ fn spec(timeout: Duration) -> CallSpec<'static> {
     CallSpec {
         subject_for_errors: "https://example.com/video/42",
         timeout,
+        timeout_strikes: TimeoutStrikes::Always,
+    }
+}
+
+/// [`spec`] under a shared timeout gate — what a playlist batch's entries
+/// run under.
+fn gated_spec(timeout: Duration, gate: &AtomicBool) -> CallSpec<'_> {
+    CallSpec {
+        timeout_strikes: TimeoutStrikes::OncePer(gate),
+        ..spec(timeout)
     }
 }
 
@@ -222,6 +232,67 @@ async fn runner_timeout_is_a_strike_and_cancels_the_call() {
         .clone()
         .expect("closure ran");
     assert!(token.is_cancelled(), "timeout must trip the per-call token");
+}
+
+/// Three calls timing out under ONE gate (a playlist batch) strike once:
+/// each still comes back as its own `Timeout`, but only the first claims
+/// the gate, so the plugin is not disabled by a single dead upstream.
+/// A fresh gate (the next batch) strikes again.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn timeouts_under_one_gate_strike_once_per_gate() {
+    let ext = fixture_extractor();
+    let batch = AtomicBool::new(false);
+    for _ in 0..TRAP_DISABLE_THRESHOLD {
+        let err = ext
+            .run_in_fresh_store(gated_spec(Duration::from_millis(50), &batch), |_s, _i| {
+                Box::pin(std::future::pending::<Result<(), PluginError>>())
+            })
+            .await
+            .expect_err("deadline elapses");
+        assert!(matches!(err, PluginError::Timeout { .. }), "got {err:?}");
+    }
+    assert_eq!(ext.test_trap_count(), 1, "one strike for the whole batch");
+    assert!(!ext.test_is_disabled());
+
+    let next_batch = AtomicBool::new(false);
+    ext.run_in_fresh_store(
+        gated_spec(Duration::from_millis(50), &next_batch),
+        |_s, _i| Box::pin(std::future::pending::<Result<(), PluginError>>()),
+    )
+    .await
+    .expect_err("deadline elapses");
+    assert_eq!(
+        ext.test_trap_count(),
+        2,
+        "a new batch's first timeout strikes again"
+    );
+}
+
+/// The gate is about timeouts only: every other strike kind under a
+/// claimed gate still counts, each time.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_gate_leaves_other_strike_kinds_uncounted_never() {
+    let ext = fixture_extractor();
+    let gate = AtomicBool::new(true);
+    for _ in 0..2 {
+        ext.run_in_fresh_store(gated_spec(EXTRACT_TIMEOUT, &gate), |_s, _i| {
+            Box::pin(async { Err::<(), _>(PluginError::Internal("boom".into())) })
+        })
+        .await
+        .expect_err("closure error propagates");
+    }
+    assert_eq!(ext.test_trap_count(), 2);
+}
+
+/// A standalone `extract` runs under `Always`: every timeout strikes, as
+/// `runner_timeout_is_a_strike_and_cancels_the_call` shows for the spec
+/// this returns.
+#[test]
+fn extract_spec_counts_every_timeout() {
+    let spec = PluginExtractor::extract_spec("https://example.com/video/42");
+    assert_eq!(spec.timeout, EXTRACT_TIMEOUT);
+    assert_eq!(spec.subject_for_errors, "https://example.com/video/42");
+    assert!(matches!(spec.timeout_strikes, TimeoutStrikes::Always));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -408,4 +479,89 @@ fn search_site_routing_still_uses_name() {
     // `search_site_name()` (== `name` here, since no `search_site` override).
     assert_eq!(ext.manifest.search_site_name(), "example");
     assert_eq!(ext.manifest.name, "example");
+}
+
+// ── plugin-supplied `detail` strings are sanitised at the ONE mapping site ──
+
+/// The hostile detail every arm below is fed: a terminal-clearing escape,
+/// a credentialled URL whose password carries a CR (a `\s` the userinfo
+/// redaction pattern refuses, so redacting BEFORE stripping leaks `pw@` —
+/// this fixture is what pins the order), and a CR/LF that would forge a
+/// second log line.
+const HOSTILE_DETAIL: &str = "\u{1b}[2J https://user:p\rw@h/x\r\nfake line";
+
+fn assert_detail_neutralised(e: &PluginError) {
+    let msg = e.to_string();
+    assert!(!msg.contains('\u{1b}'), "ESC survived: {msg:?}");
+    assert!(
+        !msg.contains('\n') && !msg.contains('\r'),
+        "line break survived: {msg:?}"
+    );
+    assert!(!msg.contains("pw@"), "credential survived: {msg:?}");
+    assert!(
+        msg.contains("fake line"),
+        "the printable text is kept: {msg:?}"
+    );
+}
+
+/// Every WIT error case that carries a plugin-authored `detail` renders it
+/// through `plugin_detail`: control characters stripped BEFORE credential
+/// redaction (a CR inside the userinfo would otherwise defeat the
+/// redaction pattern), then the length cap.
+#[test]
+fn plugin_error_details_are_sanitised_and_redacted() {
+    use crate::bindings::rdlp::plugin::types::ExtractError as W;
+    use crate::playlist_adapter::{WitPlaylistError, playlist_error_to_plugin_error};
+
+    let d = || HOSTILE_DETAIL.to_string();
+    for e in [
+        common_plugin_error("p".into(), CommonPluginErr::Network(d())),
+        common_plugin_error("p".into(), CommonPluginErr::Parse(d())),
+        common_plugin_error("p".into(), CommonPluginErr::Internal(d())),
+        extract_error_to_plugin_error("p", W::UnsupportedUrl(d())),
+        extract_error_to_plugin_error("p", W::NotFound(d())),
+        extract_error_to_plugin_error("p", W::AuthRequired(d())),
+        playlist_error_to_plugin_error("p", WitPlaylistError::UnsupportedUrl(d())),
+        playlist_error_to_plugin_error("p", WitPlaylistError::NotFound(d())),
+        playlist_error_to_plugin_error("p", WitPlaylistError::Network(d())),
+    ] {
+        assert_detail_neutralised(&e);
+    }
+}
+
+/// The cap, at its boundary: `MAX_PLUGIN_ERROR_DETAIL_BYTES` bytes pass
+/// through whole, one more is cut back to the cap — and never mid-char (a
+/// two-byte `ä` straddling the cap is dropped whole, not split).
+#[test]
+fn plugin_error_detail_is_capped_at_the_bound_inclusive() {
+    let detail_of = |e: PluginError| match e {
+        PluginError::ExtractNetwork { detail, .. } => detail,
+        other => panic!("expected ExtractNetwork, got {other:?}"),
+    };
+    let at = "a".repeat(MAX_PLUGIN_ERROR_DETAIL_BYTES);
+    assert_eq!(
+        detail_of(common_plugin_error(
+            "p".into(),
+            CommonPluginErr::Network(at.clone())
+        )),
+        at
+    );
+    let over = "a".repeat(MAX_PLUGIN_ERROR_DETAIL_BYTES + 1);
+    assert_eq!(
+        detail_of(common_plugin_error(
+            "p".into(),
+            CommonPluginErr::Network(over)
+        ))
+        .len(),
+        MAX_PLUGIN_ERROR_DETAIL_BYTES
+    );
+    let straddling = format!("{}ä", "a".repeat(MAX_PLUGIN_ERROR_DETAIL_BYTES - 1));
+    assert_eq!(straddling.len(), MAX_PLUGIN_ERROR_DETAIL_BYTES + 1);
+    assert_eq!(
+        detail_of(common_plugin_error(
+            "p".into(),
+            CommonPluginErr::Network(straddling)
+        )),
+        "a".repeat(MAX_PLUGIN_ERROR_DETAIL_BYTES - 1)
+    );
 }

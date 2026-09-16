@@ -17,7 +17,8 @@
     clippy::needless_pass_by_value
 )]
 
-use rdlp_redact::{RedactedUrl, RedactedUrlBuf};
+use rdlp_redact::text::sanitize_for_terminal;
+use rdlp_redact::{RedactedUrl, RedactedUrlBuf, redact_str};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -58,8 +59,81 @@ pub(crate) const EXTRACT_TIMEOUT: Duration = Duration::from_secs(30);
 /// extract makes one.
 pub(crate) const SEARCH_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// Wall-clock cap on one `extract-playlist` page call. The search cap,
+/// under its own name: a listing page is the same shape of work as a
+/// search page (one upstream listing request, possibly a couple more for
+/// pagination tokens), and naming it separately lets the two be tuned
+/// apart without a hunt for which `SEARCH_TIMEOUT` use was really a
+/// playlist's.
+pub(crate) const LISTING_TIMEOUT: Duration = SEARCH_TIMEOUT;
+
+/// Longest plugin-authored error `detail` kept, in bytes. The detail lands
+/// in every `RdlpError::Extraction` message, warn line, and desktop
+/// failure record built from the error; 512 bytes holds a URL plus a
+/// sentence of reason (the longest detail a well-behaved plugin has cause
+/// to send) while stopping a plugin from pushing a page of text into each
+/// of those sinks on every failed call.
+pub(crate) const MAX_PLUGIN_ERROR_DETAIL_BYTES: usize = 512;
+
+/// Make a plugin-authored error `detail` safe for every sink it reaches:
+/// control characters stripped ([`sanitize_for_terminal`] — CWE-117 log
+/// injection, CWE-150 terminal escapes), then credentials redacted
+/// ([`redact_str`]), then cut to [`MAX_PLUGIN_ERROR_DETAIL_BYTES`] on a
+/// char boundary. Strip BEFORE redacting: a CR or TAB inside `user:pw@`
+/// breaks the userinfo pattern's match, so the other order leaks the
+/// credential in the clear (measured, `sanitize-before-redact-order`).
+/// Cut LAST so the cap can never split a `*:*@` replacement.
+///
+/// The one site every `detail` crosses — [`common_plugin_error`] and the
+/// early-return arms of the per-export mappers all call it — so a new WIT
+/// error case gets the same treatment by construction.
+pub(crate) fn plugin_detail(detail: &str) -> String {
+    let mut out = redact_str(&sanitize_for_terminal(detail));
+    if out.len() > MAX_PLUGIN_ERROR_DETAIL_BYTES {
+        let cut = out
+            .char_indices()
+            .map(|(i, _)| i)
+            .take_while(|&i| i <= MAX_PLUGIN_ERROR_DETAIL_BYTES)
+            .last()
+            .unwrap_or(0);
+        out.truncate(cut);
+    }
+    out
+}
+
+/// Whether a [`PluginError::Timeout`] from a call counts against the
+/// 3-strike rule. Every other strike kind (`Trapped`, `Internal`,
+/// `LinkerWire`) always counts; only the timeout is gated, because it is
+/// the one fault a slow upstream — not the plugin — can produce many times
+/// at once.
+pub(crate) enum TimeoutStrikes<'a> {
+    /// Every timeout strikes: a single `extract`, a search call, a
+    /// playlist page fetch.
+    Always,
+    /// At most one timeout strikes per gate: the first timed-out call
+    /// claims it, later ones under the same gate return their `Timeout`
+    /// unchanged but are not counted. A playlist batch resolves its
+    /// entries under one gate (`PluginPlaylistSource`), so a dead
+    /// upstream during a 16-wide batch is one strike, not sixteen — and a
+    /// fresh batch has a fresh gate, so a plugin that keeps timing out
+    /// across batches still strikes out.
+    OncePer(&'a AtomicBool),
+}
+
+impl TimeoutStrikes<'_> {
+    /// Whether THIS timeout counts. Claims the gate atomically, so two
+    /// entries timing out in the same instant cannot both count.
+    fn claim(&self) -> bool {
+        match self {
+            Self::Always => true,
+            Self::OncePer(gate) => !gate.swap(true, Ordering::AcqRel),
+        }
+    }
+}
+
 /// Per-call parameters for [`PluginExtractor::run_in_fresh_store`]: the
-/// wall-clock cap and what the call was about, for the strike log line.
+/// wall-clock cap, what the call was about (for the strike log line), and
+/// how a timeout is counted.
 pub(crate) struct CallSpec<'a> {
     /// What the call was handling, named in the strike log line: the URL
     /// for `extract`, the search-site name for search calls. Rendered
@@ -68,6 +142,20 @@ pub(crate) struct CallSpec<'a> {
     pub subject_for_errors: &'a str,
     /// Wall-clock cap for the whole call, instantiation included.
     pub timeout: Duration,
+    /// Whether a timeout of this call strikes (see [`TimeoutStrikes`]).
+    pub timeout_strikes: TimeoutStrikes<'a>,
+}
+
+impl CallSpec<'_> {
+    /// Whether `e` counts against the 3-strike rule for this call:
+    /// [`counts_as_strike`]'s verdict, with a `Timeout` additionally
+    /// subject to `timeout_strikes`.
+    fn strikes(&self, e: &PluginError) -> bool {
+        match e {
+            PluginError::Timeout { .. } => self.timeout_strikes.claim(),
+            other => counts_as_strike(other),
+        }
+    }
 }
 
 /// A freshly instantiated component, handed to the per-call closure.
@@ -294,12 +382,13 @@ impl InfoExtractor for PluginExtractor {
         p as i32
     }
 
-    /// One `extract` call under the crate's default extract budget
-    /// (`EXTRACT_TIMEOUT`, 30 s) — see `PluginExtractor::extract_within`
-    /// for the call itself; the playlist loop uses that entry point with
-    /// its own per-item budget.
+    /// One `extract` call under [`PluginExtractor::extract_spec`] — the
+    /// crate's default extract budget (`EXTRACT_TIMEOUT`, 30 s), every
+    /// timeout a strike. See `PluginExtractor::extract_within` for the
+    /// call itself; the playlist loop uses that entry point with its own
+    /// per-item spec.
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> rdlp_core::Result<InfoDict> {
-        self.extract_within(url, ctx, EXTRACT_TIMEOUT).await
+        self.extract_within(ctx, Self::extract_spec(url)).await
     }
 
     /// Drives `extract-playlist` through [`crate::playlist_adapter`]'s
@@ -318,27 +407,34 @@ impl InfoExtractor for PluginExtractor {
 }
 
 impl PluginExtractor {
-    /// One `extract` call under `budget` — the runner's tokio timeout and
-    /// epoch deadline both. [`InfoExtractor::extract`] passes
-    /// [`EXTRACT_TIMEOUT`]; the playlist loop
-    /// (`playlist_adapter::PluginPlaylistSource::resolve_entry`) passes
-    /// `Config::playlist_item_timeout`, so an entry has ONE timer and a
-    /// slow one is a `PluginError::Timeout` — a strike, as for any extract.
+    /// The spec a standalone `extract` of `url` runs under: the crate's
+    /// default budget and every timeout a strike.
+    pub(crate) const fn extract_spec(url: &str) -> CallSpec<'_> {
+        CallSpec {
+            subject_for_errors: url,
+            timeout: EXTRACT_TIMEOUT,
+            timeout_strikes: TimeoutStrikes::Always,
+        }
+    }
+
+    /// One `extract` call of `spec.subject_for_errors` (the URL) under
+    /// `spec.timeout` — the runner's tokio timeout and epoch deadline both.
+    /// [`InfoExtractor::extract`] passes [`PluginExtractor::extract_spec`];
+    /// the playlist loop (`playlist_adapter::PluginPlaylistSource::resolve_entry`)
+    /// passes `Config::playlist_item_timeout` under the batch's shared
+    /// timeout gate, so an entry has ONE timer and a slow one is a
+    /// `PluginError::Timeout` — a strike at most once per batch.
     ///
     /// # Errors
     ///
     /// The runner's errors and the plugin's own, mapped through
-    /// [`plugin_error_to_rdlp`] with `url` as the subject.
+    /// [`plugin_error_to_rdlp`] with the URL as the subject.
     pub(crate) async fn extract_within(
         &self,
-        url: &str,
         ctx: &ExtractionContext,
-        budget: Duration,
+        spec: CallSpec<'_>,
     ) -> rdlp_core::Result<InfoDict> {
-        let spec = CallSpec {
-            subject_for_errors: url,
-            timeout: budget,
-        };
+        let url = spec.subject_for_errors;
         // An owned copy moves into the future: the runner's closure is
         // higher-ranked over the store borrow, so it cannot return a future
         // that also borrows `url` from this frame.
@@ -374,8 +470,9 @@ impl PluginExtractor {
     /// [`PluginError::Disabled`] when the plugin has struck out;
     /// [`PluginError::Timeout`] when `spec.timeout` elapses;
     /// [`PluginError::Trapped`] when instantiation fails; otherwise
-    /// whatever `f` returns. Traps, timeouts, internal and linker errors
-    /// count as strikes — domain outcomes do not (see `counts_as_strike`).
+    /// whatever `f` returns. Traps, internal and linker errors count as
+    /// strikes, a timeout as `spec.timeout_strikes` says — domain outcomes
+    /// do not (see `counts_as_strike`, [`TimeoutStrikes`]).
     pub(crate) async fn run_in_fresh_store<T, F>(
         &self,
         spec: CallSpec<'_>,
@@ -439,14 +536,20 @@ impl PluginExtractor {
             }
         };
 
-        if let Err(e) = &result
-            && counts_as_strike(e)
-        {
-            log::warn!(
-                "plugin {plugin} strike ({e}) while handling {}",
-                RedactedUrl::new(spec.subject_for_errors)
-            );
-            self.record_trap();
+        if let Err(e) = &result {
+            if spec.strikes(e) {
+                log::warn!(
+                    "plugin {plugin} strike ({e}) while handling {}",
+                    RedactedUrl::new(spec.subject_for_errors)
+                );
+                self.record_trap();
+            } else if matches!(e, PluginError::Timeout { .. }) {
+                log::debug!(
+                    "plugin {plugin} timed out while handling {} (already \
+                     counted once for this batch)",
+                    RedactedUrl::new(spec.subject_for_errors)
+                );
+            }
         }
         result
     }
@@ -503,7 +606,10 @@ pub(crate) fn plugin_error_to_rdlp(e: PluginError, url: Option<&str>) -> RdlpErr
 
 /// Whether an error counts against the 3-strike rule: runtime faults do,
 /// domain outcomes the plugin reported on purpose (UnsupportedUrl,
-/// NotFound, RateLimited, SearchUnsupported, …) do not.
+/// NotFound, RateLimited, SearchUnsupported, …) do not. A `Timeout` is a
+/// fault here too; the runner additionally gates it per call through
+/// [`TimeoutStrikes`] (`CallSpec::strikes`), so a playlist batch counts
+/// its timeouts at most once.
 pub(crate) const fn counts_as_strike(e: &PluginError) -> bool {
     matches!(
         e,
@@ -666,18 +772,25 @@ pub(crate) enum CommonPluginErr {
     Internal(String),
 }
 
-/// Map a shared WIT error case to its `PluginError` variant.
+/// Map a shared WIT error case to its `PluginError` variant, with every
+/// plugin-authored `detail` passed through [`plugin_detail`].
 pub(crate) fn common_plugin_error(plugin: String, kind: CommonPluginErr) -> PluginError {
     match kind {
         CommonPluginErr::RateLimited(retry_after) => PluginError::RateLimited {
             plugin,
             retry_after,
         },
-        CommonPluginErr::Network(detail) => PluginError::ExtractNetwork { plugin, detail },
-        CommonPluginErr::Parse(detail) => PluginError::ExtractParse { plugin, detail },
+        CommonPluginErr::Network(detail) => PluginError::ExtractNetwork {
+            plugin,
+            detail: plugin_detail(&detail),
+        },
+        CommonPluginErr::Parse(detail) => PluginError::ExtractParse {
+            plugin,
+            detail: plugin_detail(&detail),
+        },
         CommonPluginErr::Cancelled => PluginError::Cancelled { plugin },
         CommonPluginErr::Internal(detail) => {
-            PluginError::Internal(format!("plugin {plugin}: {detail}"))
+            PluginError::Internal(format!("plugin {plugin}: {}", plugin_detail(&detail)))
         }
     }
 }
@@ -696,9 +809,24 @@ fn extract_error_to_plugin_error(
     use crate::bindings::rdlp::plugin::types::ExtractError as W;
     let plugin = plugin.to_string();
     let common = match err {
-        W::UnsupportedUrl(detail) => return PluginError::UnsupportedUrl { plugin, detail },
-        W::NotFound(detail) => return PluginError::NotFound { plugin, detail },
-        W::AuthRequired(detail) => return PluginError::AuthRequired { plugin, detail },
+        W::UnsupportedUrl(detail) => {
+            return PluginError::UnsupportedUrl {
+                plugin,
+                detail: plugin_detail(&detail),
+            };
+        }
+        W::NotFound(detail) => {
+            return PluginError::NotFound {
+                plugin,
+                detail: plugin_detail(&detail),
+            };
+        }
+        W::AuthRequired(detail) => {
+            return PluginError::AuthRequired {
+                plugin,
+                detail: plugin_detail(&detail),
+            };
+        }
         W::RateLimited(retry_after) => CommonPluginErr::RateLimited(retry_after),
         W::Network(detail) => CommonPluginErr::Network(detail),
         W::Parse(detail) => CommonPluginErr::Parse(detail),
