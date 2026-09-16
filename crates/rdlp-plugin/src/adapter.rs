@@ -294,9 +294,10 @@ impl InfoExtractor for PluginExtractor {
         p as i32
     }
 
-    /// One `extract` call under [`EXTRACT_TIMEOUT`] — see
-    /// [`PluginExtractor::extract_within`] for the call itself; the
-    /// playlist loop uses that entry point with its own per-item budget.
+    /// One `extract` call under the crate's default extract budget
+    /// (`EXTRACT_TIMEOUT`, 30 s) — see `PluginExtractor::extract_within`
+    /// for the call itself; the playlist loop uses that entry point with
+    /// its own per-item budget.
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> rdlp_core::Result<InfoDict> {
         self.extract_within(url, ctx, EXTRACT_TIMEOUT).await
     }
