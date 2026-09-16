@@ -460,11 +460,8 @@ mod registry_search_arbitration_tests {
         let reg = registry_of(vec![
             builtin("PornHub"),
             FakeSearch {
-                name: "xhamster",
                 display: Some("XHamster"),
-                plugin: true,
-                prio: 150,
-                overrides: false,
+                ..plugin("xhamster", 150, false)
             },
         ]);
         let sites = reg.list_search_sites();

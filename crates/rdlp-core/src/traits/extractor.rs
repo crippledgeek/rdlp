@@ -148,8 +148,10 @@ pub trait SearchExtractor: Send + Sync {
     /// see [`display_name`](Self::display_name).
     fn name(&self) -> &str;
 
-    /// Human-readable site label for display surfaces (provider pickers,
-    /// `Available: …` lists). Defaults to [`name`](Self::name); a plugin
+    /// Human-readable site label for GUI surfaces such as a provider
+    /// picker. `Available: …` error lists deliberately print [`name`](Self::name)
+    /// instead, since the user types that key back into `--search-site`.
+    /// Defaults to [`name`](Self::name); a plugin
     /// whose routing key (`search_site = "xhamster"`) differs from its
     /// label (`display_name = "XHamster"`) overrides it.
     fn display_name(&self) -> &str {
