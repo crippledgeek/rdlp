@@ -142,8 +142,21 @@ pub trait InfoExtractor: Send + Sync {
 /// lightweight preview results.
 #[async_trait]
 pub trait SearchExtractor: Send + Sync {
-    /// Human-readable site name (should match the corresponding `InfoExtractor::name()`).
+    /// Site key that search routing (`--search-site`, the registry's
+    /// case-insensitive lookup) compares against; should match the
+    /// corresponding `InfoExtractor::name()`. Not a display surface —
+    /// see [`display_name`](Self::display_name).
     fn name(&self) -> &str;
+
+    /// Human-readable site label for GUI surfaces such as a provider
+    /// picker. `Available: …` error lists deliberately print [`name`](Self::name)
+    /// instead, since the user types that key back into `--search-site`.
+    /// Defaults to [`name`](Self::name); a plugin
+    /// whose routing key (`search_site = "xhamster"`) differs from its
+    /// label (`display_name = "XHamster"`) overrides it.
+    fn display_name(&self) -> &str {
+        self.name()
+    }
 
     /// Describe the available search filters for this site.
     ///

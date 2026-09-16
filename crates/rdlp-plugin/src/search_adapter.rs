@@ -466,6 +466,10 @@ impl SearchExtractor for PluginSearchExtractor {
         self.inner.manifest.search_site_name()
     }
 
+    fn display_name(&self) -> &str {
+        self.inner.manifest.display_name()
+    }
+
     async fn supported_filters(&self) -> Vec<SearchFilterDescriptor> {
         self.filters_or_fetch().await
     }

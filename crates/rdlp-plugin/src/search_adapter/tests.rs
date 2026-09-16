@@ -654,3 +654,19 @@ async fn an_absent_export_answers_no_filters() {
         .expect("absent export is Ok");
     assert!(filters.is_empty());
 }
+
+// ── display name vs routing key (#779) ────────────────────────────────
+
+/// `name()` is the `search_site` routing key; `display_name()` is the
+/// manifest's human label. The desktop provider picker listed the pilot
+/// plugin as `xhamster` because the two were one method.
+#[test]
+fn display_name_is_the_manifest_label_not_the_search_site_key() {
+    let ext = PluginSearchExtractor::new(Arc::new(fixture_extractor_with_manifest(
+        &fixture_manifest_with(
+            "supports_search = true\nsearch_site = \"xhamster\"\ndisplay_name = \"XHamster\"",
+        ),
+    )));
+    assert_eq!(SearchExtractor::name(&ext), "xhamster");
+    assert_eq!(SearchExtractor::display_name(&ext), "XHamster");
+}
