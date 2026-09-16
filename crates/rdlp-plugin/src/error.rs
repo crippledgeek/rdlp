@@ -16,11 +16,11 @@ pub enum PluginError {
     },
 
     /// `plugin.wasm` is larger than the host reads before verifying it.
-    #[error("plugin binary at {path} is {bytes} bytes; the most rdlp loads is {max}")]
+    #[error("plugin binary at {path} exceeds the {max}-byte cap ({bytes} bytes seen)")]
     WasmTooLarge {
         /// Filesystem path of the oversized `plugin.wasm`.
         path: PathBuf,
-        /// Its size on disk.
+        /// Its declared size, or the count at which reading was cut off.
         bytes: u64,
         /// [`crate::signature::MAX_PLUGIN_WASM_BYTES`].
         max: u64,

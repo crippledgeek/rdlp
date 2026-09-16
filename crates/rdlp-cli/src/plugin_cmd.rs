@@ -68,10 +68,10 @@ enum Hint {
     SeeInfo,
 }
 
-/// One line for the trust column: the signature's verdict, then the
-/// recorded identity checked against the one the manifest presents
-/// (`identity`), with the way forward. An unverifiable signature gets no
-/// trust hint — the loader refuses it before it looks at trust.
+/// One line for the trust column: the binary's verdict (read under the
+/// size cap, signature verified), then the recorded identity checked
+/// against the one the manifest presents (`identity`), with the way
+/// forward. A binary the loader would refuse gets no trust hint.
 fn trust_state(
     verified: Result<&IdentityCheck, &PluginError>,
     name: &str,
@@ -79,7 +79,10 @@ fn trust_state(
     hint: Hint,
 ) -> String {
     match verified {
-        Err(e) => format!("SIGNATURE INVALID — {e}; not loaded whatever the trust state"),
+        Err(e @ PluginError::SignatureInvalid { .. }) => {
+            format!("SIGNATURE INVALID — {e}; not loaded whatever the trust state")
+        }
+        Err(e) => format!("NOT LOADED — {e}"),
         Ok(IdentityCheck::Match) => "TRUSTED".into(),
         Ok(IdentityCheck::NewName) => match hint {
             Hint::Inline => format!("UNTRUSTED — {}", trust_hint(identity)),
@@ -404,6 +407,26 @@ mod tests {
         );
         assert!(line.starts_with("SIGNATURE INVALID"), "{line}");
         assert!(line.contains("bad sig"), "{line}");
+        assert!(!line.contains("--trust-publisher"), "{line}");
+    }
+
+    /// A plugin refused for its size (or unreadable) was never
+    /// signature-checked: the line must say neither SIGNATURE INVALID nor
+    /// how to trust it.
+    #[test]
+    fn trust_state_of_a_size_refusal_is_not_loaded_not_signature_invalid() {
+        let line = trust_state(
+            Err(&rdlp_plugin::PluginError::WasmTooLarge {
+                path: "/p/plugin.wasm".into(),
+                bytes: 1,
+                max: 0,
+            }),
+            "foo",
+            ID,
+            Hint::Inline,
+        );
+        assert!(line.starts_with("NOT LOADED"), "{line}");
+        assert!(!line.contains("SIGNATURE"), "{line}");
         assert!(!line.contains("--trust-publisher"), "{line}");
     }
 

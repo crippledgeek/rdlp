@@ -9,6 +9,7 @@ pub mod sigstore;
 
 use crate::PluginError;
 use crate::manifest::{Manifest, Signature};
+use std::io::Read;
 use std::path::Path;
 
 /// The most `plugin.wasm` bytes the host reads before verifying them.
@@ -40,25 +41,47 @@ pub fn verify_file(manifest: &Manifest, wasm_path: &Path) -> Result<Vec<u8>, Plu
     Ok(wasm)
 }
 
-/// Read a `plugin.wasm` for verification, refusing one over
-/// [`MAX_PLUGIN_WASM_BYTES`] from its size on disk — before any of it is
-/// read.
+/// Read a `plugin.wasm` for verification under [`MAX_PLUGIN_WASM_BYTES`].
+///
+/// The size is checked twice: the open handle's own metadata refuses a
+/// declared overrun without reading a byte, and the read itself is cut
+/// at the cap, so a source whose metadata lies — a symlink to a device
+/// file stats as 0 bytes — or a file swapped after the stat is still
+/// bounded by what is actually read.
 ///
 /// # Errors
 ///
 /// [`PluginError::WasmTooLarge`] over the cap; the I/O error otherwise.
 fn read_plugin_wasm(path: &Path) -> Result<Vec<u8>, PluginError> {
     #[allow(clippy::disallowed_methods)] // load-time sync I/O, as the loader's
-    let bytes = std::fs::metadata(path)?.len();
-    if bytes > MAX_PLUGIN_WASM_BYTES {
-        return Err(PluginError::WasmTooLarge {
-            path: path.to_path_buf(),
-            bytes,
-            max: MAX_PLUGIN_WASM_BYTES,
-        });
+    let file = std::fs::File::open(path)?;
+    let declared = file.metadata()?.len();
+    read_capped(file, declared, MAX_PLUGIN_WASM_BYTES, path)
+}
+
+/// [`read_plugin_wasm`] over any source: `declared` is what the source
+/// claims to hold, `max` the cap; the bytes read are the final word.
+fn read_capped(
+    source: impl Read,
+    declared: u64,
+    max: u64,
+    path: &Path,
+) -> Result<Vec<u8>, PluginError> {
+    let too_large = |bytes| PluginError::WasmTooLarge {
+        path: path.to_path_buf(),
+        bytes,
+        max,
+    };
+    if declared > max {
+        return Err(too_large(declared));
     }
-    #[allow(clippy::disallowed_methods)]
-    Ok(std::fs::read(path)?)
+    let mut wasm = Vec::with_capacity(usize::try_from(declared).unwrap_or(0));
+    source.take(max + 1).read_to_end(&mut wasm)?;
+    let read = wasm.len() as u64;
+    if read > max {
+        return Err(too_large(read));
+    }
+    Ok(wasm)
 }
 
 /// Top-level signature verification entry point. Dispatches to the right backend
@@ -67,5 +90,58 @@ pub fn verify(manifest: &Manifest, wasm_bytes: &[u8]) -> Result<(), PluginError>
     match &manifest.signature {
         Signature::Sigstore { .. } => sigstore::verify_sigstore(manifest, wasm_bytes),
         Signature::Ed25519 { .. } => ed25519::verify_ed25519(manifest, wasm_bytes),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io;
+
+    /// A source that must never be asked for bytes.
+    struct Unreadable;
+
+    impl io::Read for Unreadable {
+        fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+            panic!("a declared overrun must not be read")
+        }
+    }
+
+    /// A source whose declared size lies (a symlink to `/dev/zero` stats
+    /// as 0 bytes) is still cut off: the bytes actually read are the
+    /// guard, not the stat.
+    #[test]
+    fn read_capped_stops_an_endless_source_at_the_cap() {
+        let err = read_capped(io::repeat(0), 0, 16, Path::new("/p/plugin.wasm"))
+            .expect_err("an endless source is over any cap");
+        assert!(
+            matches!(
+                err,
+                PluginError::WasmTooLarge {
+                    bytes: 17,
+                    max: 16,
+                    ..
+                }
+            ),
+            "{err}"
+        );
+    }
+
+    /// Exactly the cap is allowed; the declared size short-circuits
+    /// without reading when it is already over.
+    #[test]
+    fn read_capped_allows_the_cap_and_refuses_a_declared_overrun_unread() {
+        let ok = read_capped(io::repeat(7).take(16), 16, 16, Path::new("/p")).expect("at the cap");
+        assert_eq!(ok.len(), 16);
+
+        let err = read_capped(Unreadable, 17, 16, Path::new("/p")).expect_err("declared over");
+        assert!(matches!(
+            err,
+            PluginError::WasmTooLarge {
+                bytes: 17,
+                max: 16,
+                ..
+            }
+        ));
     }
 }
