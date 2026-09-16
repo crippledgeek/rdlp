@@ -153,23 +153,20 @@ impl<'a> Loader<'a> {
         // Step 2: enforce WIT contract version before any crypto work
         check_wit_version(&manifest.name, &manifest.wit_version)?;
 
-        // Step 3: read WASM bytes
-        #[allow(clippy::disallowed_methods)] // startup/load-time sync I/O
-        let wasm = std::fs::read(&wasm_path)?;
+        // Step 3: read WASM bytes, bounded before the read, and verify
+        // the signature over them
+        let wasm = crate::signature::verify_file(&manifest, &wasm_path)?;
 
-        // Step 4: verify signature
-        crate::signature::verify(&manifest, &wasm)?;
-
-        // Step 5: compute identity
+        // Step 4: compute identity
         let identity = manifest.signature.identity_string();
 
-        // Step 6: trust-store checks
+        // Step 5: trust-store checks
         self.check_trust(&TrustSubject {
             manifest: &manifest,
             identity: &identity,
         })?;
 
-        // Step 7: compile component
+        // Step 6: compile component
         let component = wasmtime::component::Component::new(self.engine.raw(), &wasm)
             .map_err(|e| PluginError::Internal(format!("component compile: {e}")))?;
 
