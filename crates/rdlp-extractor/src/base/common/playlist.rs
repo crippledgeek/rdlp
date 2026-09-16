@@ -33,6 +33,20 @@ pub const DEFAULT_PLAYLIST_CONCURRENCY: usize = 1;
 /// value the in-tree xhamster playlist path used (`VIDEO_EXTRACTION_TIMEOUT`).
 pub const DEFAULT_PLAYLIST_ITEM_TIMEOUT_SECS: u64 = 30;
 
+/// How long past the per-entry budget the loop's own guard waits before
+/// giving up on an entry whose implementor has not returned.
+///
+/// The budget is enforced by the implementor (`ResolveRequest::budget` is
+/// the plugin call's tokio timeout and epoch deadline), so its own error
+/// is the one that should come back — for a plugin that error is a
+/// strike, which the loop's guard is not. Two timers set to the same
+/// instant race on the millisecond; the grace puts the guard far enough
+/// behind that it only ever fires for an implementor with no timer at all.
+/// 5 s covers the implementor's timer firing plus its cleanup (a plugin
+/// runner trips its cancel token and drops the store — milliseconds) by
+/// three orders of magnitude while still bounding a runaway implementor.
+pub const PLAYLIST_ITEM_TIMEOUT_GRACE: Duration = Duration::from_secs(5);
+
 /// One listed playlist entry: the URL to resolve plus whatever cheap
 /// identity the listing page already carried.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -54,10 +68,10 @@ pub struct PlaylistPage {
     /// Whether the site reports (or implies) a further page exists.
     pub has_more: bool,
     /// The playlist's id, stamped into every resolved entry's
-    /// `playlist_id` (and `playlist`).
+    /// `playlist_id` (and `playlist`, when there is no title).
     pub playlist_id: Option<String>,
     /// The playlist's title, stamped into every resolved entry's
-    /// `playlist_title`.
+    /// `playlist_title` and `playlist`.
     pub playlist_title: Option<String>,
     /// The site's own total, when page one carries one. Stamped as
     /// `playlist_count` when present (never below the number actually
@@ -65,17 +79,25 @@ pub struct PlaylistPage {
     pub total_estimate: Option<u64>,
 }
 
-/// How the loop treats a failed (or timed-out) entry — from
-/// `Config::playlist_ignore_errors`.
+/// How the loop treats a failed (or timed-out) entry, and a later page
+/// that fails to list — from `Config::playlist_ignore_errors`.
+///
+/// An entry that runs past its `ResolveRequest::budget` fails with the
+/// implementor's own timeout error (for a plugin, `PluginError::Timeout`,
+/// which is a strike exactly as it is for a single `extract`); the loop
+/// treats that like any other failed entry.
 ///
 /// Outcomes are collected from the concurrent resolver first and the policy
 /// is applied afterwards in listing order, so under `AbortOnFirstFailure`
 /// the failure reported is the first BY POSITION, not the first to complete.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlaylistResolution {
-    /// Log a warning and leave the entry out of the result (the default).
+    /// Log a warning and leave the entry out of the result; a later page
+    /// that fails to list is warned about and the entries listed so far
+    /// are resolved (the default).
     SkipFailed,
-    /// Return the failed entry's own error; nothing is returned.
+    /// Return the failed entry's own error, or the failed page's, and
+    /// nothing is returned.
     AbortOnFirstFailure,
 }
 
@@ -102,6 +124,20 @@ pub struct PlaylistStart<'a> {
     pub url: &'a str,
     /// Page `first_page_index()`, already fetched.
     pub first_page: PlaylistPage,
+}
+
+/// One entry the loop asks an implementor to resolve, with the wall-clock
+/// budget the implementor must enforce on its own call — for a plugin,
+/// the `extract` call's tokio timeout and epoch deadline. One timer, owned
+/// by the implementor: the loop only guards `budget +
+/// [`PLAYLIST_ITEM_TIMEOUT_GRACE`]` behind it.
+#[derive(Debug, Clone, Copy)]
+pub struct ResolveRequest<'a> {
+    /// The listed entry to resolve.
+    pub entry: &'a PlaylistEntry,
+    /// `Config::playlist_item_timeout` (or its default), the cap the
+    /// implementor applies to its own work.
+    pub budget: Duration,
 }
 
 /// Which 1-based listing positions the operator asked for, from
@@ -225,7 +261,9 @@ impl Listed {
 
 /// What one entry's resolution produced, before the failure policy is
 /// applied. `InfoDict` is boxed so the enum is not sized by its one large
-/// variant (`clippy::large_enum_variant`).
+/// variant (`clippy::large_enum_variant`). `TimedOut` is the loop's guard
+/// firing — an implementor that ignored its budget; one that honoured it
+/// comes back as `Failed` with its own timeout error.
 enum ItemOutcome {
     Resolved(Box<InfoDict>),
     Failed(RdlpError),
@@ -240,11 +278,12 @@ struct Resolved {
 }
 
 /// The resolution phase's inputs: which entries, how many at once, and how
-/// long each may take.
+/// long each may take (the budget handed to the implementor; the loop's
+/// own guard sits `PLAYLIST_ITEM_TIMEOUT_GRACE` behind it).
 struct ResolvePlan {
     selected: Vec<(usize, PlaylistEntry)>,
     concurrency: usize,
-    timeout: Duration,
+    budget: Duration,
 }
 
 impl ResolvePlan {
@@ -258,16 +297,25 @@ impl ResolvePlan {
                 .playlist_concurrency
                 .unwrap_or(DEFAULT_PLAYLIST_CONCURRENCY)
                 .max(1),
-            timeout: Duration::from_secs(
+            budget: Duration::from_secs(
                 cfg.playlist_item_timeout
                     .unwrap_or(DEFAULT_PLAYLIST_ITEM_TIMEOUT_SECS),
             ),
         }
     }
+
+    /// When the loop stops waiting for an implementor that never enforced
+    /// its budget.
+    fn guard(&self) -> Duration {
+        self.budget.saturating_add(PLAYLIST_ITEM_TIMEOUT_GRACE)
+    }
 }
 
 /// The playlist-level fields stamped onto every resolved entry.
 struct Stamp {
+    /// `InfoDict::playlist`: yt-dlp's `playlist = playlist_title or
+    /// playlist_id` — the title when the site gave one, else the id.
+    playlist: Option<String>,
     playlist_id: Option<String>,
     playlist_title: Option<String>,
     /// The site's reported total (`PlaylistPage::total_estimate` on page
@@ -280,7 +328,7 @@ struct Stamp {
 
 impl Stamp {
     fn apply(&self, info: &mut InfoDict, position: usize) {
-        info.playlist = self.playlist_id.clone();
+        info.playlist = self.playlist.clone();
         info.playlist_id = self.playlist_id.clone();
         info.playlist_title = self.playlist_title.clone();
         info.playlist_index = Some(position);
@@ -313,17 +361,25 @@ pub trait PagedPlaylist: Send + Sync {
         ctx: &ExtractionContext,
     ) -> impl Future<Output = Result<PlaylistPage>> + Send;
 
-    /// Resolve ONE listed entry to its full `InfoDict`. REQUIRED. The loop
-    /// stamps the playlist fields afterwards; implementors leave them alone.
+    /// Resolve ONE listed entry to its full `InfoDict` within
+    /// `request.budget`. REQUIRED. The loop stamps the playlist fields
+    /// afterwards; implementors leave them alone.
+    ///
+    /// The budget is the implementor's to enforce — it is the one timer on
+    /// the entry (a plugin runs its `extract` under it), so the error that
+    /// comes back from a slow entry is the implementor's own. The loop
+    /// only guards [`PLAYLIST_ITEM_TIMEOUT_GRACE`] behind it, for an
+    /// implementor that ignores the budget altogether.
     ///
     /// # Errors
     ///
-    /// Returns an error when the entry cannot be extracted. Whether that
-    /// error skips the entry or aborts the playlist is the loop's decision
+    /// Returns an error when the entry cannot be extracted, or when it
+    /// runs past `request.budget`. Whether that error skips the entry or
+    /// aborts the playlist is the loop's decision
     /// (`Config::playlist_ignore_errors`), not the implementor's.
     fn resolve_entry(
         &self,
-        entry: &PlaylistEntry,
+        request: ResolveRequest<'_>,
         ctx: &ExtractionContext,
     ) -> impl Future<Output = Result<InfoDict>> + Send;
 
@@ -400,12 +456,14 @@ pub trait PagedPlaylist: Send + Sync {
     ///
     /// An unparsable `Config::playlist_items` is an `Extraction` error before
     /// any further page is fetched (the caller has already fetched page
-    /// one). Under `AbortOnFirstFailure`, the first failed entry BY LISTING
-    /// POSITION returns its own error (or an `Extraction` error naming the
-    /// entry, for a timeout); the cost of that contract is that every
-    /// selected entry is resolved before the error comes back, since a
-    /// by-position verdict needs every outcome. A later-page listing failure
-    /// is not an error: the entries listed so far are resolved.
+    /// one). A later page's listing failure is warned about and, under
+    /// `AbortOnFirstFailure`, returned as the page's own error before
+    /// anything is resolved; under `SkipFailed` the entries listed so far
+    /// are resolved. Under `AbortOnFirstFailure`, the first failed entry
+    /// BY LISTING POSITION returns its own error (or an `Extraction` error
+    /// naming the entry, when the loop's guard fired); the cost of that
+    /// contract is that every selected entry is resolved before the error
+    /// comes back, since a by-position verdict needs every outcome.
     fn extract_all_entries_from(
         &self,
         start: PlaylistStart<'_>,
@@ -418,6 +476,7 @@ pub trait PagedPlaylist: Send + Sync {
             let selection = PlaylistSelection::from_config(cfg, url)?;
             let last_needed = selection.last_needed();
 
+            let policy = PlaylistResolution::from_config(cfg.playlist_ignore_errors);
             let mut last_page = self.first_page_index();
             let (mut listed, mut next) = Listed::start(first_page, last_needed);
             while next == Listing::Continue {
@@ -425,15 +484,25 @@ pub trait PagedPlaylist: Send + Sync {
                 last_page += 1;
                 next = match self.fetch_playlist_page(url, last_page, ctx).await {
                     Ok(p) => listed.absorb(p, last_needed),
-                    Err(e) => {
-                        debug!(page = last_page; "{tag} Playlist page failed, resolving the entries listed so far: {e}");
-                        Listing::Stop
-                    }
+                    Err(e) => match policy {
+                        PlaylistResolution::SkipFailed => {
+                            warn!(page = last_page; "{tag} Playlist page failed, resolving the {} entries listed so far ({}): {e}", listed.entries.len(), RedactedUrl::new(url));
+                            Listing::Stop
+                        }
+                        PlaylistResolution::AbortOnFirstFailure => {
+                            warn!(page = last_page; "{tag} Playlist page failed, aborting ({}): {e}", RedactedUrl::new(url));
+                            return Err(e);
+                        }
+                    },
                 };
             }
             let total = listed.count();
             let n_listed = listed.entries.len();
             let stamp = Stamp {
+                playlist: listed
+                    .playlist_title
+                    .clone()
+                    .or_else(|| listed.playlist_id.clone()),
                 playlist_id: listed.playlist_id,
                 playlist_title: listed.playlist_title,
                 count: total,
@@ -447,12 +516,11 @@ pub trait PagedPlaylist: Send + Sync {
                 .collect();
             debug!(listed = n_listed, selected = selected.len(), last_page; "{tag} Playlist listed");
             if selected.is_empty() && n_listed > 0 {
-                debug!(listed = n_listed; "{tag} Requested playlist range selects nothing from the listed entries");
+                warn!(listed = n_listed; "{tag} Requested playlist range selects nothing from the listed entries ({})", RedactedUrl::new(url));
             }
 
             let plan = ResolvePlan::new(selected, cfg);
-            let policy = PlaylistResolution::from_config(cfg.playlist_ignore_errors);
-            let timeout = plan.timeout;
+            let guard = plan.guard();
             let outcomes = resolve_all(self, plan, ctx).await;
 
             let mut out = Vec::with_capacity(outcomes.len());
@@ -474,13 +542,13 @@ pub trait PagedPlaylist: Send + Sync {
                         return Err(e);
                     }
                     (ItemOutcome::TimedOut, PlaylistResolution::SkipFailed) => {
-                        warn!(position, total; "{tag} Playlist item timed out after {}s, skipping ({})", timeout.as_secs(), RedactedUrl::new(&entry.url));
+                        warn!(position, total; "{tag} Playlist item ignored its budget and timed out after {}s, skipping ({})", guard.as_secs(), RedactedUrl::new(&entry.url));
                     }
                     (ItemOutcome::TimedOut, PlaylistResolution::AbortOnFirstFailure) => {
                         return Err(RdlpError::extraction(
                             format!(
-                                "playlist item {position} timed out after {}s",
-                                timeout.as_secs()
+                                "playlist item {position} ignored its budget and timed out after {}s",
+                                guard.as_secs()
                             ),
                             &entry.url,
                         ));
@@ -492,8 +560,10 @@ pub trait PagedPlaylist: Send + Sync {
     }
 }
 
-/// Resolve every planned entry under the plan's concurrency and per-item
-/// timeout, returning the outcomes sorted by listing position.
+/// Resolve every planned entry under the plan's concurrency, handing each
+/// implementor call the per-item budget and guarding
+/// `PLAYLIST_ITEM_TIMEOUT_GRACE` behind it, returning the outcomes sorted
+/// by listing position.
 ///
 /// `buffer_unordered` (not `buffered`) so a slow entry does not hold back
 /// completed ones behind it; listing order is restored by the sort. Each
@@ -504,10 +574,15 @@ async fn resolve_all<P: PagedPlaylist + ?Sized>(
     plan: ResolvePlan,
     ctx: &ExtractionContext,
 ) -> Vec<Resolved> {
-    let timeout = plan.timeout;
+    let budget = plan.budget;
+    let guard = plan.guard();
     let mut outcomes: Vec<Resolved> = futures::stream::iter(plan.selected)
         .map(|(position, entry)| async move {
-            let outcome = match tokio::time::timeout(timeout, site.resolve_entry(&entry, ctx)).await
+            let request = ResolveRequest {
+                entry: &entry,
+                budget,
+            };
+            let outcome = match tokio::time::timeout(guard, site.resolve_entry(request, ctx)).await
             {
                 Ok(Ok(info)) => ItemOutcome::Resolved(Box::new(info)),
                 Ok(Err(e)) => ItemOutcome::Failed(e),
@@ -574,25 +649,33 @@ mod tests {
     }
 
     /// How the mock resolves one entry: wait `delay`, then succeed or fail.
+    /// The wait runs under the request's budget the way a real implementor
+    /// enforces it (the plugin runner's own timeout), unless
+    /// `ignores_budget` — the implementor the loop's guard exists for.
     #[derive(Debug, Clone, Copy, Default)]
     struct Behavior {
         delay: Duration,
         fail: bool,
+        ignores_budget: bool,
     }
 
     fn failing() -> Behavior {
         Behavior {
-            delay: Duration::ZERO,
             fail: true,
+            ..Behavior::default()
         }
     }
 
     fn slow(ms: u64) -> Behavior {
         Behavior {
             delay: Duration::from_millis(ms),
-            fail: false,
+            ..Behavior::default()
         }
     }
+
+    /// The error an honouring mock returns when its budget runs out —
+    /// the implementor's own timeout error, distinct from the loop's guard.
+    const MOCK_BUDGET_EXCEEDED: &str = "mock budget exceeded";
 
     /// Decrements the mock's in-flight counter when the resolve future
     /// ends — including when `timeout` DROPS it mid-`sleep`, which a
@@ -669,9 +752,10 @@ mod tests {
         }
         async fn resolve_entry(
             &self,
-            entry: &PlaylistEntry,
+            request: ResolveRequest<'_>,
             _ctx: &ExtractionContext,
         ) -> Result<InfoDict> {
+            let entry = request.entry;
             self.resolves.fetch_add(1, Ordering::SeqCst);
             self.resolved_urls
                 .lock()
@@ -681,12 +765,19 @@ mod tests {
             let _guard = InFlight(&self.in_flight);
             self.max_in_flight.fetch_max(now, Ordering::SeqCst);
             let behavior = (self.behavior)(entry);
-            tokio::time::sleep(behavior.delay).await;
+            let work = tokio::time::sleep(behavior.delay);
+            if behavior.ignores_budget {
+                work.await;
+            } else {
+                tokio::time::timeout(request.budget, work)
+                    .await
+                    .map_err(|_| RdlpError::extraction(MOCK_BUDGET_EXCEEDED, &entry.url))?;
+            }
             if behavior.fail {
                 return Err(RdlpError::extraction("mock resolve failure", &entry.url));
             }
             let id = entry.id.clone().unwrap_or_default();
-            Ok(InfoDict::new(id.clone(), id, "mp4", &entry.url))
+            Ok(InfoDict::new(id.clone(), id, "mock", &entry.url))
         }
     }
 
@@ -732,8 +823,27 @@ mod tests {
         for info in &out {
             assert_eq!(info.playlist_count, Some(4));
             assert_eq!(info.playlist_id.as_deref(), Some("pl"));
-            assert_eq!(info.playlist.as_deref(), Some("pl"));
+            // yt-dlp: `playlist` is the title when the site gives one.
+            assert_eq!(info.playlist.as_deref(), Some("The List"));
             assert_eq!(info.playlist_title.as_deref(), Some("The List"));
+        }
+    }
+
+    /// `playlist` falls back to the id when page one carries no title
+    /// (yt-dlp `playlist = playlist_title or playlist_id`).
+    #[tokio::test]
+    async fn playlist_field_falls_back_to_the_id_without_a_title() {
+        let untitled: PageFn = Box::new(|_| {
+            let mut pg = page(entries(1, 2), false);
+            pg.playlist_title = None;
+            Ok(pg)
+        });
+        let mock = MockPlaylist::new(untitled);
+        let out = run(&mock, cfg(|_| {})).await.expect("all resolve");
+        assert_eq!(out.len(), 2);
+        for info in &out {
+            assert_eq!(info.playlist.as_deref(), Some("pl"));
+            assert_eq!(info.playlist_title, None);
         }
     }
 
@@ -822,6 +932,7 @@ mod tests {
                 Behavior {
                     delay: Duration::from_millis(10),
                     fail: true,
+                    ..Behavior::default()
                 }
             } else if e.url.ends_with("/v3") {
                 failing()
@@ -862,8 +973,13 @@ mod tests {
         assert_eq!(mock.max_in_flight.load(Ordering::SeqCst), 3);
     }
 
+    /// The per-item budget reaches the implementor and is the ONE timer on
+    /// the entry: an implementor that honours it fails with its own timeout
+    /// error (for a plugin, the runner's `Timeout` — a strike), which the
+    /// loop prunes or propagates like any other failure. The loop's guard
+    /// never fires here.
     #[tokio::test(start_paused = true)]
-    async fn per_item_timeout_prunes_the_slow_entry() {
+    async fn per_item_budget_is_enforced_by_the_implementor_and_prunes_the_slow_entry() {
         let slow_v2: BehaviorFn = Box::new(|e| {
             if e.url.ends_with("/v2") {
                 slow(1500)
@@ -872,12 +988,18 @@ mod tests {
             }
         });
         let mock = MockPlaylist::new(scripted(1, 3)).with_behavior(slow_v2);
+        let started = tokio::time::Instant::now();
         let out = run(&mock, cfg(|c| c.playlist_item_timeout = Some(1)))
             .await
-            .expect("skip policy prunes the timed-out entry");
+            .expect("skip policy prunes the entry that ran out of budget");
         assert_eq!(indices(&out), vec![1, 3]);
+        assert!(
+            started.elapsed() < Duration::from_secs(1) + PLAYLIST_ITEM_TIMEOUT_GRACE,
+            "the implementor's own timer ended the entry, not the loop's guard"
+        );
 
-        // Under the abort policy the timeout is a failure like any other.
+        // Under the abort policy the implementor's timeout error is the
+        // playlist's error — its own message, not the guard's.
         let err = run(
             &mock,
             cfg(|c| {
@@ -886,14 +1008,61 @@ mod tests {
             }),
         )
         .await
-        .expect_err("abort policy propagates the timeout");
-        assert!(err.to_string().contains("timed out"), "got {err}");
+        .expect_err("abort policy propagates the implementor's timeout");
+        assert!(err.to_string().contains(MOCK_BUDGET_EXCEEDED), "got {err}");
+        assert_eq!(error_url(&err), "https://x.test/v2");
+    }
+
+    /// The loop's guard fires only for an implementor that ignores its
+    /// budget, and only `PLAYLIST_ITEM_TIMEOUT_GRACE` after the budget —
+    /// so it can never race an implementor's own timer.
+    #[tokio::test(start_paused = true)]
+    async fn guard_fires_only_for_an_implementor_that_ignores_the_budget() {
+        let budget = Duration::from_secs(1);
+        let runaway_v2: BehaviorFn = Box::new(|e| {
+            if e.url.ends_with("/v2") {
+                Behavior {
+                    delay: Duration::from_secs(3600),
+                    ignores_budget: true,
+                    ..Behavior::default()
+                }
+            } else {
+                Behavior::default()
+            }
+        });
+        let mock = MockPlaylist::new(scripted(1, 3)).with_behavior(runaway_v2);
+        let started = tokio::time::Instant::now();
+        let out = run(&mock, cfg(|c| c.playlist_item_timeout = Some(1)))
+            .await
+            .expect("skip policy prunes the entry the guard gave up on");
+        assert_eq!(indices(&out), vec![1, 3]);
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed >= budget + PLAYLIST_ITEM_TIMEOUT_GRACE,
+            "the guard waits the grace past the budget: {elapsed:?}"
+        );
+        assert!(
+            elapsed < budget + PLAYLIST_ITEM_TIMEOUT_GRACE + Duration::from_secs(1),
+            "the guard did fire: {elapsed:?}"
+        );
+
+        // Under the abort policy the guard's verdict names the entry.
+        let err = run(
+            &mock,
+            cfg(|c| {
+                c.playlist_item_timeout = Some(1);
+                c.playlist_ignore_errors = Some(false);
+            }),
+        )
+        .await
+        .expect_err("abort policy propagates the guard's timeout");
+        assert!(err.to_string().contains("ignored its budget"), "got {err}");
         assert_eq!(error_url(&err), "https://x.test/v2");
     }
 
     #[tokio::test(start_paused = true)]
     async fn timed_out_entry_releases_its_concurrency_slot() {
-        // Entry #1 is dropped by the 1 s timeout while #2..#4 finish; with
+        // Entry #1 is dropped by the 1 s budget while #2..#4 finish; with
         // concurrency 2 the in-flight peak is 2 both before and after the
         // drop, so a leaked slot would show as a peak of 3 only if the
         // counter over-reported — the guard keeps it at exactly 2.
@@ -1023,6 +1192,41 @@ mod tests {
             .expect("later page failure returns the partial listing");
         assert_eq!(indices(&out), vec![1, 2]);
         assert!(out.iter().all(|i| i.playlist_count == Some(2)));
+        // The same partial result under an explicit skip policy.
+        let out = run(
+            &second_fails,
+            cfg(|c| c.playlist_ignore_errors = Some(true)),
+        )
+        .await
+        .expect("skip policy resolves the entries listed so far");
+        assert_eq!(indices(&out), vec![1, 2]);
+    }
+
+    /// Under `AbortOnFirstFailure` a later page's listing failure is the
+    /// playlist's failure: the page error comes back and nothing listed
+    /// so far is resolved — a partial playlist is exactly what the
+    /// operator opted out of.
+    #[tokio::test]
+    async fn later_page_error_aborts_under_abort_policy_without_resolving() {
+        let second_fails = MockPlaylist::new(Box::new(|p| {
+            if p == 1 {
+                Ok(page(entries(1, 2), true))
+            } else {
+                Err(RdlpError::extraction("page 2 down", "https://x.test"))
+            }
+        }));
+        let err = run(
+            &second_fails,
+            cfg(|c| c.playlist_ignore_errors = Some(false)),
+        )
+        .await
+        .expect_err("abort policy propagates a later page's failure");
+        assert!(err.to_string().contains("page 2 down"), "got {err}");
+        assert_eq!(
+            second_fails.resolves.load(Ordering::SeqCst),
+            0,
+            "nothing is resolved once the listing has failed under abort"
+        );
     }
 
     #[tokio::test]

@@ -2,8 +2,8 @@ use super::*;
 use crate::convert::MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES;
 use crate::test_harness::instantiate;
 use crate::test_support::unit::{
-    FIXTURE_MANIFEST, TEST_LOG_TARGET, captured_entry_containing, captured_logs, fixture_extractor,
-    fixture_extractor_from, test_origin,
+    FIXTURE_MANIFEST, TEST_LOG_TARGET, captured_count_containing, captured_entry_containing,
+    captured_logs, fixture_extractor, fixture_extractor_from, test_origin,
 };
 use crate::test_support::{EXAMPLE_0_5_2_WASM, extraction_ctx};
 
@@ -288,13 +288,9 @@ fn page_fetch_does_not_cap_or_warn_at_exactly_the_bound() {
     let false_positive_cap_message = format!(
         "extract-playlist: plugin test supplied {MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES} playlist entries"
     );
-    let wrongly_capped = logs
-        .lock()
-        .expect("test mutex is never poisoned")
-        .iter()
-        .any(|(_, m)| m.contains(&false_positive_cap_message));
-    assert!(
-        !wrongly_capped,
+    assert_eq!(
+        captured_count_containing(&logs, &false_positive_cap_message),
+        0,
         "exactly the bound must not warn (a >= instead of > would false-positive here)"
     );
 }
@@ -396,12 +392,32 @@ async fn not_found_on_page_1_propagates() {
 /// once. The count is filtered on THIS playlist's URL: the capture buffer
 /// is process-global, and every other playlist test in this binary
 /// probes its own page 1 too.
+///
+/// The same run also pins that `Config::playlist_item_timeout` is the
+/// budget the plugin runner runs each entry's `extract` under — ONE timer
+/// per entry, the runner's — via the runner's per-call budget line. A
+/// value above `EXTRACT_TIMEOUT` (30 s) is the discriminating case: a
+/// loop that wrapped `InfoExtractor::extract` would leave the runner at
+/// 30 s and make anything above it dead. One test rather than two because
+/// the fixture has exactly one real listing URL and the page-fetch count
+/// above is keyed on it — a second test listing it would double the
+/// count.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn real_first_page_hands_off_to_the_scaffold_and_fetches_page_1_once() {
+    use rdlp_core::ExtractionContext;
+    use std::sync::Arc;
+
     let ext = fixture_extractor_from(FIXTURE_MANIFEST, EXAMPLE_0_5_2_WASM);
     let logs = captured_logs();
+    let ctx = ExtractionContext {
+        config: Arc::new(rdlp_types::Config {
+            playlist_item_timeout: Some(31),
+            ..Default::default()
+        }),
+        ..extraction_ctx()
+    };
     let out = ext
-        .extract_playlist("https://example.com/a-real-playlist", &extraction_ctx())
+        .extract_playlist("https://example.com/a-real-playlist", &ctx)
         .await
         .expect("a real first page hands off to the scaffold");
     let ids: Vec<&str> = out.iter().map(|i| i.id.as_str()).collect();
@@ -411,15 +427,12 @@ async fn real_first_page_hands_off_to_the_scaffold_and_fetches_page_1_once() {
         "both pages' entries resolved, in order"
     );
     let page_fetches = |page: u32| {
-        logs.lock()
-            .expect("test mutex is never poisoned")
-            .iter()
-            .filter(|(_, m)| {
-                m.contains(&format!(
-                    "extract-playlist: fetching page {page} of https://example.com/a-real-playlist"
-                ))
-            })
-            .count()
+        captured_count_containing(
+            &logs,
+            &format!(
+                "extract-playlist: fetching page {page} of https://example.com/a-real-playlist"
+            ),
+        )
     };
     assert_eq!(page_fetches(2), 1, "the scaffold fetched page 2 itself");
     let page_1_fetches = page_fetches(1);
@@ -427,4 +440,14 @@ async fn real_first_page_hands_off_to_the_scaffold_and_fetches_page_1_once() {
         page_1_fetches, 1,
         "page one must be fetched exactly once — the probe's page is reused by the scaffold"
     );
+    for id in ["1", "2", "3"] {
+        assert_eq!(
+            captured_count_containing(
+                &logs,
+                &format!("for https://example.com/video/{id} under a 31s budget")
+            ),
+            1,
+            "entry {id} resolved under the configured budget, exactly once"
+        );
+    }
 }

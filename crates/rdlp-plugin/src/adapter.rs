@@ -278,10 +278,48 @@ impl InfoExtractor for PluginExtractor {
         p as i32
     }
 
+    /// One `extract` call under [`EXTRACT_TIMEOUT`] — see
+    /// [`PluginExtractor::extract_within`] for the call itself; the
+    /// playlist loop uses that entry point with its own per-item budget.
     async fn extract(&self, url: &str, ctx: &ExtractionContext) -> rdlp_core::Result<InfoDict> {
+        self.extract_within(url, ctx, EXTRACT_TIMEOUT).await
+    }
+
+    /// Drives `extract-playlist` through [`crate::playlist_adapter`]'s
+    /// `PagedPlaylist` scaffold, falling back to the trait default (one
+    /// `extract` call) when the export is absent or the plugin declines
+    /// the URL. See `PluginExtractor::extract_playlist_via_plugin` for the
+    /// probe/fallback design.
+    async fn extract_playlist(
+        &self,
+        url: &str,
+        ctx: &ExtractionContext,
+    ) -> rdlp_core::Result<Vec<InfoDict>> {
+        self.extract_playlist_via_plugin(url, ctx).await
+    }
+}
+
+impl PluginExtractor {
+    /// One `extract` call under `budget` — the runner's tokio timeout and
+    /// epoch deadline both. [`InfoExtractor::extract`] passes
+    /// [`EXTRACT_TIMEOUT`]; the playlist loop
+    /// (`playlist_adapter::PluginPlaylistSource::resolve_entry`) passes
+    /// `Config::playlist_item_timeout`, so an entry has ONE timer and a
+    /// slow one is a `PluginError::Timeout` — a strike, as for any extract.
+    ///
+    /// # Errors
+    ///
+    /// The runner's errors and the plugin's own, mapped through
+    /// [`plugin_error_to_rdlp`] with `url` as the subject.
+    pub(crate) async fn extract_within(
+        &self,
+        url: &str,
+        ctx: &ExtractionContext,
+        budget: Duration,
+    ) -> rdlp_core::Result<InfoDict> {
         let spec = CallSpec {
             subject_for_errors: url,
-            timeout: EXTRACT_TIMEOUT,
+            timeout: budget,
         };
         // An owned copy moves into the future: the runner's closure is
         // higher-ranked over the store borrow, so it cannot return a future
@@ -301,21 +339,6 @@ impl InfoExtractor for PluginExtractor {
         .map_err(|e| plugin_error_to_rdlp(e, Some(url)))
     }
 
-    /// Drives `extract-playlist` through [`crate::playlist_adapter`]'s
-    /// `PagedPlaylist` scaffold, falling back to the trait default (one
-    /// `extract` call) when the export is absent or the plugin declines
-    /// the URL. See `PluginExtractor::extract_playlist_via_plugin` for the
-    /// probe/fallback design.
-    async fn extract_playlist(
-        &self,
-        url: &str,
-        ctx: &ExtractionContext,
-    ) -> rdlp_core::Result<Vec<InfoDict>> {
-        self.extract_playlist_via_plugin(url, ctx).await
-    }
-}
-
-impl PluginExtractor {
     /// Run one plugin call in a fresh store: refuse if disabled, build the
     /// store with the capability contexts, instantiate, run `f` under
     /// `spec.timeout`, and apply the 3-strike accounting to the outcome.
@@ -355,6 +378,15 @@ impl PluginExtractor {
         let cancel = tokio_util::sync::CancellationToken::new();
         let ticks = deadline_ticks(spec.timeout, self.engine.tick_period());
         let mut store = build_store(&self.engine, &plugin, cancel.clone(), ticks);
+        // Which budget a call ran under is what a `Timeout` strike needs
+        // read next to: the playlist loop hands `extract` a per-item
+        // budget that differs from `EXTRACT_TIMEOUT`.
+        log::debug!(
+            target: &store.data().log_target,
+            "calling plugin {plugin} for {} under a {}s budget",
+            RedactedUrl::new(spec.subject_for_errors),
+            spec.timeout.as_secs()
+        );
         // Every call through this runner (extract, search, playlist pages)
         // shares one display identity for the call's lifetime, so it is set
         // once here rather than per-closure the way `metadata_caps` is

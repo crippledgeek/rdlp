@@ -30,7 +30,9 @@ use crate::adapter::{
 use crate::convert::{PluginOrigin, cap_plugin_playlist_entries};
 use crate::instance::PluginStoreData;
 use rdlp_core::{ExtractionContext, InfoExtractor, RdlpError, Result as RdlpResult};
-use rdlp_extractor::base::common::{PagedPlaylist, PlaylistEntry, PlaylistPage, PlaylistStart};
+use rdlp_extractor::base::common::{
+    PagedPlaylist, PlaylistEntry, PlaylistPage, PlaylistStart, ResolveRequest,
+};
 use rdlp_redact::RedactedUrl;
 use rdlp_types::InfoDict;
 
@@ -300,8 +302,8 @@ impl PluginExtractor {
 
 /// `PagedPlaylist` over one plugin: each page is one `extract-playlist`
 /// call in a fresh store under `SEARCH_TIMEOUT` ([`PluginExtractor::call_extract_playlist_page`]);
-/// each entry resolves via the plugin's own `extract`
-/// (`PluginExtractor::extract`).
+/// each entry resolves via the plugin's own `extract` under the loop's
+/// per-item budget ([`PluginExtractor::extract_within`]).
 pub(crate) struct PluginPlaylistSource<'a> {
     pub plugin: &'a PluginExtractor,
 }
@@ -336,12 +338,18 @@ impl PagedPlaylist for PluginPlaylistSource<'_> {
         }
     }
 
+    /// The budget is the plugin call's own tokio timeout and epoch
+    /// deadline, so a slow entry is a `PluginError::Timeout` (a strike,
+    /// exactly as for a single `extract`) and the loop's guard never
+    /// competes with it.
     async fn resolve_entry(
         &self,
-        entry: &PlaylistEntry,
+        request: ResolveRequest<'_>,
         ctx: &ExtractionContext,
     ) -> RdlpResult<InfoDict> {
-        InfoExtractor::extract(self.plugin, &entry.url, ctx).await
+        self.plugin
+            .extract_within(&request.entry.url, ctx, request.budget)
+            .await
     }
 }
 

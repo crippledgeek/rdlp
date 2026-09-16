@@ -4,7 +4,8 @@ use super::super::{
 };
 use super::*;
 use crate::test_support::unit::{
-    LogEntries, TEST_LOG_TARGET, captured_entry_containing, captured_logs, test_origin,
+    TEST_LOG_TARGET, captured_count_containing, captured_entry_containing, captured_logs,
+    test_origin,
 };
 use serde_json::json;
 
@@ -28,17 +29,6 @@ fn run(extras: Vec<(&str, WitMetaValue)>, caps: &MetadataCaps) -> HashMap<String
         caps,
         &test_origin(),
     )
-}
-
-/// How many captured entries on the test target contain `needle` —
-/// the "warn once per refusal class" assertions need a count, not
-/// just presence.
-fn warn_count(logs: &LogEntries, needle: &str) -> usize {
-    logs.lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .iter()
-        .filter(|(t, m)| t == TEST_LOG_TARGET && m.contains(needle))
-        .count()
 }
 
 #[test]
@@ -215,7 +205,11 @@ fn max_extras_boundary() {
     let needle = "2 extras past the 3-entry bound";
     let (target, _) = captured_entry_containing(&logs, needle);
     assert_eq!(target, TEST_LOG_TARGET);
-    assert_eq!(warn_count(&logs, needle), 1, "warn once per class");
+    assert_eq!(
+        captured_count_containing(&logs, needle),
+        1,
+        "warn once per class"
+    );
 }
 
 /// Fix round 1, finding 1: once the count bound is reached, later entries
@@ -241,9 +235,9 @@ fn entries_past_the_count_bound_skip_the_reserved_probe() {
     assert!(out.contains_key("keep"));
     let needle = "3 extras past the 1-entry bound";
     captured_entry_containing(&logs, needle);
-    assert_eq!(warn_count(&logs, needle), 1);
+    assert_eq!(captured_count_containing(&logs, needle), 1);
     assert_eq!(
-        warn_count(&logs, "1 extras whose key shadows"),
+        captured_count_containing(&logs, "1 extras whose key shadows"),
         0,
         "no probe ran past the bound"
     );
@@ -268,7 +262,10 @@ fn entries_after_the_aggregate_is_crossed_skip_the_reserved_probe() {
     );
     assert!(out.is_empty(), "{out:?}");
     captured_entry_containing(&logs, "3 extras past the 4-byte aggregate bound");
-    assert_eq!(warn_count(&logs, "2 extras whose key shadows"), 0);
+    assert_eq!(
+        captured_count_containing(&logs, "2 extras whose key shadows"),
+        0
+    );
 }
 
 /// `value_bytes` bounds a `text` by its UTF-8 bytes and a `text-list` by
@@ -314,7 +311,11 @@ fn value_bytes_boundary() {
         msg.contains(&format!("{METADATA_LIST_ITEM_BYTES} per text-list item")),
         "{msg}"
     );
-    assert_eq!(warn_count(&logs, needle), 1, "warn once per class");
+    assert_eq!(
+        captured_count_containing(&logs, needle),
+        1,
+        "warn once per class"
+    );
 }
 
 /// Fix round 1, finding 2: a `text-list`'s element COUNT is bounded even
@@ -412,7 +413,11 @@ fn total_bytes_boundary() {
     assert!(over.contains_key("a"));
     let needle = "2 extras past the 20-byte aggregate bound";
     captured_entry_containing(&logs, needle);
-    assert_eq!(warn_count(&logs, needle), 1, "warn once per class");
+    assert_eq!(
+        captured_count_containing(&logs, needle),
+        1,
+        "warn once per class"
+    );
 }
 
 #[test]

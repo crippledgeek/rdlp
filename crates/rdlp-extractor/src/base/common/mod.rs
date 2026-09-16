@@ -63,8 +63,8 @@ use regex::Regex;
 /// listing/range/resolution loop a plugin's playlist extension answers
 /// against, plus the page/entry records it exchanges.
 pub use playlist::{
-    DEFAULT_PLAYLIST_CONCURRENCY, DEFAULT_PLAYLIST_ITEM_TIMEOUT_SECS, PagedPlaylist, PlaylistEntry,
-    PlaylistPage, PlaylistResolution, PlaylistStart,
+    DEFAULT_PLAYLIST_CONCURRENCY, DEFAULT_PLAYLIST_ITEM_TIMEOUT_SECS, PLAYLIST_ITEM_TIMEOUT_GRACE,
+    PagedPlaylist, PlaylistEntry, PlaylistPage, PlaylistResolution, PlaylistStart, ResolveRequest,
 };
 pub(crate) use protocol::protocol_for_url;
 pub(crate) use search::SearchOrigin;
@@ -83,8 +83,8 @@ pub(crate) use search::{
 };
 /// The playlist loop's own overall cap, reachable outside this crate so a
 /// caller that bounds a plugin-controlled row list at the WIT boundary
-/// (`rdlp-plugin`'s `cap_plugin_playlist_entries`) can cite the same
-/// literal rather than restating it (fix round 1, finding 2, refs #768).
+/// (`rdlp-plugin`'s `cap_plugin_playlist_entries`) cites the one constant
+/// rather than restating it — a restated literal drifts (#768).
 pub use selectors::MAX_PLAYLIST_SIZE;
 pub(crate) use selectors::*;
 

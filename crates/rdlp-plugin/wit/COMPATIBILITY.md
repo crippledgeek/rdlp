@@ -119,20 +119,29 @@ concurrency, timeout, or failure policy crosses the WIT boundary:
 - *Concurrency.* `Config::playlist_concurrency`, default
   `DEFAULT_PLAYLIST_CONCURRENCY` = 1 (validated `1..=16`).
 - *Per-item timeout.* `Config::playlist_item_timeout` seconds, default
-  `DEFAULT_PLAYLIST_ITEM_TIMEOUT_SECS` = 30 (validated `1..=600`).
+  `DEFAULT_PLAYLIST_ITEM_TIMEOUT_SECS` = 30 (validated `1..=600`). It is
+  the budget of the entry's `extract` call itself
+  (`PluginExtractor::extract_within`: the runner's tokio timeout AND epoch
+  deadline), so an entry has ONE timer; a slow entry is a
+  `PluginError::Timeout`, which is a strike exactly as for a single
+  `extract`. The loop's own guard sits `PLAYLIST_ITEM_TIMEOUT_GRACE` (5 s)
+  behind the budget and fires only for an implementor that ignores it —
+  never for a plugin.
 - *Failure.* `Config::playlist_ignore_errors`, default `true`: a failed or
-  timed-out entry is skipped with a warning. `false`: the first failed entry
-  *by listing position* returns its own error (a timeout becomes an
-  `Extraction` error naming the entry) and nothing is returned. A later
-  page's listing failure is not an error: the entries listed so far are
-  resolved.
-- *Stamping.* Every resolved `InfoDict` gets `playlist`/`playlist_id` from
-  `playlist-id`, `playlist_title`, `playlist_index` = its 1-based listing
-  position, and `playlist_count` = the site's `total-estimate` from page
-  one when present (never below the listed count — a site total smaller
-  than what was listed is wrong by construction), else the number of
-  entries listed (yt-dlp `n_entries`) — never the number selected or
-  resolved.
+  timed-out entry is skipped with a warning, and a later page's listing
+  failure is warned about and the entries listed so far are resolved.
+  `false`: the first failed entry *by listing position* returns its own
+  error and nothing is returned; a later page's listing failure returns
+  the page's own error before anything is resolved. A first-page failure
+  propagates under either policy.
+- *Stamping.* Every resolved `InfoDict` gets `playlist_id` from
+  `playlist-id`, `playlist_title` from `playlist-title`, `playlist` = the
+  title when present else the id (yt-dlp `playlist = playlist_title or
+  playlist_id`), `playlist_index` = its 1-based listing position, and
+  `playlist_count` = the site's `total-estimate` from page one when
+  present (never below the listed count — a site total smaller than what
+  was listed is wrong by construction), else the number of entries listed
+  (yt-dlp `n_entries`) — never the number selected or resolved.
 
 ## 9. Metadata (0.5.2)
 

@@ -511,17 +511,44 @@ signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         }))
     }
 
-    /// First captured entry whose message contains `needle`, cloned out so
-    /// the lock is released before any assertion panics.
-    pub fn captured_entry_containing(logs: &LogEntries, needle: &str) -> (String, String) {
-        let entries = logs
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        entries
+    /// Every captured entry whose message contains `needle`, cloned out so
+    /// the lock is released before any assertion panics. The one filter
+    /// behind [`captured_entry_containing`] and [`captured_count_containing`]:
+    /// the buffer is process-global and shared with every other test in
+    /// the binary, so a needle must be distinctive enough (a URL, a count,
+    /// a bound) to select one test's lines.
+    fn captured_matching(logs: &LogEntries, needle: &str) -> Vec<(String, String)> {
+        logs.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
-            .find(|(_, m)| m.contains(needle))
+            .filter(|(_, m)| m.contains(needle))
             .cloned()
-            .unwrap_or_else(|| panic!("no entry containing {needle:?} among {entries:?}"))
+            .collect()
+    }
+
+    /// First captured entry whose message contains `needle`.
+    ///
+    /// # Panics
+    ///
+    /// When no entry contains `needle`, naming every captured entry.
+    pub fn captured_entry_containing(logs: &LogEntries, needle: &str) -> (String, String) {
+        captured_matching(logs, needle)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| {
+                let entries = logs
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clone();
+                panic!("no entry containing {needle:?} among {entries:?}")
+            })
+    }
+
+    /// How many captured entries contain `needle` — for the "exactly
+    /// once" assertions (one warning per refusal class, one fetch per
+    /// page, one runner call per entry).
+    pub fn captured_count_containing(logs: &LogEntries, needle: &str) -> usize {
+        captured_matching(logs, needle).len()
     }
 }
 
