@@ -15,6 +15,17 @@ pub enum PluginError {
         reason: String,
     },
 
+    /// `plugin.wasm` is larger than the host reads before verifying it.
+    #[error("plugin binary at {path} is {bytes} bytes; the most rdlp loads is {max}")]
+    WasmTooLarge {
+        /// Filesystem path of the oversized `plugin.wasm`.
+        path: PathBuf,
+        /// Its size on disk.
+        bytes: u64,
+        /// [`crate::signature::MAX_PLUGIN_WASM_BYTES`].
+        max: u64,
+    },
+
     /// Cryptographic signature verification failed.
     #[error("signature verification failed for plugin '{plugin}': {reason}")]
     SignatureInvalid {

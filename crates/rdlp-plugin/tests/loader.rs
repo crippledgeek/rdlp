@@ -230,6 +230,54 @@ fn identity_mismatch_refuses_load() {
     }
 }
 
+/// A `plugin.wasm` over the cap is refused from its size alone — before
+/// it is read, so before the signature is checked (#784). The file is
+/// sparse: `set_len` past the cap costs no disk and no time, and a
+/// refusal that had read the bytes first would have found a signature
+/// mismatch, not a size error.
+#[test]
+fn an_oversized_wasm_is_refused_by_size_before_it_is_read() {
+    use rdlp_plugin::signature::MAX_PLUGIN_WASM_BYTES;
+
+    let td = TempDir::new().unwrap();
+    let plugins_dir = td.path().join("plugins");
+    let key = SigningKey::generate(&mut OsRng);
+    let wasm = stub_wasm();
+    write_signed_plugin(
+        &plugins_dir.join("huge"),
+        &key,
+        &SignedPluginSpec {
+            capabilities: &["log"],
+            ..SignedPluginSpec::stub("huge", &wasm)
+        },
+    );
+    let wasm_path = plugins_dir.join("huge").join("plugin.wasm");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&wasm_path)
+        .unwrap()
+        .set_len(MAX_PLUGIN_WASM_BYTES + 1)
+        .unwrap();
+
+    let (engine, mut trust, prompter) = make_loader_args(&td, Arc::new(AlwaysApprove));
+    let mut loader = Loader::new(&engine, &mut trust, prompter);
+    let outcomes = loader.discover(&plugins_dir);
+
+    assert_eq!(outcomes.len(), 1);
+    let Err((_, err)) = &outcomes[0] else {
+        panic!("an oversized plugin must be refused")
+    };
+    assert!(
+        matches!(
+            err,
+            PluginError::WasmTooLarge { bytes, max, .. }
+                if *bytes == MAX_PLUGIN_WASM_BYTES + 1 && *max == MAX_PLUGIN_WASM_BYTES
+        ),
+        "size refusal, not a signature one: {err}"
+    );
+    assert!(trust.lookup("huge").is_none(), "nothing recorded");
+}
+
 #[test]
 fn bad_signature_logged_and_skipped() {
     let td = TempDir::new().unwrap();

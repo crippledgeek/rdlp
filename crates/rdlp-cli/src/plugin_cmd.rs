@@ -102,12 +102,9 @@ fn identity_and_state(
     hint: Hint,
 ) -> (String, String) {
     let identity = m.signature.identity_string();
-    #[allow(clippy::disallowed_methods)] // CLI command — sync I/O acceptable
-    let verified = std::fs::read(plugin_dir.join("plugin.wasm"))
-        .map_err(|e| PluginError::Internal(format!("read plugin.wasm: {e}")))
-        .and_then(|wasm| rdlp_plugin::signature::verify(m, &wasm));
+    let verified = rdlp_plugin::signature::verify_file(m, &plugin_dir.join("plugin.wasm"));
     let check = trust.check_identity_match(&m.name, &identity);
-    let state = trust_state(verified.as_ref().map(|()| &check), &m.name, &identity, hint);
+    let state = trust_state(verified.as_ref().map(|_| &check), &m.name, &identity, hint);
     (identity, state)
 }
 
