@@ -1,9 +1,14 @@
 //! Columnar transposition cipher.
 
 /// Undo a columnar transposition keyed by `key`'s sorted character order (empty key = identity).
+///
+/// Padded: a partial last row is filled with spaces, so `columnar_transpose`
+/// then `columnar_untranspose` round-trips exactly only when `src.len()` is a
+/// multiple of `key`'s character count (see
+/// `untranspose_pads_a_partial_last_row_with_spaces`).
 #[must_use]
 pub fn columnar_untranspose(src: &[char], key: &str) -> Vec<char> {
-    let column_count = key.len();
+    let column_count = key.chars().count();
     if column_count == 0 {
         return src.to_vec();
     }
@@ -38,9 +43,12 @@ pub fn columnar_untranspose(src: &[char], key: &str) -> Vec<char> {
 }
 
 /// The forward direction (used by round-trip tests and any encoder).
+///
+/// Padded the same way as [`columnar_untranspose`]: a partial last row is
+/// filled with spaces.
 #[must_use]
 pub fn columnar_transpose(src: &[char], key: &str) -> Vec<char> {
-    let column_count = key.len();
+    let column_count = key.chars().count();
     if column_count == 0 {
         return src.to_vec();
     }
@@ -105,5 +113,22 @@ mod tests {
         let out = columnar_untranspose(&['a', 'b', 'c', 'd', 'e'], "abc");
         assert_eq!(out.len(), 6);
         assert!(out.contains(&' '));
+    }
+
+    #[test]
+    fn non_ascii_key_round_trips() {
+        // "kéy" is 3 chars but 4 UTF-8 bytes (é is 2 bytes) — column_count must
+        // come from key.chars().count(), not key.len(), or the grid is built
+        // with the wrong column count and the round trip is silently wrong.
+        // 7 chars over a 3-column key pads the last row (see
+        // `untranspose_pads_a_partial_last_row_with_spaces`); trim it like
+        // `columnar_roundtrip` does.
+        let plain: Vec<char> = "abcdefg".chars().collect();
+        let key = "kéy";
+        let mut roundtripped = columnar_untranspose(&columnar_transpose(&plain, key), key);
+        while roundtripped.last() == Some(&' ') {
+            roundtripped.pop();
+        }
+        assert_eq!(roundtripped, plain);
     }
 }

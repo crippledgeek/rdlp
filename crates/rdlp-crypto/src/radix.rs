@@ -6,6 +6,10 @@ const BASE36: u32 = 36;
 /// The base-36 alphabet, `0-9` then `a-z`, indexed by remainder.
 const ALPHA: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
 
+// If ALPHA and BASE36 drift apart, `n % BASE36` can index past ALPHA's end —
+// `to_base36` would then silently truncate a digit rather than encode it.
+const _: () = assert!(ALPHA.len() == BASE36 as usize);
+
 /// Encode `n` as a base-36 string using the `0-9a-z` alphabet.
 ///
 /// # Panics
