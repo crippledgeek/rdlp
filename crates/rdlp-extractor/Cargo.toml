@@ -12,7 +12,6 @@ rdlp-types = { path = "../rdlp-types" }
 rdlp-security = { path = "../rdlp-security" }
 rdlp-redact = { workspace = true }
 rdlp-crypto = { path = "../rdlp-crypto" }
-rdlp-jsinterp = { path = "../rdlp-jsinterp" }
 rdlp-http = { path = "../rdlp-http" }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
@@ -27,7 +26,6 @@ thiserror = { workspace = true }
 regex = { workspace = true }
 lazy-regex = { workspace = true }
 url = { workspace = true }
-inventory = { workspace = true }
 base64 = { workspace = true }
 m3u8-rs = { workspace = true }
 futures = { workspace = true }
@@ -58,6 +56,8 @@ test-support = []
 
 [dev-dependencies]
 hex = { workspace = true }
+# Only `tests/spankbang_live.rs` evaluates site JS; production extraction never does.
+rdlp-jsinterp = { path = "../rdlp-jsinterp" }
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 mockito = { workspace = true }
 rdlp-cookies = { path = "../rdlp-cookies" }

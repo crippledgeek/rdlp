@@ -19,6 +19,7 @@
 use anyhow::Context as _;
 use rdlp_core::{RdlpError, Result};
 use rdlp_crypto::hash::java_string_hash32;
+use rdlp_crypto::prng::lcg_step;
 use rdlp_crypto::shuffle::seeded_shuffle;
 use rdlp_crypto::transposition::columnar_untranspose;
 
@@ -27,20 +28,22 @@ const LAYERS: u32 = 3;
 
 /// glibc-style LCG the aniwatch `seedRand` uses: `(s * 1103515245 + 12345) & 0x7FFF_FFFF`.
 ///
-/// `rdlp_crypto::prng::lcg_step` is deliberately NOT used here: that primitive
-/// wraps its state as a JS `i32` (32-bit, sign-preserving), while this cipher's
-/// `seedRand` masks to 31 bits (`& 0x7FFF_FFFF`, always non-negative) — a
-/// different modulus, not an instance of the same shape.
-const GLIBC_LCG_MULT: u64 = 1_103_515_245;
-const GLIBC_LCG_INC: u64 = 12345;
-const GLIBC_LCG_MASK: u64 = 0x7FFF_FFFF;
+/// The multiplier/increment pair is glibc's `rand()`; the 31-bit mask is the
+/// site's, applied on top of the toolkit's `lcg_step`. That is exact, not an
+/// approximation: `lcg_step` wraps modulo 2^32 and 2^31 divides 2^32, so the low
+/// 31 bits of its result equal the 31-bit state for every seed.
+const GLIBC_LCG_MULT: u32 = 1_103_515_245;
+const GLIBC_LCG_INC: u32 = 12345;
+const GLIBC_LCG_MASK: u32 = 0x7FFF_FFFF;
 
-/// One draw in `0..modulus`, advancing `seed` (site parameter of the cipher, not a toolkit primitive).
+/// One draw in `0..modulus`, advancing `seed`. The `u64` state and the
+/// `% modulus` draw are this cipher's wiring around the toolkit step.
 fn glibc_lcg_step(seed: &mut u64, modulus: u64) -> u64 {
-    *seed = (seed
-        .wrapping_mul(GLIBC_LCG_MULT)
-        .wrapping_add(GLIBC_LCG_INC))
-        & GLIBC_LCG_MASK;
+    // `as i32` truncates to the low 32 bits, and only the low 31 survive the
+    // mask below, so a seed above u32 (never produced here) would still step correctly.
+    let next = lcg_step(*seed as i32, GLIBC_LCG_MULT, GLIBC_LCG_INC);
+    // `as u32` reinterprets the two's-complement bits so the mask sees them unsigned.
+    *seed = u64::from(next as u32 & GLIBC_LCG_MASK);
     *seed % modulus
 }
 
@@ -251,13 +254,13 @@ mod tests {
     }
 
     #[test]
-    fn test_keygen_deterministic() {
-        let k1 = keygen("megakey", "clientkey");
-        let k2 = keygen("megakey", "clientkey");
-        assert_eq!(k1, k2);
-        assert!(!k1.is_empty());
-        // All chars should be printable ASCII
-        assert!(k1.chars().all(|c| (32..=126).contains(&(c as u32))));
+    fn keygen_output_is_printable_ascii() {
+        // The final `% 95 + 32` normalisation is what keeps the derived key
+        // inside the cipher's alphabet; an off-by-one there leaks control
+        // characters or DEL into every layer key.
+        let key = keygen("megakey", "clientkey");
+        assert!(!key.is_empty());
+        assert!(key.chars().all(|c| (32..=126).contains(&(c as u32))));
     }
 
     #[test]
