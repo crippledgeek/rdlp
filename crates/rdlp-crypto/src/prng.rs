@@ -4,14 +4,21 @@
 //! ciphers: seeded byte generators that reproduce a target's `Math.random`-style
 //! or hand-rolled PRNG bit-for-bit.
 //!
+//! Every step here is public as "a number plus its parameters" — `lcg_step`,
+//! `weyl_step`, `xorshift`, `rotate_scramble`, `fmix32`, `pcg_xsh_rs`, and
+//! `mxs_mix` — so a site wiring a *new* JS-emulating cipher composes them
+//! directly instead of re-deriving the arithmetic. [`ByteGenerator`] is the
+//! composed 7-algorithm façade this crate's own callers (`xhamster`) use.
+//!
 //! ## JavaScript Integer Semantics
 //!
 //! All arithmetic here intentionally emulates JavaScript's 32-bit signed integer
-//! behavior. JavaScript bitwise operators coerce operands to `i32`; Python's
-//! yt-dlp uses `n % (sign * 2^32)`. In Rust we use `i64` intermediate values
-//! and truncate with `as i32`, which matches the JS semantics exactly.
-//! Clippy warnings about sign-change and truncation casts are suppressed
+//! behavior via [`crate::js_int::to_signed_32`] (re-exported here as
+//! [`to_signed_32`] for call-site brevity — every function in this module needs
+//! it). Clippy warnings about sign-change and truncation casts are suppressed
 //! per-function with explanatory comments; they are intentional.
+
+pub use crate::js_int::to_signed_32;
 
 // =============================================================================
 // Constants
@@ -40,19 +47,76 @@ const XORSHIFT_ADD_CONST: u32 = 0xa5a5_a5a5;
 const MXS_MULT1: u32 = 0x7feb_352d;
 const MXS_MULT2: u32 = 0x846c_a68b;
 
-/// Convert a value to signed 32-bit integer matching JavaScript's behavior.
+/// A left-rotation amount valid for [`rotate_scramble`] (and any `u32::rotate_left` caller).
 ///
-/// JavaScript bitwise operators work on signed 32-bit integers. Python's
-/// yt-dlp uses `n % (sign * 2^32)` to emulate this. In Rust we simply
-/// truncate to i32 via wrapping.
-#[allow(clippy::cast_possible_truncation)]
-#[inline]
-#[must_use]
-pub const fn to_signed_32(n: i64) -> i32 {
-    n as i32
+/// `rotate_left` **wraps** its shift at 32 bits rather than rejecting an
+/// out-of-range value (`x.rotate_left(35) == x.rotate_left(3)`), which would
+/// silently alias two different algorithm parameters onto the same behavior —
+/// this newtype rejects that at construction instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Rotation(u32);
+
+impl Rotation {
+    /// Validate `amount` is in `0..32` (`u32::rotate_left`'s wrap boundary).
+    /// Returns `None` outside that range.
+    #[must_use]
+    pub const fn new(amount: u32) -> Option<Self> {
+        if amount < 32 {
+            Some(Self(amount))
+        } else {
+            None
+        }
+    }
 }
 
-/// Xorshift with configurable shift values (left, right, left pattern).
+/// The ROL-7 rotation [`ByteGenerator::weyl_rol7`] scrambles with.
+const ROL7: Rotation = match Rotation::new(7) {
+    Some(r) => r,
+    None => panic!("7 is in 0..32"),
+};
+
+/// The three left/right/left shift amounts a [`xorshift`] variant uses.
+///
+/// Validated once at construction rather than as three loose `u8` parameters
+/// (see `limit-function-arguments`: a cohesive triple of shift amounts is
+/// exactly the "data clump" the rule asks to be grouped). `u32::rotate`-style
+/// wraparound applies here too, hence the same `< 32` bound as [`Rotation`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct XorshiftShifts {
+    left1: u8,
+    right: u8,
+    left2: u8,
+}
+
+impl XorshiftShifts {
+    /// Validate all three shifts are in `0..32`. Returns `None` otherwise.
+    #[must_use]
+    pub const fn new(left1: u8, right: u8, left2: u8) -> Option<Self> {
+        if left1 < 32 && right < 32 && left2 < 32 {
+            Some(Self {
+                left1,
+                right,
+                left2,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+/// Shift triple for [`ByteGenerator::xorshift32`] (algorithm 2).
+const XORSHIFT32_SHIFTS: XorshiftShifts = match XorshiftShifts::new(13, 17, 5) {
+    Some(s) => s,
+    None => panic!("13, 17, 5 are all in 0..32"),
+};
+
+/// Shift triple for [`ByteGenerator::xorshift_add`] (algorithm 5).
+const XORSHIFT_ADD_SHIFTS: XorshiftShifts = match XorshiftShifts::new(7, 9, 8) {
+    Some(s) => s,
+    None => panic!("7, 9, 8 are all in 0..32"),
+};
+
+/// Xorshift with a configurable, validated shift triple.
 ///
 /// Reference: <https://en.wikipedia.org/wiki/Xorshift>
 #[allow(
@@ -61,11 +125,12 @@ pub const fn to_signed_32(n: i64) -> i32 {
     clippy::cast_lossless
 )]
 #[inline]
-fn xorshift(state: i32, shift_left1: u8, shift_right: u8, shift_left2: u8) -> i32 {
+#[must_use]
+pub fn xorshift(state: i32, shifts: XorshiftShifts) -> i32 {
     let mut x = state;
-    x = to_signed_32(i64::from(x) ^ (i64::from(x) << shift_left1));
-    x = to_signed_32(i64::from(x) ^ ((x as u32 >> shift_right) as i64));
-    to_signed_32(i64::from(x) ^ (i64::from(x) << shift_left2))
+    x = to_signed_32(i64::from(x) ^ (i64::from(x) << shifts.left1));
+    x = to_signed_32(i64::from(x) ^ ((x as u32 >> shifts.right) as i64));
+    to_signed_32(i64::from(x) ^ (i64::from(x) << shifts.left2))
 }
 
 /// Linear Congruential Generator step: `s * multiplier + increment`, in JS i32
@@ -85,7 +150,8 @@ pub fn lcg_step(s: i32, multiplier: u32, increment: u32) -> i32 {
 /// Reference: <https://en.wikipedia.org/wiki/Weyl_sequence>
 #[allow(clippy::cast_possible_wrap)]
 #[inline]
-const fn weyl_step(s: i32, increment: u32) -> i32 {
+#[must_use]
+pub const fn weyl_step(s: i32, increment: u32) -> i32 {
     s.wrapping_add(increment as i32)
 }
 
@@ -114,12 +180,52 @@ pub fn fmix32(mut s: i32) -> i32 {
     clippy::cast_possible_truncation
 )]
 #[inline]
-const fn rol_scramble(s: i32, rotation: u32) -> i32 {
-    let mut x = (s as u32).rotate_left(rotation) as i32;
+#[must_use]
+pub const fn rotate_scramble(s: i32, rotation: Rotation) -> i32 {
+    let mut x = (s as u32).rotate_left(rotation.0) as i32;
     x = x.wrapping_add(PHI as i32);
     x ^= (x as u32 >> 11) as i32;
     // Intentional: JS-emulation truncation from i64 to i32
     (i64::wrapping_mul(x as i64, ROL_SCRAMBLE_MULT as i64)) as i32
+}
+
+/// PCG's XSH-RS output permutation, lifted out of [`ByteGenerator::lcg_pcg`].
+///
+/// Xorshift, then a variable right-shift keyed off the input's high bits, so
+/// any LCG-based generator can reuse the same output function.
+///
+/// Reference: <https://en.wikipedia.org/wiki/Permuted_congruential_generator>
+/// and the PCG paper §6.3.1 (O'Neill, 2014).
+#[allow(
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation
+)]
+#[inline]
+#[must_use]
+pub fn pcg_xsh_rs(state: i32) -> i32 {
+    let s2 = to_signed_32(i64::from(state) ^ i64::from(state as u32 >> 18));
+    let shift = (state as u32 >> 27) & 31;
+    (s2 as u32 >> shift) as i32
+}
+
+/// Multiply-xor-shift (MXS) mixer, lifted out of [`ByteGenerator::weyl_mxs`].
+///
+/// Xor-shift, multiply, xor-shift, multiply, with the two multipliers as
+/// parameters so a different MXS instance can reuse the same mixing shape.
+#[allow(
+    clippy::cast_sign_loss,
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation
+)]
+#[inline]
+#[must_use]
+pub fn mxs_mix(state: i32, mult1: u32, mult2: u32) -> i32 {
+    // All casts are intentional JS-emulation truncation
+    let mut x = to_signed_32(i64::from(state) ^ (i64::from(state) << 5));
+    x = to_signed_32(i64::from(x) * i64::from(mult1));
+    x = to_signed_32(i64::from(x) ^ i64::from(x as u32 >> 15));
+    to_signed_32(i64::from(x) * i64::from(mult2))
 }
 
 /// Pseudo-random number generator with 7 algorithm variants.
@@ -191,7 +297,7 @@ impl ByteGenerator {
     ///
     /// Reference: <https://en.wikipedia.org/wiki/Xorshift>
     fn xorshift32(&mut self) -> i32 {
-        self.state = xorshift(self.state, 13, 17, 5);
+        self.state = xorshift(self.state, XORSHIFT32_SHIFTS);
         self.state
     }
 
@@ -207,44 +313,27 @@ impl ByteGenerator {
     /// Weyl Sequence + ROL-7 scrambling.
     const fn weyl_rol7(&mut self) -> i32 {
         self.state = weyl_step(self.state, WEYL_ROL_INC);
-        rol_scramble(self.state, 7)
+        rotate_scramble(self.state, ROL7)
     }
 
     /// Xorshift variant with constant addition (shifts: 7, 9, 8).
     #[allow(clippy::cast_possible_wrap)]
     fn xorshift_add(&mut self) -> i32 {
-        self.state = xorshift(self.state, 7, 9, 8).wrapping_add(XORSHIFT_ADD_CONST as i32);
+        self.state =
+            xorshift(self.state, XORSHIFT_ADD_SHIFTS).wrapping_add(XORSHIFT_ADD_CONST as i32);
         self.state
     }
 
     /// LCG with PCG-style variable right-shift scrambler.
-    #[allow(
-        clippy::cast_sign_loss,
-        clippy::cast_possible_wrap,
-        clippy::cast_possible_truncation
-    )]
     fn lcg_pcg(&mut self) -> i32 {
         self.state = lcg_step(self.state, PCG_MULT, PCG_INC);
-        // PCG output function: xor-shift then variable right-shift
-        let s2 = to_signed_32(i64::from(self.state) ^ i64::from(self.state as u32 >> 18));
-        let shift = (self.state as u32 >> 27) & 31;
-        (s2 as u32 >> shift) as i32
+        pcg_xsh_rs(self.state)
     }
 
     /// Weyl Sequence + multiply-xor-shift (MXS) mixing.
-    #[allow(
-        clippy::cast_sign_loss,
-        clippy::cast_possible_wrap,
-        clippy::cast_possible_truncation
-    )]
     fn weyl_mxs(&mut self) -> i32 {
         self.state = weyl_step(self.state, PHI);
-        // MXS: xor-shift, multiply, xor-shift, multiply
-        // All casts are intentional JS-emulation truncation
-        let mut x = to_signed_32(i64::from(self.state) ^ (i64::from(self.state) << 5));
-        x = to_signed_32(i64::from(x) * i64::from(MXS_MULT1));
-        x = to_signed_32(i64::from(x) ^ i64::from(x as u32 >> 15));
-        to_signed_32(i64::from(x) * i64::from(MXS_MULT2))
+        mxs_mix(self.state, MXS_MULT1, MXS_MULT2)
     }
 }
 
@@ -253,14 +342,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_to_signed_32() {
-        assert_eq!(to_signed_32(0), 0);
-        assert_eq!(to_signed_32(1), 1);
-        assert_eq!(to_signed_32(-1), -1);
-        assert_eq!(to_signed_32(0x7FFF_FFFF), 0x7FFF_FFFF);
-        // Overflow wraps
-        assert_eq!(to_signed_32(0x1_0000_0000), 0);
-        assert_eq!(to_signed_32(0x1_0000_0001), 1);
+    fn rotation_validates_the_rotate_left_wrap_boundary() {
+        assert!(Rotation::new(0).is_some());
+        assert!(Rotation::new(31).is_some());
+        assert!(Rotation::new(32).is_none());
+        assert!(Rotation::new(u32::MAX).is_none());
+    }
+
+    #[test]
+    fn xorshift_shifts_validates_all_three_amounts() {
+        assert!(XorshiftShifts::new(0, 0, 0).is_some());
+        assert!(XorshiftShifts::new(31, 31, 31).is_some());
+        assert!(XorshiftShifts::new(32, 0, 0).is_none());
+        assert!(XorshiftShifts::new(0, 32, 0).is_none());
+        assert!(XorshiftShifts::new(0, 0, 32).is_none());
+    }
+
+    #[test]
+    fn pcg_xsh_rs_matches_reference_value() {
+        // Reference value computed independently (Python, matching Rust's
+        // i32/u32 wrapping semantics) for state = 0x1234_5678, before this
+        // function existed — pcg_xsh_rs is a pure extraction of lcg_pcg's
+        // output-permutation body, so this pins the composition is unchanged.
+        assert_eq!(pcg_xsh_rs(0x1234_5678), 76_354_749);
+    }
+
+    #[test]
+    fn mxs_mix_matches_reference_value() {
+        // Reference value computed independently for state = 0x1234_5678 with
+        // this module's own MXS_MULT1/MXS_MULT2 — mxs_mix is a pure extraction
+        // of weyl_mxs's mixing body.
+        assert_eq!(mxs_mix(0x1234_5678, MXS_MULT1, MXS_MULT2), -1_133_639_945);
     }
 
     #[test]
@@ -321,6 +433,31 @@ mod tests {
                     "Algorithm {algo_id} not deterministic"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn test_byte_generator_reference_bytes_per_algorithm() {
+        // One concrete byte per algorithm from seed 12345, pinned from the
+        // pre-refactor implementation (before rotate_scramble/xorshift/
+        // pcg_xsh_rs/mxs_mix were extracted as public compositions) — proves
+        // the extraction changed no algorithm's output.
+        let expected: [(u8, u8); 7] = [
+            (1, 68),
+            (2, 122),
+            (3, 154),
+            (4, 249),
+            (5, 84),
+            (6, 197),
+            (7, 229),
+        ];
+        for (algo_id, expected_byte) in expected {
+            let mut rng = ByteGenerator::new(algo_id, 12345).unwrap();
+            assert_eq!(
+                rng.next_byte(),
+                expected_byte,
+                "algorithm {algo_id} byte changed"
+            );
         }
     }
 }
