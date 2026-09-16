@@ -25,8 +25,8 @@ use wasmtime::Store;
 
 use crate::PluginError;
 use crate::adapter::{
-    CallSpec, CommonPluginErr, FreshInstance, PluginExtractor, SEARCH_TIMEOUT, common_plugin_error,
-    plugin_error_to_rdlp,
+    CallSpec, CommonPluginErr, ExportCall, FreshInstance, PluginExtractor, SEARCH_TIMEOUT,
+    TimeoutStrikes, call_export_by_name, common_plugin_error, plugin_error_to_rdlp,
 };
 use crate::bindings::rdlp::plugin::types::{
     SearchError as WitSearchError, SearchPage as WitSearchPage, SearchQuery as WitSearchQuery,
@@ -109,6 +109,7 @@ impl PluginExtractor {
         let spec = CallSpec {
             subject_for_errors: self.manifest.search_site_name(),
             timeout: SEARCH_TIMEOUT,
+            timeout_strikes: TimeoutStrikes::Always,
         };
         self.run_in_fresh_store(spec, |store, inst| {
             Box::pin(call_search_filters(store, &inst.raw))
@@ -131,6 +132,7 @@ impl PluginExtractor {
         let spec = CallSpec {
             subject_for_errors: self.manifest.search_site_name(),
             timeout: SEARCH_TIMEOUT,
+            timeout_strikes: TimeoutStrikes::Always,
         };
         // The query moves into the future: the runner's closure is
         // higher-ranked over the store borrow, so it cannot return a future
@@ -144,6 +146,8 @@ impl PluginExtractor {
 
 /// Look up `search-filters` by name on the live instance and call it.
 /// Absent export ⇒ `Ok(vec![])` — the component was built before 0.5.1.
+/// `call_export_by_name` already logs the absent-export case once, at
+/// debug; this function does not log it again.
 ///
 /// Takes the raw instance rather than a [`FreshInstance`] because the
 /// by-name lookup is all it needs — which also lets a unit test drive it
@@ -152,28 +156,18 @@ pub(crate) async fn call_search_filters(
     store: &mut Store<PluginStoreData>,
     inst: &wasmtime::component::Instance,
 ) -> Result<Vec<SearchFilterDescriptor>, PluginError> {
-    let plugin = store.data().plugin_name.clone();
-    let Some(idx) = inst.get_export(&mut *store, None, SEARCH_FILTERS_EXPORT) else {
-        log::debug!(
-            target: &store.data().log_target,
-            "plugin exports no `{SEARCH_FILTERS_EXPORT}` (pre-0.5.1); treating as no filters"
-        );
+    let out = call_export_by_name::<(), (Vec<WitSearchFilterDescriptor>,)>(
+        store,
+        inst,
+        ExportCall {
+            name: SEARCH_FILTERS_EXPORT,
+            params: (),
+        },
+    )
+    .await?;
+    let Some((descs,)) = out else {
         return Ok(Vec::new());
     };
-    let trapped = |stage: &str, e: wasmtime::Error| PluginError::Trapped {
-        plugin: plugin.clone(),
-        reason: format!("{stage} {SEARCH_FILTERS_EXPORT}: {e}"),
-    };
-    let func = inst
-        .get_typed_func::<(), (Vec<WitSearchFilterDescriptor>,)>(&mut *store, idx)
-        .map_err(|e| trapped("signature of", e))?;
-    let (descs,) = func
-        .call_async(&mut *store, ())
-        .await
-        .map_err(|e| trapped("call", e))?;
-    func.post_return_async(&mut *store)
-        .await
-        .map_err(|e| trapped("post-return", e))?;
     Ok(descriptors_from_wit(descs, &store.data().origin()))
 }
 

@@ -315,3 +315,130 @@ async fn playlist_episode_collision_reports_output_busy() {
     );
     drop(server);
 }
+
+// ---------------------------------------------------------------------------
+// `download_episodes` / `run_retry_waves` (#768): `Option<&T>` at the
+// boundary, and the archive keyed on `archive_token_for`, never on the
+// display name.
+// ---------------------------------------------------------------------------
+
+/// An episode as a plugin produces it: the manifest `display_name` in
+/// `extractor`, the manifest `name` in `extractor_key`, one format on a
+/// loopback URL the SSRF gate rejects at dispatch — so an episode that is
+/// NOT skipped fails deterministically without any network, and one that
+/// is skipped never reaches dispatch at all.
+fn plugin_episode() -> rdlp_types::InfoDict {
+    let mut info = rdlp_types::InfoDict::new(
+        "ep-1",
+        "Episode One",
+        "XHamster Display",
+        "http://127.0.0.1:1/watch/ep-1",
+    );
+    info.extractor_key = Some("xhamster".to_string());
+    info.formats = vec![rdlp_types::Format::new(
+        "http-1",
+        "http://127.0.0.1:1/ep-1.mp4",
+        "mp4",
+        rdlp_types::DownloadProtocol::Https,
+    )];
+    info
+}
+
+fn bare_orchestrator() -> crate::orchestrator::Orchestrator {
+    use crate::handle::DownloadId;
+    use std::sync::Arc;
+    use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
+
+    let (tx, _rx) = mpsc::channel::<crate::events::Event>(64);
+    crate::orchestrator::Orchestrator::new(
+        Arc::new(rdlp_types::Config::default()),
+        tx,
+        DownloadId::next(),
+        CancellationToken::new(),
+        None,
+    )
+}
+
+/// The archive is consulted through `archive_token_for`: a line under the
+/// plugin's `name` skips the episode; a line under its `display_name`
+/// (what `extractor` carries) does not, and neither does no archive.
+#[tokio::test(start_paused = true)]
+async fn download_episodes_skips_only_an_episode_recorded_under_its_archive_token() {
+    use tempfile::TempDir;
+
+    let orch = bare_orchestrator();
+    let dir = TempDir::new().unwrap();
+    let infos = vec![plugin_episode()];
+    let existing = HashMap::new();
+
+    let under_key: HashSet<String> = [archive::archive_key("xhamster", "ep-1")].into();
+    let under_display: HashSet<String> = [archive::archive_key("XHamster Display", "ep-1")].into();
+    let mut outcomes = Vec::new();
+    for archive in [Some(&under_key), Some(&under_display), None] {
+        let (downloaded, failed, interrupted) = orch
+            .download_episodes(
+                &infos,
+                &existing,
+                archive,
+                dir.path(),
+                &[],
+                None,
+                Instant::now(),
+                infos.len(),
+            )
+            .await;
+        assert!(downloaded.is_empty() && !interrupted);
+        outcomes.push(failed);
+    }
+    let [skipped, under_display_name, no_archive] = outcomes.as_slice() else {
+        panic!("three runs");
+    };
+    assert!(skipped.is_empty(), "recorded under its token: skipped");
+    assert_eq!(
+        under_display_name.len(),
+        1,
+        "a line under the display name is not this episode's token"
+    );
+    assert_eq!(no_archive.len(), 1, "no archive: the episode is attempted");
+    assert_eq!(no_archive.first().map(|f| f.0), Some(1));
+}
+
+/// Every wave retries each still-failed episode under the audio filter it
+/// is handed; an episode that keeps failing stays in `failed` and counts
+/// nothing recovered. Paused time makes the three wave delays free.
+#[tokio::test(start_paused = true)]
+async fn run_retry_waves_retries_each_failed_episode_and_keeps_the_survivors() {
+    use tempfile::TempDir;
+
+    let orch = bare_orchestrator();
+    let dir = TempDir::new().unwrap();
+    let infos = vec![plugin_episode()];
+    let mut failed = vec![(1, "Episode One".to_string(), "first pass".to_string())];
+    let mut downloaded = Vec::new();
+    let mut interrupted = false;
+
+    let recovered = orch
+        .run_retry_waves(
+            &mut failed,
+            &mut downloaded,
+            &mut interrupted,
+            &infos,
+            dir.path(),
+            &[],
+            Some("dub"),
+            infos.len(),
+        )
+        .await;
+
+    assert_eq!(recovered, 0);
+    assert!(downloaded.is_empty());
+    assert!(!interrupted);
+    assert_eq!(failed.len(), 1, "still failed after every wave");
+    assert_eq!(failed.first().map(|f| f.0), Some(1));
+    assert_ne!(
+        failed.first().map(|f| f.2.as_str()),
+        Some("first pass"),
+        "the recorded error is the last wave's, not the first pass's"
+    );
+}

@@ -483,10 +483,11 @@ impl Orchestrator {
         // Single video — check archive before downloading
         if let Some(ref archive_set) = archive {
             let info = single_info;
-            if archive::is_in_archive(archive_set, &info.extractor, &info.id) {
+            let token = archive::archive_token_for(info);
+            if archive::is_in_archive(archive_set, token, &info.id) {
                 info!(
                     id = info.id.as_str(),
-                    extractor = info.extractor.as_str();
+                    extractor = token;
                     "Already in archive, skipping"
                 );
                 return Ok(None);
@@ -518,8 +519,7 @@ impl Orchestrator {
             match phase {
                 DownloadPhase::Complete { path } => {
                     // Record in archive after successful download
-                    self.record_in_archive(&single_info.extractor, &single_info.id)
-                        .await;
+                    self.record_in_archive(single_info).await;
                     return Ok(Some(path));
                 }
                 DownloadPhase::Cancelled => return Ok(None),
@@ -577,16 +577,18 @@ impl Orchestrator {
         }
     }
 
-    /// Record a completed download in the archive (no-op if not configured).
+    /// Record a completed download in the archive (no-op if not configured),
+    /// under the token [`archive::archive_token_for`] derives from `info`,
+    /// and `info.id`.
     ///
     /// The archive append is synchronous file I/O, dispatched via
     /// `spawn_blocking` to avoid stalling the async runtime.
-    pub(super) async fn record_in_archive(&self, extractor: &str, id: &str) {
+    pub(super) async fn record_in_archive(&self, info: &rdlp_types::InfoDict) {
         let Some(path) = self.config.download_archive.clone() else {
             return;
         };
-        let extractor = extractor.to_owned();
-        let id = id.to_owned();
+        let extractor = archive::archive_token_for(info).to_owned();
+        let id = info.id.clone();
         let result =
             tokio::task::spawn_blocking(move || archive::record_in_archive(&path, &extractor, &id))
                 .await;

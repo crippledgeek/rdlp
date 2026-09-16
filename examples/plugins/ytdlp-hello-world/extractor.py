@@ -13,7 +13,10 @@ from extractor_plugin.imports.types import (
     Format,
     PluginInfo,
     SearchPage,
+    Extraction,
+    InfoDictExtra,
     ExtractError_Internal,
+    PlaylistError_UnsupportedUrl,
     SearchError_Unsupported,
 )
 
@@ -28,7 +31,7 @@ class ExtractorPlugin(_ExtractorPluginProtocol):
         return PluginInfo(
             name="hello-world",
             version="0.1.0",
-            wit_version="0.5.1",
+            wit_version="0.5.2",
             matches=["https://example.com/*"],
             url_regex=None,
             priority=150,
@@ -88,3 +91,21 @@ class ExtractorPlugin(_ExtractorPluginProtocol):
 
     def search_filters(self):
         return []
+
+    def extract_playlist(self, url, page):
+        # No playlists: `unsupported-url` makes the host fall back to `extract`.
+        raise Err(PlaylistError_UnsupportedUrl(url))
+
+    def extract_with_metadata(self, url):
+        # The frozen core plus an empty 0.5.2 extra.
+        return Extraction(
+            core=self.extract(url),
+            extra=InfoDictExtra(
+                actors=[],
+                channel=None,
+                channel_url=None,
+                age_limit=None,
+                thumbnails=[],
+                extras=[],
+            ),
+        )

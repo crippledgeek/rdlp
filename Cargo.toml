@@ -63,6 +63,11 @@ async-trait = "0.1"
 # HTML entity decoding — reached only through the single decode boundary in rdlp-types
 html-escape = "0.2.15"
 
+# Compile-time string formatting: `Config::validate`'s `&'static str` reasons
+# cite the named bound constants instead of restating their literals.
+# Already in the lock file transitively.
+const_format = "0.2"
+
 # IP network arithmetic — the IANA special-purpose registry as a const table.
 # Already in the lock file transitively; `Ipv4Net::new_assert` is const, which
 # is what lets the registry be a compile-time constant rather than a hand-rolled

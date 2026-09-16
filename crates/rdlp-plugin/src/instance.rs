@@ -31,6 +31,12 @@ pub struct PluginStoreData {
     pub limits: StoreLimits,
     /// Plugin name (used as `log` target and in error messages).
     pub plugin_name: String,
+    /// `Manifest::display_name()` — what conversions put in
+    /// `InfoDict::extractor`. Defaults to `plugin_name` from [`Self::new`]
+    /// the same way `metadata_caps` defaults, then
+    /// `PluginExtractor::run_in_fresh_store` overwrites it with the
+    /// manifest's real value once the manifest is in scope.
+    pub(crate) display_name: String,
     /// Cancellation token threaded into all I/O capabilities.
     pub cancel: CancellationToken,
     /// `log` target — `format!("plugin::{plugin_name}")`.
@@ -46,6 +52,11 @@ pub struct PluginStoreData {
     pub fetch: Option<crate::host::fetch::FetchCtx>,
     /// Granted `host:html-select` capability state, or `None` if not requested.
     pub html_select: Option<crate::host::html_select::HtmlSelectCtx>,
+    /// Bounds on a 0.5.2 `extract-with-metadata` result's `extras`.
+    /// `Default` from [`Self::new`]; `PluginExtractor::extract` overrides
+    /// it from the call's `Config` before the export runs, the same way
+    /// the capability fields above are filled after construction.
+    pub(crate) metadata_caps: crate::metadata_adapter::MetadataCaps,
 }
 
 impl PluginStoreData {
@@ -55,6 +66,7 @@ impl PluginStoreData {
         crate::convert::PluginOrigin {
             plugin_name: &self.plugin_name,
             log_target: &self.log_target,
+            display_name: &self.display_name,
         }
     }
 
@@ -65,6 +77,10 @@ impl PluginStoreData {
     pub fn new(plugin_name: impl Into<String>, cancel: CancellationToken) -> Self {
         let plugin_name = plugin_name.into();
         let log_target = format!("plugin::{plugin_name}");
+        // Same fallback `Manifest::display_name()` uses when unset; the
+        // real value (when the manifest set one) is filled in by
+        // `PluginExtractor::run_in_fresh_store` once it has the manifest.
+        let display_name = plugin_name.clone();
         // StoreLimits calibration:
         //
         // - `memory_size` (64 MiB) is the threat-model boundary and is
@@ -106,6 +122,7 @@ impl PluginStoreData {
         Self {
             limits,
             plugin_name,
+            display_name,
             cancel,
             log_target,
             store_kv: None,
@@ -113,6 +130,7 @@ impl PluginStoreData {
             cookie_jar: None,
             fetch: None,
             html_select: None,
+            metadata_caps: crate::metadata_adapter::MetadataCaps::default(),
         }
     }
 }

@@ -152,11 +152,13 @@ signature = "ZA"
 #[test]
 fn canonical_bytes_of_a_pre_0_5_1_manifest_are_unchanged() {
     // Same fixture as `canonical_form_excludes_signature_field` above, with no
-    // `supports_extract`/`search_site` set — a manifest written before those
-    // fields existed. Pinned by running this exact parse+encode against the
-    // pre-0.5.1 code (before Task 10's fields were added) and copying its
-    // real output, so a regression here means an existing plugin's signature
-    // silently stops verifying.
+    // `supports_extract`/`search_site` (0.5.1) and no `display_name` (0.5.2)
+    // set — a manifest written before any of those fields existed. Pinned by
+    // running this exact parse+encode against the pre-0.5.1 code (before
+    // `supports_extract`/`search_site` were added) and copying its real
+    // output, so a regression here means an existing plugin's signature
+    // silently stops verifying; the unset `display_name` adding nothing is
+    // pinned by the same bytes.
     let toml = r#"
 name = "x"
 version = "1.0.0"
@@ -314,6 +316,33 @@ signature = "ZA"
     assert!(
         !s.contains("search_claims_override"),
         "an empty (default) claim must leave pre-0.5.1 bytes untouched: {s}"
+    );
+}
+
+/// `display_name`, when set, appears in the canonical bytes at the
+/// position its own lexicographic sort position puts it: between
+/// `claims_override` and `matches`.
+#[test]
+fn canonical_bytes_include_display_name_when_set() {
+    let toml = r#"
+name = "x"
+version = "1.0.0"
+wit_version = "0.5.0"
+matches = ["https://x.com/*"]
+priority = 150
+display_name = "XHamster"
+capabilities = ["log"]
+
+[signature]
+type = "ed25519"
+pubkey = "ZA"
+signature = "ZA"
+"#;
+    let m = parse_manifest_str(toml).unwrap();
+    let s = String::from_utf8(canonical_bytes(&m)).unwrap();
+    assert_eq!(
+        s,
+        "capabilities = [\"log\"]\nclaims_override = []\ndisplay_name = \"XHamster\"\nmatches = [\"https://x.com/*\"]\nname = \"x\"\npriority = 150\nsupports_search = false\nversion = \"1.0.0\"\nwit_version = \"0.5.0\"\n"
     );
 }
 

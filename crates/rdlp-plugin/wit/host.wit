@@ -1,4 +1,4 @@
-package rdlp:plugin@0.5.1;
+package rdlp:plugin@0.5.2;
 
 interface host-fetch {
     record request {

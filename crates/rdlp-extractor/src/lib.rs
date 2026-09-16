@@ -56,12 +56,22 @@ compile_error!(
     "the `loopback-test-exemption` feature is test-only and must not be enabled in a release build"
 );
 
+// `test-support` gates `log_capture` on the same terms (see that module's
+// doc) and so gets the same guard.
+#[cfg(all(feature = "test-support", not(any(test, debug_assertions))))]
+compile_error!(
+    "the `test-support` feature is test-only and must not be enabled in a release build"
+);
+
 /// Base extraction utilities and network-specific base extractors
 pub mod base;
 /// Site-specific extractor implementations
 pub mod extractors;
 /// HLS size detection and playlist parsing
 pub mod hls;
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod log_capture;
 /// Utility functions for extraction
 pub mod utils;
 

@@ -8,6 +8,7 @@ from extractor_plugin import ExtractorPlugin as _ExtractorPluginProtocol
 from extractor_plugin.types import Err
 from extractor_plugin.imports.types import (
     InfoDict, Format, PluginInfo, SearchPage,
+    Extraction, InfoDictExtra, PlaylistError_UnsupportedUrl,
     ExtractError_UnsupportedUrl, ExtractError_NotFound,
     ExtractError_RateLimited, ExtractError_AuthRequired,
     ExtractError_Network, ExtractError_Parse, ExtractError_Cancelled,
@@ -241,7 +242,7 @@ class ExtractorPlugin(_ExtractorPluginProtocol):
         return PluginInfo(
             name=primary.__name__.lower(),
             version="0.1.0",
-            wit_version="0.5.1",
+            wit_version="0.5.2",
             matches=[],  # populated from manifest at install time
             url_regex=getattr(primary, "_VALID_URL", None),
             priority=150,
@@ -282,6 +283,27 @@ class ExtractorPlugin(_ExtractorPluginProtocol):
         # `--search-filter` against this list, so `[]` rejects them all
         # before a fetch.
         return []
+
+    def extract_playlist(self, url, page):
+        # 0.5.2 export, required by the `extractor-plugin` world's Protocol.
+        # The shim has no playlist listing yet; `unsupported-url` is the
+        # answer that makes the host fall back to a single `extract`.
+        raise Err(PlaylistError_UnsupportedUrl(url))
+
+    def extract_with_metadata(self, url):
+        # 0.5.2 export: the frozen core from `extract` plus an empty extra,
+        # so a 0.5.2 host lifts exactly what a 0.5.0 host would have.
+        return Extraction(
+            core=self.extract(url),
+            extra=InfoDictExtra(
+                actors=[],
+                channel=None,
+                channel_url=None,
+                age_limit=None,
+                thumbnails=[],
+                extras=[],
+            ),
+        )
 
 
 def _opt_str(v, where=""):

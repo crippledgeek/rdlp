@@ -4,6 +4,21 @@
 //! On subsequent runs, already-present entries are skipped. Compatible with
 //! yt-dlp's `--download-archive` format.
 //!
+//! # Case-insensitive extractor token
+//!
+//! The extractor token is written lowercased and matched case-insensitively,
+//! mirroring yt-dlp's `make_archive_id` (`f'{ie_key.lower()} {video_id}'`).
+//! The id half stays case-sensitive. [`archive_key`] is the single place the
+//! line is formatted; [`load_archive`] normalises the extractor token of
+//! every line it reads so a legacy cased line (written by an older rdlp
+//! build) still matches. This also covers plugin extractors: `InfoDict`'s
+//! extractor field may carry a manifest `display_name` (e.g. `XHamster`)
+//! instead of the canonical lowercase `name`, and folding it here is what
+//! keeps that display casing from ever affecting archive matching — and
+//! [`archive_token_for`] prefers `InfoDict::extractor_key` (a plugin's
+//! manifest `name`) over the display name in the first place, so a
+//! renamed `display_name` never splits an archive either.
+//!
 //! # Concurrency
 //!
 //! Read and write paths take an advisory file lock via [`fs4::fs_std::FileExt`]
@@ -13,16 +28,63 @@
 //! is released when the file handle drops.
 
 use fs4::fs_std::FileExt;
+use rdlp_redact::text::sanitize_for_line;
+use rdlp_types::InfoDict;
 use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 
+/// The extractor half of `info`'s archive line: `extractor_key` (yt-dlp
+/// `extractor_key`; a plugin's manifest `name`) when set, else `extractor`
+/// (an in-tree extractor's one name). The one place the choice is made —
+/// every archive read and write goes through it, so a plugin's
+/// `display_name` (which IS `extractor`) can never become an archive
+/// token.
+#[must_use]
+pub fn archive_token_for(info: &InfoDict) -> &str {
+    info.extractor_key.as_deref().unwrap_or(&info.extractor)
+}
+
+/// Build the canonical archive line for an `{extractor} {id}` pair.
+///
+/// The extractor token is ASCII-lowercased before formatting — safe because
+/// plugin extractor names are constrained to `[a-z0-9][a-z0-9-]{0,63}` by
+/// `validate_plugin_name`, and every built-in `ExtractorName` spelling is
+/// plain ASCII too, so no non-ASCII casing rule is ever in play. The id's
+/// case is left untouched: unlike extractor names, ids are opaque site
+/// identifiers that may be legitimately case-sensitive. Its control
+/// characters are not: a plugin-supplied id is untrusted, and a line break
+/// in it would end this record early and write a second one under whatever
+/// extractor token follows (`"1\nxvideos 456"` marks `xvideos 456` as
+/// already downloaded). [`sanitize_for_line`] maps every control character
+/// to `_` — here, at the one formatting point every read and write shares,
+/// so a lookup and the record it is compared against sanitise identically;
+/// the plugin boundary (`rdlp_plugin::convert::info_dict_from_wit`) applies
+/// the same helper first, so this is the defence in depth.
+pub fn archive_key(extractor: &str, id: &str) -> String {
+    format!(
+        "{} {}",
+        extractor.to_ascii_lowercase(),
+        sanitize_for_line(id)
+    )
+}
+
 /// Load archive entries from a file into a `HashSet`.
 ///
 /// Returns an empty set if the file does not exist. Blank lines and lines
-/// starting with `#` are ignored. Takes a shared lock for the duration of
-/// the read so a concurrent writer cannot append a half-line under us.
+/// starting with `#` are ignored. Each surviving line's extractor token
+/// (the text before the first space) is lowercased so a line written by an
+/// older, case-preserving rdlp build still canonicalises to the form
+/// [`archive_key`] produces — see the module docs. A line with no space is
+/// malformed (never produced by [`record_in_archive`]) and is kept verbatim;
+/// it can never match a real query, since every valid key contains a space.
+/// The same holds for any other whitespace separator (a tab, e.g.
+/// `"XHamster\t123"`): rdlp and yt-dlp both always write a literal space, so
+/// a tab-separated line is malformed too — kept verbatim, never normalised,
+/// never matched.
+/// Takes a shared lock for the duration of the read so a concurrent writer
+/// cannot append a half-line under us.
 pub fn load_archive(path: &Path) -> HashSet<String> {
     // Safe: sync helper invoked only via tokio::task::spawn_blocking (see orchestrator/mod.rs::load_archive_if_configured).
     #[allow(clippy::disallowed_methods)]
@@ -47,7 +109,13 @@ pub fn load_archive(path: &Path) -> HashSet<String> {
             let trimmed = line.trim();
             !trimmed.is_empty() && !trimmed.starts_with('#')
         })
-        .map(|line| line.trim().to_owned())
+        .map(|line| {
+            let trimmed = line.trim();
+            match trimmed.split_once(' ') {
+                Some((token, rest)) => format!("{} {rest}", token.to_ascii_lowercase()),
+                None => trimmed.to_owned(),
+            }
+        })
         .collect()
     // `_lock` (when Some) drops here — the underlying `file` drop releases
     // the OS-level lock.
@@ -55,7 +123,7 @@ pub fn load_archive(path: &Path) -> HashSet<String> {
 
 /// Check whether a video is already recorded in the archive.
 pub fn is_in_archive(archive: &HashSet<String>, extractor: &str, id: &str) -> bool {
-    archive.contains(&format!("{extractor} {id}"))
+    archive.contains(&archive_key(extractor, id))
 }
 
 /// Append a completed download entry to the archive file.
@@ -93,7 +161,7 @@ pub fn record_in_archive(path: &Path, extractor: &str, id: &str) -> std::io::Res
     // are not a supported deployment target for the download archive.
     file.lock_exclusive()?;
 
-    let result = writeln!(file, "{extractor} {id}");
+    let result = writeln!(file, "{}", archive_key(extractor, id));
 
     // Explicit unlock (also released on drop, but this makes the
     // ordering with the write flush obvious).
@@ -125,14 +193,171 @@ mod tests {
 
         let archive = load_archive(tmp.path());
         assert_eq!(archive.len(), 2);
-        assert!(archive.contains("SiteA abc123"));
-        assert!(archive.contains("SiteB xyz789"));
+        // Loaded lines are normalised to a lowercase extractor token (see
+        // `archive_key`), so the canonical set holds "sitea"/"siteb", not
+        // the on-disk casing.
+        assert!(archive.contains("sitea abc123"));
+        assert!(archive.contains("siteb xyz789"));
+    }
+
+    /// A cased line written before this fix (or by an older rdlp build)
+    /// must still match a lowercase query — the extractor token is
+    /// case-insensitive, matching yt-dlp's `make_archive_id`
+    /// (`f'{ie_key.lower()} {video_id}'`).
+    #[test]
+    fn legacy_cased_line_matches_lowercase_query() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        writeln!(tmp, "XHamster 123").unwrap();
+        tmp.flush().unwrap();
+
+        let archive = load_archive(tmp.path());
+        assert!(is_in_archive(&archive, "xhamster", "123"));
+        assert!(is_in_archive(&archive, "XHamster", "123"));
+    }
+
+    /// The same id under a different extractor token must not collide —
+    /// only the extractor token is case-folded, never merged across sites.
+    #[test]
+    fn same_id_other_site_does_not_match() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        writeln!(tmp, "xhamster 123").unwrap();
+        tmp.flush().unwrap();
+
+        let archive = load_archive(tmp.path());
+        assert!(!is_in_archive(&archive, "xvideos", "123"));
+    }
+
+    /// Only the extractor token is case-folded; the id stays case-sensitive
+    /// (ids may be case-sensitive site identifiers, unlike extractor names).
+    #[test]
+    fn id_is_case_sensitive() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        writeln!(tmp, "xhamster abc").unwrap();
+        tmp.flush().unwrap();
+
+        let archive = load_archive(tmp.path());
+        assert!(!is_in_archive(&archive, "xhamster", "ABC"));
+        assert!(is_in_archive(&archive, "xhamster", "abc"));
+    }
+
+    #[tokio::test]
+    async fn record_writes_lowercase_token() {
+        let tmp = NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+
+        record_in_archive(&path, "XHamster", "9").unwrap();
+
+        // `load_archive` already lowercases on read, which would mask a
+        // record-time regression — read the raw file contents directly
+        // (via the async `tokio::fs` reader, since the crate bans
+        // `std::fs::read_to_string`/`File::open` outside the two
+        // pre-existing allowed sites) to prove `record_in_archive` itself
+        // wrote the lowercase token, not just that a reader normalises it.
+        let contents = tokio::fs::read_to_string(&path).await.unwrap();
+        assert!(contents.contains("xhamster 9\n"));
+        assert!(!contents.contains("XHamster"));
+    }
+
+    /// A malformed line (no space — never written by `record_in_archive`,
+    /// but may appear in a hand-edited archive file) survives `load_archive`
+    /// verbatim rather than panicking, and can never match a real query
+    /// since `archive_key` always produces `"{extractor} {id}"`.
+    #[test]
+    fn malformed_line_without_space_survives_and_never_matches() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        writeln!(tmp, "NoSpaceHere").unwrap();
+        tmp.flush().unwrap();
+
+        let archive = load_archive(tmp.path());
+        assert!(archive.contains("NoSpaceHere"));
+        assert!(!is_in_archive(&archive, "nospacehere", ""));
+        assert!(!is_in_archive(&archive, "NoSpaceHere", ""));
+    }
+
+    /// A tab (or any other whitespace) separator is equally malformed: rdlp
+    /// and yt-dlp both always write a literal space, so `split_once(' ')`
+    /// finds no space and the whole line is kept verbatim, never matching.
+    #[test]
+    fn malformed_line_with_tab_separator_survives_and_never_matches() {
+        let mut tmp = NamedTempFile::new().unwrap();
+        writeln!(tmp, "XHamster\t123").unwrap();
+        tmp.flush().unwrap();
+
+        let archive = load_archive(tmp.path());
+        assert!(archive.contains("XHamster\t123"));
+        assert!(!is_in_archive(&archive, "xhamster", "123"));
+        assert!(!is_in_archive(&archive, "XHamster", "123"));
+    }
+
+    /// An id carrying a line break must not split the record: the
+    /// archive is line-oriented, so `"1\nxvideos 456"` written verbatim
+    /// would put `xvideos 456` on its own line and mark ANOTHER
+    /// extractor's video as already downloaded. `archive_key` maps every
+    /// control character to `_` (`rdlp_redact::text::sanitize_for_line`),
+    /// so exactly one line is written and the injected key never matches
+    /// — while the sanitised id still matches its own lookup, since the
+    /// lookup goes through the same `archive_key`.
+    #[tokio::test]
+    async fn id_with_a_line_break_writes_one_record_and_injects_nothing() {
+        let tmp = NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+        let injected = "1\nxvideos 456";
+
+        record_in_archive(&path, "p", injected).unwrap();
+
+        let contents = tokio::fs::read_to_string(&path).await.unwrap();
+        assert_eq!(contents.lines().count(), 1, "one record: {contents:?}");
+        assert_eq!(contents, "p 1_xvideos 456\n");
+        let archive = load_archive(&path);
+        assert!(
+            !is_in_archive(&archive, "xvideos", "456"),
+            "the injected second record must not exist"
+        );
+        assert!(
+            is_in_archive(&archive, "p", injected),
+            "the sanitised id still matches its own lookup"
+        );
+    }
+
+    /// CR and TAB are `Cc` too and get the same placeholder; a space is
+    /// not (`load_archive` splits on the FIRST space, so an id with one
+    /// round-trips today and must keep doing so).
+    #[tokio::test]
+    async fn id_control_characters_become_placeholders_but_a_space_survives() {
+        for (id, expected_line) in [
+            ("1\rxvideos 456", "p 1_xvideos 456\n"),
+            ("1\txvideos 456", "p 1_xvideos 456\n"),
+            ("1 two", "p 1 two\n"),
+        ] {
+            let tmp = NamedTempFile::new().unwrap();
+            let path = tmp.path().to_path_buf();
+            record_in_archive(&path, "p", id).unwrap();
+            let contents = tokio::fs::read_to_string(&path).await.unwrap();
+            assert_eq!(contents, expected_line, "id {id:?}");
+            assert!(is_in_archive(&load_archive(&path), "p", id), "id {id:?}");
+        }
+    }
+
+    /// A plugin's `InfoDict` carries its manifest `name` as
+    /// `extractor_key` and its `display_name` as `extractor`; the archive
+    /// token is the key, so renaming the display never splits an archive.
+    /// An in-tree extractor has no key and the token is `extractor`.
+    #[test]
+    fn archive_token_prefers_extractor_key_over_the_display_name() {
+        let mut plugin = InfoDict::new("9", "t", "XHamster Display", "https://x.test/9");
+        plugin.extractor_key = Some("xhamster".to_string());
+        assert_eq!(archive_token_for(&plugin), "xhamster");
+
+        let in_tree = InfoDict::new("9", "t", "XHamster", "https://x.test/9");
+        assert_eq!(archive_token_for(&in_tree), "XHamster");
     }
 
     #[test]
     fn is_in_archive_checks_extractor_and_id() {
+        // The set holds the canonical (lowercased-token) form `load_archive`
+        // produces — `archive_key` is the single place that shape is built.
         let mut archive = HashSet::new();
-        archive.insert("SiteA abc123".to_string());
+        archive.insert(archive_key("SiteA", "abc123"));
 
         assert!(is_in_archive(&archive, "SiteA", "abc123"));
         assert!(!is_in_archive(&archive, "SiteA", "other"));
@@ -211,12 +436,12 @@ mod tests {
             archive.len()
         );
 
-        // Every entry MUST start with `SiteA ` and be followed by a
-        // well-formed marker. A torn write would leave entries that don't
-        // match this shape.
+        // Every entry MUST start with `sitea ` (lowercased by `load_archive`
+        // normalisation) and be followed by a well-formed marker. A torn
+        // write would leave entries that don't match this shape.
         for entry in &archive {
             let suffix = entry
-                .strip_prefix("SiteA ")
+                .strip_prefix("sitea ")
                 .unwrap_or_else(|| panic!("malformed entry: {entry:?}"));
             assert!(
                 suffix.contains("-padding-padding-padding-padding"),

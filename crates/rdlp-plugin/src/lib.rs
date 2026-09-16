@@ -122,10 +122,14 @@ pub mod host;
 pub mod instance;
 pub mod loader;
 pub mod manifest;
+pub mod metadata_adapter;
+pub mod playlist_adapter;
 pub mod priority;
 pub mod prompt;
 pub mod search_adapter;
 pub mod signature;
+#[cfg(test)]
+pub(crate) mod test_harness;
 #[cfg(feature = "test-support")]
 #[doc(hidden)]
 pub mod test_support;
@@ -140,14 +144,25 @@ pub use error::PluginError;
 /// Two worlds live in `wit/extractor.wit`: `extractor-plugin` is the guest
 /// contract plugin authors build against; `extractor-plugin-host` is what the
 /// host binds here. Exports added to `extractor-plugin` after 0.5.0 (such as
-/// `search-filters`) are optional to the host and looked up by name on the
-/// live instance by [`adapter::PluginExtractor::call_search_filters`]
-/// (in [`search_adapter`]), rather than
+/// `search-filters`, `extract-playlist`, and `extract-with-metadata`) are
+/// optional to the host and looked up by name on the live instance through
+/// `adapter::call_export_by_name` — `search_adapter::call_search_filters`,
+/// `playlist_adapter::call_extract_playlist`, and
+/// `metadata_adapter::call_extract_with_metadata` — rather than
 /// bound at instantiation, because generated bindings require every
 /// world-level export to be present at instantiate time
 /// (wasmtime-wit-bindgen 30, `no function export … found`) — binding the
 /// smaller host world is what lets a 0.5.0-built component, which never
-/// declared `search-filters`, still instantiate on a 0.5.1 host.
+/// declared any of them, still instantiate on the current host.
+/// `bindgen!` emits a Rust type only for a record/variant reachable from a
+/// function signature in the *bound* world — adding a types-only `use` to
+/// `extractor-plugin-host` (no export attached) was tried and confirmed
+/// (via `cargo check`) NOT to make it emit `playlist-page`/`playlist-error`/
+/// `extraction`. Those, and every 0.5.2 type nested under them
+/// (`playlist-entry`, `thumbnail`, `meta-value`, `info-dict-extra`), are
+/// hand-declared `ComponentType + Lift` mirrors in [`playlist_adapter`] and
+/// [`metadata_adapter`] instead, each pinned against `wit/types.wit`'s
+/// source text by a test in that module.
 ///
 /// It exposes:
 /// - `bindings::ExtractorPluginHost` — the generated host-side instance type

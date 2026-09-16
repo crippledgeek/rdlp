@@ -261,3 +261,92 @@ mod sanitize_for_terminal_tests {
         assert_eq!(out, "\u{2065}\u{206a}");
     }
 }
+
+/// What every `Cc` character in a line-record token becomes under
+/// [`sanitize_for_line`]: a placeholder rather than nothing, so an id whose
+/// only content was a control character does not collapse to the empty
+/// string and collide with another entry's.
+const LINE_CONTROL_PLACEHOLDER: char = '_';
+
+/// Return a copy of `s` fit to be ONE token of a line-oriented text record,
+/// with every control character (the Unicode general-category `Cc` set —
+/// see [`sanitize_for_terminal`] for the ranges) replaced by
+/// `LINE_CONTROL_PLACEHOLDER` (`_`).
+///
+/// The sink this exists for is the download archive: one `{extractor} {id}`
+/// record per line, read back with `BufRead::lines` and split on the first
+/// space. An `id` is plugin-supplied text, and a LF or CR inside it would
+/// end the record early and start another — `"1\nxvideos 456"` writes
+/// `xvideos 456` as a second record, so another extractor's video is
+/// reported as already downloaded (CWE-93, record injection). TAB and the
+/// rest of `Cc` cannot split a line but are replaced too, so the token stays
+/// printable and a hand-edited archive shows exactly what was recorded.
+///
+/// Only `Cc` is touched. A space is kept — the archive's reader splits on
+/// the FIRST space, so an id containing one round-trips intact today and
+/// rewriting it would silently change every existing entry's key. Bidi
+/// controls are kept too: they are a rendering threat, not a line-structure
+/// one, and the record is never rendered.
+///
+/// # Examples
+///
+/// ```
+/// use rdlp_redact::text::sanitize_for_line;
+///
+/// assert_eq!(sanitize_for_line("1\nxvideos 456"), "1_xvideos 456");
+/// assert_eq!(sanitize_for_line("a b"), "a b");
+/// ```
+#[must_use]
+pub fn sanitize_for_line(s: &str) -> String {
+    s.chars()
+        .map(|c| {
+            if c.is_control() {
+                LINE_CONTROL_PLACEHOLDER
+            } else {
+                c
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod sanitize_for_line_tests {
+    use super::sanitize_for_line;
+
+    /// The record-injection shape: a LF inside an id would end the archive
+    /// line early and begin another.
+    #[test]
+    fn line_feed_is_replaced() {
+        assert_eq!(sanitize_for_line("1\nxvideos 456"), "1_xvideos 456");
+    }
+
+    #[test]
+    fn carriage_return_and_tab_are_replaced() {
+        assert_eq!(sanitize_for_line("1\rxvideos 456"), "1_xvideos 456");
+        assert_eq!(sanitize_for_line("1\txvideos 456"), "1_xvideos 456");
+        assert_eq!(sanitize_for_line("1\r\n2"), "1__2");
+    }
+
+    #[test]
+    fn other_controls_are_replaced_not_dropped() {
+        // ESC, NUL, DEL, and a C1 control each become one placeholder, so
+        // an id made only of controls is not the empty string.
+        assert_eq!(sanitize_for_line("\u{1b}[2J"), "_[2J");
+        assert_eq!(sanitize_for_line("a\0b\u{7f}c\u{85}d"), "a_b_c_d");
+        assert_eq!(sanitize_for_line("\n"), "_");
+    }
+
+    #[test]
+    fn space_and_printable_non_ascii_are_kept() {
+        assert_eq!(sanitize_for_line("a b"), "a b");
+        assert_eq!(sanitize_for_line("Café 日本語"), "Café 日本語");
+        assert_eq!(sanitize_for_line(""), "");
+    }
+
+    /// Line structure, not rendering, is the concern: bidi controls are
+    /// `Cf`, not `Cc`, and pass through.
+    #[test]
+    fn bidi_controls_are_kept() {
+        assert_eq!(sanitize_for_line("a\u{202e}b"), "a\u{202e}b");
+    }
+}

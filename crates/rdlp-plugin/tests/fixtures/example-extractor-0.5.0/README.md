@@ -24,7 +24,7 @@ Compiled component for the ABI compat test suite (rdlp#762 slice B).
   the manifest's declared rdlp capabilities and never WASI).
 
 Built against `rdlp:plugin@0.5.0` BEFORE the 0.5.1 bump; it is the positive
-compat fixture for `loader::tests::a_0_5_0_component_loads_on_the_0_5_1_host`.
+compat fixture for `loader::tests::a_0_5_0_component_loads_on_the_current_host`.
 
 ## Fix round 1 — why this is NOT a `cargo-component build` artifact
 
@@ -65,7 +65,7 @@ One import, no WASI of any kind, and no `search-filters` export. That last
 absence is what the host/full world split exists for
 (`crates/rdlp-plugin/wit/COMPATIBILITY.md` §3): the component instantiates on
 the `extractor-plugin-host` world the host binds (Fact C — proven every run by
-`crates/rdlp-plugin/tests/loader.rs::a_0_5_0_component_loads_on_the_0_5_1_host`
+`crates/rdlp-plugin/tests/loader.rs::a_0_5_0_component_loads_on_the_current_host`
 through the production loader), and would fail with `no function export
 `search-filters` found` against the full `extractor-plugin` world (Fact D —
 the failure measured at the time of this rebuild; the host never binds that

@@ -1,4 +1,4 @@
-package rdlp:plugin@0.5.1;
+package rdlp:plugin@0.5.2;
 
 interface types {
     record plugin-info {
@@ -84,6 +84,93 @@ interface types {
         display-name: string,
         allowed-values: list<string>,
         default: option<string>,
+    }
+
+    /// One item of a playlist listing. The host resolves it through this
+    /// plugin's `extract`; the plugin never resolves items itself
+    /// (yt-dlp `url_result`, gallery-dl `Message.Queue`, Grayjay `Pager`).
+    @since(version = 0.5.2)
+    record playlist-entry {
+        url: string,
+        id: option<string>,
+        title: option<string>,
+    }
+
+    /// One page of a playlist listing. `page` is 1-indexed, like
+    /// `search-page`; `has-more` ends the host's page loop.
+    @since(version = 0.5.2)
+    record playlist-page {
+        entries: list<playlist-entry>,
+        page: u32,
+        has-more: bool,
+        playlist-id: option<string>,
+        playlist-title: option<string>,
+        total-estimate: option<u64>,
+    }
+
+    /// Same vocabulary as `search-error`, minus `unsupported` (an absent
+    /// export already means "no playlist support") and `cancelled` (the
+    /// host cancels the whole call).
+    @since(version = 0.5.2)
+    variant playlist-error {
+        unsupported-url(string),
+        not-found(string),
+        rate-limited(option<u32>),
+        network(string),
+        parse(string),
+        internal(string),
+    }
+
+    /// Mirrors rdlp's native `Thumbnail`.
+    @since(version = 0.5.2)
+    record thumbnail {
+        url: string,
+        id: option<string>,
+        width: option<u32>,
+        height: option<u32>,
+        preference: option<s32>,
+    }
+
+    /// A typed open-metadata value: OpenTelemetry's stable attribute
+    /// subset (scalar + homogeneous list), never a nested map.
+    @since(version = 0.5.2)
+    variant meta-value {
+        text(string),
+        integer(s64),
+        number(f64),
+        flag(bool),
+        text-list(list<string>),
+    }
+
+    /// Metadata `info-dict` (frozen at 0.5.0) cannot carry. The named
+    /// fields recur across most sites; `extras` is the open tail, validated
+    /// and capped by the host before it reaches `InfoDict::extra`.
+    ///
+    /// `extras` rules (host-enforced; a refused entry is dropped with one
+    /// warning per class on the plugin's log target, never an error):
+    /// a key matches `^[a-z][a-z0-9-]{0,62}$`; a key that, with `-` folded
+    /// to `_`, names a core `info-dict` field (`title`, `extractor-key`,
+    /// `view-count`, …) is dropped, because kept keys become TOP-LEVEL keys
+    /// of the video's JSON and would overwrite it; the first of a repeated
+    /// key wins; a `number` must be finite; and the host caps the entry
+    /// count, one text value's bytes, and the map's total bytes (defaults
+    /// 64 / 4096 / 65536, operator-tunable). Entries are considered in the
+    /// order given, so list the important ones first.
+    @since(version = 0.5.2)
+    record info-dict-extra {
+        actors: list<string>,
+        channel: option<string>,
+        channel-url: option<string>,
+        age-limit: option<u8>,
+        thumbnails: list<thumbnail>,
+        extras: list<tuple<string, meta-value>>,
+    }
+
+    /// What `extract-with-metadata` returns: the frozen core plus the extra.
+    @since(version = 0.5.2)
+    record extraction {
+        core: info-dict,
+        extra: info-dict-extra,
     }
 
     variant extract-error {

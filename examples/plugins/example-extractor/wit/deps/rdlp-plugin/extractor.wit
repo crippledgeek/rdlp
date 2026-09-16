@@ -1,4 +1,4 @@
-package rdlp:plugin@0.5.1;
+package rdlp:plugin@0.5.2;
 
 world extractor-plugin-host {
     import host-fetch;
@@ -19,8 +19,26 @@ world extractor-plugin-host {
 world extractor-plugin {
     include extractor-plugin-host;
 
-    use types.{search-filter-descriptor};
+    // `extract-error` is re-aliased rather than re-used bare: `include`
+    // already imports it (from `extractor-plugin-host`'s own `use`), and
+    // wasm-tools 1.248.0 rejects a second `use types.{extract-error}` here
+    // as "shadows previously imported items" — while the bare name is not
+    // otherwise resolvable in a signature without a local `use`. The alias
+    // is the same `types.extract-error` type; only the local binding name
+    // differs, so the wire type is unchanged.
+    use types.{search-filter-descriptor, playlist-page, playlist-error, extraction, extract-error as metadata-extract-error};
 
     @since(version = 0.5.1)
     export search-filters: func() -> list<search-filter-descriptor>;
+
+    /// One page of a playlist listing; the host resolves entries via
+    /// `extract`. Optional: a plugin without playlists omits it (or returns
+    /// `unsupported-url`), and the host tries `extract` on the URL instead.
+    @since(version = 0.5.2)
+    export extract-playlist: func(url: string, page: u32) -> result<playlist-page, playlist-error>;
+
+    /// `extract` plus the 0.5.2 metadata. A plugin exporting this should
+    /// implement `extract` as `extract-with-metadata(url).core`.
+    @since(version = 0.5.2)
+    export extract-with-metadata: func(url: string) -> result<extraction, metadata-extract-error>;
 }

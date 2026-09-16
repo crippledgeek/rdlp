@@ -55,14 +55,20 @@ impl CookieJar for NoOpCookieJar {
 
 /// Build an `ExtractionContext` for mockito-backed unit tests.
 pub fn test_ctx() -> ExtractionContext {
+    test_ctx_with(Config {
+        verbose: false,
+        ..Config::default()
+    })
+}
+
+/// [`test_ctx`] with a caller-supplied `Config`, for tests that exercise a
+/// config-driven code path (the playlist loop's range, concurrency, timeout
+/// and failure-policy fields).
+pub fn test_ctx_with(config: Config) -> ExtractionContext {
     let client = wreq::Client::builder()
         .redirect(wreq::redirect::Policy::none())
         .build()
         .expect("client build must succeed in tests");
-    let config = Config {
-        verbose: false,
-        ..Config::default()
-    };
     ExtractionContext::new(
         Arc::new(client),
         Arc::new(NoOpJsEngine),

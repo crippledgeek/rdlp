@@ -9,11 +9,12 @@
     missing_docs
 )]
 
-//! End-to-end proof of the host side of the 0.5.1 search contract
-//! (rdlp#762 slice B, decision D3): `search-filters` is resolved by a
-//! manual export lookup rather than by the generated bindings, so a
-//! 0.5.1 component answers with its descriptors while a 0.5.0 component —
-//! which never declared the export — instantiates and answers `[]`.
+//! End-to-end proof of the host side of the search-filters contract added
+//! in 0.5.1 (rdlp#762 slice B, decision D3): `search-filters` is resolved
+//! by a manual export lookup rather than by the generated bindings, so the
+//! example component — now built against 0.5.2, which keeps the export —
+//! answers with its descriptors while a 0.5.0 component, which never
+//! declared it, instantiates and answers `[]`.
 //!
 //! Builds `examples/plugins/example-extractor` with the production-loadable
 //! recipe (plain `cargo build` for `wasm32-unknown-unknown`, then
@@ -28,21 +29,15 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
-use ed25519_dalek::SigningKey;
-use rand::rngs::OsRng;
 use rdlp_core::{RdlpError, SearchExtractor};
 use rdlp_extractor::base::common::PAGE_RATE_LIMIT_MS;
 use rdlp_plugin::PluginError;
-use rdlp_plugin::adapter::{HostResources, PluginExtractor};
+use rdlp_plugin::adapter::PluginExtractor;
 use rdlp_plugin::bindings::rdlp::plugin::types::SearchQuery as WitSearchQuery;
-use rdlp_plugin::engine::{Engine, EngineConfig};
-use rdlp_plugin::loader::Loader;
-use rdlp_plugin::prompt::AlwaysApprove;
 use rdlp_plugin::search_adapter::PluginSearchExtractor;
 use rdlp_plugin::test_support::{
-    EXAMPLE_0_5_0_WASM, SignedPluginSpec, extraction_ctx, write_signed_plugin,
+    EXAMPLE_0_5_0_WASM, SignedPluginSpec, extraction_ctx, load_signed_adapter,
 };
-use rdlp_plugin::trust_store::TrustStore;
 use rdlp_types::{SearchFilter, SearchQuery};
 use tempfile::TempDir;
 
@@ -87,7 +82,7 @@ fn build_example_component_uncached() -> Vec<u8> {
         &["build", "--release", "--target", "wasm32-unknown-unknown"],
     );
     let core = dir.join("target/wasm32-unknown-unknown/release/example_extractor.wasm");
-    let out = dir.join("target/example-extractor-0.5.1.component.wasm");
+    let out = dir.join("target/example-extractor-0.5.2.component.wasm");
     run(
         &dir,
         "wasm-tools",
@@ -105,30 +100,18 @@ fn build_example_component_uncached() -> Vec<u8> {
 /// Sign `wasm` under `wit_version` as a search-capable `example` (the
 /// template's `supports_search = true`), discover it through the real
 /// loader, and wrap it in a `PluginExtractor` with no host resources (the
-/// example declares no capabilities).
+/// example declares no capabilities) — `test_support::load_signed_adapter`,
+/// the one copy of that wiring.
 fn load_adapter(td: &TempDir, wasm: &[u8], wit_version: &str) -> PluginExtractor {
-    let plugins_dir = td.path().join("plugins");
-    let key = SigningKey::generate(&mut OsRng);
-    write_signed_plugin(
-        &plugins_dir.join("example"),
-        &key,
+    load_signed_adapter(
+        td.path(),
         &SignedPluginSpec {
             wit_version,
             supports_search: true,
             wasm,
             ..SignedPluginSpec::example()
         },
-    );
-    let engine = Arc::new(Engine::new(EngineConfig::default()).unwrap());
-    let mut trust = TrustStore::open(td.path().join("trust.toml")).unwrap();
-    let prompter = Arc::new(AlwaysApprove);
-    let mut loader = Loader::new(engine.as_ref(), &mut trust, prompter);
-    let mut outcomes = loader.discover(&plugins_dir);
-    assert_eq!(outcomes.len(), 1, "expected exactly one discover outcome");
-    let loaded = outcomes
-        .remove(0)
-        .unwrap_or_else(|(path, err)| panic!("discover failed for {path:?}: {err:?}"));
-    PluginExtractor::new(loaded, engine, HostResources::default()).expect("adapter")
+    )
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -136,10 +119,10 @@ fn load_adapter(td: &TempDir, wasm: &[u8], wit_version: &str) -> PluginExtractor
 async fn search_filters_and_search_round_trip_through_the_runner() {
     let wasm = build_example_component();
 
-    // (a) present-export path: the 0.5.1 example declares exactly one
+    // (a) present-export path: the (0.5.2-built) example still declares exactly one
     // descriptor; label == value per the WIT record contract.
     let td = TempDir::new().unwrap();
-    let adapter = load_adapter(&td, wasm, "0.5.1");
+    let adapter = load_adapter(&td, wasm, "0.5.2");
     let filters = adapter.call_search_filters().await.expect("search-filters");
     assert_eq!(
         filters.len(),
@@ -218,7 +201,7 @@ fn extraction_message(err: RdlpError) -> String {
 async fn plugin_search_extractor_drives_the_example_through_the_host_scaffold() {
     let wasm = build_example_component();
     let td = TempDir::new().unwrap();
-    let adapter = Arc::new(load_adapter(&td, wasm, "0.5.1"));
+    let adapter = Arc::new(load_adapter(&td, wasm, "0.5.2"));
     let site = PluginSearchExtractor::new(Arc::clone(&adapter));
     let ctx = extraction_ctx();
     let pacing = Duration::from_millis(PAGE_RATE_LIMIT_MS);
@@ -314,7 +297,7 @@ async fn plugin_search_extractor_drives_the_example_through_the_host_scaffold() 
 async fn later_page_error_returns_partial_results_and_counts_a_strike() {
     let wasm = build_example_component();
     let td = TempDir::new().unwrap();
-    let adapter = Arc::new(load_adapter(&td, wasm, "0.5.1"));
+    let adapter = Arc::new(load_adapter(&td, wasm, "0.5.2"));
     let site = PluginSearchExtractor::new(Arc::clone(&adapter));
     let ctx = extraction_ctx();
 

@@ -18,8 +18,12 @@ use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey};
 use rdlp_core::ExtractionContext;
 
+use crate::adapter::{HostResources, PluginExtractor};
+use crate::engine::{Engine, EngineConfig};
+use crate::loader::{DiscoverOutcome, Loader};
 use crate::manifest::{Manifest, Signature, canonical_bytes};
-use crate::prompt::{ConfirmRequest, ConfirmResponse, Prompter};
+use crate::prompt::{AlwaysApprove, ConfirmRequest, ConfirmResponse, Prompter};
+use crate::trust_store::TrustStore;
 
 /// The committed 0.5.0 example component (`tests/fixtures/example-extractor-0.5.0`):
 /// WASI-free, no capabilities, implements `extract` and `search`, instantiates
@@ -28,6 +32,16 @@ use crate::prompt::{ConfirmRequest, ConfirmResponse, Prompter};
 #[doc(hidden)]
 pub const EXAMPLE_0_5_0_WASM: &[u8] =
     include_bytes!("../tests/fixtures/example-extractor-0.5.0/plugin.wasm");
+
+/// The committed 0.5.2 example component (`tests/fixtures/example-extractor-0.5.2`):
+/// the same source as the 0.5.0 one, rebuilt against `rdlp:plugin@0.5.2`
+/// with `search-filters`, `extract-playlist` and `extract-with-metadata`
+/// exported — see its README for what each answers per URL. The one copy
+/// of those bytes for the playlist/metadata unit tests and
+/// `tests/abi_0_5_2_fixture.rs`.
+#[doc(hidden)]
+pub const EXAMPLE_0_5_2_WASM: &[u8] =
+    include_bytes!("../tests/fixtures/example-extractor-0.5.2/plugin.wasm");
 
 /// The default extraction context a plugin test hands to `extract` /
 /// `search`: a stock HTTP client, the boa engine, an empty cookie jar and
@@ -122,6 +136,19 @@ impl<'a> SignedPluginSpec<'a> {
             ..Self::stub("example", EXAMPLE_0_5_0_WASM)
         }
     }
+
+    /// The committed 0.5.2 example component under the same template:
+    /// `wit_version = "0.5.2"` (the contract it was built against) and
+    /// `supports_search = true` (it exports `search` + `search-filters`).
+    #[must_use]
+    pub const fn example_0_5_2() -> Self {
+        Self {
+            wit_version: "0.5.2",
+            supports_search: true,
+            wasm: EXAMPLE_0_5_2_WASM,
+            ..Self::example()
+        }
+    }
 }
 
 /// Base64 of the key's 32-byte public key, as the manifest carries it.
@@ -163,6 +190,7 @@ pub fn write_signed_plugin(dir: &Path, key: &SigningKey, spec: &SignedPluginSpec
     let owned = |items: &[&str]| items.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
     let mut manifest = Manifest {
         name: spec.name.to_string(),
+        display_name: None,
         version: spec.version.to_string(),
         wit_version: spec.wit_version.to_string(),
         matches: owned(spec.matches),
@@ -199,6 +227,71 @@ fn write_fixture_file(dir: &Path, name: &str, contents: &[u8]) {
     std::fs::create_dir_all(dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
     std::fs::write(dir.join(name), contents)
         .unwrap_or_else(|e| panic!("write {}/{name}: {e}", dir.display()));
+}
+
+/// Sign `spec` under a fresh key into `<root>/plugins/<spec.name>`, let
+/// `tamper` edit that directory (a no-op closure for the honest case),
+/// then run the production [`Loader::discover`] over `<root>/plugins` with
+/// an [`AlwaysApprove`] prompter and a trust store at `<root>/trust.toml`.
+/// Returns the engine (an adapter built from the outcome must share it)
+/// and the one outcome `discover` produced for that directory.
+///
+/// The one "sign, then discover through the real loader" mechanism for
+/// every fixture: the ABI compat tests (`tests/loader.rs`,
+/// `tests/abi_0_5_2_fixture.rs`) and the example search e2e. `tamper`
+/// runs between the write and the discover so a refusal test can flip a
+/// byte of the signed artefact or rewrite the manifest without a second
+/// copy of this wiring.
+///
+/// # Panics
+///
+/// If `discover` returns anything other than exactly one outcome — the
+/// directory holds exactly the one plugin this wrote.
+#[doc(hidden)]
+pub fn discover_signed_after(
+    root: &Path,
+    spec: &SignedPluginSpec<'_>,
+    tamper: impl FnOnce(&Path),
+) -> (Arc<Engine>, DiscoverOutcome) {
+    let plugins_dir = root.join("plugins");
+    let dir = plugins_dir.join(spec.name);
+    let key = SigningKey::generate(&mut rand::rngs::OsRng);
+    write_signed_plugin(&dir, &key, spec);
+    tamper(&dir);
+
+    let engine =
+        Arc::new(Engine::new(EngineConfig::default()).unwrap_or_else(|e| panic!("engine: {e}")));
+    let mut trust =
+        TrustStore::open(root.join("trust.toml")).unwrap_or_else(|e| panic!("trust store: {e}"));
+    let mut loader = Loader::new(engine.as_ref(), &mut trust, Arc::new(AlwaysApprove));
+    let mut outcomes = loader.discover(&plugins_dir);
+    assert_eq!(
+        outcomes.len(),
+        1,
+        "discover over a directory holding one plugin yields exactly one outcome"
+    );
+    (engine, outcomes.remove(0))
+}
+
+/// [`discover_signed_after`] with no tampering, unwrapped into a
+/// [`PluginExtractor`] with no host resources — the shape every fixture
+/// that declares no capabilities loads through.
+///
+/// # Panics
+///
+/// If the loader refuses the plugin or the adapter cannot be built.
+#[doc(hidden)]
+#[must_use]
+pub fn load_signed_adapter(root: &Path, spec: &SignedPluginSpec<'_>) -> PluginExtractor {
+    let (engine, outcome) = discover_signed_after(root, spec, |_| {});
+    let loaded = outcome.unwrap_or_else(|(path, err)| {
+        panic!(
+            "the signed fixture must load through the production loader: {}: {err:?}",
+            path.display()
+        )
+    });
+    PluginExtractor::new(loaded, engine, HostResources::default())
+        .unwrap_or_else(|e| panic!("adapter: {e}"))
 }
 
 /// The trust-store identity string for a signing key, computed by the
@@ -327,6 +420,27 @@ pubkey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 "#;
 
+    /// [`FIXTURE_MANIFEST`] with `extra_top_level_lines` spliced into its
+    /// top-level key block, after `capabilities = []`. The fixture ends
+    /// with a `[signature]` table, so appending after the text would land
+    /// the lines inside that table — invalid TOML; splicing above it keeps
+    /// the fixture valid whatever the lines are (`display_name`,
+    /// `search_site`, an override claim).
+    pub fn fixture_manifest_with(extra_top_level_lines: &str) -> String {
+        FIXTURE_MANIFEST.replace(
+            "capabilities = []",
+            &format!("capabilities = []\n{extra_top_level_lines}"),
+        )
+    }
+
+    /// [`FIXTURE_MANIFEST`] under another plugin `name` — for a test that
+    /// must tell its own log lines from every other fixture-driven test's
+    /// in the binary: the plugin's log target is derived from its name
+    /// (`PluginStoreData::new`), so a unique name is a unique target.
+    pub fn fixture_manifest_named(name: &str) -> String {
+        FIXTURE_MANIFEST.replace(r#"name = "example""#, &format!("name = {name:?}"))
+    }
+
     /// The 0.5.0 fixture wrapped in an adapter, on a manifest with no
     /// `search_site` and no override claim of either kind.
     pub fn fixture_extractor() -> PluginExtractor {
@@ -336,10 +450,18 @@ signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
     /// The 0.5.0 fixture on `toml` — for tests that need a manifest field
     /// (a `search_site`, an override claim) the default fixture lacks.
     pub fn fixture_extractor_with_manifest(toml: &str) -> PluginExtractor {
+        fixture_extractor_from(toml, super::EXAMPLE_0_5_0_WASM)
+    }
+
+    /// Build an adapter from `toml` and `wasm` directly — the one
+    /// engine/component/loader wiring every unit-test adapter shares:
+    /// [`fixture_extractor_with_manifest`] uses it for the committed 0.5.0
+    /// fixture, and the playlist/metadata tests call it with
+    /// `EXAMPLE_0_5_2_WASM` for the 0.5.2 one.
+    pub fn fixture_extractor_from(toml: &str, wasm: &[u8]) -> PluginExtractor {
         let engine = Arc::new(Engine::new(EngineConfig::default()).expect("engine"));
         let component =
-            wasmtime::component::Component::from_binary(engine.raw(), super::EXAMPLE_0_5_0_WASM)
-                .expect("component");
+            wasmtime::component::Component::from_binary(engine.raw(), wasm).expect("component");
         let manifest = parse_manifest_str(toml).expect("manifest");
         let identity = manifest.signature.identity_string();
         let loaded = LoadedPlugin {
@@ -361,60 +483,17 @@ signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         PluginOrigin {
             plugin_name: TEST_PLUGIN_NAME,
             log_target: TEST_LOG_TARGET,
+            display_name: TEST_PLUGIN_NAME,
         }
     }
 
-    /// `(target, message)` pairs captured from the `log` facade.
-    pub type LogEntries = Arc<std::sync::Mutex<Vec<(String, String)>>>;
-
-    /// Minimal `log::Log` sink so a test can assert a refusal was reported
-    /// to the plugin's own log target. Mirrors the capturing-logger harness
-    /// in `rdlp-cookies`; `log::set_logger` accepts one logger per process,
-    /// so the buffer is process-global and never cleared — each assertion
-    /// looks for its own distinctive message instead.
-    struct CapturingLogger {
-        entries: LogEntries,
-    }
-
-    impl log::Log for CapturingLogger {
-        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
-            true
-        }
-        fn log(&self, record: &log::Record<'_>) {
-            self.entries
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push((record.target().to_string(), record.args().to_string()));
-        }
-        fn flush(&self) {}
-    }
-
-    /// The process-global capture buffer, installing the logger on first use.
-    pub fn captured_logs() -> LogEntries {
-        static CAPTURED: std::sync::OnceLock<LogEntries> = std::sync::OnceLock::new();
-        Arc::clone(CAPTURED.get_or_init(|| {
-            let entries: LogEntries = Arc::new(std::sync::Mutex::new(Vec::new()));
-            let logger: &'static CapturingLogger = Box::leak(Box::new(CapturingLogger {
-                entries: Arc::clone(&entries),
-            }));
-            log::set_logger(logger).expect("no other logger in the rdlp-plugin lib test binary");
-            log::set_max_level(log::LevelFilter::Warn);
-            entries
-        }))
-    }
-
-    /// First captured entry whose message contains `needle`, cloned out so
-    /// the lock is released before any assertion panics.
-    pub fn captured_entry_containing(logs: &LogEntries, needle: &str) -> (String, String) {
-        let entries = logs
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        entries
-            .iter()
-            .find(|(_, m)| m.contains(needle))
-            .cloned()
-            .unwrap_or_else(|| panic!("no entry containing {needle:?} among {entries:?}"))
-    }
+    /// The `log` capture sink, shared with rdlp-extractor's own tests: see
+    /// `rdlp_extractor::log_capture` for the process-global-buffer caveat
+    /// every assertion here lives with.
+    pub use rdlp_extractor::log_capture::{
+        captured_count_containing, captured_count_on_target, captured_entry_containing,
+        captured_logs,
+    };
 }
 
 #[cfg(test)]

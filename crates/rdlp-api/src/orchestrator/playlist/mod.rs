@@ -305,10 +305,10 @@ impl Orchestrator {
             .download_episodes(
                 &infos,
                 &existing_files,
-                &archive,
+                archive.as_ref(),
                 &playlist_dir,
                 &selected_sub_langs,
-                &selected_audio,
+                selected_audio.as_deref(),
                 batch_resolved_at,
                 total,
             )
@@ -323,7 +323,7 @@ impl Orchestrator {
                 &infos,
                 &playlist_dir,
                 &selected_sub_langs,
-                &selected_audio,
+                selected_audio.as_deref(),
                 total,
             )
             .await;

@@ -19,8 +19,22 @@ pub struct InfoDict {
     /// Video title
     pub title: String,
 
-    /// Name of the extractor that provided this info
+    /// Name of the extractor that provided this info — the display
+    /// surface: `%(extractor)s` (a path component), log tags, list/UI
+    /// rendering. A plugin's manifest `display_name` lands here.
     pub extractor: String,
+
+    /// The extractor's identity key, when it differs from [`extractor`]
+    /// (yt-dlp `extractor_key`): the download-archive token and any other
+    /// on-disk or namespace contract key on this, never on the display
+    /// name. A plugin sets it to its manifest `name`; in-tree extractors,
+    /// whose one name is both, leave it `None` and the archive falls back
+    /// to `extractor`. Serialized only when set so every existing
+    /// `--dump-json` consumer and archive line is unchanged.
+    ///
+    /// [`extractor`]: Self::extractor
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extractor_key: Option<String>,
 
     /// Original webpage URL
     pub webpage_url: String,
@@ -277,6 +291,7 @@ impl InfoDict {
             id: id.into(),
             title: title.into(),
             extractor: extractor.into(),
+            extractor_key: None,
             webpage_url: webpage_url.into(),
             description: None,
             duration: None,

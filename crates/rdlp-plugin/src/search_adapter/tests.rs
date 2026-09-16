@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::test_harness::{EMPTY_COMPONENT_WAT, instantiate, wit_body_lines};
+
 #[test]
 fn unsupported_is_the_search_only_variant() {
     assert!(matches!(
@@ -52,30 +54,19 @@ fn only_internal_among_the_search_errors_is_a_strike() {
     }
 }
 
-/// Drift guard for the hand-written lift: the record's field lines in
-/// `wit/types.wit` must be exactly these, in this order — the component
-/// canonical ABI lifts records positionally, so a reordered or retyped
-/// field would lift garbage without a type error.
+/// Drift guard for the hand-written lift (`test_harness::wit_body_lines`
+/// says why): the record's field lines in `wit/types.wit` must be exactly
+/// these, in this order.
 #[test]
 fn lift_mirrors_the_wit_record_field_for_field() {
-    const TYPES_WIT: &str = include_str!("../../wit/types.wit");
-    let expected = [
-        "key: string,",
-        "display-name: string,",
-        "allowed-values: list<string>,",
-        "default: option<string>,",
-    ];
-    let (_, after) = TYPES_WIT
-        .split_once("record search-filter-descriptor {")
-        .expect("types.wit declares search-filter-descriptor");
-    let (body, _) = after.split_once('}').expect("record body is closed");
-    let fields: Vec<&str> = body
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .collect();
     assert_eq!(
-        fields, expected,
+        wit_body_lines("record", "search-filter-descriptor"),
+        [
+            "key: string,",
+            "display-name: string,",
+            "allowed-values: list<string>,",
+            "default: option<string>,",
+        ],
         "search-filter-descriptor drifted from the Rust lift"
     );
 }
@@ -104,8 +95,8 @@ fn descriptor_labels_are_the_values() {
 // ── PluginSearchExtractor ─────────────────────────────────────────────
 
 use crate::test_support::unit::{
-    FIXTURE_MANIFEST, TEST_LOG_TARGET, captured_entry_containing, captured_logs, fixture_extractor,
-    fixture_extractor_with_manifest, test_origin,
+    TEST_LOG_TARGET, captured_entry_containing, captured_logs, fixture_extractor,
+    fixture_extractor_with_manifest, fixture_manifest_with, test_origin,
 };
 
 fn host_query(filters: &[(&str, &str)]) -> SearchQuery {
@@ -294,10 +285,9 @@ fn identity_and_arbitration_come_from_the_manifest() {
 /// The fixture manifest serving `site` for search, with `claim` lines
 /// appended verbatim.
 fn manifest_claiming(site: &str, claim: &str) -> String {
-    FIXTURE_MANIFEST.replace(
-        "capabilities = []",
-        &format!("capabilities = []\nsupports_search = true\nsearch_site = \"{site}\"\n{claim}"),
-    )
+    fixture_manifest_with(&format!(
+        "supports_search = true\nsearch_site = \"{site}\"\n{claim}"
+    ))
 }
 
 /// The shadowing attempt: a plugin naming a built-in's site with only a
@@ -592,32 +582,6 @@ fn an_over_long_allowed_value_is_dropped_from_its_descriptor() {
 
 // ── the by-name export call against minimal components (L1 / m7) ─────────
 
-/// A minimal component exporting only `search-filters`, instantiated on a
-/// bare linker (no host world, no capabilities) into a store carrying the
-/// unit-test plugin name — the smallest thing `call_search_filters` can be
-/// pointed at.
-async fn instantiate(wat: &str) -> (Store<PluginStoreData>, wasmtime::component::Instance) {
-    use crate::engine::{Engine, EngineConfig};
-    let engine = Engine::new(EngineConfig::default()).expect("engine");
-    let component =
-        wasmtime::component::Component::new(engine.raw(), wat::parse_str(wat).expect("wat"))
-            .expect("component");
-    // The production deadline: an unbounded tick count overflows
-    // wasmtime's epoch arithmetic (`store.rs` adds unchecked) once the
-    // engine's ticker has advanced.
-    let mut store = crate::instance::build_store(
-        &engine,
-        "test",
-        tokio_util::sync::CancellationToken::new(),
-        crate::instance::deadline_ticks(SEARCH_TIMEOUT, engine.tick_period()),
-    );
-    let instance = wasmtime::component::Linker::<PluginStoreData>::new(engine.raw())
-        .instantiate_async(&mut store, &component)
-        .await
-        .expect("instantiate");
-    (store, instance)
-}
-
 /// `search-filters` returning one descriptor, laid out by hand in core
 /// memory in canonical-ABI order: `key`, `display-name`, `allowed-values`
 /// (two strings), `default = some("newest")`. The core function returns
@@ -646,17 +610,6 @@ const SEARCH_FILTERS_ONE_DESCRIPTOR_WAT: &str = r#"(component
   (export $desc_x "search-filter-descriptor" (type $desc))
   (func (export "search-filters") (result (list $desc_x))
     (canon lift (core func $i "search-filters") (memory $i "mem") string-encoding=utf8))
-)"#;
-
-/// `search-filters` exported with the wrong type (`u32`, not
-/// `list<search-filter-descriptor>`).
-const SEARCH_FILTERS_WRONG_TYPE_WAT: &str = r#"(component
-  (core module $m
-    (func (export "search-filters") (result i32) (i32.const 7))
-  )
-  (core instance $i (instantiate $m))
-  (func (export "search-filters") (result u32)
-    (canon lift (core func $i "search-filters")))
 )"#;
 
 /// The positive half of the drift guard: a component whose export carries
@@ -689,37 +642,13 @@ async fn a_correctly_typed_export_lifts_and_post_returns() {
     assert_eq!(second, first);
 }
 
-/// A `search-filters` export with the wrong signature is a `Trapped` (the
-/// typed lookup refuses it before any wasm runs) and therefore a strike —
-/// not an absent export, which would silently mean "no filters".
-#[tokio::test]
-async fn a_mis_typed_export_is_a_trap_and_a_strike() {
-    use crate::adapter::counts_as_strike;
-    let (mut store, instance) = instantiate(SEARCH_FILTERS_WRONG_TYPE_WAT).await;
-    let err = call_search_filters(&mut store, &instance)
-        .await
-        .expect_err("wrong signature");
-    match &err {
-        PluginError::Trapped { plugin, reason } => {
-            assert_eq!(plugin, "test");
-            assert!(
-                reason.starts_with("signature of search-filters:"),
-                "{reason}"
-            );
-        }
-        other => panic!("expected Trapped, got {other:?}"),
-    }
-    assert!(
-        counts_as_strike(&err),
-        "a mis-typed export must count against the plugin"
-    );
-}
-
-/// A component with no `search-filters` export at all answers no filters,
-/// with no error — the pre-0.5.1 path, pinned at this level too.
+/// This export's "absent" meaning: a component with no `search-filters`
+/// answers no filters, with no error — the pre-0.5.1 path. The
+/// lookup/typecheck/trap mechanism itself (a mis-typed export is a
+/// `Trapped` strike, never "no filters") is `adapter::tests::by_name_*`.
 #[tokio::test]
 async fn an_absent_export_answers_no_filters() {
-    let (mut store, instance) = instantiate("(component)").await;
+    let (mut store, instance) = instantiate(EMPTY_COMPONENT_WAT).await;
     let filters = call_search_filters(&mut store, &instance)
         .await
         .expect("absent export is Ok");

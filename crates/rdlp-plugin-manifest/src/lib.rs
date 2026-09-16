@@ -33,6 +33,27 @@ pub const KNOWN_CAPABILITIES: &[&str] = &[
 /// Maximum byte length of a `url_regex` source string before compilation is even attempted.
 const URL_REGEX_MAX_BYTES: usize = 2048;
 
+/// Maximum byte length of `display_name`. It is display-only — rendered in
+/// `%(extractor)s` and log tags — so the bound
+/// exists to keep those surfaces readable, not to encode any protocol limit;
+/// 64 matches the identifier-length cap already applied to `name` and
+/// `search_site` by [`validate_plugin_name`], giving plugin authors one
+/// length rule to remember across both fields.
+const DISPLAY_NAME_MAX_BYTES: usize = 64;
+
+/// The Unicode bidi embedding/override (`U+202A..=U+202E`) and isolate
+/// (`U+2066..=U+2069`) controls — the nine code points behind the
+/// Trojan-Source visual-reordering attack (CVE-2021-42574), and exactly the
+/// set `rustc`'s `text_direction_codepoint_in_literal` lint denies. They
+/// are general-category `Cf`, not `Cc`, so [`char::is_control`] does not
+/// see them; `display_name` is rendered into every log tag and
+/// `%(extractor)s`, where `X\u{202E}Y` would display reordered. Refused at
+/// the source. Inline rather than `rdlp_redact::text::is_bidi_control`
+/// (the same set) because this leaf crate deliberately carries no rdlp
+/// dependency — author tooling links it alone.
+const BIDI_CONTROLS: [std::ops::RangeInclusive<char>; 2] =
+    ['\u{202A}'..='\u{202E}', '\u{2066}'..='\u{2069}'];
+
 /// Errors that can be produced while parsing or validating a manifest.
 ///
 /// `rdlp-plugin::PluginError` provides a `From<ManifestError>` conversion so
@@ -89,6 +110,16 @@ pub enum ManifestError {
 pub struct Manifest {
     /// Plugin name (kebab-case, no namespace).
     pub name: String,
+    /// Human-readable name for display only — `%(extractor)s`, log tags,
+    /// and `PluginExtractor::name()`. Never used for identity, URL/search
+    /// routing, the trust store, or the archive token; those stay on
+    /// `name` (which also travels as `InfoDict::extractor_key`). Because
+    /// `%(extractor)s` renders it into one output-path component, it may
+    /// not contain a path separator (`/`, `\`), nor a control or bidi
+    /// control character (see `validate_display_name`). Defaults to `name`
+    /// when unset (see [`Manifest::display_name`]).
+    #[serde(default)]
+    pub display_name: Option<String>,
     /// Plugin semver version.
     pub version: String,
     /// Target WIT contract version (e.g. "0.1.0").
@@ -142,6 +173,14 @@ impl Manifest {
     #[must_use]
     pub fn search_site_name(&self) -> &str {
         self.search_site.as_deref().unwrap_or(&self.name)
+    }
+
+    /// Human-readable name for display surfaces — the `display_name`
+    /// override when set, else `name`. Never the identity/routing key;
+    /// see [`Self::search_site_name`] and `name` for that.
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        self.display_name.as_deref().unwrap_or(&self.name)
     }
 
     /// Whether this manifest claims the right to shadow the built-in
@@ -208,7 +247,8 @@ pub enum Signature {
     Ed25519 {
         /// Base64-encoded 32-byte Ed25519 public key.
         pubkey: String,
-        /// Base64-encoded 64-byte Ed25519 signature over (`canonical_bytes(manifest)` || `wasm_bytes`).
+        /// Base64-encoded 64-byte Ed25519 signature over
+        /// (`canonical_bytes(manifest)` || `wasm_bytes`).
         signature: String,
     },
 }
@@ -265,7 +305,8 @@ pub fn parse_manifest_str(s: &str) -> Result<Manifest, ManifestError> {
 /// - All error variants from [`parse_manifest_str`] when the file contents fail
 ///   validation; in that case the error is wrapped as
 ///   [`ManifestError::InvalidManifest`] with the file path attached.
-#[allow(clippy::disallowed_methods)] // startup/load-time sync I/O — acceptable per clippy.toml policy
+// Startup/load-time sync I/O — acceptable per the clippy.toml policy.
+#[allow(clippy::disallowed_methods)]
 pub fn parse_manifest_file(path: &Path) -> Result<Manifest, ManifestError> {
     let s = std::fs::read_to_string(path)?;
     parse_manifest_str(&s).map_err(|e| match e {
@@ -407,7 +448,45 @@ fn validate(m: &Manifest) -> Result<(), ManifestError> {
 
     validate_capability_composition(m)?;
     validate_search_site(m)?;
+    validate_display_name(m)?;
 
+    Ok(())
+}
+
+/// `display_name` is rendered directly into `%(extractor)s` and log tags
+/// (the first-install prompt shows `name`), so it is held to
+/// plain-display-text rules rather than the filesystem-safe shape
+/// `validate_plugin_name` enforces on `name`/`search_site`: any non-empty,
+/// ≤64-byte string free of control and bidi-control characters
+/// ([`BIDI_CONTROLS`]) is fine — spaces and mixed case included. The one
+/// path rule it keeps: `%(extractor)s` is ONE output-path component, and
+/// although the template renderer already maps `/` and `\` to `_` when it
+/// renders a field, refusing them here keeps the display name an author
+/// wrote the one the user sees — defence in depth at the source. Namespace
+/// keys (the archive token, `host-store-kv`) stay on `name`.
+fn validate_display_name(m: &Manifest) -> Result<(), ManifestError> {
+    let Some(d) = &m.display_name else {
+        return Ok(());
+    };
+    if d.is_empty() {
+        return invalid("empty display_name");
+    }
+    if d.len() > DISPLAY_NAME_MAX_BYTES {
+        return invalid(&format!(
+            "display_name longer than {DISPLAY_NAME_MAX_BYTES} bytes"
+        ));
+    }
+    if d.chars().any(char::is_control) {
+        return invalid("display_name contains a control character");
+    }
+    if d.chars()
+        .any(|c| BIDI_CONTROLS.iter().any(|block| block.contains(&c)))
+    {
+        return invalid("display_name contains a bidi control character");
+    }
+    if d.contains(['/', '\\']) {
+        return invalid("display_name contains a path separator");
+    }
     Ok(())
 }
 
@@ -464,9 +543,9 @@ fn invalid(reason: &str) -> Result<(), ManifestError> {
 /// - LF line endings, single space around `=`
 /// - optional fields included only when present
 /// - fields introduced after 0.5.0 (`supports_extract`, `search_site`,
-///   `search_claims_override`) appear only when non-default (`false` /
-///   present / non-empty respectively), so every pre-0.5.1 manifest keeps
-///   its exact bytes and signature
+///   `search_claims_override`, `display_name`) appear only when non-default
+///   (`false` / present / non-empty / present respectively), so every
+///   pre-0.5.1 manifest keeps its exact bytes and signature
 ///
 /// Reference implementation in another language must produce identical bytes
 /// for an equivalent manifest. Test fixtures live in
@@ -505,6 +584,9 @@ pub fn canonical_bytes(m: &Manifest) -> Vec<u8> {
     if let Some(site) = &m.search_site {
         top.insert("search_site", quote_str(site));
     }
+    if let Some(d) = &m.display_name {
+        top.insert("display_name", quote_str(d));
+    }
     if !m.search_claims_override.is_empty() {
         top.insert(
             "search_claims_override",
@@ -539,7 +621,147 @@ fn string_list(v: &[String]) -> String {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)] // test code — panicking on unexpected errors is intentional
+mod display_name_tests {
+    use super::{ManifestError, parse_manifest_str};
+
+    /// A minimal-but-complete manifest, with `{line}` spliced in as an
+    /// extra top-level key before `[signature]` — used to add a
+    /// `display_name` line without hand-duplicating the whole fixture per test.
+    fn manifest_with(line: &str) -> String {
+        format!(
+            r#"
+name = "x"
+version = "1.0.0"
+wit_version = "0.5.0"
+matches = ["https://x.com/*"]
+priority = 150
+capabilities = ["log"]
+{line}
+
+[signature]
+type = "ed25519"
+pubkey = "ZA"
+signature = "ZA"
+"#
+        )
+    }
+
+    fn assert_invalid_reason_contains(toml: &str, needle: &str) {
+        match parse_manifest_str(toml) {
+            Err(ManifestError::InvalidManifest { reason, .. }) => {
+                assert!(
+                    reason.contains(needle),
+                    "reason {reason:?} lacks {needle:?}"
+                );
+            }
+            other => panic!("expected InvalidManifest, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn display_name_defaults_to_name() {
+        let m = parse_manifest_str(&manifest_with("")).unwrap();
+        assert_eq!(m.display_name(), "x");
+    }
+
+    #[test]
+    fn display_name_empty_rejected() {
+        assert_invalid_reason_contains(
+            &manifest_with(r#"display_name = """#),
+            "empty display_name",
+        );
+    }
+
+    #[test]
+    fn display_name_64_bytes_accepted() {
+        let name = "a".repeat(64);
+        let toml = manifest_with(&format!("display_name = \"{name}\""));
+        let m = parse_manifest_str(&toml).unwrap();
+        assert_eq!(m.display_name(), name);
+    }
+
+    #[test]
+    fn display_name_65_bytes_rejected() {
+        let name = "a".repeat(65);
+        let toml = manifest_with(&format!("display_name = \"{name}\""));
+        assert_invalid_reason_contains(&toml, "64 bytes");
+    }
+
+    /// Same boundary restated in bytes, not chars: 32 × "ä" is 64 bytes at
+    /// 32 chars — `String::len` (bytes) is what the cap validates against,
+    /// not `.chars().count()`, and this is the case that would tell them apart.
+    #[test]
+    fn display_name_64_bytes_multibyte_accepted() {
+        let name = "ä".repeat(32);
+        assert_eq!(name.len(), 64, "fixture must be exactly 64 bytes");
+        let toml = manifest_with(&format!("display_name = \"{name}\""));
+        let m = parse_manifest_str(&toml).unwrap();
+        assert_eq!(m.display_name(), name);
+    }
+
+    #[test]
+    fn display_name_66_bytes_multibyte_rejected() {
+        let name = "ä".repeat(33);
+        assert_eq!(name.len(), 66, "fixture must be over the 64-byte cap");
+        let toml = manifest_with(&format!("display_name = \"{name}\""));
+        assert_invalid_reason_contains(&toml, "64 bytes");
+    }
+
+    #[test]
+    fn display_name_control_char_rejected() {
+        // TOML's own `\u0007` escape — a literal control byte is not valid TOML
+        // at all, so the escape is how the fixture reaches `validate`.
+        assert_invalid_reason_contains(
+            &manifest_with("display_name = \"X\\u0007\""),
+            "control character",
+        );
+    }
+
+    /// `display_name` is `InfoDict::extractor`, which `%(extractor)s`
+    /// renders into one output-path component; the renderer would map a
+    /// separator to `_` itself, so this refusal is defence in depth at the
+    /// source rather than the only thing between the name and a directory.
+    #[test]
+    fn display_name_with_a_path_separator_rejected() {
+        // TOML-escaped: `\\` in the file is one backslash in the value.
+        for name in ["Site/Sub", r"Site\\Sub", "/", r"\\"] {
+            assert_invalid_reason_contains(
+                &manifest_with(&format!("display_name = \"{name}\"")),
+                "path separator",
+            );
+        }
+    }
+
+    /// A bidi override or isolate is `Cf`, not `Cc`, so the control-character
+    /// check above does not see it — yet `X\u{202E}Y` renders visually
+    /// reordered in every log tag and `%(extractor)s` (Trojan Source,
+    /// CVE-2021-42574). All nine hostile code points are refused; the
+    /// neighbours just outside each block, and ordinary non-ASCII text, are
+    /// still accepted.
+    #[test]
+    fn display_name_with_a_bidi_control_rejected() {
+        for c in ('\u{202A}'..='\u{202E}').chain('\u{2066}'..='\u{2069}') {
+            assert_invalid_reason_contains(
+                &manifest_with(&format!("display_name = \"X{c}Y\"")),
+                "bidi",
+            );
+        }
+        for c in ['\u{2029}', '\u{202F}', '\u{2065}', '\u{206A}', 'é', '日'] {
+            let name = format!("X{c}Y");
+            let m = parse_manifest_str(&manifest_with(&format!("display_name = \"{name}\"")))
+                .unwrap_or_else(|e| panic!("{name:?} (U+{:04X}) must be accepted: {e}", c as u32));
+            assert_eq!(m.display_name(), name);
+        }
+    }
+
+    #[test]
+    fn display_name_with_spaces_and_case_accepted() {
+        let m = parse_manifest_str(&manifest_with(r#"display_name = "XHamster Pro""#)).unwrap();
+        assert_eq!(m.display_name(), "XHamster Pro");
+    }
+}
+
+#[cfg(test)]
 mod validate_plugin_name_tests {
     use super::{ManifestError, validate_plugin_name};
 

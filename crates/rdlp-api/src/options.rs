@@ -26,7 +26,7 @@ pub struct OptionEntry {
     pub gui: Gui,
 }
 
-/// The registry. One entry per `Config`/`PostProcess` leaf field (99 total).
+/// The registry. One entry per `Config`/`PostProcess` leaf field (105 total).
 pub const OPTION_REGISTRY: &[OptionEntry] = &[
     OptionEntry {
         field: "output_to_stdout",
@@ -137,6 +137,18 @@ pub const OPTION_REGISTRY: &[OptionEntry] = &[
         gui: Gui::Missing("#602"),
     },
     OptionEntry {
+        field: "max_metadata_extras",
+        gui: Gui::Missing("#602"),
+    },
+    OptionEntry {
+        field: "max_metadata_value_bytes",
+        gui: Gui::Missing("#602"),
+    },
+    OptionEntry {
+        field: "max_metadata_extras_bytes",
+        gui: Gui::Missing("#602"),
+    },
+    OptionEntry {
         field: "source_address",
         gui: Gui::Missing("#602"),
     },
@@ -214,6 +226,18 @@ pub const OPTION_REGISTRY: &[OptionEntry] = &[
     },
     OptionEntry {
         field: "playlist_items",
+        gui: Gui::Missing("#602"),
+    },
+    OptionEntry {
+        field: "playlist_concurrency",
+        gui: Gui::Missing("#602"),
+    },
+    OptionEntry {
+        field: "playlist_item_timeout",
+        gui: Gui::Missing("#602"),
+    },
+    OptionEntry {
+        field: "playlist_ignore_errors",
         gui: Gui::Missing("#602"),
     },
     OptionEntry {
@@ -436,7 +460,7 @@ mod tests {
     /// so a new Config/PostProcess field is E0027 here until it gets a registry entry.
     /// DO NOT ADD `..` — the correct fix for E0027 is a new `OPTION_REGISTRY` entry.
     #[test]
-    // Exhaustively destructuring `Config` + `PostProcess` (99 fields total) plus the
+    // Exhaustively destructuring `Config` + `PostProcess` (105 fields total) plus the
     // 1:1 `EXPECTED` mirror is the forcing function this test exists for — splitting it
     // would break the single-canary property. `items_after_statements`: `EXPECTED` sits
     // next to the destructures it mirrors, which is the readable order here.
@@ -470,6 +494,9 @@ mod tests {
             hls_expansion_timeout: _,
             parallel_threshold: _,
             max_fragment_bytes: _,
+            max_metadata_extras: _,
+            max_metadata_value_bytes: _,
+            max_metadata_extras_bytes: _,
             source_address: _,
             user_agent: _,
             browser_emulation: _,
@@ -490,6 +517,9 @@ mod tests {
             playlist_start: _,
             playlist_end: _,
             playlist_items: _,
+            playlist_concurrency: _,
+            playlist_item_timeout: _,
+            playlist_ignore_errors: _,
             username: _,
             password: _,
             two_factor: _,
@@ -577,6 +607,9 @@ mod tests {
             "hls_expansion_timeout",
             "parallel_threshold",
             "max_fragment_bytes",
+            "max_metadata_extras",
+            "max_metadata_value_bytes",
+            "max_metadata_extras_bytes",
             "source_address",
             "user_agent",
             "browser_emulation",
@@ -597,6 +630,9 @@ mod tests {
             "playlist_start",
             "playlist_end",
             "playlist_items",
+            "playlist_concurrency",
+            "playlist_item_timeout",
+            "playlist_ignore_errors",
             "username",
             "password",
             "two_factor",
@@ -660,11 +696,11 @@ mod tests {
         );
         assert_eq!(
             OPTION_REGISTRY.len(),
-            99,
-            "registry must have exactly 99 entries"
+            105,
+            "registry must have exactly 105 entries"
         );
         let expected: HashSet<&str> = EXPECTED.iter().copied().collect();
-        assert_eq!(expected.len(), 99, "EXPECTED drifted from 99");
+        assert_eq!(expected.len(), 105, "EXPECTED drifted from 105");
         assert_eq!(
             registry, expected,
             "OPTION_REGISTRY fields must exactly match Config+PostProcess"
@@ -683,7 +719,7 @@ mod tests {
         }
         assert_eq!(control, 40, "Control count drifted");
         assert_eq!(na, 6, "NotApplicable count drifted");
-        assert_eq!(missing, 53, "Missing count drifted");
+        assert_eq!(missing, 59, "Missing count drifted");
     }
 
     #[test]
