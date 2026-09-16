@@ -1,5 +1,6 @@
 //! Application configuration types
 
+use const_format::formatcp;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::PathBuf;
@@ -46,6 +47,54 @@ pub const DEFAULT_MAX_FRAGMENT_BYTES: u64 = 512 * 1024 * 1024;
 /// outliers — while still keeping worst-case per-fragment memory bounded to
 /// a fixed number rather than unbounded.
 pub const MAX_FRAGMENT_BYTES_UPPER_BOUND: u64 = 2 * 1024 * 1024 * 1024;
+
+/// Ceiling for [`Config::max_metadata_extras`].
+///
+/// 16× the consuming crate's default of 64 keys. Past a thousand keys the
+/// map is page content, not metadata, and every key is paid per
+/// `--dump-json` line and archive record.
+pub const MAX_METADATA_EXTRAS_UPPER_BOUND: usize = 1024;
+
+/// Ceiling for [`Config::max_metadata_value_bytes`].
+///
+/// 1 MiB, 256× the consuming crate's 4 KiB default — room for a full
+/// description or transcript an operator opts into, never a media payload.
+pub const MAX_METADATA_VALUE_BYTES_UPPER_BOUND: usize = 1024 * 1024;
+
+/// Ceiling for [`Config::max_metadata_extras_bytes`].
+///
+/// 16 MiB, sixteen maximal values — the largest metadata map one download
+/// can be asked to serialise into every record before it is a file of its
+/// own.
+pub const MAX_METADATA_EXTRAS_BYTES_UPPER_BOUND: usize = 16 * 1024 * 1024;
+
+/// Ceiling for [`Config::playlist_concurrency`].
+///
+/// 16 entries resolved at once. Each is one page fetch (and, for a plugin,
+/// one instantiated store); above this the host is hammering the site, and
+/// the in-tree xhamster playlist path never ran past 4.
+pub const MAX_PLAYLIST_CONCURRENCY: usize = 16;
+
+/// Ceiling for [`Config::playlist_item_timeout`].
+///
+/// 600 s, the same ten-minute cap every other per-request timeout in this
+/// file (`socket_timeout`, `read_timeout`, `hls_expansion_timeout`) is held
+/// to.
+pub const MAX_PLAYLIST_ITEM_TIMEOUT_SECS: u64 = 600;
+
+// The `OutOfRange` reasons for the five bounds above, formatted at compile
+// time so each cites its constant rather than restating the literal. Module
+// consts rather than inline in `validate`: `formatcp!` expands to an
+// `unsafe` block, and a method body containing one makes clippy's
+// `unsafe_derive_deserialize` fire on `Config`'s derive.
+const MAX_METADATA_EXTRAS_REASON: &str = formatcp!("must be 1..={MAX_METADATA_EXTRAS_UPPER_BOUND}");
+const MAX_METADATA_VALUE_BYTES_REASON: &str =
+    formatcp!("must be 1..={MAX_METADATA_VALUE_BYTES_UPPER_BOUND} bytes (1 MiB)");
+const MAX_METADATA_EXTRAS_BYTES_REASON: &str =
+    formatcp!("must be 1..={MAX_METADATA_EXTRAS_BYTES_UPPER_BOUND} bytes (16 MiB)");
+const MAX_PLAYLIST_CONCURRENCY_REASON: &str = formatcp!("must be 1..={MAX_PLAYLIST_CONCURRENCY}");
+const MAX_PLAYLIST_ITEM_TIMEOUT_REASON: &str =
+    formatcp!("must be 1..={MAX_PLAYLIST_ITEM_TIMEOUT_SECS} seconds");
 
 /// Errors from configuration validation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -286,21 +335,22 @@ pub struct Config {
     /// `rdlp-plugin` crate's metadata adapter will carry into `InfoDict`.
     /// Unset keeps the consuming crate's default
     /// (`DEFAULT_MAX_METADATA_EXTRAS`). Validated post-load by
-    /// `Config::validate()`: must be 1..=1024.
+    /// `Config::validate()`: must be `1..=MAX_METADATA_EXTRAS_UPPER_BOUND`.
     #[serde(default)]
     pub max_metadata_extras: Option<usize>,
 
     /// Ceiling on a single metadata extras value's byte length. Unset keeps
     /// the consuming crate's default (`DEFAULT_MAX_METADATA_VALUE_BYTES`).
-    /// Validated post-load by `Config::validate()`: must be `1..=1_048_576`
-    /// bytes (1 MiB).
+    /// Validated post-load by `Config::validate()`: must be
+    /// `1..=MAX_METADATA_VALUE_BYTES_UPPER_BOUND` (1 MiB).
     #[serde(default)]
     pub max_metadata_value_bytes: Option<usize>,
 
     /// Ceiling on the total byte length of a metadata extras map, summed
     /// across all its keys and values. Unset keeps the consuming crate's
     /// default (`DEFAULT_MAX_METADATA_EXTRAS_BYTES`). Validated post-load by
-    /// `Config::validate()`: must be `1..=16_777_216` bytes (16 MiB).
+    /// `Config::validate()`: must be `1..=MAX_METADATA_EXTRAS_BYTES_UPPER_BOUND`
+    /// (16 MiB).
     #[serde(default)]
     pub max_metadata_extras_bytes: Option<usize>,
 
@@ -387,14 +437,15 @@ pub struct Config {
     /// How many playlist items the host-driven page loop resolves
     /// concurrently. Unset keeps the consuming crate's default
     /// (`DEFAULT_PLAYLIST_CONCURRENCY`). Validated post-load by
-    /// `Config::validate()`: must be 1..=16.
+    /// `Config::validate()`: must be `1..=MAX_PLAYLIST_CONCURRENCY`.
     #[serde(default)]
     pub playlist_concurrency: Option<usize>,
 
-    /// Wall-clock cap, in seconds, on resolving a single playlist item.
-    /// Unset keeps the consuming crate's default
-    /// (`DEFAULT_PLAYLIST_ITEM_TIMEOUT_SECS`). Validated post-load by
-    /// `Config::validate()`: must be 1..=600 seconds.
+    /// Wall-clock cap, in seconds, on resolving a single playlist item — the
+    /// budget of the item's own extract call. Unset keeps the consuming
+    /// crate's default (`DEFAULT_PLAYLIST_ITEM_TIMEOUT_SECS`). Validated
+    /// post-load by `Config::validate()`: must be
+    /// `1..=MAX_PLAYLIST_ITEM_TIMEOUT_SECS`.
     #[serde(default)]
     pub playlist_item_timeout: Option<u64>,
 
@@ -840,45 +891,45 @@ impl Config {
             });
         }
         if let Some(n) = self.max_metadata_extras
-            && !(1..=1024).contains(&n)
+            && !(1..=MAX_METADATA_EXTRAS_UPPER_BOUND).contains(&n)
         {
             return Err(ConfigValidationError::OutOfRange {
                 field: "max_metadata_extras",
-                reason: "must be 1..=1024",
+                reason: MAX_METADATA_EXTRAS_REASON,
             });
         }
         if let Some(b) = self.max_metadata_value_bytes
-            && !(1..=1_048_576).contains(&b)
+            && !(1..=MAX_METADATA_VALUE_BYTES_UPPER_BOUND).contains(&b)
         {
             return Err(ConfigValidationError::OutOfRange {
                 field: "max_metadata_value_bytes",
-                reason: "must be 1..=1_048_576 bytes (1 MiB)",
+                reason: MAX_METADATA_VALUE_BYTES_REASON,
             });
         }
         if let Some(b) = self.max_metadata_extras_bytes
-            && !(1..=16_777_216).contains(&b)
+            && !(1..=MAX_METADATA_EXTRAS_BYTES_UPPER_BOUND).contains(&b)
         {
             return Err(ConfigValidationError::OutOfRange {
                 field: "max_metadata_extras_bytes",
-                reason: "must be 1..=16_777_216 bytes (16 MiB)",
+                reason: MAX_METADATA_EXTRAS_BYTES_REASON,
             });
         }
 
         // Playlist loop range checks
         if let Some(n) = self.playlist_concurrency
-            && !(1..=16).contains(&n)
+            && !(1..=MAX_PLAYLIST_CONCURRENCY).contains(&n)
         {
             return Err(ConfigValidationError::OutOfRange {
                 field: "playlist_concurrency",
-                reason: "must be 1..=16",
+                reason: MAX_PLAYLIST_CONCURRENCY_REASON,
             });
         }
         if let Some(t) = self.playlist_item_timeout
-            && !(1..=600).contains(&t)
+            && !(1..=MAX_PLAYLIST_ITEM_TIMEOUT_SECS).contains(&t)
         {
             return Err(ConfigValidationError::OutOfRange {
                 field: "playlist_item_timeout",
-                reason: "must be 1..=600 seconds",
+                reason: MAX_PLAYLIST_ITEM_TIMEOUT_REASON,
             });
         }
         if let Some(s) = &self.playlist_items {

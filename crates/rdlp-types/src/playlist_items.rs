@@ -49,7 +49,7 @@ impl fmt::Display for PlaylistItemsError {
             Self::Unsupported(s) => {
                 write!(
                     f,
-                    "{s:?} is not supported (negative indices and ::step need the playlist length, which is not known before this page is fetched)"
+                    "{s:?} is not supported (negative indices and ::step need the playlist length, which is not known before any page is fetched)"
                 )
             }
         }
@@ -190,5 +190,19 @@ mod tests {
                 "{spec}: got {err:?}"
             );
         }
+    }
+
+    /// The refusal is decided before any page is fetched (`Config::validate`
+    /// and the playlist loop's `validate_selection` both run first), and
+    /// the message says so — not "this page", which named a page that does
+    /// not exist yet.
+    #[test]
+    fn unsupported_message_names_the_moment_it_is_decided() {
+        let err = PlaylistItems::parse("1::2").expect_err("::step is unsupported");
+        assert!(
+            err.to_string()
+                .contains("not known before any page is fetched"),
+            "{err}"
+        );
     }
 }

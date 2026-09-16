@@ -12,15 +12,15 @@ impl Orchestrator {
     /// Download episodes concurrently with cancellation support.
     ///
     /// Returns (downloaded paths, failed episodes, whether interrupted).
-    #[allow(clippy::too_many_arguments, clippy::ref_option, clippy::too_many_lines)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub(super) async fn download_episodes(
         &self,
         infos: &[rdlp_types::InfoDict],
         existing_files: &HashMap<String, PathBuf>,
-        archive: &Option<HashSet<String>>,
+        archive: Option<&HashSet<String>>,
         playlist_dir: &std::path::Path,
         selected_sub_langs: &[String],
-        selected_audio: &Option<String>,
+        selected_audio: Option<&str>,
         batch_resolved_at: Instant,
         total: usize,
     ) -> (Vec<PathBuf>, Vec<(usize, String, String)>, bool) {
@@ -77,7 +77,7 @@ impl Orchestrator {
             let position = index + 1;
             let dir = playlist_dir.to_path_buf();
             let sub_langs = selected_sub_langs.to_vec();
-            let audio = selected_audio.clone();
+            let audio = selected_audio.map(str::to_owned);
             async move {
                 debug!("{}", "\u{2500}".repeat(60));
                 info!(position, total, title:? = info_owned.title; "Downloading");
@@ -155,7 +155,7 @@ impl Orchestrator {
     /// After the initial pass, retry failed episodes up to 3 more
     /// times with increasing delays. Each wave re-extracts fresh CDN
     /// URLs since old tokens are likely expired.
-    #[allow(clippy::too_many_arguments, clippy::too_many_lines, clippy::ref_option)]
+    #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
     pub(super) async fn run_retry_waves(
         &self,
         failed: &mut Vec<(usize, String, String)>,
@@ -164,7 +164,7 @@ impl Orchestrator {
         infos: &[rdlp_types::InfoDict],
         playlist_dir: &std::path::Path,
         selected_sub_langs: &[String],
-        selected_audio: &Option<String>,
+        selected_audio: Option<&str>,
         total: usize,
     ) -> usize {
         const MAX_RETRY_WAVES: usize = 3;
@@ -214,7 +214,7 @@ impl Orchestrator {
             let retry_futs = retry_batch.into_iter().map(|(position, title, _err)| {
                 let dir = playlist_dir.to_path_buf();
                 let sub_langs = selected_sub_langs.to_vec();
-                let audio = selected_audio.clone();
+                let audio = selected_audio.map(str::to_owned);
                 let index = position - 1;
                 #[allow(clippy::indexing_slicing)]
                 // index = position-1; position came from infos enumeration

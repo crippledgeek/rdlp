@@ -6691,6 +6691,7 @@ dependencies = [
 name = "rdlp-types"
 version = "0.1.0"
 dependencies = [
+ "const_format",
  "html-escape",
  "rdlp-redact",
  "regex",

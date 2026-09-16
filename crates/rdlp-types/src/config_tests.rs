@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::container::ContainerFormat;
+use std::ops::RangeInclusive;
 
 #[test]
 fn test_default_config() {
@@ -573,17 +574,19 @@ fn hls_expansion_timeout_boundaries() {
     }
 }
 
-/// Asserts a `usize`/`u64` `Config` field's inclusive validation boundary:
-/// `min` and `max` accepted, `min - 1` and `max + 1` rejected with
-/// `ConfigValidationError::OutOfRange { field, .. }`. Mirrors
-/// `hls_expansion_timeout_boundaries` above, generalized so the six new
-/// playlist/metadata fields don't each hand-roll the same four assertions.
+/// Asserts a `usize`/`u64` `Config` field's inclusive validation boundary
+/// `range`: both ends accepted, one below and one above rejected with
+/// `ConfigValidationError::OutOfRange { field, reason }` whose `reason`
+/// cites the upper bound's value (the named constant, not a restated
+/// literal). Mirrors `hls_expansion_timeout_boundaries` above, generalized
+/// so the five playlist/metadata fields don't each hand-roll the same
+/// assertions.
 fn assert_usize_field_boundaries(
     field: &'static str,
-    min: usize,
-    max: usize,
+    range: RangeInclusive<usize>,
     with_value: impl Fn(Option<usize>) -> Config,
 ) {
+    let (min, max) = (*range.start(), *range.end());
     for accepted in [min, max] {
         with_value(Some(accepted))
             .validate()
@@ -593,10 +596,13 @@ fn assert_usize_field_boundaries(
         let err = with_value(Some(rejected))
             .validate()
             .expect_err("out of range must reject");
-        assert!(
-            matches!(err, ConfigValidationError::OutOfRange { field: f, .. } if f == field),
-            "{field}={rejected}: got {err:?}"
-        );
+        match err {
+            ConfigValidationError::OutOfRange { field: f, reason } if f == field => assert!(
+                reason.contains(&format!("1..={max}")),
+                "{field}: the reason must cite the bound: {reason:?}"
+            ),
+            other => panic!("{field}={rejected}: got {other:?}"),
+        }
     }
     with_value(None)
         .validate()
@@ -605,42 +611,72 @@ fn assert_usize_field_boundaries(
 
 #[test]
 fn playlist_concurrency_boundaries() {
-    assert_usize_field_boundaries("playlist_concurrency", 1, 16, |v| Config {
-        playlist_concurrency: v,
-        ..Config::default()
+    assert_usize_field_boundaries("playlist_concurrency", 1..=MAX_PLAYLIST_CONCURRENCY, |v| {
+        Config {
+            playlist_concurrency: v,
+            ..Config::default()
+        }
     });
 }
 
 #[test]
 fn playlist_item_timeout_boundaries() {
-    assert_usize_field_boundaries("playlist_item_timeout", 1, 600, |v| Config {
-        playlist_item_timeout: v.map(|n| n as u64),
-        ..Config::default()
-    });
+    assert_usize_field_boundaries(
+        "playlist_item_timeout",
+        1..=usize::try_from(MAX_PLAYLIST_ITEM_TIMEOUT_SECS).expect("600 fits"),
+        |v| Config {
+            playlist_item_timeout: v.map(|n| n as u64),
+            ..Config::default()
+        },
+    );
 }
 
 #[test]
 fn max_metadata_extras_boundaries() {
-    assert_usize_field_boundaries("max_metadata_extras", 1, 1024, |v| Config {
-        max_metadata_extras: v,
-        ..Config::default()
-    });
+    assert_usize_field_boundaries(
+        "max_metadata_extras",
+        1..=MAX_METADATA_EXTRAS_UPPER_BOUND,
+        |v| Config {
+            max_metadata_extras: v,
+            ..Config::default()
+        },
+    );
 }
 
 #[test]
 fn max_metadata_value_bytes_boundaries() {
-    assert_usize_field_boundaries("max_metadata_value_bytes", 1, 1_048_576, |v| Config {
-        max_metadata_value_bytes: v,
-        ..Config::default()
-    });
+    assert_usize_field_boundaries(
+        "max_metadata_value_bytes",
+        1..=MAX_METADATA_VALUE_BYTES_UPPER_BOUND,
+        |v| Config {
+            max_metadata_value_bytes: v,
+            ..Config::default()
+        },
+    );
 }
 
 #[test]
 fn max_metadata_extras_bytes_boundaries() {
-    assert_usize_field_boundaries("max_metadata_extras_bytes", 1, 16_777_216, |v| Config {
-        max_metadata_extras_bytes: v,
-        ..Config::default()
-    });
+    assert_usize_field_boundaries(
+        "max_metadata_extras_bytes",
+        1..=MAX_METADATA_EXTRAS_BYTES_UPPER_BOUND,
+        |v| Config {
+            max_metadata_extras_bytes: v,
+            ..Config::default()
+        },
+    );
+}
+
+/// The named bounds are the documented ones — a constant edited without
+/// its rationale would move every reason string with it, so the values
+/// are pinned here where a change is deliberate.
+#[test]
+fn validate_bounds_are_the_documented_values() {
+    assert_eq!(MAX_PLAYLIST_CONCURRENCY, 16);
+    assert_eq!(MAX_PLAYLIST_ITEM_TIMEOUT_SECS, 600);
+    assert_eq!(MAX_METADATA_EXTRAS_UPPER_BOUND, 1024);
+    assert_eq!(MAX_METADATA_VALUE_BYTES_UPPER_BOUND, 1_048_576);
+    assert_eq!(MAX_METADATA_EXTRAS_BYTES_UPPER_BOUND, 16_777_216);
 }
 
 #[test]
