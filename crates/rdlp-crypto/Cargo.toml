@@ -5,16 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Cryptographic utilities for rdlp including PRNG-based URL decryption"
+description = "Site-agnostic obfuscation toolkit for rdlp: PRNG, hash, shuffle, transposition, radix, and homoglyph primitives"
 
+# Deliberately dependency-free: plugins link this crate into a
+# wasm32-unknown-unknown component, so every dependency would have to be
+# wasm-clean too.
 [dependencies]
-log = { workspace = true }
-regex = { workspace = true }
-url = { workspace = true }
-hex = { workspace = true }
-
-[dev-dependencies]
-tokio = { workspace = true, features = ["test-util"] }
 
 [lints.rust]
 missing_docs = "warn"

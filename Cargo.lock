@@ -6390,13 +6390,6 @@ dependencies = [
 [[package]]
 name = "rdlp-crypto"
 version = "0.1.0"
-dependencies = [
- "hex",
- "log",
- "regex",
- "tokio",
- "url",
-]
 
 [[package]]
 name = "rdlp-desktop"

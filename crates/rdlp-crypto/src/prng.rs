@@ -8,7 +8,7 @@
 //! `weyl_step`, `xorshift`, `rotate_scramble`, `fmix32`, `pcg_xsh_rs`, and
 //! `mxs_mix` — so a site wiring a *new* JS-emulating cipher composes them
 //! directly instead of re-deriving the arithmetic. [`ByteGenerator`] is the
-//! composed 7-algorithm façade this crate's own callers (`xhamster`) use.
+//! composed 7-algorithm façade a site's cipher wiring drives.
 //!
 //! ## JavaScript Integer Semantics
 //!
@@ -189,7 +189,7 @@ pub const fn rotate_scramble(s: i32, rotation: Rotation) -> i32 {
     (i64::wrapping_mul(x as i64, ROL_SCRAMBLE_MULT as i64)) as i32
 }
 
-/// PCG's XSH-RS output permutation, lifted out of [`ByteGenerator::lcg_pcg`].
+/// PCG's XSH-RS output permutation, lifted out of `ByteGenerator::lcg_pcg`.
 ///
 /// Xorshift, then a variable right-shift keyed off the input's high bits, so
 /// any LCG-based generator can reuse the same output function.
@@ -209,7 +209,7 @@ pub fn pcg_xsh_rs(state: i32) -> i32 {
     (s2 as u32 >> shift) as i32
 }
 
-/// Multiply-xor-shift (MXS) mixer, lifted out of [`ByteGenerator::weyl_mxs`].
+/// Multiply-xor-shift (MXS) mixer, lifted out of `ByteGenerator::weyl_mxs`.
 ///
 /// Xor-shift, multiply, xor-shift, multiply, with the two multipliers as
 /// parameters so a different MXS instance can reuse the same mixing shape.

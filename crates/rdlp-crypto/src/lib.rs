@@ -38,9 +38,7 @@ pub mod prng;
 pub mod radix;
 pub mod shuffle;
 pub mod transposition;
-pub mod xhamster;
 
 pub use homoglyph::{CYRILLIC_UPPERCASE_TO_LATIN, HomoglyphTable};
 pub use js_int::to_signed_32;
 pub use prng::ByteGenerator;
-pub use xhamster::decipher_format_url;
