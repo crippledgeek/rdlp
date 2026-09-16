@@ -402,8 +402,10 @@ fn resolve_reference(origin: &str, reference: &str) -> Option<(Url, Url)> {
 
 /// Format a [`FilterValidationError`] into an `RdlpError::Extraction` using the
 /// shared "Family-1" wording, where the site name is the **only** per-site
-/// variant. Used by PornHub / RedTube / XHamster, whose three validator error
-/// arms are byte-identical apart from that literal.
+/// variant. Used by the in-tree Family-1 sites (PornHub, RedTube, PornoXO,
+/// PornOne), whose validator error arms differ only in that literal;
+/// XHamster used it in-tree before C0-b, and plugin sites reach it through
+/// the host.
 ///
 /// Family-2 sites (TNAFlix / MovieFap) phrase these errors differently
 /// (`Unknown {Site} search filter key '{key}'`, etc.) and MUST NOT use this

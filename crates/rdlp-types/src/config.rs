@@ -72,7 +72,7 @@ pub const MAX_METADATA_EXTRAS_BYTES_UPPER_BOUND: usize = 16 * 1024 * 1024;
 ///
 /// 16 entries resolved at once. Each is one page fetch (and, for a plugin,
 /// one instantiated store); above this the host is hammering the site, and
-/// the in-tree xhamster playlist path never ran past 4.
+/// the xhamster playlist path, before it left the tree, never ran past 4.
 pub const MAX_PLAYLIST_CONCURRENCY: usize = 16;
 
 /// Ceiling for [`Config::playlist_item_timeout`].

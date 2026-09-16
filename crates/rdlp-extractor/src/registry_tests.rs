@@ -78,8 +78,9 @@ mod tests {
         assert!(registry.find_search_extractor("PORNHUB").is_some());
     }
 
-    /// xhamster ships as the rdlp-plugins `xhamster` plugin (slice C0-b,
-    /// #771), so the built-in registry must neither route its URLs to a
+    /// xhamster ships as the rdlp-plugins `xhamster` plugin (removed here in
+    /// slice C0-b, #771; landing as rdlp#762 slice C1-b), so the built-in
+    /// registry must neither route its URLs to a
     /// dedicated extractor nor claim it as a search site — the plugin
     /// host would otherwise lose the arbitration to the built-in.
     #[test]

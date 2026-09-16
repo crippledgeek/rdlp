@@ -183,9 +183,9 @@ impl SearchResultPreview {
 /// Information about a site that supports search.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SearchSiteInfo {
-    /// Machine-readable name (e.g. "xhamster").
+    /// Machine-readable name (e.g. "pornhub").
     pub name: String,
-    /// Human-readable display name (e.g. "`XHamster`").
+    /// Human-readable display name (e.g. "`PornHub`").
     pub display_name: String,
 }
 

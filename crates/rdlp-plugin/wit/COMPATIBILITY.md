@@ -79,8 +79,8 @@ module list):
 - `homoglyph` — `homoglyph::HomoglyphTable` and the
   `CYRILLIC_UPPERCASE_TO_LATIN` table (visually-identical character
   substitution)
-- `js_int` — `js_int::to_signed_32` (the JS `|0` coercion every
-  JS-emulating primitive below needs)
+- `js_int` — `js_int::to_signed_32` (the JS `|0` coercion the
+  i64-arithmetic PRNG steps use)
 - `prng` — the PRNG algorithm variants: `prng::lcg_step`,
   `prng::weyl_step`, `prng::xorshift` (+ `prng::XorshiftShifts`),
   `prng::rotate_scramble` (+ `prng::Rotation`), `prng::fmix32`,
@@ -89,9 +89,9 @@ module list):
 
 Site wiring — which algorithm id, which byte offsets, which key
 derivation, which homoglyph table — stays in the plugin. The `xhamster`
-plugin in rdlp-plugins is the first consumer: it links this crate to
-reconstruct its PRNG-based URL decryption, exactly as the in-tree
-`megacloud`, `eporner`, and `kvs` decoders do today.
+plugin in rdlp-plugins (landing as rdlp#762 slice C1-b) is the first
+consumer: it links this crate to reconstruct its PRNG-based URL decryption,
+exactly as the in-tree `megacloud`, `eporner`, and `kvs` decoders do today.
 
 ## 6. Deferred to the next minor
 

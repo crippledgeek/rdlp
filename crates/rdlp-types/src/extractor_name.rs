@@ -184,7 +184,8 @@ mod tests {
         );
     }
 
-    /// xhamster left the built-in set for the rdlp-plugins plugin (#771);
+    /// xhamster left the built-in set for the rdlp-plugins plugin (#771;
+    /// landing as rdlp#762 slice C1-b);
     /// a plugin-served site must not also be a closed-set variant, or the
     /// vocabulary would claim a site the binary no longer implements.
     #[test]

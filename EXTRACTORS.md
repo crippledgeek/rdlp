@@ -59,7 +59,7 @@ What to look for in the page body:
 | `<script type="application/ld+json">{ "@type": "VideoObject", … }` | JSON-LD source — use `BaseExtractor::parse_json_ld` and look at **EPorner** for the actor-extraction pattern. |
 | `html5player.setVideoHLS(…)` / `html5player.setVideoUrlLow(…)` | WGCZ Holding network (XVideos, XNXX, …) — extend `WgczNetworkBase` rather than writing from scratch. |
 | Empty `<title>`, no OG tags, just `window.constants = {…}` | Client-rendered SPA. Find the XHR endpoint by greping `app.js` for `/api/`. The **ABXXX** extractor is the reference for this shape. |
-| Encrypted / encoded URL strings (base64 with non-ASCII bytes mixed in, or numeric keys) | Per-site decoder needed. See the `xhamster` plugin in rdlp-plugins for a boa-evaluated `window.initials` decoder, and look in-tree at **ABXXX** (Cyrillic-homoglyph + comma-split base64). |
+| Encrypted / encoded URL strings (base64 with non-ASCII bytes mixed in, or numeric keys) | Per-site decoder needed. See the `xhamster` plugin in rdlp-plugins (landing as rdlp#762 slice C1-b) for a boa-evaluated `window.initials` decoder, and look in-tree at **ABXXX** (Cyrillic-homoglyph + comma-split base64). |
 
 If you see neither flashvars nor a JSON-LD block, look at the JS bundle:
 
@@ -250,7 +250,7 @@ Plugins must be signed (Sigstore keyless via GitHub Actions OIDC, or Ed25519 fal
 
 The reference plugin lives at `examples/plugins/example-extractor` (Rust + cargo-component); the full plugin author guide is tracked in [issue #213](https://github.com/crippledgeek/rdlp/issues/213). For the design rationale and security model, see `crates/rdlp-plugin/wit/COMPATIBILITY.md` (WIT versioning policy) and the module doc on `crates/rdlp-plugin/src/lib.rs` (trust model).
 
-Sites now live in rdlp-plugins — the xhamster extractor was the first to move (rdlp#762 slice C, C0-b = [rdlp#771](https://github.com/crippledgeek/rdlp/issues/771)) and carried its full commit history with it. A Rust plugin links `rdlp-crypto` as an ordinary crate dependency (`git = "https://github.com/crippledgeek/rdlp", rev = "<develop merge commit>"`) for the obfuscation primitives — the crate has zero dependencies and builds cleanly for `wasm32-unknown-unknown`, so it composes into any plugin's Cargo.toml the same way it composes into rdlp's own workspace. It is never reached through a host import: the WIT surface has no "decrypt this site's URLs" export, because that would freeze one site's decryption scheme into every future ABI version for every plugin (see `crates/rdlp-plugin/wit/COMPATIBILITY.md` §5).
+Sites now live in rdlp-plugins — the xhamster extractor is the first to move (rdlp#762 slice C; C0-b = [rdlp#771](https://github.com/crippledgeek/rdlp/issues/771) removes it here, and its history travels with it as the plugin lands in C1-b). A Rust plugin links `rdlp-crypto` as an ordinary crate dependency (`git = "https://github.com/crippledgeek/rdlp", rev = "<develop merge commit>"`) for the obfuscation primitives — the crate has zero dependencies and builds cleanly for `wasm32-unknown-unknown`, so it composes into any plugin's Cargo.toml the same way it composes into rdlp's own workspace. It is never reached through a host import: the WIT surface has no "decrypt this site's URLs" export, because that would freeze one site's decryption scheme into every future ABI version for every plugin (see `crates/rdlp-plugin/wit/COMPATIBILITY.md` §5).
 
 ### WIT 0.5.1 additions
 
