@@ -7,10 +7,11 @@ mod build_from_ytdlp;
 pub use build_from_ytdlp::run as run_build_from_ytdlp;
 
 use anyhow::{Context, Result};
+use rdlp_plugin::PluginError;
 use rdlp_plugin::manifest::{Manifest, validate_plugin_name};
 use rdlp_plugin::trust_store::{IdentityCheck, TrustStore};
 use rdlp_types::Config;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Reject path-traversing or otherwise unsafe plugin names BEFORE any
 /// `dir.join(name)` / `remove_dir_all` operation. Gives the user a clear
@@ -48,8 +49,8 @@ pub fn disabled_list_path() -> Result<PathBuf> {
 
 /// How an untrusted plugin gets trusted. The default prompter denies an
 /// unknown publisher, so nothing prompts: the operator passes the identity
-/// and the loader records it the first time the plugin loads — which
-/// `plugin list` / `plugin info` never do.
+/// and the loader records it once the signature verifies and the identity
+/// is approved on a load — which `plugin list` / `plugin info` never do.
 fn trust_hint(identity: &str) -> String {
     format!(
         "not loaded until trusted: run rdlp with `--trust-publisher {identity}` \
@@ -57,27 +58,56 @@ fn trust_hint(identity: &str) -> String {
     )
 }
 
-/// One line for the trust column: the recorded identity checked against
-/// the one the manifest presents (`identity`), with the way forward.
-fn trust_state(check: &IdentityCheck, name: &str, identity: &str) -> String {
-    match check {
-        IdentityCheck::Match => "TRUSTED".into(),
-        IdentityCheck::NewName => format!("UNTRUSTED — {}", trust_hint(identity)),
-        IdentityCheck::Mismatch { recorded, .. } => format!(
+/// How much of the way forward a trust line carries.
+#[derive(Clone, Copy)]
+enum Hint {
+    /// The full `--trust-publisher` command (`info`, `retrust`).
+    Inline,
+    /// A pointer to `plugin info` (`list`, where the identity is already
+    /// on the line).
+    SeeInfo,
+}
+
+/// One line for the trust column: the signature's verdict, then the
+/// recorded identity checked against the one the manifest presents
+/// (`identity`), with the way forward. An unverifiable signature gets no
+/// trust hint — the loader refuses it before it looks at trust.
+fn trust_state(
+    verified: Result<&IdentityCheck, &PluginError>,
+    name: &str,
+    identity: &str,
+    hint: Hint,
+) -> String {
+    match verified {
+        Err(e) => format!("SIGNATURE INVALID — {e}; not loaded whatever the trust state"),
+        Ok(IdentityCheck::Match) => "TRUSTED".into(),
+        Ok(IdentityCheck::NewName) => match hint {
+            Hint::Inline => format!("UNTRUSTED — {}", trust_hint(identity)),
+            Hint::SeeInfo => format!("UNTRUSTED (see `rdlp plugin info {name}`)"),
+        },
+        Ok(IdentityCheck::Mismatch { recorded, .. }) => format!(
             "IDENTITY CHANGED — recorded {recorded}; after verifying the publisher, \
              run `rdlp plugin retrust {name}`"
         ),
     }
 }
 
-/// The manifest's own publisher identity, and its trust state in `trust`.
-fn identity_and_state(m: &Manifest, trust: &TrustStore) -> (String, String) {
+/// The manifest's own publisher identity, and its trust state in `trust`
+/// after the same signature check the loader performs over
+/// `<plugin_dir>/plugin.wasm`.
+fn identity_and_state(
+    m: &Manifest,
+    plugin_dir: &Path,
+    trust: &TrustStore,
+    hint: Hint,
+) -> (String, String) {
     let identity = m.signature.identity_string();
-    let state = trust_state(
-        &trust.check_identity_match(&m.name, &identity),
-        &m.name,
-        &identity,
-    );
+    #[allow(clippy::disallowed_methods)] // CLI command — sync I/O acceptable
+    let verified = std::fs::read(plugin_dir.join("plugin.wasm"))
+        .map_err(|e| PluginError::Internal(format!("read plugin.wasm: {e}")))
+        .and_then(|wasm| rdlp_plugin::signature::verify(m, &wasm));
+    let check = trust.check_identity_match(&m.name, &identity);
+    let state = trust_state(verified.as_ref().map(|()| &check), &m.name, &identity, hint);
     (identity, state)
 }
 
@@ -110,7 +140,7 @@ pub fn run_list(config: &Config) -> Result<()> {
             match rdlp_plugin::manifest::parse_manifest_file(&manifest_path) {
                 Ok(m) => {
                     found += 1;
-                    let (identity, state) = identity_and_state(&m, &trust);
+                    let (identity, state) = identity_and_state(&m, &path, &trust, Hint::SeeInfo);
                     println!(
                         "{}  v{}  identity={identity}  caps=[{}]  {state}",
                         m.name,
@@ -157,7 +187,7 @@ pub fn run_info(name: &str, config: &Config) -> Result<()> {
             }
         }
         println!("Capabilities: {}", m.capabilities.join(", "));
-        let (identity, state) = identity_and_state(&m, &trust);
+        let (identity, state) = identity_and_state(&m, &plugin_dir, &trust, Hint::Inline);
         println!("Identity: {identity}");
         println!("Trust state: {state}");
         if let Some(e) = trust_entry {
@@ -200,9 +230,10 @@ pub fn run_retrust(name: &str, config: &Config) -> Result<()> {
             })
             .map_or_else(
                 || {
-                    "not loaded until trusted: run rdlp with `--trust-publisher <identity>` \
-                     (see `rdlp plugin info`)"
-                        .into()
+                    format!(
+                        "{} — see `rdlp plugin info {name}`",
+                        trust_hint("<identity>")
+                    )
                 },
                 |m| trust_hint(&m.signature.identity_string()),
             );
@@ -347,14 +378,44 @@ mod tests {
 
     #[test]
     fn trust_state_of_a_new_name_is_untrusted_with_the_hint() {
-        let line = trust_state(&IdentityCheck::NewName, "foo", ID);
+        let line = trust_state(Ok(&IdentityCheck::NewName), "foo", ID, Hint::Inline);
         assert!(line.starts_with("UNTRUSTED"), "{line}");
         assert!(line.contains("--trust-publisher"), "{line}");
+        assert!(line.contains(ID), "the identity reaches the line: {line}");
+    }
+
+    /// `list` already prints the identity on the line; its state points
+    /// at `info` instead of repeating 64 hex characters inside a hint.
+    #[test]
+    fn trust_state_for_list_points_at_info_instead_of_repeating_the_identity() {
+        let line = trust_state(Ok(&IdentityCheck::NewName), "foo", ID, Hint::SeeInfo);
+        assert_eq!(line, "UNTRUSTED (see `rdlp plugin info foo`)");
+    }
+
+    /// A manifest the loader would refuse gets no trust hint: trusting an
+    /// identity does nothing for a plugin whose signature does not verify.
+    #[test]
+    fn trust_state_of_an_invalid_signature_names_it_and_gives_no_trust_hint() {
+        let line = trust_state(
+            Err(&rdlp_plugin::PluginError::SignatureInvalid {
+                plugin: "foo".into(),
+                reason: "bad sig".into(),
+            }),
+            "foo",
+            ID,
+            Hint::Inline,
+        );
+        assert!(line.starts_with("SIGNATURE INVALID"), "{line}");
+        assert!(line.contains("bad sig"), "{line}");
+        assert!(!line.contains("--trust-publisher"), "{line}");
     }
 
     #[test]
     fn trust_state_of_a_match_is_trusted() {
-        assert_eq!(trust_state(&IdentityCheck::Match, "foo", ID), "TRUSTED");
+        assert_eq!(
+            trust_state(Ok(&IdentityCheck::Match), "foo", ID, Hint::Inline),
+            "TRUSTED"
+        );
     }
 
     /// A changed identity names the recorded one and the way out
@@ -362,12 +423,13 @@ mod tests {
     #[test]
     fn trust_state_of_a_mismatch_names_the_recorded_identity_and_retrust() {
         let line = trust_state(
-            &IdentityCheck::Mismatch {
+            Ok(&IdentityCheck::Mismatch {
                 recorded: "ed25519:0000".into(),
                 presented: ID.into(),
-            },
+            }),
             "foo",
             ID,
+            Hint::Inline,
         );
         assert!(line.starts_with("IDENTITY CHANGED"), "{line}");
         assert!(line.contains("ed25519:0000"), "{line}");
