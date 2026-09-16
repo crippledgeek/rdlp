@@ -136,13 +136,9 @@ impl<'a> Loader<'a> {
             if !dir.join("plugin.toml").exists() || !dir.join("plugin.wasm").exists() {
                 continue;
             }
-            match self.load_one(&dir) {
-                Ok(plugin) => out.push(Ok(plugin)),
-                Err(e) => {
-                    log::warn!("plugin {dir:?} failed to load: {e}");
-                    out.push(Err((dir, e)));
-                }
-            }
+            // A failure is the caller's to report — returned, not logged
+            // here as well.
+            out.push(self.load_one(&dir).map_err(|e| (dir, e)));
         }
         out
     }

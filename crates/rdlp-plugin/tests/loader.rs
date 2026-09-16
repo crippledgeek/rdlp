@@ -23,7 +23,7 @@ use rdlp_plugin::test_support::{
     write_signed_plugin,
 };
 use rdlp_plugin::trust_store::TrustStore;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Once};
 use tempfile::TempDir;
 
 const MINIMAL_COMPONENT_WAT: &str = r#"(component)"#;
@@ -111,6 +111,79 @@ fn first_install_denied_does_not_load() {
     assert_eq!(outcomes.len(), 1);
     assert!(outcomes[0].is_err());
     assert!(trust.lookup("foo").is_none());
+}
+
+/// Records this crate's WARN-and-above `log` output for one assertion.
+///
+/// Not `testing_logger`: that sets the global max level to `Trace`, and
+/// wasmtime's compile threads then pretty-print pre-regalloc instructions
+/// through a path that is `unreachable!()` for virtual registers
+/// (cranelift-codegen 0.117 `x64/inst/external.rs::enc`) — every test in
+/// the binary that compiles a component aborts. Filtering to this crate's
+/// target at `Warn` keeps cranelift's tracing off.
+struct WarnCapture;
+
+static CAPTURED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static INSTALL: Once = Once::new();
+
+impl log::Log for WarnCapture {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.target().starts_with("rdlp_plugin")
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            CAPTURED
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push(record.args().to_string());
+        }
+    }
+
+    fn flush(&self) {}
+}
+
+fn captured_warnings() -> Vec<String> {
+    INSTALL.call_once(|| {
+        log::set_logger(&WarnCapture).expect("no other logger in this test binary");
+        log::set_max_level(log::LevelFilter::Warn);
+    });
+    CAPTURED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+}
+
+/// `discover` hands a failed load back as `Err((dir, e))` for the caller
+/// to report; logging it here as well printed every failure twice in
+/// rdlp's bootstrap (`rdlp_plugin::loader` WARN, then the identical
+/// `rdlp_api::plugin_bootstrap` WARN).
+#[test]
+fn a_failed_load_is_returned_to_the_caller_not_logged_as_well() {
+    let td = TempDir::new().unwrap();
+    let plugins_dir = td.path().join("plugins");
+    let key = SigningKey::generate(&mut OsRng);
+    let wasm = stub_wasm();
+    write_signed_plugin(
+        &plugins_dir.join("foo"),
+        &key,
+        &SignedPluginSpec {
+            capabilities: &["log"],
+            ..SignedPluginSpec::stub("foo", &wasm)
+        },
+    );
+
+    let _ = captured_warnings(); // installs the capture before the load
+    let (engine, mut trust, prompter) = make_loader_args(&td, Arc::new(AlwaysDeny));
+    let mut loader = Loader::new(&engine, &mut trust, prompter);
+    let outcomes = loader.discover(&plugins_dir);
+
+    assert!(outcomes[0].is_err(), "the denial is returned");
+    let echoed: Vec<String> = captured_warnings()
+        .into_iter()
+        .filter(|body| body.contains("failed to load"))
+        .collect();
+    assert!(echoed.is_empty(), "returned AND logged: {echoed:?}");
 }
 
 #[test]
