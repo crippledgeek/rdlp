@@ -42,7 +42,7 @@ function unregisteredCommandError(commands: readonly string[]): Error {
 const defaultHandlers: Record<string, InvokeHandler> = {
     search_providers: () => [
         { name: "redtube", display_name: "RedTube" },
-        { name: "xhamster", display_name: "xHamster" },
+        { name: "pornhub", display_name: "PornHub" },
         { name: "tnaflix", display_name: "TNAFlix" },
     ],
 

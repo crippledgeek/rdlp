@@ -534,7 +534,7 @@ pub struct Args {
     #[arg(long, value_parser = non_blank, value_name = "QUERY", help_heading = HELP_HEADING_SEARCH)]
     pub search: Option<String>,
 
-    /// Site to search (required with --search, e.g., "xhamster")
+    /// Site to search (required with --search, e.g., "pornhub")
     #[arg(long, value_parser = non_blank, value_name = "SITE", help_heading = HELP_HEADING_SEARCH)]
     pub search_site: Option<String>,
 

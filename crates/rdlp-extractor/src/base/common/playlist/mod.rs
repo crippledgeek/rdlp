@@ -24,16 +24,15 @@ use super::search::{PAGE_RATE_LIMIT_MS, log_tag};
 
 /// Entries resolved at once when `Config::playlist_concurrency` is unset.
 /// 1 is what every surveyed downloader does (yt-dlp resolves playlist
-/// entries sequentially; its `-N` is fragment-scoped); the in-tree xhamster
-/// extractor runs 4 (`CONCURRENT_EXTRACTIONS` in `extractors/xhamster`,
-/// until slice C0-b moves it onto this loop), which is why this is a
-/// tunable and not a constant.
+/// entries sequentially; its `-N` is fragment-scoped); the xhamster
+/// extractor ran 4 (`CONCURRENT_EXTRACTIONS`, before slice C0-b moved it
+/// out of tree onto this loop), which is why this is a tunable and not a
+/// constant.
 pub const DEFAULT_PLAYLIST_CONCURRENCY: usize = 1;
 
 /// Per-entry budget when `Config::playlist_item_timeout` is unset — the
-/// value the in-tree xhamster playlist path runs under
-/// (`VIDEO_EXTRACTION_TIMEOUT` in `extractors/xhamster`, until slice C0-b
-/// moves it onto this loop).
+/// value the xhamster playlist path ran under (`VIDEO_EXTRACTION_TIMEOUT`,
+/// before slice C0-b moved it out of tree onto this loop).
 pub const DEFAULT_PLAYLIST_ITEM_TIMEOUT_SECS: u64 = 30;
 
 /// How long past the per-entry budget the loop's own guard waits before

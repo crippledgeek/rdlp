@@ -511,7 +511,7 @@ impl RdlpClient {
     /// Execute a keyword search on a site.
     ///
     /// # Arguments
-    /// * `site` - Site name (e.g., "xhamster").
+    /// * `site` - Site name (e.g., "pornhub").
     /// * `query` - Search query with optional filters.
     /// * `network` - Per-call network overrides (cookie source, proxy, …)
     ///   layered on top of the client's base config. Pass
@@ -539,7 +539,7 @@ impl RdlpClient {
     /// Execute a paginated search on a site, returning a single page.
     ///
     /// # Arguments
-    /// * `site` - Site name (e.g., "xhamster").
+    /// * `site` - Site name (e.g., "pornhub").
     /// * `query` - Search query with page number set.
     /// * `network` - Per-call network overrides (cookie source, proxy, …)
     ///   layered on top of the client's base config. Pass

@@ -302,7 +302,7 @@ impl Orchestrator {
     /// Execute a search query using the named search extractor.
     ///
     /// # Arguments
-    /// * `extractor_name` - Site name (e.g., "xhamster")
+    /// * `extractor_name` - Site name (e.g., "pornhub")
     /// * `query` - Search query with filters and optional max results
     ///
     /// # Errors

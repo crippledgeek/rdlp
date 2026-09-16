@@ -37,7 +37,7 @@ pub struct AppSettings {
     pub embed_metadata: bool,
     /// Whether to enable verbose logging.
     pub verbose: bool,
-    /// Default search provider site name (e.g. `"xhamster"`).
+    /// Default search provider site name (e.g. `"pornhub"`).
     pub default_search_provider: Option<String>,
     /// Enable audio normalization (peak mode unless loudnorm is set).
     #[serde(default)]
@@ -1098,7 +1098,7 @@ mod tests {
             embed_thumbnail: false,
             embed_metadata: true,
             verbose: true,
-            default_search_provider: Some("xhamster".to_owned()),
+            default_search_provider: Some("pornhub".to_owned()),
             normalize_audio: true,
             loudnorm: true,
             loudnorm_preset: Some("streaming".to_owned()),
@@ -1145,10 +1145,7 @@ mod tests {
         assert!(!restored.embed_thumbnail);
         assert!(restored.embed_metadata);
         assert!(restored.verbose);
-        assert_eq!(
-            restored.default_search_provider.as_deref(),
-            Some("xhamster")
-        );
+        assert_eq!(restored.default_search_provider.as_deref(), Some("pornhub"));
         assert!(restored.normalize_audio);
         assert!(restored.loudnorm);
         assert_eq!(restored.loudnorm_preset.as_deref(), Some("streaming"));

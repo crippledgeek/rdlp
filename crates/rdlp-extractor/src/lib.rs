@@ -80,7 +80,7 @@ pub use extractors::{
     AbxxxExtractor, EMPFlixSearchExtractor, EPornerExtractor, GenericExtractor, HQPornerExtractor,
     KoreanPornMovieExtractor, MovieFapSearchExtractor, NineAnimeExtractor, PornHubExtractor,
     PornoneExtractor, PornoxoExtractor, RedTubeExtractor, SpankBangExtractor, TNAFlixExtractor,
-    TNAFlixSearchExtractor, XHamsterExtractor, XNXXExtractor, XTitsExtractor, XVideosExtractor,
+    TNAFlixSearchExtractor, XNXXExtractor, XTitsExtractor, XVideosExtractor,
 };
 
 // Re-export base utilities for convenient access
@@ -139,9 +139,6 @@ impl ExtractorRegistry {
         // Register XTits extractor
         registry.register(Arc::new(XTitsExtractor::new()));
 
-        // Register XHamster extractor
-        registry.register(Arc::new(XHamsterExtractor::new()));
-
         // Register 9anime extractor
         registry.register(Arc::new(NineAnimeExtractor::new()));
 
@@ -175,7 +172,6 @@ impl ExtractorRegistry {
         registry.register(Arc::new(GenericExtractor::new()));
 
         // Register search extractors
-        registry.register_search(Arc::new(XHamsterExtractor::new()));
         registry.register_search(Arc::new(RedTubeExtractor::new()));
         registry.register_search(Arc::new(TNAFlixSearchExtractor::new()));
         registry.register_search(Arc::new(PornHubExtractor::new()));
@@ -268,7 +264,7 @@ impl ExtractorRegistry {
     /// extractor registered LAST — the two are not "the same policy".
     ///
     /// # Arguments
-    /// * `name` - Site name to look up (e.g., "xhamster", "XHamster")
+    /// * `name` - Site name to look up (e.g., "pornhub", "PornHub")
     ///
     /// # Returns
     /// An `Arc<dyn SearchExtractor>` if found, `None` otherwise

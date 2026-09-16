@@ -66,25 +66,32 @@ mod tests {
         assert!(extractors.contains(&"RedTube"));
         assert!(extractors.contains(&"PornHub"));
         assert!(extractors.contains(&"XTits"));
-        assert!(extractors.contains(&"XHamster"));
         assert!(extractors.contains(&"9anime"));
         assert!(extractors.contains(&"HQPorner"));
         assert!(extractors.contains(&"SpankBang"));
     }
 
     #[test]
-    fn test_find_search_extractor_xhamster() {
-        let registry = ExtractorRegistry::new();
-        let extractor = registry.find_search_extractor("xhamster");
-        assert!(extractor.is_some());
-        assert_eq!(extractor.unwrap().name(), "XHamster");
-    }
-
-    #[test]
     fn test_find_search_extractor_case_insensitive() {
         let registry = ExtractorRegistry::new();
-        assert!(registry.find_search_extractor("XHamster").is_some());
-        assert!(registry.find_search_extractor("XHAMSTER").is_some());
+        assert!(registry.find_search_extractor("PornHub").is_some());
+        assert!(registry.find_search_extractor("PORNHUB").is_some());
+    }
+
+    /// xhamster ships as the rdlp-plugins `xhamster` plugin (slice C0-b,
+    /// #771), so the built-in registry must neither route its URLs to a
+    /// dedicated extractor nor claim it as a search site — the plugin
+    /// host would otherwise lose the arbitration to the built-in.
+    #[test]
+    fn xhamster_is_not_a_built_in() {
+        let registry = ExtractorRegistry::new();
+        assert!(
+            registry
+                .find_extractor("https://xhamster.com/videos/x-1")
+                .is_none_or(|e| e.name() == "Generic"),
+            "an xhamster URL must fall through to Generic"
+        );
+        assert!(registry.find_search_extractor("xhamster").is_none());
     }
 
     #[test]
@@ -134,7 +141,7 @@ mod tests {
         assert!(
             sites
                 .iter()
-                .any(|name| name.eq_ignore_ascii_case("xhamster"))
+                .any(|name| name.eq_ignore_ascii_case("pornhub"))
         );
     }
 
@@ -157,10 +164,6 @@ mod tests {
         let xtits = registry.find_extractor("https://www.xtits.xxx/videos/183207/spicy-lesbians/");
         assert!(xtits.is_some());
         assert_eq!(xtits.unwrap().name(), "XTits");
-
-        let xhamster = registry.find_extractor("https://xhamster.com/videos/test-video-1509445");
-        assert!(xhamster.is_some());
-        assert_eq!(xhamster.unwrap().name(), "XHamster");
 
         let nine_anime =
             registry.find_extractor("https://9animetv.to/watch/sword-art-online-2274?ep=26565");

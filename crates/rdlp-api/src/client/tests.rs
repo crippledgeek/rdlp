@@ -198,17 +198,17 @@ fn test_list_search_sites() {
     let client = RdlpClient::new(Config::default()).unwrap();
     let sites = client.list_search_sites();
     assert!(!sites.is_empty());
-    assert!(sites.iter().any(|s| s.name == "xhamster"));
+    assert!(sites.iter().any(|s| s.name == "pornhub"));
 }
 
 #[tokio::test]
 async fn test_search_filters() {
     let client = RdlpClient::new(Config::default()).unwrap();
-    let filters = client.search_filters("xhamster").await.unwrap();
+    let filters = client.search_filters("pornhub").await.unwrap();
     assert!(!filters.is_empty());
     let keys: Vec<&str> = filters.iter().map(|f| f.key.as_str()).collect();
-    assert!(keys.contains(&"quality"));
-    assert!(keys.contains(&"sort"));
+    assert!(keys.contains(&"ordering"));
+    assert!(keys.contains(&"period"));
 }
 
 #[tokio::test]

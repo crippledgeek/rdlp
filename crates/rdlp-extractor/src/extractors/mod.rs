@@ -16,7 +16,6 @@ pub mod pornoxo;
 pub mod redtube;
 pub mod spankbang;
 pub mod tnaflix;
-pub mod xhamster;
 pub mod xnxx;
 pub mod xtits;
 pub mod xvideos;
@@ -35,7 +34,6 @@ pub use spankbang::SpankBangExtractor;
 pub use tnaflix::{
     EMPFlixSearchExtractor, MovieFapSearchExtractor, TNAFlixExtractor, TNAFlixSearchExtractor,
 };
-pub use xhamster::XHamsterExtractor;
 pub use xnxx::XNXXExtractor;
 pub use xtits::XTitsExtractor;
 pub use xvideos::XVideosExtractor;

@@ -6,8 +6,8 @@
 //
 // Search keys are hierarchical for granular invalidation:
 //   search.all()              → ["search"]           — invalidate everything
-//   search.site("xhamster")   → ["search","xhamster"] — invalidate one site
-//   search.params(q, s, f)    → ["search","xhamster","teen","sort=relevance"]
+//   search.site("pornhub")    → ["search","pornhub"] — invalidate one site
+//   search.params(q, s, f)    → ["search","pornhub","teen","sort=relevance"]
 //
 // Filters are serialized to a stable string so TanStack Query can
 // compare keys with === instead of deep-comparing object arrays.
