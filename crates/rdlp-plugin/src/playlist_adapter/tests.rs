@@ -2,8 +2,9 @@ use super::*;
 use crate::convert::MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES;
 use crate::test_harness::{EMPTY_COMPONENT_WAT, instantiate, wit_body_lines};
 use crate::test_support::unit::{
-    FIXTURE_MANIFEST, TEST_LOG_TARGET, captured_count_containing, captured_entry_containing,
-    captured_logs, fixture_extractor, fixture_extractor_from, test_origin,
+    FIXTURE_MANIFEST, TEST_LOG_TARGET, captured_count_containing, captured_count_on_target,
+    captured_entry_containing, captured_logs, fixture_extractor, fixture_extractor_from,
+    fixture_manifest_named, test_origin,
 };
 use crate::test_support::{EXAMPLE_0_5_2_WASM, extraction_ctx};
 
@@ -341,13 +342,17 @@ async fn absent_export_falls_back_to_single_extract_without_probing() {
 /// URL as a single video": the plugin's `extract-playlist` is never
 /// called even though the component exports it, and the URL goes to
 /// `extract` — which for the fixture's playlist URL is a domain error,
-/// never the three listed entries.
+/// never the three listed entries. The plugin is loaded under its own
+/// name so its log target is its own: the page-1 line for this URL is
+/// also produced by `real_first_page_hands_off_…` (playlists on), and
+/// only the target tells that test's line from a probe this one must
+/// never make — so the count on THIS target is asserted to be zero.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn extract_playlist_off_skips_the_probe_and_extracts_the_url_itself() {
     use rdlp_core::ExtractionContext;
     use std::sync::Arc;
 
-    let ext = fixture_extractor_from(FIXTURE_MANIFEST, EXAMPLE_0_5_2_WASM);
+    let ext = fixture_extractor_from(&fixture_manifest_named("example-off"), EXAMPLE_0_5_2_WASM);
     let logs = captured_logs();
     let ctx = ExtractionContext {
         config: Arc::new(rdlp_types::Config {
@@ -363,16 +368,26 @@ async fn extract_playlist_off_skips_the_probe_and_extracts_the_url_itself() {
         !matches!(&out, Ok(v) if v.len() == 3),
         "the listing must not be driven with playlists off: {out:?}"
     );
-    // The probe's page-1 line for this URL is keyed on the URL; the one
-    // test that does list it (`real_first_page_hands_off_…`) runs with
-    // playlists on, so a count of 1 here would be that test's line, and
-    // anything above it this test's own probe.
-    assert!(
-        captured_count_containing(
+    assert_eq!(
+        captured_count_on_target(
             &logs,
+            "plugin::example-off",
             "extract-playlist: fetching page 1 of https://example.com/a-real-playlist"
-        ) <= 1,
+        ),
+        0,
         "playlists off must not probe extract-playlist"
+    );
+    // The control for the target filter: the same plugin DID log its
+    // fallback `extract` of the URL on that target, so an empty target
+    // (a wrong name, a wrong derivation) cannot pass the zero above.
+    assert_eq!(
+        captured_count_on_target(
+            &logs,
+            "plugin::example-off",
+            "for https://example.com/a-real-playlist under a"
+        ),
+        1,
+        "the fallback extract ran on this plugin's own target"
     );
 }
 

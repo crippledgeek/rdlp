@@ -77,7 +77,10 @@ tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 wat = "1"
 rand = { workspace = true }
 mockito = { workspace = true }
-rdlp-extractor = { path = "../rdlp-extractor", features = ["loopback-test-exemption"] }
+rdlp-extractor = { path = "../rdlp-extractor", features = [
+    "loopback-test-exemption",
+    "test-support",
+] }
 # Self-dev-dependency: this crate's OWN tests/*.rs binaries link the lib as
 # an external crate (same reason `test_support` isn't `cfg(test)`), so they
 # need the feature enabled too, exactly like `rdlp-api`'s dev-dep on this

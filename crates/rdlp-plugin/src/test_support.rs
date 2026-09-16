@@ -433,6 +433,14 @@ signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         )
     }
 
+    /// [`FIXTURE_MANIFEST`] under another plugin `name` — for a test that
+    /// must tell its own log lines from every other fixture-driven test's
+    /// in the binary: the plugin's log target is derived from its name
+    /// (`PluginStoreData::new`), so a unique name is a unique target.
+    pub fn fixture_manifest_named(name: &str) -> String {
+        FIXTURE_MANIFEST.replace(r#"name = "example""#, &format!("name = {name:?}"))
+    }
+
     /// The 0.5.0 fixture wrapped in an adapter, on a manifest with no
     /// `search_site` and no override claim of either kind.
     pub fn fixture_extractor() -> PluginExtractor {
@@ -480,87 +488,13 @@ signature = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
         }
     }
 
-    /// `(target, message)` pairs captured from the `log` facade.
-    pub type LogEntries = Arc<std::sync::Mutex<Vec<(String, String)>>>;
-
-    /// Minimal `log::Log` sink so a test can assert a refusal was reported
-    /// to the plugin's own log target. Mirrors the capturing-logger harness
-    /// in `rdlp-cookies`; `log::set_logger` accepts one logger per process,
-    /// so the buffer is process-global and never cleared — each assertion
-    /// looks for its own distinctive message instead.
-    struct CapturingLogger {
-        entries: LogEntries,
-    }
-
-    impl log::Log for CapturingLogger {
-        fn enabled(&self, _: &log::Metadata<'_>) -> bool {
-            true
-        }
-        fn log(&self, record: &log::Record<'_>) {
-            self.entries
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .push((record.target().to_string(), record.args().to_string()));
-        }
-        fn flush(&self) {}
-    }
-
-    /// The process-global capture buffer, installing the logger on first use.
-    pub fn captured_logs() -> LogEntries {
-        static CAPTURED: std::sync::OnceLock<LogEntries> = std::sync::OnceLock::new();
-        Arc::clone(CAPTURED.get_or_init(|| {
-            let entries: LogEntries = Arc::new(std::sync::Mutex::new(Vec::new()));
-            let logger: &'static CapturingLogger = Box::leak(Box::new(CapturingLogger {
-                entries: Arc::clone(&entries),
-            }));
-            log::set_logger(logger).expect("no other logger in the rdlp-plugin lib test binary");
-            // `Debug`, not `Warn`: the page-fetch and per-call budget
-            // lines the playlist tests count are `debug!` — `Warn` would
-            // silently drop them before they ever reached this logger.
-            log::set_max_level(log::LevelFilter::Debug);
-            entries
-        }))
-    }
-
-    /// Every captured entry whose message contains `needle`, cloned out so
-    /// the lock is released before any assertion panics. The one filter
-    /// behind [`captured_entry_containing`] and [`captured_count_containing`]:
-    /// the buffer is process-global and shared with every other test in
-    /// the binary, so a needle must be distinctive enough (a URL, a count,
-    /// a bound) to select one test's lines.
-    fn captured_matching(logs: &LogEntries, needle: &str) -> Vec<(String, String)> {
-        logs.lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .iter()
-            .filter(|(_, m)| m.contains(needle))
-            .cloned()
-            .collect()
-    }
-
-    /// First captured entry whose message contains `needle`.
-    ///
-    /// # Panics
-    ///
-    /// When no entry contains `needle`, naming every captured entry.
-    pub fn captured_entry_containing(logs: &LogEntries, needle: &str) -> (String, String) {
-        captured_matching(logs, needle)
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| {
-                let entries = logs
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clone();
-                panic!("no entry containing {needle:?} among {entries:?}")
-            })
-    }
-
-    /// How many captured entries contain `needle` — for the "exactly
-    /// once" assertions (one warning per refusal class, one fetch per
-    /// page, one runner call per entry).
-    pub fn captured_count_containing(logs: &LogEntries, needle: &str) -> usize {
-        captured_matching(logs, needle).len()
-    }
+    /// The `log` capture sink, shared with rdlp-extractor's own tests: see
+    /// `rdlp_extractor::log_capture` for the process-global-buffer caveat
+    /// every assertion here lives with.
+    pub use rdlp_extractor::log_capture::{
+        captured_count_containing, captured_count_on_target, captured_entry_containing,
+        captured_logs,
+    };
 }
 
 #[cfg(test)]

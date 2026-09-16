@@ -6,7 +6,7 @@
 # `#[cfg(test)]` (because a SIBLING crate's own integration test links the
 # lib as a regular external dependency and cannot see `cfg(test)` items)
 # behind a cargo feature instead, so the extra dependencies that code needs
-# (e.g. `tempfile`, `temp-env`) never reach a release binary. Two such
+# (e.g. `tempfile`, `temp-env`) never reach a release binary. Three such
 # features exist today:
 #
 #   - rdlp-extractor's `loopback-test-exemption` — widens the `#[cfg(test)]`
@@ -19,8 +19,12 @@
 #     rdlp-api's own tests share). Reaching a production binary would link
 #     `tempfile`/`temp-env` into every user's `rdlp`/`rdlp-desktop` binary
 #     for no runtime purpose.
+#   - rdlp-extractor's `test-support` — gates `pub mod log_capture` (the
+#     `log::Log` capture sink its own and rdlp-plugin's tests share). No
+#     extra dependencies, but a process-global logger installer has no
+#     business in a release binary.
 #
-# Both are meant to be enabled ONLY as a dev-dependency (or a dev-dependency
+# All three are meant to be enabled ONLY as a dev-dependency (or a dev-dependency
 # feature unification, or a self-referential dev-dependency) in a sibling
 # crate's own test suite. This gate derives the workspace's binary crates
 # from `cargo metadata` (never a hardcoded list -- the same drift class
@@ -68,6 +72,7 @@ command -v jq >/dev/null 2>&1 || { echo "ERROR: jq not found -- cannot run this 
 # non-dev dependency graph. Append here, never hardcode a second script.
 CHECKS=(
     "rdlp-extractor:loopback-test-exemption"
+    "rdlp-extractor:test-support"
     "rdlp-plugin:test-support"
 )
 
