@@ -291,11 +291,12 @@ It adds:
   entries (`url`, optional `id`/`title`), `has-more`, and the playlist's
   id/title/total on page one. The host resolves every entry through the
   plugin's own `extract` and owns the range (`Config::playlist_start` /
-  `playlist_end` / `playlist_items`), concurrency, per-item timeout,
-  skip-or-abort policy, and the stamped
-  `playlist_*` fields. A plugin without playlists omits the export or
-  answers `unsupported-url`; either way the host falls back to a single
-  `extract` on the URL.
+  `playlist_end` / `playlist_items`), concurrency, per-item timeout (the
+  budget of each entry's `extract` call; a timed-out entry is a strike),
+  skip-or-abort policy, and the stamped `playlist_*` fields. A plugin
+  without playlists omits the export or answers `unsupported-url`; either
+  way the host falls back to a single `extract` on the URL (an omitted
+  export is known at load and costs no probe).
 - **`extract-with-metadata` export (optional)** — `func(url) ->
   result<extraction, extract-error>`, where `extraction` is the frozen
   `info-dict` as `core` plus an `info-dict-extra` (`actors`, `channel`,
@@ -308,9 +309,11 @@ It adds:
   64 / 4096 / 65 536, tunable in `Config`), and each kept key lands as a
   top-level key of the video's JSON.
 - **`display_name` manifest field** — an optional human-readable name (≤ 64
-  bytes, no control characters, spaces and case allowed) used for
-  `%(extractor)s` and log tags only; identity, routing, the trust store, and
-  the download-archive token stay on `name`.
+  bytes, no control characters, no `/` or `\` since `%(extractor)s` is one
+  output-path component; spaces and case allowed) used for `%(extractor)s`
+  and log tags. Identity, routing, the trust store, and the download-archive
+  token stay on `name`, which the host also stamps into every plugin
+  `InfoDict` as `extractor_key`.
 
 ## Policy: yt-dlp-ported plugins stay byte-identical
 

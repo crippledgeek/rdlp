@@ -129,6 +129,13 @@ pub struct PluginExtractor {
     trap_count: AtomicU32,
     /// Set to `true` after `TRAP_DISABLE_THRESHOLD` traps.
     disabled: AtomicBool,
+    /// Whether the component declares an `extract-playlist` export, read
+    /// off its type once at load. A component cannot gain or lose an
+    /// export between calls, so `extract_playlist` consults this instead
+    /// of instantiating a store to find out — otherwise every
+    /// non-playlist URL through a pre-0.5.2 plugin would pay one extra
+    /// instantiation for the probe.
+    pub(crate) has_extract_playlist: bool,
 }
 
 impl PluginExtractor {
@@ -164,6 +171,14 @@ impl PluginExtractor {
                 reason: format!("{e}"),
             }
         })?;
+        let has_extract_playlist = loaded
+            .component
+            .component_type()
+            .get_export(
+                engine.raw(),
+                crate::playlist_adapter::EXTRACT_PLAYLIST_EXPORT,
+            )
+            .is_some();
         Ok(Self {
             engine,
             manifest: loaded.manifest,
@@ -173,6 +188,7 @@ impl PluginExtractor {
             host_resources,
             trap_count: AtomicU32::new(0),
             disabled: AtomicBool::new(false),
+            has_extract_playlist,
         })
     }
 
@@ -287,8 +303,9 @@ impl InfoExtractor for PluginExtractor {
 
     /// Drives `extract-playlist` through [`crate::playlist_adapter`]'s
     /// `PagedPlaylist` scaffold, falling back to the trait default (one
-    /// `extract` call) when the export is absent or the plugin declines
-    /// the URL. See `PluginExtractor::extract_playlist_via_plugin` for the
+    /// `extract` call) when the export is absent, the operator turned
+    /// playlist extraction off, or the plugin declines the URL. See
+    /// `PluginExtractor::extract_playlist_via_plugin` for the
     /// probe/fallback design.
     async fn extract_playlist(
         &self,

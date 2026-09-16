@@ -303,6 +303,10 @@ async fn extractor_field_and_name_use_display_name() {
         .await
         .expect("extract");
     assert_eq!(info.extractor, "Example Site");
+    // The identity key travels beside the display name so the archive
+    // token (`rdlp_api::orchestrator::archive::archive_token_for`) is the
+    // manifest `name`, never the display surface.
+    assert_eq!(info.extractor_key.as_deref(), Some("example"));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

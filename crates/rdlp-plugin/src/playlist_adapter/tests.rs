@@ -205,7 +205,7 @@ fn page_fetch_maps_wit_page_to_playlist_page() {
         playlist_title: Some("A Playlist".into()),
         total_estimate: Some(42),
     };
-    let page = playlist_page_from_wit(w, &test_origin());
+    let page = playlist_page_from_wit(w, 2, &test_origin());
     assert_eq!(page.entries.len(), 1);
     let entry = page.entries.first().expect("one entry");
     assert_eq!(entry.url, "https://x.example/v/1");
@@ -215,6 +215,43 @@ fn page_fetch_maps_wit_page_to_playlist_page() {
     assert_eq!(page.playlist_id.as_deref(), Some("pl-1"));
     assert_eq!(page.playlist_title.as_deref(), Some("A Playlist"));
     assert_eq!(page.total_estimate, Some(42));
+}
+
+/// A page echoing a number other than the one requested is a plugin bug
+/// worth seeing in the plugin's log; the host keeps its own count and
+/// the page is converted unchanged.
+#[test]
+fn page_echo_mismatch_is_logged_on_the_plugin_target_and_not_acted_on() {
+    let logs = captured_logs();
+    let w = WitPlaylistPage {
+        entries: Vec::new(),
+        page: 7,
+        has_more: false,
+        playlist_id: None,
+        playlist_title: None,
+        total_estimate: None,
+    };
+    let page = playlist_page_from_wit(w, 3, &test_origin());
+    assert!(page.entries.is_empty());
+    let (target, _) = captured_entry_containing(
+        &logs,
+        "extract-playlist: plugin test answered page 7 for a request for page 3",
+    );
+    assert_eq!(target, TEST_LOG_TARGET);
+    // A matching echo says nothing.
+    let quiet = WitPlaylistPage {
+        entries: Vec::new(),
+        page: 4,
+        has_more: false,
+        playlist_id: None,
+        playlist_title: None,
+        total_estimate: None,
+    };
+    playlist_page_from_wit(quiet, 4, &test_origin());
+    assert_eq!(
+        captured_count_containing(&logs, "answered page 4 for a request for page 4"),
+        0
+    );
 }
 
 /// `playlist_page_from_wit` caps `entries` the same way
@@ -239,7 +276,7 @@ fn page_fetch_caps_entries_and_warns() {
         playlist_title: None,
         total_estimate: None,
     };
-    let page = playlist_page_from_wit(w, &test_origin());
+    let page = playlist_page_from_wit(w, 1, &test_origin());
     assert_eq!(page.entries.len(), MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES);
     let (target, msg) = captured_entry_containing(
         &logs,
@@ -283,7 +320,7 @@ fn page_fetch_does_not_cap_or_warn_at_exactly_the_bound() {
         playlist_title: None,
         total_estimate: None,
     };
-    let page = playlist_page_from_wit(w, &test_origin());
+    let page = playlist_page_from_wit(w, 1, &test_origin());
     assert_eq!(page.entries.len(), MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES);
     let false_positive_cap_message = format!(
         "extract-playlist: plugin test supplied {MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES} playlist entries"
@@ -300,10 +337,14 @@ fn page_fetch_does_not_cap_or_warn_at_exactly_the_bound() {
 /// A plugin whose component never declared `extract-playlist` (the
 /// committed 0.5.0 fixture) falls back to the trait default: one
 /// `extract` call, wrapped in a one-element `Vec`, with no playlist index
-/// stamped.
+/// stamped — and WITHOUT probing: the export's absence is read off the
+/// component type at load, so no `extract-playlist` page is ever
+/// requested (the by-name-call line `call_extract_playlist_page` logs
+/// on every attempt is absent for this URL).
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn absent_export_falls_back_to_single_extract() {
+async fn absent_export_falls_back_to_single_extract_without_probing() {
     let ext = fixture_extractor();
+    let logs = captured_logs();
     let out = ext
         .extract_playlist("https://example.com/video/42", &extraction_ctx())
         .await
@@ -312,6 +353,53 @@ async fn absent_export_falls_back_to_single_extract() {
     let info = out.first().expect("one entry");
     assert_eq!(info.title, "Example Video 42");
     assert_eq!(info.playlist_index, None);
+    assert_eq!(
+        captured_count_containing(
+            &logs,
+            "extract-playlist: fetching page 1 of https://example.com/video/42"
+        ),
+        0,
+        "a component without the export is never probed"
+    );
+}
+
+/// `Config::extract_playlist = false` is the operator saying "treat every
+/// URL as a single video": the plugin's `extract-playlist` is never
+/// called even though the component exports it, and the URL goes to
+/// `extract` — which for the fixture's playlist URL is a domain error,
+/// never the three listed entries.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn extract_playlist_off_skips_the_probe_and_extracts_the_url_itself() {
+    use rdlp_core::ExtractionContext;
+    use std::sync::Arc;
+
+    let ext = fixture_extractor_from(FIXTURE_MANIFEST, EXAMPLE_0_5_2_WASM);
+    let logs = captured_logs();
+    let ctx = ExtractionContext {
+        config: Arc::new(rdlp_types::Config {
+            extract_playlist: false,
+            ..Default::default()
+        }),
+        ..extraction_ctx()
+    };
+    let out = ext
+        .extract_playlist("https://example.com/a-real-playlist", &ctx)
+        .await;
+    assert!(
+        !matches!(&out, Ok(v) if v.len() == 3),
+        "the listing must not be driven with playlists off: {out:?}"
+    );
+    // The probe's page-1 line for this URL is keyed on the URL; the one
+    // test that does list it (`real_first_page_hands_off_…`) runs with
+    // playlists on, so a count of 1 here would be that test's line, and
+    // anything above it this test's own probe.
+    assert!(
+        captured_count_containing(
+            &logs,
+            "extract-playlist: fetching page 1 of https://example.com/a-real-playlist"
+        ) <= 1,
+        "playlists off must not probe extract-playlist"
+    );
 }
 
 // The four tests below load the committed 0.5.2 fixture
@@ -323,7 +411,7 @@ async fn absent_export_falls_back_to_single_extract() {
 // pinned in `examples/plugins/example-extractor/src/lib.rs`.
 
 /// A plugin whose `extract-playlist` answers `err(unsupported-url)` for
-/// this URL falls back the same way `absent_export_falls_back_to_single_extract`
+/// this URL falls back the same way `absent_export_falls_back_to_single_extract_without_probing`
 /// does: the fixture's `extract` accepts this URL as a single video, so
 /// the fallback is the one entry it produces.
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

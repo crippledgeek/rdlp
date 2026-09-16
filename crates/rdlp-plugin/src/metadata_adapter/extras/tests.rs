@@ -125,6 +125,7 @@ fn shadowing_a_core_field_is_dropped_with_a_warning() {
         "playlist-index",
         "webpage-url",
         "actors",
+        "extractor-key",
     ] {
         let out = run(vec![(k, WitMetaValue::Flag(true))], &LOOSE);
         assert!(!out.contains_key(k), "{k:?} shadows a core field");

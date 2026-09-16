@@ -45,7 +45,9 @@ pub(crate) const MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES: usize =
 /// host's refusals next to their own lines).
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PluginOrigin<'a> {
-    /// The plugin's manifest name — identity, never rendered to the user.
+    /// The plugin's manifest name — identity: what [`info_dict_from_wit`]
+    /// puts in `InfoDict::extractor_key` (the archive token), never
+    /// rendered to the user.
     pub plugin_name: &'a str,
     /// The plugin's `log` target (`PluginStoreData::log_target`).
     pub log_target: &'a str,
@@ -146,8 +148,10 @@ pub(crate) const fn narrow_f64(v: f64) -> f32 {
 
 /// Convert a bindgen-generated `InfoDict` to the rdlp-types `InfoDict`.
 ///
-/// The WIT `InfoDict` does not carry `extractor` or `webpage_url` — those are
-/// filled in from the call context (`origin.plugin_name` and `url`). The
+/// The WIT `InfoDict` does not carry `extractor`, `extractor_key` or
+/// `webpage_url` — those are filled in from the call context:
+/// `origin.display_name` is the display surface, `origin.plugin_name` the
+/// identity key the archive token is built from, `url` the page. The
 /// format list is capped at [`MAX_PLUGIN_FORMATS`] here, at the boundary,
 /// so nothing downstream ever sees more rows than that from a plugin.
 pub(crate) fn info_dict_from_wit(
@@ -162,6 +166,7 @@ pub(crate) fn info_dict_from_wit(
         // Prefer the URL the plugin returned; fall back to the request URL.
         w.url.as_deref().unwrap_or(url),
     );
+    out.extractor_key = Some(origin.plugin_name.to_string());
     out.thumbnail = w.thumbnail;
     out.description = w.description;
     out.uploader = w.uploader;

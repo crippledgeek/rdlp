@@ -94,13 +94,21 @@ itself. `playlist-error` is `search-error`'s vocabulary minus `unsupported`
 whole call).
 
 **Optional, by name.** `playlist_adapter::call_extract_playlist` resolves
-the export on the live instance. `PluginExtractor::extract_playlist_via_plugin`
-fetches page one as a probe: an absent export, or `unsupported-url` on that
-page, means "not a playlist for this plugin" and the host falls back to a
-single `extract` — the `InfoExtractor::extract_playlist` trait default. A
-successful page one is handed to the loop, not re-fetched. Every other
-domain error on page one propagates (`not-found` stays `not-found`); only
-`internal` records a strike (`playlist_error_to_plugin_error`).
+the export on the live instance. Whether the component declares it at all
+is read off the component type once at load
+(`PluginExtractor::has_extract_playlist`), so a plugin without the export —
+and any plugin when `Config::extract_playlist` is `false` — goes straight
+to a single `extract` (the `InfoExtractor::extract_playlist` trait default)
+with no instantiation spent asking. Otherwise
+`PluginExtractor::extract_playlist_via_plugin` fetches page one as a probe:
+`unsupported-url` on that page means "not a playlist for this plugin" and
+falls back the same way — a per-call cost by nature, since the plugin
+decides per URL. A successful page one is handed to the loop, not
+re-fetched. Every other domain error on page one propagates (`not-found`
+stays `not-found`); only `internal` records a strike
+(`playlist_error_to_plugin_error`). A page whose echoed `page` differs from
+the one requested is logged on the plugin's target and otherwise converted
+unchanged — the host keeps its own count.
 
 **The host loop owns everything after listing**
 (`rdlp_extractor::base::common::PagedPlaylist`, `playlist.rs`; the plugin
@@ -211,18 +219,25 @@ A fourth TOML-only field (`plugin-info` stays frozen, §2/§7):
 set, else `name`. Canonical manifest bytes include it only when set, so
 every earlier manifest's bytes and signature stay valid unchanged.
 Validation (`validate_display_name`): non-empty, at most
-`DISPLAY_NAME_MAX_BYTES` (64) **bytes**, no control characters; spaces and
-mixed case are fine — unlike `name` it is never a path component or
-namespace key.
+`DISPLAY_NAME_MAX_BYTES` (64) **bytes**, no control characters, no path
+separator (`/`, `\`); spaces and mixed case are fine.
 
-It feeds display surfaces only: `InfoExtractor::name`
+It feeds display surfaces: `InfoExtractor::name`
 (`PluginExtractor::name`), `InfoDict::extractor` and therefore
 `%(extractor)s` (`convert::PluginOrigin::display_name`), and the playlist
-loop's log tag (`PagedPlaylist::name`). Identity, URL and search routing,
-the trust store, the disabled list, the `host-store-kv` namespace, and the
-download-archive token stay on `name`. The archive token is written ASCII-lowercased and matched
-case-insensitively (`rdlp_api::orchestrator::archive::archive_key`; legacy
+loop's log tag (`PagedPlaylist::name`). `%(extractor)s` is the one place a
+display surface touches disk — the template renderer makes it ONE output
+path component — which is why a separator is refused; the value is not
+otherwise a path or a namespace key.
+
+Identity travels beside it: `convert::info_dict_from_wit` sets
+`InfoDict::extractor_key` (yt-dlp `extractor_key`) to the manifest `name`,
+and the download-archive token is
+`rdlp_api::orchestrator::archive::archive_token_for` = `extractor_key`
+when set, else `extractor` (an in-tree extractor's one name). So the
+archive, URL and search routing, the trust store, the disabled list, and
+the `host-store-kv` namespace are all keyed on `name`; changing
+`display_name` never splits an archive. The token is additionally written
+ASCII-lowercased and matched case-insensitively (`archive_key`; legacy
 cased lines are normalised on read), mirroring yt-dlp's `make_archive_id`
-(`f'{ie_key.lower()} {video_id}'`) — so a `display_name` such as
-`XHamster` reaching `InfoDict::extractor` can never split an archive. The
-id half stays case-sensitive.
+(`f'{ie_key.lower()} {video_id}'`). The id half stays case-sensitive.

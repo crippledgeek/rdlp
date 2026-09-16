@@ -32,7 +32,7 @@ use crate::instance::PluginStoreData;
 const EXTRACT_WITH_METADATA_EXPORT: &str = "extract-with-metadata";
 
 /// Hand-lift of `wit/types.wit`'s `thumbnail` record.
-#[derive(Debug, Clone, PartialEq, ComponentType, Lift)]
+#[derive(Debug, Clone, PartialEq, Eq, ComponentType, Lift)]
 #[component(record)]
 pub(crate) struct WitThumbnail {
     /// Thumbnail URL.

@@ -100,7 +100,10 @@ pub struct Manifest {
     /// Human-readable name for display only — `%(extractor)s`, log tags,
     /// and `PluginExtractor::name()`. Never used for identity, URL/search
     /// routing, the trust store, or the archive token; those stay on
-    /// `name`. Defaults to `name` when unset (see [`Manifest::display_name`]).
+    /// `name` (which also travels as `InfoDict::extractor_key`). Because
+    /// `%(extractor)s` renders it into one output-path component, it may
+    /// not contain a path separator (`/`, `\`). Defaults to `name` when
+    /// unset (see [`Manifest::display_name`]).
     #[serde(default)]
     pub display_name: Option<String>,
     /// Plugin semver version.
@@ -438,8 +441,11 @@ fn validate(m: &Manifest) -> Result<(), ManifestError> {
 /// (the first-install prompt shows `name`), so it is held to
 /// plain-display-text rules rather than the filesystem-safe shape
 /// `validate_plugin_name` enforces on `name`/`search_site`: any non-empty,
-/// non-control, ≤64-byte string is fine — spaces and mixed case included
-/// (unlike `name`, it is never used as a path component or namespace key).
+/// non-control, ≤64-byte string is fine — spaces and mixed case included.
+/// The one path rule it keeps: `%(extractor)s` is ONE output-path
+/// component (the template renderer splits on `/`), so a separator would
+/// create or escape a directory and is rejected. Namespace keys (the
+/// archive token, `host-store-kv`) stay on `name`.
 fn validate_display_name(m: &Manifest) -> Result<(), ManifestError> {
     let Some(d) = &m.display_name else {
         return Ok(());
@@ -454,6 +460,9 @@ fn validate_display_name(m: &Manifest) -> Result<(), ManifestError> {
     }
     if d.chars().any(char::is_control) {
         return invalid("display_name contains a control character");
+    }
+    if d.contains(['/', '\\']) {
+        return invalid("display_name contains a path separator");
     }
     Ok(())
 }
@@ -684,6 +693,20 @@ signature = "ZA"
             &manifest_with("display_name = \"X\\u0007\""),
             "control character",
         );
+    }
+
+    /// `display_name` is `InfoDict::extractor`, which `%(extractor)s`
+    /// renders into an output path (`paths.rs` splits the template on
+    /// `/`), so a separator in it would create or escape a directory.
+    #[test]
+    fn display_name_with_a_path_separator_rejected() {
+        // TOML-escaped: `\\` in the file is one backslash in the value.
+        for name in ["Site/Sub", r"Site\\Sub", "/", r"\\"] {
+            assert_invalid_reason_contains(
+                &manifest_with(&format!("display_name = \"{name}\"")),
+                "path separator",
+            );
+        }
     }
 
     #[test]

@@ -14,7 +14,10 @@
 //! build) still matches. This also covers plugin extractors: `InfoDict`'s
 //! extractor field may carry a manifest `display_name` (e.g. `XHamster`)
 //! instead of the canonical lowercase `name`, and folding it here is what
-//! keeps that display casing from ever affecting archive matching.
+//! keeps that display casing from ever affecting archive matching — and
+//! [`archive_token_for`] prefers `InfoDict::extractor_key` (a plugin's
+//! manifest `name`) over the display name in the first place, so a
+//! renamed `display_name` never splits an archive either.
 //!
 //! # Concurrency
 //!
@@ -25,10 +28,22 @@
 //! is released when the file handle drops.
 
 use fs4::fs_std::FileExt;
+use rdlp_types::InfoDict;
 use std::collections::HashSet;
 use std::fs::OpenOptions;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
+
+/// The extractor half of `info`'s archive line: `extractor_key` (yt-dlp
+/// `extractor_key`; a plugin's manifest `name`) when set, else `extractor`
+/// (an in-tree extractor's one name). The one place the choice is made —
+/// every archive read and write goes through it, so a plugin's
+/// `display_name` (which IS `extractor`) can never become an archive
+/// token.
+#[must_use]
+pub fn archive_token_for(info: &InfoDict) -> &str {
+    info.extractor_key.as_deref().unwrap_or(&info.extractor)
+}
 
 /// Build the canonical archive line for an `{extractor} {id}` pair.
 ///
@@ -259,6 +274,20 @@ mod tests {
         assert!(archive.contains("XHamster\t123"));
         assert!(!is_in_archive(&archive, "xhamster", "123"));
         assert!(!is_in_archive(&archive, "XHamster", "123"));
+    }
+
+    /// A plugin's `InfoDict` carries its manifest `name` as
+    /// `extractor_key` and its `display_name` as `extractor`; the archive
+    /// token is the key, so renaming the display never splits an archive.
+    /// An in-tree extractor has no key and the token is `extractor`.
+    #[test]
+    fn archive_token_prefers_extractor_key_over_the_display_name() {
+        let mut plugin = InfoDict::new("9", "t", "XHamster Display", "https://x.test/9");
+        plugin.extractor_key = Some("xhamster".to_string());
+        assert_eq!(archive_token_for(&plugin), "xhamster");
+
+        let in_tree = InfoDict::new("9", "t", "XHamster", "https://x.test/9");
+        assert_eq!(archive_token_for(&in_tree), "XHamster");
     }
 
     #[test]

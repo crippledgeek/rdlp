@@ -36,7 +36,7 @@ use rdlp_extractor::base::common::{
 use rdlp_redact::RedactedUrl;
 use rdlp_types::InfoDict;
 
-const EXTRACT_PLAYLIST_EXPORT: &str = "extract-playlist";
+pub(crate) const EXTRACT_PLAYLIST_EXPORT: &str = "extract-playlist";
 
 /// Hand-lift of `wit/types.wit`'s `playlist-entry` record. See the module
 /// doc for why this is hand-declared rather than bindgen-generated.
@@ -57,7 +57,11 @@ pub(crate) struct WitPlaylistEntry {
 pub(crate) struct WitPlaylistPage {
     /// The page's items.
     pub entries: Vec<WitPlaylistEntry>,
-    /// 1-indexed page number, matching `search-page`.
+    /// 1-indexed page number, matching `search-page`. The host asked for
+    /// a page and keeps its own count; this echo is checked against the
+    /// request in [`playlist_page_from_wit`] and a mismatch is logged, not
+    /// acted on — a plugin echoing the wrong page is a plugin bug worth
+    /// seeing in its log, not a reason to re-number the listing.
     pub page: u32,
     /// Whether a further page exists.
     #[component(name = "has-more")]
@@ -164,8 +168,21 @@ fn playlist_entry_from_wit(w: WitPlaylistEntry) -> PlaylistEntry {
 /// capping `entries` at [`crate::convert::MAX_PLUGIN_PLAYLIST_PAGE_ENTRIES`]
 /// (same truncate-and-warn-once shape `info_dict_from_wit` uses for
 /// `formats`) so one plugin-controlled page can never hand the loop more
-/// rows than it would ever keep.
-fn playlist_page_from_wit(w: WitPlaylistPage, origin: &PluginOrigin<'_>) -> PlaylistPage {
+/// rows than it would ever keep. `requested` is the page the host asked
+/// for; a plugin echoing a different `page` is logged on its target.
+fn playlist_page_from_wit(
+    w: WitPlaylistPage,
+    requested: u32,
+    origin: &PluginOrigin<'_>,
+) -> PlaylistPage {
+    if w.page != requested {
+        log::debug!(
+            target: origin.log_target,
+            "{EXTRACT_PLAYLIST_EXPORT}: plugin {} answered page {} for a request for page {requested}",
+            origin.plugin_name,
+            w.page
+        );
+    }
     let entries = cap_plugin_playlist_entries(w.entries, EXTRACT_PLAYLIST_EXPORT, origin)
         .into_iter()
         .map(playlist_entry_from_wit)
@@ -245,7 +262,7 @@ impl PluginExtractor {
                     None => Ok(None),
                     Some(Ok(p)) => {
                         let origin = store.data().origin();
-                        Ok(Some(playlist_page_from_wit(p, &origin)))
+                        Ok(Some(playlist_page_from_wit(p, page, &origin)))
                     }
                     Some(Err(e)) => {
                         Err(playlist_error_to_plugin_error(&store.data().plugin_name, e))
@@ -259,11 +276,15 @@ impl PluginExtractor {
     /// Drive this plugin's `extract-playlist` export through the
     /// host-owned [`PagedPlaylist`] loop, falling back to a single
     /// `extract` call — the [`InfoExtractor::extract_playlist`] trait
-    /// default — when the export is absent or the plugin declines the URL.
+    /// default — when the export is absent, `Config::extract_playlist`
+    /// is off, or the plugin declines the URL.
     ///
-    /// Page one is fetched here as a probe: an absent export or
-    /// `unsupported-url` means "not a playlist for this plugin". A
-    /// successful page one is handed to
+    /// The first two are known before any call: the export's presence is
+    /// read off the component type at load (`has_extract_playlist`) and
+    /// the config is in hand, so neither costs an instantiation. Only
+    /// then is page one fetched as a probe: `unsupported-url` means "not
+    /// a playlist for this plugin" and is a per-call cost by nature — the
+    /// plugin decides per URL. A successful page one is handed to
     /// [`PagedPlaylist::extract_all_entries_from`] rather than re-fetched,
     /// so a real playlist costs exactly the pages it has, not one extra.
     /// `source` is built before the probe (rather than only once a real
@@ -281,6 +302,9 @@ impl PluginExtractor {
         url: &str,
         ctx: &ExtractionContext,
     ) -> RdlpResult<Vec<InfoDict>> {
+        if !self.has_extract_playlist || !ctx.config.extract_playlist {
+            return Ok(vec![self.extract(url, ctx).await?]);
+        }
         let source = PluginPlaylistSource { plugin: self };
         source.validate_selection(url, ctx)?;
         let first = self
@@ -322,13 +346,12 @@ impl PagedPlaylist for PluginPlaylistSource<'_> {
         _ctx: &ExtractionContext,
     ) -> RdlpResult<PlaylistPage> {
         match self.plugin.call_extract_playlist_page(url, page).await {
-            // Unreachable in practice: `extract_playlist_via_plugin`'s
-            // probe already proved this component exports
-            // `extract-playlist` before this method is ever called (a
-            // component cannot un-export something between two calls on
-            // the same `PluginExtractor`). Kept for exhaustiveness and
-            // because `call_extract_playlist_page` has no other caller to
-            // prove that of.
+            // Unreachable in practice: `has_extract_playlist` (read off
+            // the component type at load) and the probe both proved this
+            // component exports `extract-playlist` before this method is
+            // ever called. Kept for exhaustiveness and because
+            // `call_extract_playlist_page` has no other caller to prove
+            // that of.
             Ok(None) => Err(RdlpError::extraction(
                 "plugin has no extract-playlist export",
                 url,

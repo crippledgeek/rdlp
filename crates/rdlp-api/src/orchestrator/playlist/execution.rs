@@ -44,7 +44,7 @@ impl Orchestrator {
                     return None;
                 }
                 if let Some(archive_set) = archive
-                    && archive::is_in_archive(archive_set, &ep.extractor, &ep.id)
+                    && archive::is_in_archive(archive_set, archive::archive_token_for(ep), &ep.id)
                 {
                     return None;
                 }
@@ -120,11 +120,7 @@ impl Orchestrator {
                                         id: self.download_id,
                                         index: position,
                                     });
-                                    self.record_in_archive(
-                                        &info_owned.extractor,
-                                        &info_owned.id,
-                                    )
-                                    .await;
+                                    self.record_in_archive(&info_owned).await;
                                 }
                                 Ok(None) => {
                                     debug!(position, total; "Skipped by user");
@@ -265,11 +261,7 @@ impl Orchestrator {
                                         downloaded.push(path);
                                         let idx = pos - 1;
                                         #[allow(clippy::indexing_slicing)] // idx = pos-1; pos from infos enumeration
-                                        self.record_in_archive(
-                                            &infos[idx].extractor,
-                                            &infos[idx].id,
-                                        )
-                                        .await;
+                                        self.record_in_archive(&infos[idx]).await;
                                         retried_ok += 1;
                                     }
                                     Ok(None) => {
