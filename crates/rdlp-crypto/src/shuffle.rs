@@ -2,11 +2,17 @@
 
 /// Fisher-Yates shuffle over a copy of `items`, drawing `next(i + 1)` in `0..=i` for `i`
 /// from the end down to 1. The caller supplies `next`, so any PRNG can drive the draw.
+///
+/// # Panics
+///
+/// Panics if `next(bound)` returns a value `>= bound`: the draw is used as a
+/// swap index without a second range check, because a draw outside its bound
+/// is a broken PRNG contract, not an input to be silently clamped.
 #[must_use]
 pub fn seeded_shuffle<T: Clone>(items: &[T], mut next: impl FnMut(u64) -> u64) -> Vec<T> {
     let mut result: Vec<T> = items.to_vec();
     for i in (1..result.len()).rev() {
-        let bound = u64::try_from(i).unwrap_or(u64::MAX) + 1;
+        let bound = u64::try_from(i + 1).unwrap_or(u64::MAX);
         let swap_idx = usize::try_from(next(bound)).unwrap_or(i);
         result.swap(i, swap_idx);
     }
@@ -46,6 +52,13 @@ mod tests {
     fn shuffle_with_zero_draws_is_a_rotation_by_swaps() {
         // drawing 0 every time swaps each i with 0: [1,2,3] -> swap(2,0)=[3,2,1] -> swap(1,0)=[2,3,1]
         assert_eq!(seeded_shuffle(&[1, 2, 3], |_| 0), vec![2, 3, 1]);
+    }
+
+    #[test]
+    #[should_panic(expected = "index out of bounds")]
+    fn shuffle_panics_when_a_draw_reaches_its_bound() {
+        // A draw equal to its bound is the first out-of-contract value.
+        let _ = seeded_shuffle(&[1, 2, 3], |bound| bound);
     }
 
     #[test]

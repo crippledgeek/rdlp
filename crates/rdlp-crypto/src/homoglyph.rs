@@ -1,7 +1,11 @@
 //! Homoglyph substitution tables.
 
-/// A reversible substitution table mapping visually-identical characters onto a
-/// canonical form (e.g. Cyrillic letters that render identically to Latin ones).
+/// A substitution table folding visually-identical characters onto one canonical form.
+///
+/// E.g. Cyrillic letters that render identically to Latin ones. Folding is
+/// one-directional: several `from` characters may share a `to`, so the
+/// original cannot be recovered from the folded text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HomoglyphTable(&'static [(char, char)]);
 
 impl HomoglyphTable {
@@ -57,6 +61,16 @@ mod tests {
             CYRILLIC_UPPERCASE_TO_LATIN.fold("abc/=+\u{0430}"),
             "abc/=+\u{0430}"
         ); // lowercase Cyrillic a is NOT in the table
+    }
+
+    #[test]
+    fn tables_compare_by_their_pairs() {
+        // Value semantics: two tables built from the same pairs are equal
+        // and a `Copy` of the constant is the constant.
+        let copy = CYRILLIC_UPPERCASE_TO_LATIN;
+        assert_eq!(copy, CYRILLIC_UPPERCASE_TO_LATIN);
+        assert_ne!(HomoglyphTable::new(&[]), CYRILLIC_UPPERCASE_TO_LATIN);
+        assert!(format!("{copy:?}").starts_with("HomoglyphTable("));
     }
 
     #[test]

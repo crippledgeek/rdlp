@@ -17,8 +17,8 @@
 //! - [`homoglyph`] — [`homoglyph::HomoglyphTable`] and the
 //!   [`CYRILLIC_UPPERCASE_TO_LATIN`] table (visually-identical character
 //!   substitution)
-//! - [`js_int`] — [`js_int::to_signed_32`] (the JS `|0` coercion every
-//!   JS-emulating primitive below needs)
+//! - [`js_int`] — [`js_int::to_signed_32`] (the JS `|0` coercion the
+//!   i64-arithmetic PRNG steps use)
 //! - [`prng`] — the PRNG algorithm variants: [`prng::lcg_step`],
 //!   [`prng::weyl_step`], [`prng::xorshift`] (+ [`prng::XorshiftShifts`]),
 //!   [`prng::rotate_scramble`] (+ [`prng::Rotation`]), [`prng::fmix32`],
@@ -28,7 +28,6 @@
 //! Site wiring lives in the caller — a plugin links this crate as a library,
 //! never through a host import.
 
-#![warn(missing_docs)]
 #![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 
 pub mod hash;

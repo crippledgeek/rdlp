@@ -1,5 +1,14 @@
 //! Columnar transposition cipher.
 
+/// The key's column indices in the order the cipher visits them: sorted by the
+/// key character's code point, ties keeping their original left-to-right
+/// order (a stable sort, so a repeated key character is not ambiguous).
+fn sorted_columns(key: &str) -> Vec<usize> {
+    let mut key_map: Vec<(char, usize)> = key.chars().enumerate().map(|(i, c)| (c, i)).collect();
+    key_map.sort_by_key(|&(c, _)| c);
+    key_map.into_iter().map(|(_, i)| i).collect()
+}
+
 /// Undo a columnar transposition keyed by `key`'s sorted character order (empty key = identity).
 ///
 /// Padded: a partial last row is filled with spaces, so `columnar_transpose`
@@ -17,14 +26,10 @@ pub fn columnar_untranspose(src: &[char], key: &str) -> Vec<char> {
     // Build a 2D grid filled with spaces
     let mut grid: Vec<Vec<char>> = vec![vec![' '; column_count]; row_count];
 
-    // Build sorted key-index map (sort by char code, preserving original index)
-    let mut key_map: Vec<(char, usize)> = key.chars().enumerate().map(|(i, c)| (c, i)).collect();
-    key_map.sort_by_key(|&(c, _)| c);
-
     // Fill grid column-by-column in sorted key order
     let mut src_iter = src.iter();
-    for &(_, col_idx) in &key_map {
-        for row in grid.iter_mut().take(row_count) {
+    for col_idx in sorted_columns(key) {
+        for row in &mut grid {
             let Some(&ch) = src_iter.next() else {
                 break;
             };
@@ -58,7 +63,7 @@ pub fn columnar_transpose(src: &[char], key: &str) -> Vec<char> {
     // Fill row by row
     let mut src_iter = src.iter();
     for grid_row in &mut grid {
-        for cell in grid_row.iter_mut().take(column_count) {
+        for cell in grid_row.iter_mut() {
             let Some(&ch) = src_iter.next() else {
                 break;
             };
@@ -66,13 +71,9 @@ pub fn columnar_transpose(src: &[char], key: &str) -> Vec<char> {
         }
     }
 
-    // Build sorted key-index map
-    let mut key_map: Vec<(char, usize)> = key.chars().enumerate().map(|(i, c)| (c, i)).collect();
-    key_map.sort_by_key(|&(c, _)| c);
-
     // Read column by column in sorted key order
     let mut result = Vec::with_capacity(src.len());
-    for &(_, col_idx) in &key_map {
+    for col_idx in sorted_columns(key) {
         for grid_row in &grid {
             if let Some(&ch) = grid_row.get(col_idx) {
                 result.push(ch);
@@ -86,17 +87,31 @@ pub fn columnar_transpose(src: &[char], key: &str) -> Vec<char> {
 mod tests {
     use super::*;
 
+    /// Strip the spaces a partial last row is padded with (see
+    /// `untranspose_pads_a_partial_last_row_with_spaces`).
+    fn trim_padding(mut chars: Vec<char>) -> Vec<char> {
+        while chars.last() == Some(&' ') {
+            chars.pop();
+        }
+        chars
+    }
+
+    #[test]
+    fn sorted_columns_orders_by_code_point_and_keeps_ties_stable() {
+        assert_eq!(sorted_columns("cab"), vec![1, 2, 0]);
+        // Repeated characters keep their left-to-right order.
+        assert_eq!(sorted_columns("baa"), vec![1, 2, 0]);
+        assert_eq!(sorted_columns(""), Vec::<usize>::new());
+    }
+
     #[test]
     fn columnar_roundtrip() {
         let plain: Vec<char> = "The quick brown fox jumps".chars().collect();
         let key = "secret";
-        // 25 chars over a 6-column key pads the grid's last row with trailing
-        // spaces (see `untranspose_pads_a_partial_last_row_with_spaces`); the
+        // 25 chars over a 6-column key pads the grid's last row; the
         // roundtrip is exact modulo that padding.
-        let mut roundtripped = columnar_untranspose(&columnar_transpose(&plain, key), key);
-        while roundtripped.last() == Some(&' ') {
-            roundtripped.pop();
-        }
+        let roundtripped =
+            trim_padding(columnar_untranspose(&columnar_transpose(&plain, key), key));
         assert_eq!(roundtripped, plain);
     }
 
@@ -120,15 +135,11 @@ mod tests {
         // "kéy" is 3 chars but 4 UTF-8 bytes (é is 2 bytes) — column_count must
         // come from key.chars().count(), not key.len(), or the grid is built
         // with the wrong column count and the round trip is silently wrong.
-        // 7 chars over a 3-column key pads the last row (see
-        // `untranspose_pads_a_partial_last_row_with_spaces`); trim it like
-        // `columnar_roundtrip` does.
+        // 7 chars over a 3-column key pads the last row; trim it.
         let plain: Vec<char> = "abcdefg".chars().collect();
         let key = "kéy";
-        let mut roundtripped = columnar_untranspose(&columnar_transpose(&plain, key), key);
-        while roundtripped.last() == Some(&' ') {
-            roundtripped.pop();
-        }
+        let roundtripped =
+            trim_padding(columnar_untranspose(&columnar_transpose(&plain, key), key));
         assert_eq!(roundtripped, plain);
     }
 }

@@ -37,37 +37,26 @@ const ALPHA: &[u8] = b"0123456789abcdefghijklmnopqrstuvwxyz";
 const _: () = assert!(ALPHA.len() == 36);
 
 /// Encode `n` as a string in `base`, using the `0-9a-z` alphabet.
-///
-/// # Panics
-///
-/// Never panics: `bytes` is built exclusively from the ASCII-only `ALPHA`
-/// slice, so the internal UTF-8 conversion always succeeds.
 #[must_use]
 pub fn to_radix(mut n: u32, base: Radix) -> String {
     if n == 0 {
         return "0".to_string();
     }
     let base = u32::from(base.0);
-    let mut bytes = Vec::with_capacity(8);
+    let mut digits = Vec::new();
     while n > 0 {
         let digit = usize::try_from(n % base).unwrap_or(0);
         if let Some(&b) = ALPHA.get(digit) {
-            bytes.push(b);
+            digits.push(b);
         }
         n /= base;
     }
-    bytes.reverse();
-    // INVARIANT: `bytes` is built exclusively from the ASCII-only `ALPHA` slice,
-    // so it is always valid UTF-8.
-    #[allow(clippy::expect_used)]
-    String::from_utf8(bytes).expect("ascii")
+    // Least-significant digit was pushed first; `char::from(u8)` needs no
+    // UTF-8 check, so no fallible conversion sits on this path.
+    digits.iter().rev().map(|&b| char::from(b)).collect()
 }
 
 /// Encode `n` as a base-36 string using the `0-9a-z` alphabet.
-///
-/// # Panics
-///
-/// Never panics: see [`to_radix`].
 #[must_use]
 pub fn to_base36(n: u32) -> String {
     to_radix(n, Radix::BASE36)

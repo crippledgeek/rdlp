@@ -13,10 +13,13 @@
 //! ## JavaScript Integer Semantics
 //!
 //! All arithmetic here intentionally emulates JavaScript's 32-bit signed integer
-//! behavior via [`crate::js_int::to_signed_32`] (re-exported here as
-//! [`to_signed_32`] for call-site brevity — every function in this module needs
-//! it). Clippy warnings about sign-change and truncation casts are suppressed
-//! per-function with explanatory comments; they are intentional.
+//! behavior. The steps that compute in `i64` (`lcg_step`, `xorshift`, `fmix32`,
+//! `pcg_xsh_rs`, `mxs_mix`) narrow their result with
+//! [`crate::js_int::to_signed_32`] — the JS `|0` coercion, re-exported here as
+//! [`to_signed_32`] for call-site brevity; `weyl_step` and `rotate_scramble`
+//! stay in 32-bit wrapping arithmetic and need no coercion. Clippy warnings
+//! about sign-change and truncation casts are suppressed per-function with
+//! explanatory comments; they are intentional.
 
 pub use crate::js_int::to_signed_32;
 
@@ -24,7 +27,9 @@ pub use crate::js_int::to_signed_32;
 // Constants
 // =============================================================================
 
-/// Golden ratio constant (2^32 / φ), commonly used in hash functions.
+/// Golden ratio constant (2^32 / φ), commonly used in hash functions. The Weyl
+/// increment of algorithms 3 and 7 and the additive constant of
+/// [`rotate_scramble`].
 const PHI: u32 = 0x9e37_79b9;
 
 // MurmurHash3 fmix32 constants
@@ -42,6 +47,7 @@ const PCG_INC: u32 = 0xac56_4b05;
 
 // Algorithm-specific constants
 const WEYL_ROL_INC: u32 = 0x6d2b_79f5;
+/// The multiplier that closes [`rotate_scramble`].
 const ROL_SCRAMBLE_MULT: u32 = 0x27d4_eb2d;
 const XORSHIFT_ADD_CONST: u32 = 0xa5a5_a5a5;
 const MXS_MULT1: u32 = 0x7feb_352d;
@@ -52,15 +58,16 @@ const MXS_MULT2: u32 = 0x846c_a68b;
 /// `rotate_left` **wraps** its shift at 32 bits rather than rejecting an
 /// out-of-range value (`x.rotate_left(35) == x.rotate_left(3)`), which would
 /// silently alias two different algorithm parameters onto the same behavior —
-/// this newtype rejects that at construction instead.
+/// this newtype rejects that at construction instead. `u8` like
+/// [`XorshiftShifts`]: both hold "a shift amount in `0..32`".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Rotation(u32);
+pub struct Rotation(u8);
 
 impl Rotation {
     /// Validate `amount` is in `0..32` (`u32::rotate_left`'s wrap boundary).
     /// Returns `None` outside that range.
     #[must_use]
-    pub const fn new(amount: u32) -> Option<Self> {
+    pub const fn new(amount: u8) -> Option<Self> {
         if amount < 32 {
             Some(Self(amount))
         } else {
@@ -79,8 +86,14 @@ const ROL7: Rotation = match Rotation::new(7) {
 ///
 /// Validated once at construction rather than as three loose `u8` parameters
 /// (see `limit-function-arguments`: a cohesive triple of shift amounts is
-/// exactly the "data clump" the rule asks to be grouped). `u32::rotate`-style
-/// wraparound applies here too, hence the same `< 32` bound as [`Rotation`].
+/// exactly the "data clump" the rule asks to be grouped). A shift of 32 or
+/// more is rejected because it has no meaning in the 32-bit emulation:
+/// JavaScript masks a shift count to its low 5 bits (`x << 35 === x << 3`),
+/// whereas here the left shifts run on `i64` (a count in `32..64` pushes
+/// every bit past the 32-bit window so the step degenerates to `x`, and `64`
+/// or more overflows the `i64` shift itself) and the right shift is a
+/// `u32 >>` that overflows at `32`. Rejecting at construction keeps every
+/// one of those divergences from JS unreachable.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct XorshiftShifts {
     left1: u8,
@@ -174,6 +187,11 @@ pub fn fmix32(mut s: i32) -> i32 {
 }
 
 /// Rotate-left scrambler: ROL + add + xor-shift + multiply.
+///
+/// `PHI` (the additive constant) and `ROL_SCRAMBLE_MULT` are the scheme's own
+/// constants, not tunables: the rotation is what a variant of this scrambler
+/// changes, and no second user asks for different constants — parameterising
+/// them would be an API with a single caller.
 #[allow(
     clippy::cast_sign_loss,
     clippy::cast_possible_wrap,
@@ -182,7 +200,7 @@ pub fn fmix32(mut s: i32) -> i32 {
 #[inline]
 #[must_use]
 pub const fn rotate_scramble(s: i32, rotation: Rotation) -> i32 {
-    let mut x = (s as u32).rotate_left(rotation.0) as i32;
+    let mut x = (s as u32).rotate_left(rotation.0 as u32) as i32;
     x = x.wrapping_add(PHI as i32);
     x ^= (x as u32 >> 11) as i32;
     // Intentional: JS-emulation truncation from i64 to i32
@@ -244,6 +262,7 @@ pub fn mxs_mix(state: i32, mult1: u32, mult2: u32) -> i32 {
 /// 5. `xorshift_add` - Xorshift variant with constant addition
 /// 6. `lcg_pcg` - LCG with PCG-style variable right-shift scrambler
 /// 7. `weyl_mxs` - Weyl Sequence + multiply-xor-shift
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ByteGenerator {
     state: i32,
     algo_id: u8,
@@ -346,7 +365,7 @@ mod tests {
         assert!(Rotation::new(0).is_some());
         assert!(Rotation::new(31).is_some());
         assert!(Rotation::new(32).is_none());
-        assert!(Rotation::new(u32::MAX).is_none());
+        assert!(Rotation::new(u8::MAX).is_none());
     }
 
     #[test]
@@ -398,14 +417,6 @@ mod tests {
     }
 
     #[test]
-    fn test_byte_generator_algo3_murmurhash3() {
-        let mut rng = ByteGenerator::new(3, 0).unwrap();
-        let byte = rng.next_byte();
-        // Just verify it produces a deterministic value
-        let _ = byte;
-    }
-
-    #[test]
     fn test_byte_generator_invalid_algo() {
         assert!(ByteGenerator::new(0, 0).is_none());
         assert!(ByteGenerator::new(8, 0).is_none());
@@ -418,6 +429,17 @@ mod tests {
             let rng = ByteGenerator::new(algo_id, 42);
             assert!(rng.is_some(), "Algorithm {algo_id} should be valid");
         }
+    }
+
+    #[test]
+    fn byte_generators_compare_by_state_and_algorithm() {
+        let a = ByteGenerator::new(3, 12345).unwrap();
+        let mut b = a.clone();
+        assert_eq!(a, b);
+        let _ = b.next_byte();
+        assert_ne!(a, b, "advancing the state must be observable");
+        assert_ne!(a, ByteGenerator::new(4, 12345).unwrap());
+        assert!(format!("{a:?}").contains("algo_id: 3"));
     }
 
     #[test]

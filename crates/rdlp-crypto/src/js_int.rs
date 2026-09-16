@@ -5,9 +5,9 @@
 /// JavaScript bitwise operators coerce their operands to a signed 32-bit
 /// integer (the `|0` idiom). Python's yt-dlp emulates this with
 /// `n % (sign * 2^32)`; in Rust we truncate to `i32` via a plain `as` cast,
-/// which matches the JS semantics exactly. Every JS-emulating cipher in this
-/// crate needs this same coercion at its arithmetic boundaries — it is not
-/// specific to any one PRNG algorithm, hence its own module.
+/// which matches the JS semantics exactly. It is the coercion every PRNG step
+/// that computes in `i64` applies to its result, and it is not specific to any
+/// one algorithm — hence its own module.
 #[allow(clippy::cast_possible_truncation)]
 #[inline]
 #[must_use]

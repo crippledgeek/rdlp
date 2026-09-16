@@ -1,5 +1,11 @@
 //! Java `String.hashCode`-style folding hash.
 
+/// The `MurmurHash3` finalizer, reachable here as well as at
+/// [`crate::prng::fmix32`]: it is a hash primitive in its own right (a site may
+/// finalize a key with it and never touch a PRNG), so the `hash` module names it
+/// too rather than sending a hash-only caller into `prng`.
+pub use crate::prng::fmix32;
+
 /// Java `String.hashCode` folded to 32 bits: `h = h * 31 + byte` over the UTF-8 bytes, `& 0xFFFF_FFFF`.
 #[must_use]
 pub fn java_string_hash32(key: &str) -> u32 {
@@ -9,8 +15,6 @@ pub fn java_string_hash32(key: &str) -> u32 {
     }
     hash
 }
-
-pub use crate::prng::fmix32;
 
 #[cfg(test)]
 mod tests {
@@ -27,10 +31,18 @@ mod tests {
 
     #[test]
     fn java_hash_wraps_at_32_bits() {
-        // A long key overflows u32 many times; the fold keeps only the low 32 bits.
-        let h = java_string_hash32(&"x".repeat(64));
-        let _: u32 = h; // fold already narrowed to u32; the type itself is the bound
-        assert_eq!(java_string_hash32(&"x".repeat(64)), h); // deterministic
+        // "polygenelubricants" is the well-known key whose JDK hashCode is
+        // Integer.MIN_VALUE: the fold overflows 32 bits and only the low 32
+        // survive. A 33-bit or unwrapped fold cannot produce this value.
+        assert_eq!(java_string_hash32("polygenelubricants"), 0x8000_0000);
+    }
+
+    #[test]
+    fn java_hash_has_the_classic_aa_bb_collision() {
+        // 'A'*31 + 'a' == 'B'*31 + 'B' == 2112 — the textbook hashCode
+        // collision, which only a multiplier of exactly 31 reproduces.
+        assert_eq!(java_string_hash32("Aa"), 2112);
+        assert_eq!(java_string_hash32("BB"), 2112);
     }
 
     #[test]
