@@ -238,7 +238,7 @@ mod tests {
 
     #[test]
     fn decrypt_src_recovers_pinned_fixture() {
-        // Characterization pin generated from commit d6fb9736's implementation
+        // Characterization pin generated from commit 899369bf's implementation
         // (pre-rewrite `hash_key`/`seed_rand`/`seed_shuffle`/`columnar_cipher`,
         // via a throwaway forward encoder run in a scratch worktree — see the
         // C0-b Task 2 fix-round-1 report). Certifies this rewrite decrypts what

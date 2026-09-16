@@ -62,7 +62,7 @@ an ordinary crate dependency (no I/O, zero dependencies, wasm-clean),
 never a host import — a host import would freeze one site's decryption
 scheme into every future ABI version, for every plugin, forever.
 
-The crate ships the small reversible primitives that recur across
+The crate ships the small primitives that recur across
 video-hosting sites' client-side URL/source obfuscation, each public as "a
 number plus its parameters" (mirrors `crates/rdlp-crypto/src/lib.rs`'s own
 module list):

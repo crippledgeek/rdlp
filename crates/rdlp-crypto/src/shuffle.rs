@@ -5,15 +5,24 @@
 ///
 /// # Panics
 ///
-/// Panics if `next(bound)` returns a value `>= bound`: the draw is used as a
-/// swap index without a second range check, because a draw outside its bound
-/// is a broken PRNG contract, not an input to be silently clamped.
+/// Panics if `next(bound)` returns a value `>= bound`, on every target: a
+/// draw outside its bound is a broken PRNG contract, not an input to be
+/// silently clamped or skipped.
 #[must_use]
 pub fn seeded_shuffle<T: Clone>(items: &[T], mut next: impl FnMut(u64) -> u64) -> Vec<T> {
     let mut result: Vec<T> = items.to_vec();
     for i in (1..result.len()).rev() {
         let bound = u64::try_from(i + 1).unwrap_or(u64::MAX);
-        let swap_idx = usize::try_from(next(bound)).unwrap_or(i);
+        let draw = next(bound);
+        // Checked before the narrowing: on a 32-bit `usize` (wasm32) a draw
+        // >= 2^32 would otherwise fail the conversion below and the fallback
+        // would silently skip the swap instead of panicking.
+        assert!(
+            draw < bound,
+            "PRNG draw {draw} is outside its bound {bound}"
+        );
+        // `draw < bound <= len`, so it always fits a `usize`; the fallback is unreachable.
+        let swap_idx = usize::try_from(draw).unwrap_or(i);
         result.swap(i, swap_idx);
     }
     result
@@ -28,7 +37,7 @@ mod tests {
         let items: Vec<u8> = (0..50).collect();
         let mut s = 7u64;
         let out = seeded_shuffle(&items, |bound| {
-            // PCG-style LCG step; wrapping because the multiplier alone exceeds u64.
+            // PCG-style LCG step; wrapping because the product overflows u64.
             s = s.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1) % (1 << 31);
             s % bound
         });
@@ -55,10 +64,18 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "index out of bounds")]
+    #[should_panic(expected = "PRNG draw 3 is outside its bound 3")]
     fn shuffle_panics_when_a_draw_reaches_its_bound() {
         // A draw equal to its bound is the first out-of-contract value.
         let _ = seeded_shuffle(&[1, 2, 3], |bound| bound);
+    }
+
+    #[test]
+    #[should_panic(expected = "is outside its bound")]
+    fn shuffle_panics_when_a_draw_exceeds_usize() {
+        // A draw no 32-bit `usize` can hold must panic too, not be skipped —
+        // the contract check runs before the narrowing conversion.
+        let _ = seeded_shuffle(&[1, 2, 3], |_| u64::MAX);
     }
 
     #[test]

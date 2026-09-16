@@ -1,6 +1,6 @@
 //! # rdlp-crypto
 //!
-//! Site-agnostic obfuscation toolkit: the small reversible primitives that
+//! Site-agnostic obfuscation toolkit: the small primitives that
 //! recur across video-hosting sites' client-side URL/source obfuscation.
 //! Every primitive is public as "a number plus its parameters" — a site
 //! wiring a new cipher composes these directly rather than re-deriving them.

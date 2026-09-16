@@ -17,9 +17,9 @@
 //! `pcg_xsh_rs`, `mxs_mix`) narrow their result with
 //! [`crate::js_int::to_signed_32`] — the JS `|0` coercion, re-exported here as
 //! [`to_signed_32`] for call-site brevity; `weyl_step` and `rotate_scramble`
-//! stay in 32-bit wrapping arithmetic and need no coercion. Clippy warnings
-//! about sign-change and truncation casts are suppressed per-function with
-//! explanatory comments; they are intentional.
+//! stay in 32-bit wrapping arithmetic and need no coercion. The
+//! `i32 <-> u32` bit reinterpretations that emulation requires are allowed
+//! per function, each allow naming only the cast lints that fn triggers.
 
 pub use crate::js_int::to_signed_32;
 
@@ -132,17 +132,13 @@ const XORSHIFT_ADD_SHIFTS: XorshiftShifts = match XorshiftShifts::new(7, 9, 8) {
 /// Xorshift with a configurable, validated shift triple.
 ///
 /// Reference: <https://en.wikipedia.org/wiki/Xorshift>
-#[allow(
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap,
-    clippy::cast_lossless
-)]
+#[allow(clippy::cast_sign_loss)]
 #[inline]
 #[must_use]
 pub fn xorshift(state: i32, shifts: XorshiftShifts) -> i32 {
     let mut x = state;
     x = to_signed_32(i64::from(x) ^ (i64::from(x) << shifts.left1));
-    x = to_signed_32(i64::from(x) ^ ((x as u32 >> shifts.right) as i64));
+    x = to_signed_32(i64::from(x) ^ i64::from(x as u32 >> shifts.right));
     to_signed_32(i64::from(x) ^ (i64::from(x) << shifts.left2))
 }
 
@@ -151,7 +147,6 @@ pub fn xorshift(state: i32, shifts: XorshiftShifts) -> i32 {
 /// Recipes, PCG, glibc are all this shape.
 ///
 /// Reference: <https://en.wikipedia.org/wiki/Linear_congruential_generator>
-#[allow(clippy::cast_sign_loss, clippy::cast_lossless)]
 #[inline]
 #[must_use]
 pub fn lcg_step(s: i32, multiplier: u32, increment: u32) -> i32 {
@@ -171,11 +166,7 @@ pub const fn weyl_step(s: i32, increment: u32) -> i32 {
 /// `MurmurHash3` 32-bit finalizer (fmix32).
 ///
 /// Reference: <https://en.wikipedia.org/wiki/MurmurHash>
-#[allow(
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap,
-    clippy::cast_lossless
-)]
+#[allow(clippy::cast_sign_loss, clippy::cast_possible_wrap)]
 #[inline]
 #[must_use]
 pub fn fmix32(mut s: i32) -> i32 {
@@ -196,7 +187,8 @@ pub fn fmix32(mut s: i32) -> i32 {
 #[inline]
 #[must_use]
 pub const fn rotate_scramble(s: i32, rotation: Rotation) -> i32 {
-    // `as u32` widens losslessly; `u32::from` is not callable in a `const fn`.
+    // `rotation.0 as u32` widens u8 losslessly (`u32::from` is not const);
+    // `s as u32` reinterprets the bits for the rotate.
     let mut x = (s as u32).rotate_left(rotation.0 as u32) as i32;
     x = x.wrapping_add(PHI as i32);
     x ^= (x as u32 >> 11) as i32;
@@ -210,11 +202,7 @@ pub const fn rotate_scramble(s: i32, rotation: Rotation) -> i32 {
 ///
 /// Reference: <https://en.wikipedia.org/wiki/Permuted_congruential_generator>
 /// and the PCG paper §6.3.1 (O'Neill, 2014).
-#[allow(
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation
-)]
+#[allow(clippy::cast_sign_loss, clippy::cast_possible_wrap)]
 #[inline]
 #[must_use]
 pub fn pcg_xsh_rs(state: i32) -> i32 {
@@ -227,15 +215,10 @@ pub fn pcg_xsh_rs(state: i32) -> i32 {
 ///
 /// Xor-shift, multiply, xor-shift, multiply, with the two multipliers as
 /// parameters so a different MXS instance can reuse the same mixing shape.
-#[allow(
-    clippy::cast_sign_loss,
-    clippy::cast_possible_wrap,
-    clippy::cast_possible_truncation
-)]
+#[allow(clippy::cast_sign_loss)]
 #[inline]
 #[must_use]
 pub fn mxs_mix(state: i32, mult1: u32, mult2: u32) -> i32 {
-    // All casts are intentional JS-emulation truncation
     let mut x = to_signed_32(i64::from(state) ^ (i64::from(state) << 5));
     x = to_signed_32(i64::from(x) * i64::from(mult1));
     x = to_signed_32(i64::from(x) ^ i64::from(x as u32 >> 15));
@@ -285,7 +268,7 @@ impl ByteGenerator {
     }
 
     /// Generate the next byte (0-255) from the PRNG stream.
-    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    #[allow(clippy::cast_sign_loss)]
     pub fn next_byte(&mut self) -> u8 {
         let result = match self.algo_id {
             1 => self.lcg(),

@@ -48,7 +48,7 @@ use wasmtime::component::{ComponentType, Lift};
 const SEARCH_FILTERS_EXPORT: &str = "search-filters";
 
 /// Upper bound on the descriptors one `search-filters` answer may declare.
-/// The largest table shipped so far (xHamster, now a plugin) has six; 32 leaves room for a far
+/// The largest table shipped so far (xHamster, before it left the tree in C0-b) has six; 32 leaves room for a far
 /// richer site while keeping the `Available:` list the host renders on an
 /// unknown-key error bounded by a constant, not by the plugin.
 const MAX_SEARCH_FILTER_DESCRIPTORS: usize = 32;
