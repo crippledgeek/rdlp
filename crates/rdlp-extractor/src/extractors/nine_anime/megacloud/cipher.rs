@@ -18,9 +18,26 @@
 
 use anyhow::Context as _;
 use rdlp_core::{RdlpError, Result};
+use rdlp_crypto::hash::java_string_hash32;
+use rdlp_crypto::shuffle::seeded_shuffle;
+use rdlp_crypto::transposition::columnar_untranspose;
 
 /// Number of decryption layers to apply (matches the JS `layers = 3`).
 const LAYERS: u32 = 3;
+
+/// glibc-style LCG the aniwatch `seedRand` uses: `(s * 1103515245 + 12345) & 0x7FFF_FFFF`.
+const GLIBC_LCG_MULT: u64 = 1_103_515_245;
+const GLIBC_LCG_INC: u64 = 12345;
+const GLIBC_LCG_MASK: u64 = 0x7FFF_FFFF;
+
+/// One draw in `0..modulus`, advancing `seed` (site parameter of the cipher, not a toolkit primitive).
+fn glibc_lcg_step(seed: &mut u64, modulus: u64) -> u64 {
+    *seed = (seed
+        .wrapping_mul(GLIBC_LCG_MULT)
+        .wrapping_add(GLIBC_LCG_INC))
+        & GLIBC_LCG_MASK;
+    *seed % modulus
+}
 
 /// The printable ASCII character set used by the cipher (chars 32..=126).
 fn char_array() -> Vec<char> {
@@ -88,7 +105,10 @@ fn decrypt_src_impl(src: &str, client_key: &str, megacloud_key: &str) -> anyhow:
 /// Reverse one layer of the cipher.
 fn reverse_layer(dec_src: &mut Vec<char>, layer_key: &str, chars: &[char]) {
     // Step 1: Reverse substitution mapping
-    let sub_values = seed_shuffle(chars, layer_key);
+    let sub_values = {
+        let mut seed = u64::from(java_string_hash32(layer_key));
+        seeded_shuffle(chars, |bound| glibc_lcg_step(&mut seed, bound))
+    };
     let char_map: std::collections::HashMap<char, char> = sub_values
         .iter()
         .zip(chars.iter())
@@ -101,79 +121,17 @@ fn reverse_layer(dec_src: &mut Vec<char>, layer_key: &str, chars: &[char]) {
     }
 
     // Step 2: Reverse columnar transposition
-    *dec_src = columnar_cipher(dec_src, layer_key);
+    *dec_src = columnar_untranspose(dec_src, layer_key);
 
     // Step 3: Reverse seed-based character shift
-    let mut seed = hash_key(layer_key);
+    let mut seed = u64::from(java_string_hash32(layer_key));
     for ch in dec_src.iter_mut() {
         if let Some(idx) = chars.iter().position(|&c| c == *ch) {
-            let rand_num = seed_rand(&mut seed, 95);
+            let rand_num = glibc_lcg_step(&mut seed, 95);
             let new_idx = (idx as i64 - rand_num as i64 + 95) % 95;
             *ch = chars[new_idx as usize];
         }
     }
-}
-
-/// Hash a key string to a 32-bit seed value.
-fn hash_key(key: &str) -> u64 {
-    let mut hash: u64 = 0;
-    for b in key.bytes() {
-        hash = (hash.wrapping_mul(31).wrapping_add(u64::from(b))) & 0xFFFF_FFFF;
-    }
-    hash
-}
-
-/// Seeded PRNG: linear congruential generator.
-fn seed_rand(seed: &mut u64, modulus: u64) -> u64 {
-    *seed = (seed.wrapping_mul(1_103_515_245).wrapping_add(12345)) & 0x7FFF_FFFF;
-    *seed % modulus
-}
-
-/// Fisher-Yates shuffle of the character array using a seeded PRNG.
-fn seed_shuffle(chars: &[char], key: &str) -> Vec<char> {
-    let mut seed = hash_key(key);
-    let mut result: Vec<char> = chars.to_vec();
-
-    for i in (1..result.len()).rev() {
-        let swap_idx = seed_rand(&mut seed, (i + 1) as u64) as usize;
-        result.swap(i, swap_idx);
-    }
-
-    result
-}
-
-/// Reverse columnar transposition cipher.
-fn columnar_cipher(src: &[char], key: &str) -> Vec<char> {
-    let column_count = key.len();
-    if column_count == 0 {
-        return src.to_vec();
-    }
-    let row_count = src.len().div_ceil(column_count);
-
-    // Build a 2D grid filled with spaces
-    let mut grid: Vec<Vec<char>> = vec![vec![' '; column_count]; row_count];
-
-    // Build sorted key-index map (sort by char code, preserving original index)
-    let mut key_map: Vec<(char, usize)> = key.chars().enumerate().map(|(i, c)| (c, i)).collect();
-    key_map.sort_by_key(|&(c, _)| c);
-
-    // Fill grid column-by-column in sorted key order
-    let mut src_idx = 0;
-    for &(_, col_idx) in &key_map {
-        for row in grid.iter_mut().take(row_count) {
-            if src_idx < src.len() {
-                row[col_idx] = src[src_idx];
-                src_idx += 1;
-            }
-        }
-    }
-
-    // Read grid row-by-row
-    let mut result = Vec::with_capacity(src.len());
-    for row in &grid {
-        result.extend(row);
-    }
-    result
 }
 
 /// Generate a derived key from the megacloud key and client key.
@@ -258,35 +216,13 @@ mod tests {
     }
 
     #[test]
-    fn test_hash_key_deterministic() {
-        let h1 = hash_key("test_key_123");
-        let h2 = hash_key("test_key_123");
-        assert_eq!(h1, h2);
-        assert_ne!(hash_key("a"), hash_key("b"));
-    }
-
-    #[test]
     fn test_seed_rand_deterministic() {
         let mut s1 = 42;
         let mut s2 = 42;
-        let r1 = seed_rand(&mut s1, 100);
-        let r2 = seed_rand(&mut s2, 100);
+        let r1 = glibc_lcg_step(&mut s1, 100);
+        let r2 = glibc_lcg_step(&mut s2, 100);
         assert_eq!(r1, r2);
         assert_eq!(s1, s2);
-    }
-
-    #[test]
-    fn test_seed_shuffle_deterministic() {
-        let chars = char_array();
-        let s1 = seed_shuffle(&chars, "test_key");
-        let s2 = seed_shuffle(&chars, "test_key");
-        assert_eq!(s1, s2);
-        // Should be a permutation (same elements)
-        let mut sorted1 = s1;
-        sorted1.sort();
-        let mut sorted_chars = chars;
-        sorted_chars.sort();
-        assert_eq!(sorted1, sorted_chars);
     }
 
     #[test]
@@ -304,52 +240,5 @@ mod tests {
         let k1 = keygen("key_a", "client_a");
         let k2 = keygen("key_b", "client_b");
         assert_ne!(k1, k2);
-    }
-
-    #[test]
-    fn test_columnar_cipher_roundtrip() {
-        let input: Vec<char> = "hello world test".chars().collect();
-        let key = "abc";
-        // Forward: read grid row-by-row into sorted column order
-        let encrypted = columnar_cipher_forward(&input, key);
-        // Reverse: what our cipher.rs does
-        let decrypted = columnar_cipher(&encrypted, key);
-        // Output may be padded to row_count * column_count
-        let original: String = input.iter().collect();
-        let decrypted_s: String = decrypted.iter().collect();
-        // Trimming trailing spaces should recover the original
-        assert_eq!(decrypted_s.trim_end(), original);
-    }
-
-    /// Forward columnar cipher (for testing roundtrip).
-    fn columnar_cipher_forward(src: &[char], key: &str) -> Vec<char> {
-        let column_count = key.len();
-        let row_count = src.len().div_ceil(column_count);
-        let mut grid: Vec<Vec<char>> = vec![vec![' '; column_count]; row_count];
-
-        // Fill row by row
-        let mut idx = 0;
-        for grid_row in &mut grid {
-            for cell in grid_row.iter_mut().take(column_count) {
-                if idx < src.len() {
-                    *cell = src[idx];
-                    idx += 1;
-                }
-            }
-        }
-
-        // Build sorted key-index map
-        let mut key_map: Vec<(char, usize)> =
-            key.chars().enumerate().map(|(i, c)| (c, i)).collect();
-        key_map.sort_by_key(|&(c, _)| c);
-
-        // Read column by column in sorted key order
-        let mut result = Vec::with_capacity(src.len());
-        for &(_, col_idx) in &key_map {
-            for grid_row in &grid {
-                result.push(grid_row[col_idx]);
-            }
-        }
-        result
     }
 }
