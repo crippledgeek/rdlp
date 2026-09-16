@@ -145,6 +145,17 @@ interface types {
     /// Metadata `info-dict` (frozen at 0.5.0) cannot carry. The named
     /// fields recur across most sites; `extras` is the open tail, validated
     /// and capped by the host before it reaches `InfoDict::extra`.
+    ///
+    /// `extras` rules (host-enforced; a refused entry is dropped with one
+    /// warning per class on the plugin's log target, never an error):
+    /// a key matches `^[a-z][a-z0-9-]{0,62}$`; a key that, with `-` folded
+    /// to `_`, names a core `info-dict` field (`title`, `extractor-key`,
+    /// `view-count`, …) is dropped, because kept keys become TOP-LEVEL keys
+    /// of the video's JSON and would overwrite it; the first of a repeated
+    /// key wins; a `number` must be finite; and the host caps the entry
+    /// count, one text value's bytes, and the map's total bytes (defaults
+    /// 64 / 4096 / 65536, operator-tunable). Entries are considered in the
+    /// order given, so list the important ones first.
     @since(version = 0.5.2)
     record info-dict-extra {
         actors: list<string>,
