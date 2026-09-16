@@ -1,31 +1,31 @@
 //! # rdlp-crypto
 //!
-//! Cryptographic utilities for rdlp including PRNG-based URL decryption.
+//! Site-agnostic obfuscation toolkit: the small reversible primitives that
+//! recur across video-hosting sites' client-side URL/source obfuscation.
 //!
-//! This crate provides cryptographic primitives used by extractors:
+//! - [`hash`] — Java-style `String.hashCode` folding hash, and the
+//!   `MurmurHash3` fmix32 finaliser re-exported from [`prng`]
+//! - [`shuffle`] — seeded Fisher-Yates permutation
+//! - [`transposition`] — columnar transposition cipher (forward + inverse)
+//! - [`radix`] — base-36 integer encoding
+//! - [`homoglyph`] — visually-identical character substitution tables
+//! - [`prng`] — the PRNG algorithm variants the above primitives are seeded
+//!   from (JS-integer-semantics LCG, xorshift, Weyl-sequence mixers)
 //!
-//! - **PRNG-based decryption**: Used by `XHamster` for format URL obfuscation
-//! - **Hex encoding/decoding**: Utilities for handling hex-encoded ciphertext
-//!
-//! ## `XHamster` URL Decryption
-//!
-//! `XHamster` encrypts video format URLs by embedding hex-encoded ciphertext
-//! in the URL path. The encryption uses one of 7 PRNG algorithms:
-//!
-//! ```rust
-//! use rdlp_crypto::xhamster::decipher_format_url;
-//!
-//! // Decipher a hex-encoded URL path
-//! if let Some(decrypted) = decipher_format_url("010000000041424344") {
-//!     println!("Decrypted: {decrypted}");
-//! }
-//! ```
+//! Site wiring lives in the caller — a plugin links this crate as a library,
+//! never through a host import.
 
 #![warn(missing_docs)]
 #![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 
+pub mod hash;
+pub mod homoglyph;
 pub mod prng;
+pub mod radix;
+pub mod shuffle;
+pub mod transposition;
 pub mod xhamster;
 
+pub use homoglyph::{CYRILLIC_UPPERCASE_TO_LATIN, HomoglyphTable};
 pub use prng::ByteGenerator;
 pub use xhamster::decipher_format_url;

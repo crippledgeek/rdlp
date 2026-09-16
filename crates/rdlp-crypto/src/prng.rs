@@ -1,8 +1,8 @@
 //! Pseudo-random number generator implementations.
 //!
-//! This module provides PRNG algorithms used for `XHamster` URL decryption.
-//! The generators implement various algorithms that match the JavaScript
-//! implementations used by the target sites.
+//! This module provides PRNG algorithms shaped to match JavaScript-emulation
+//! ciphers: seeded byte generators that reproduce a target's `Math.random`-style
+//! or hand-rolled PRNG bit-for-bit.
 //!
 //! ## JavaScript Integer Semantics
 //!
@@ -68,12 +68,15 @@ fn xorshift(state: i32, shift_left1: u8, shift_right: u8, shift_left2: u8) -> i3
     to_signed_32(i64::from(x) ^ (i64::from(x) << shift_left2))
 }
 
-/// Linear Congruential Generator step: `s * multiplier + increment`.
+/// Linear Congruential Generator step: `s * multiplier + increment`, in JS i32
+/// semantics. The multiplier/increment pairs are the caller's — Numerical
+/// Recipes, PCG, glibc are all this shape.
 ///
 /// Reference: <https://en.wikipedia.org/wiki/Linear_congruential_generator>
 #[allow(clippy::cast_sign_loss, clippy::cast_lossless)]
 #[inline]
-fn lcg_step(s: i32, multiplier: u32, increment: u32) -> i32 {
+#[must_use]
+pub fn lcg_step(s: i32, multiplier: u32, increment: u32) -> i32 {
     to_signed_32(i64::from(s) * i64::from(multiplier) + i64::from(increment))
 }
 
@@ -95,7 +98,8 @@ const fn weyl_step(s: i32, increment: u32) -> i32 {
     clippy::cast_lossless
 )]
 #[inline]
-fn fmix32(mut s: i32) -> i32 {
+#[must_use]
+pub fn fmix32(mut s: i32) -> i32 {
     s ^= (s as u32 >> 16) as i32;
     s = to_signed_32(i64::from(s) * i64::from(FMIX32_C1));
     s ^= (s as u32 >> 13) as i32;
@@ -122,6 +126,8 @@ const fn rol_scramble(s: i32, rotation: u32) -> i32 {
 ///
 /// Each algorithm updates internal state and returns a full i32 value.
 /// The caller masks to `& 0xFF` to get a single byte for XOR decryption.
+/// `algo_id` uses the same numbering 1..=7 as the originating scheme; a
+/// caller passes the id it read from its payload.
 ///
 /// ## Algorithms
 ///
