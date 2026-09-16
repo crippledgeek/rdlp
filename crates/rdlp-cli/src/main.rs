@@ -159,7 +159,7 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
         match plugin_args.cmd {
             PluginCmd::List => plugin_cmd::run_list(&config)?,
             PluginCmd::Info { name } => plugin_cmd::run_info(&name, &config)?,
-            PluginCmd::Retrust { name } => plugin_cmd::run_retrust(&name)?,
+            PluginCmd::Retrust { name } => plugin_cmd::run_retrust(&name, &config)?,
             PluginCmd::Disable { name } => plugin_cmd::run_disable(&name)?,
             PluginCmd::Enable { name } => plugin_cmd::run_enable(&name)?,
             PluginCmd::Uninstall { name } => plugin_cmd::run_uninstall(&name, &config)?,

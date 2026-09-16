@@ -517,8 +517,10 @@ pub struct Config {
     #[serde(default)]
     pub plugin_stack_limit_mb: Option<u32>,
 
-    /// Pre-trusted publisher identities for non-interactive plugin install.
-    /// Identity strings are e.g. `sigstore:github:user/repo` or `ed25519:<8-byte-hex>`.
+    /// Pre-trusted publisher identities for non-interactive plugin install;
+    /// each is recorded on its plugin's first successful load. Identity
+    /// strings are `sigstore:github:user/repo` or `ed25519:<hex SHA-256 of
+    /// the manifest's base64 pubkey>` — `rdlp plugin info <name>` prints it.
     #[serde(default)]
     pub plugin_trusted_publishers: Vec<String>,
 

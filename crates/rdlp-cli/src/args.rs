@@ -552,9 +552,11 @@ pub struct Args {
     pub config_location: Option<PathBuf>,
 
     // === Plugin options ===
-    /// Pre-trust a publisher identity for non-interactive plugin install.
+    /// Pre-trust a publisher identity so a plugin loads non-interactively;
+    /// the identity is recorded on its first successful load.
     /// Pass repeatedly for multiple identities.
-    /// Format: `sigstore:github:user/repo` or `ed25519:<8-byte-hex>`.
+    /// Format: `sigstore:github:user/repo` or `ed25519:<hex SHA-256 of the
+    /// manifest's base64 pubkey>` — `rdlp plugin info <name>` prints it.
     #[arg(long, global = true, value_parser = non_blank, value_name = "PUBLISHER", help_heading = HELP_HEADING_CONFIG, hide_short_help = true)]
     pub trust_publisher: Vec<String>,
 
