@@ -118,10 +118,7 @@ pub fn run() {
         default_hook(info);
     }));
 
-    // SAFETY (expect): startup-time fatal; tauri.conf.json is validated at
-    // build time and the application cannot function without the webview.
-    #[allow(clippy::expect_used)]
-    let app = tauri::Builder::default()
+    let builder = tauri::Builder::default()
         // Registered first: it installs the global `log` backend, and every
         // other plugin and command logs through the `log` facade. The crate
         // depended on `log` with no backend at all, so every `info!`/`warn!`
@@ -230,8 +227,12 @@ pub fn run() {
                 .build(),
         )
         .plugin(tauri_plugin_dialog::init())
-        .plugin(tauri_plugin_opener::init())
-        .manage(AppState::new())
+        .plugin(tauri_plugin_opener::init());
+
+    // SAFETY (expect): startup-time fatal; tauri.conf.json is validated at
+    // build time and the application cannot function without the webview.
+    #[allow(clippy::expect_used)]
+    let app = manage_after_plugins(builder, AppState::new)
         .invoke_handler(tauri::generate_handler![
             commands::codecs::available_codecs,
             commands::codecs::available_audio_codecs,
@@ -273,4 +274,77 @@ pub fn run() {
             TempRegistry::cleanup_stale(&output_dir);
         }
     });
+}
+
+/// Manage the value `make` builds, constructing it inside the app's setup
+/// hook instead of while the builder chain is assembled.
+///
+/// Tauri runs every plugin's setup during `build()` and the app setup on
+/// the runtime's `Ready` event, so the factory — which loads the config
+/// and bootstraps plugins — runs with `tauri-plugin-log`'s backend already
+/// installed. `.manage(AppState::new())` evaluated the factory before any
+/// plugin existed; every record it emitted, the plugin-load outcomes among
+/// them, went to `log`'s no-op logger (#777). Replaces the builder's setup
+/// hook, so it must stay the only `.setup` in the chain.
+fn manage_after_plugins<R, T>(
+    builder: tauri::Builder<R>,
+    make: impl FnOnce() -> T + Send + 'static,
+) -> tauri::Builder<R>
+where
+    R: tauri::Runtime,
+    T: Send + Sync + 'static,
+{
+    builder.setup(move |app| {
+        app.manage(make());
+        Ok(())
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tauri::test::{MockRuntime, mock_builder, mock_context, noop_assets};
+
+    struct Probe;
+
+    /// The state factory's records must reach a logger that a plugin
+    /// installs in ITS setup hook — the shape of `tauri-plugin-log`. That
+    /// is only true when the factory runs after plugin initialisation;
+    /// evaluated while the builder chain is assembled, its records go to
+    /// `log`'s no-op logger and vanish (#777).
+    #[test]
+    fn state_factory_runs_after_plugin_setup_hooks() {
+        let logger_plugin = tauri::plugin::Builder::<MockRuntime>::new("probe-logger")
+            .setup(|_, _| {
+                testing_logger::setup();
+                Ok(())
+            })
+            .build();
+        let mut app = manage_after_plugins(mock_builder().plugin(logger_plugin), || {
+            log::info!("state built");
+            Probe
+        })
+        .build(mock_context(noop_assets()))
+        .expect("mock app builds");
+
+        // The app setup hook fires on the runtime's `Ready` event. The mock
+        // runtime cannot leave `run()` (`request_exit` is unimplemented), and
+        // `run_iteration` — deprecated for real event loops because it
+        // busy-loops there — is the one entry point that runs setup once
+        // and returns on the mock.
+        #[allow(deprecated)]
+        app.run_iteration(|_, _| {});
+
+        assert!(
+            app.try_state::<Probe>().is_some(),
+            "the factory's value is managed once setup ran"
+        );
+        testing_logger::validate(|captured| {
+            let bodies: Vec<&str> = captured.iter().map(|r| r.body.as_str()).collect();
+            assert!(
+                bodies.contains(&"state built"),
+                "the factory's record must reach the plugin-installed logger; got {bodies:?}"
+            );
+        });
+    }
 }

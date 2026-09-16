@@ -49,6 +49,9 @@ tauri-build = { version = "2.6", features = [] }
 
 [dev-dependencies]
 mockito = { workspace = true }
+# `tauri::test::mock_builder` — builds the real plugin/setup chain on a
+# headless runtime so startup ordering can be asserted (#777).
+tauri = { version = "2.11", features = ["test"] }
 # Captures `log` records so a test can assert a failure was RECORDED, not just
 # returned (#696). Unmaintained since 2019 but inert: dev-only, one dependency
 # (`log`), never linked into the shipped binary. Note `setup()` panics if
