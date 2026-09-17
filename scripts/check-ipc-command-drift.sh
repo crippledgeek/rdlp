@@ -167,6 +167,14 @@ export interface IpcCommands {
     pick_directory: { args: void; result: string | null };
 }
 FIXTURE
+    # A handler list entry the Rust parser cannot classify: cannot run (2), not
+    # a silent skip — mirrors `odd.ts` on the TS side.
+    cat > "$tmp/odd.rs" <<'FIXTURE'
+        .invoke_handler(tauri::generate_handler![
+            commands::settings::settings,
+            some_other::thing,
+        ])
+FIXTURE
     cat > "$tmp/odd.ts" <<'FIXTURE'
 export interface IpcCommands {
     settings: { args: void; result: AppSettings };
@@ -185,13 +193,16 @@ FIXTURE
     [ "$rc" -eq 1 ] || ok=0
     rc=0; check_command_set "$tmp/good.rs" "$tmp/odd.ts" >/dev/null 2>&1 || rc=$?
     [ "$rc" -eq 2 ] || ok=0
+    rc=0; odd_err=$(check_command_set "$tmp/odd.rs" "$tmp/good.ts" 2>&1 >/dev/null) || rc=$?
+    [ "$rc" -eq 2 ] || ok=0
+    [[ "$odd_err" == *"Extend this script"* ]] || ok=0
     rc=0; check_invoke_owner "$tmp/src" "$tmp/src/api/invokeClient.ts" >/dev/null 2>&1 || rc=$?
     [ "$rc" -eq 1 ] || ok=0
     rm "$tmp/src/views/Rogue.tsx"
     check_invoke_owner "$tmp/src" "$tmp/src/api/invokeClient.ts" >/dev/null 2>&1 || ok=0
 
     if [ "$ok" -eq 1 ]; then
-        echo "SELF-TEST OK: command-set diff, strict parser and raw-invoke sweep all still fire on synthetic drift."
+        echo "SELF-TEST OK: command-set diff, both strict parsers and the raw-invoke sweep all still fire on synthetic drift."
         exit 0
     fi
     echo "SELF-TEST FAILED: a check did NOT flag a known violation (or rejected a clean fixture) - it is broken."
