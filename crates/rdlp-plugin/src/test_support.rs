@@ -178,6 +178,20 @@ pub fn sign_manifest(manifest: &mut Manifest, key: &SigningKey, wasm: &[u8]) {
     }
 }
 
+#[doc(hidden)]
+/// [`write_signed_plugin`] under a key generated here; returns the
+/// publisher identity the host computes for it
+/// ([`Signature::identity_string`]) — what `--trust-publisher` takes.
+pub fn write_signed_plugin_fresh_key(dir: &Path, spec: &SignedPluginSpec<'_>) -> String {
+    let key = SigningKey::generate(&mut rand::rngs::OsRng);
+    write_signed_plugin(dir, &key, spec);
+    Signature::Ed25519 {
+        pubkey: pubkey_b64(&key),
+        signature: String::new(),
+    }
+    .identity_string()
+}
+
 /// Write a signed `plugin.toml` + `plugin.wasm` into `dir` so
 /// `Loader::discover` accepts it. Builds the [`Manifest`] directly from
 /// `spec`, signs it with [`sign_manifest`], serialises it with `toml`
@@ -255,8 +269,7 @@ pub fn discover_signed_after(
 ) -> (Arc<Engine>, DiscoverOutcome) {
     let plugins_dir = root.join("plugins");
     let dir = plugins_dir.join(spec.name);
-    let key = SigningKey::generate(&mut rand::rngs::OsRng);
-    write_signed_plugin(&dir, &key, spec);
+    write_signed_plugin_fresh_key(&dir, spec);
     tamper(&dir);
 
     let engine =

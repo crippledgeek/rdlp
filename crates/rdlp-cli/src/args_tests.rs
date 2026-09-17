@@ -9,7 +9,7 @@ use clap::{CommandFactory, Parser};
 use crate::args::{
     Args, HELP_HEADING_AUDIO_NORM, HELP_HEADING_CONFIG, HELP_HEADING_DOWNLOAD,
     HELP_HEADING_GENERAL, HELP_HEADING_INFO, HELP_HEADING_NETWORK, HELP_HEADING_POSTPROCESS,
-    HELP_HEADING_RECODE, HELP_HEADING_SEARCH, HELP_HEADING_SUBTITLES,
+    HELP_HEADING_RECODE, HELP_HEADING_SEARCH, HELP_HEADING_SUBTITLES, PluginCmd, PluginSubcommand,
 };
 
 /// Arg id (== Rust field name for clap-derive) → expected heading. This IS the
@@ -628,4 +628,32 @@ fn hidden_negations_parse_but_do_not_render() {
         assert!(!short.contains(flag), "{flag} must be hidden from -h");
         assert!(!long.contains(flag), "{flag} must be hidden from --help");
     }
+}
+
+/// `plugin list --json` / `plugin info <name> --json`: the machine-readable
+/// switch is a per-subcommand bool, like `--dump-json` on the main command.
+#[test]
+fn plugin_list_and_info_take_a_json_flag() {
+    let cmd = |argv: &[&str]| {
+        let a = Args::try_parse_from(argv).expect("parses");
+        match a.plugin {
+            Some(PluginSubcommand::Plugin(p)) => p.cmd,
+            None => panic!("a plugin subcommand"),
+        }
+    };
+    assert!(matches!(
+        cmd(&["rdlp", "plugin", "list", "--json"]),
+        PluginCmd::List { json: true }
+    ));
+    assert!(matches!(
+        cmd(&["rdlp", "plugin", "list"]),
+        PluginCmd::List { json: false }
+    ));
+    assert!(
+        matches!(cmd(&["rdlp", "plugin", "info", "foo", "--json"]), PluginCmd::Info { ref name, json: true } if name == "foo")
+    );
+    assert!(matches!(
+        cmd(&["rdlp", "plugin", "info", "foo"]),
+        PluginCmd::Info { json: false, .. }
+    ));
 }

@@ -112,12 +112,20 @@ fn non_blank_path(value: &str) -> Result<PathBuf, String> {
 #[derive(Subcommand, Debug)]
 pub enum PluginCmd {
     /// List installed plugins.
-    List,
+    List {
+        /// Print one JSON array of plugin objects instead of text (the
+        /// same object `info --json` prints; fields are only ever added).
+        #[arg(long)]
+        json: bool,
+    },
     /// Show details for a specific plugin.
     Info {
         /// Plugin name.
         #[arg(value_parser = non_blank)]
         name: String,
+        /// Print one JSON object instead of text (fields are only ever added).
+        #[arg(long)]
+        json: bool,
     },
     /// Accept a new identity for an already-installed plugin (use after the
     /// publisher legitimately rotated their signing key).

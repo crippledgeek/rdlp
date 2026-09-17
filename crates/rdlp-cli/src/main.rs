@@ -14,7 +14,6 @@ mod commands;
 // `pub mod config` in lib.rs is a one-line change that would hand any dependent
 // crate an unvalidated `merge_config`.
 mod config;
-mod plugin_cmd;
 mod selection;
 
 use anyhow::{Context, Result};
@@ -24,6 +23,7 @@ use rdlp_api::TempRegistry;
 use rdlp_api::{RdlpApiError, RdlpClient};
 use rdlp_cli::event_handler::CliEventHandler;
 use rdlp_cli::interactive::DialoguerCallback;
+use rdlp_cli::plugin_cmd;
 use rdlp_cli::sanitize::sanitize_for_terminal;
 use rdlp_types::boundary::Action;
 use std::sync::Arc;
@@ -157,8 +157,8 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
     // Plugin management subcommands — handle before any download logic.
     if let Some(PluginSubcommand::Plugin(plugin_args)) = args.plugin {
         match plugin_args.cmd {
-            PluginCmd::List => plugin_cmd::run_list(&config)?,
-            PluginCmd::Info { name } => plugin_cmd::run_info(&name, &config)?,
+            PluginCmd::List { json } => plugin_cmd::run_list(&config, json)?,
+            PluginCmd::Info { name, json } => plugin_cmd::run_info(&name, &config, json)?,
             PluginCmd::Retrust { name } => plugin_cmd::run_retrust(&name, &config)?,
             PluginCmd::Disable { name } => plugin_cmd::run_disable(&name)?,
             PluginCmd::Enable { name } => plugin_cmd::run_enable(&name)?,
