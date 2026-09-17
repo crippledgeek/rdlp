@@ -216,7 +216,7 @@ pub fn salvage_remux_sync(input: &Path) -> anyhow::Result<PathBuf> {
 
     // Suppress FFmpeg log output during salvage — the corrupt input will
     // generate many EBML warnings that we've already captured and reported.
-    let log_suppress = LogSuppressGuard::new();
+    let log_suppress = LogSuppressGuard::at(ffmpeg_the_third::log::Level::Fatal);
 
     // Open corrupt input — FFmpeg will log warnings but continue reading
     let mut ictx = ffmpeg_the_third::format::input(input)

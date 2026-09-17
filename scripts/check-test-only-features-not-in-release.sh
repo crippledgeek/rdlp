@@ -73,6 +73,7 @@ command -v jq >/dev/null 2>&1 || { echo "ERROR: jq not found -- cannot run this 
 CHECKS=(
     "rdlp-extractor:loopback-test-exemption"
     "rdlp-extractor:test-support"
+    "rdlp-ffmpeg:test-support"
     "rdlp-plugin:test-support"
 )
 

@@ -6491,6 +6491,7 @@ dependencies = [
  "log",
  "openssl-sys",
  "rdlp-core",
+ "rdlp-ffmpeg",
  "rdlp-types",
  "serde",
  "serde_json",

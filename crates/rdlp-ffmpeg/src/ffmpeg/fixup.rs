@@ -235,7 +235,7 @@ impl FFmpegRunner {
             use super::log_capture::LogSuppressGuard;
 
             ensure_init()?;
-            let _log_suppress = LogSuppressGuard::error_level();
+            let _log_suppress = LogSuppressGuard::at(ffmpeg_the_third::log::Level::Error);
 
             let mut ictx = ffmpeg_the_third::format::input(&input)
                 .with_context(|| format!("fixup: failed to open {}", input.display()))?;

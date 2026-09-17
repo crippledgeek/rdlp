@@ -273,7 +273,9 @@ impl FFmpegRunner {
             None
         };
         let _suppress = if callback.is_none() {
-            Some(super::log_capture::LogSuppressGuard::error_level())
+            Some(super::log_capture::LogSuppressGuard::at(
+                ffmpeg_the_third::log::Level::Error,
+            ))
         } else {
             None
         };

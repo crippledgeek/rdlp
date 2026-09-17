@@ -30,7 +30,17 @@ ffmpeg-the-third = "4.1"
 # the link line after rlib archives.
 openssl-sys = { workspace = true }
 
+[features]
+# Gates `ffmpeg::test_support` (in-process fixture synthesis) — needs the
+# crate's private FFI helpers, so it lives in `src/` and exists purely for
+# tests. Enabled from this crate's own [dev-dependencies] (self-dev-dep
+# trick) and from sibling crates' dev-dependencies; MUST NEVER reach a
+# release binary — enforced by
+# scripts/check-test-only-features-not-in-release.sh.
+test-support = []
+
 [dev-dependencies]
+rdlp-ffmpeg = { path = ".", features = ["test-support"] }
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 tempfile = { workspace = true }
 strum = { workspace = true }

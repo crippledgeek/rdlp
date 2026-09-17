@@ -109,7 +109,7 @@ impl FFmpegRunner {
         ensure_init()?;
 
         // Suppress FFmpeg's internal muxer trace/debug spam while keeping errors visible.
-        let _log_suppress = LogSuppressGuard::error_level();
+        let _log_suppress = LogSuppressGuard::at(ffmpeg_the_third::log::Level::Error);
 
         let mut ictx = ffmpeg_the_third::format::input(input)
             .map_err(PostProcessError::from)
@@ -234,7 +234,7 @@ impl FFmpegRunner {
         ensure_init()?;
 
         // Suppress FFmpeg's internal muxer trace/debug spam while keeping errors visible.
-        let _log_suppress = LogSuppressGuard::error_level();
+        let _log_suppress = LogSuppressGuard::at(ffmpeg_the_third::log::Level::Error);
 
         // Open input and find audio stream
         let mut ictx = ffmpeg_the_third::format::input(input)

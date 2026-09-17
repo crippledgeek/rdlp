@@ -1,8 +1,11 @@
-//! Thread-safe `FFmpeg` log capture via `av_log_set_callback`.
+//! Thread-safe `FFmpeg` log capture and stderr suppression via one
+//! install-once `av_log_set_callback`.
 //!
-//! Provides an RAII guard that installs a custom `FFmpeg` log callback to capture
-//! log messages (e.g., loudnorm JSON output). On drop, restores the default
-//! callback and error-only log level.
+//! `LogCaptureGuard` captures a thread's `FFmpeg` log lines (e.g. the
+//! loudnorm JSON block); `LogSuppressGuard` keeps noise off stderr. Neither
+//! writes `FFmpeg`'s process-global log level — that is the operator's
+//! setting (`ensure_init` / `set_verbose`) and the callback does its own
+//! routing and filtering on top of it.
 //!
 //! # Lint allowances
 //!
@@ -24,6 +27,8 @@
 use std::ffi::{CStr, c_char, c_int, c_void};
 use std::sync::{Arc, Mutex};
 
+use ffmpeg_the_third::log::Level;
+
 use crate::error::PostProcessError;
 
 /// Platform-specific `va_list` parameter type for `FFmpeg` log callbacks.
@@ -41,47 +46,80 @@ type VaListParam = *mut ffmpeg_the_third::ffi::__va_list_tag;
 #[cfg(not(all(target_os = "linux", target_arch = "x86_64")))]
 type VaListParam = ffmpeg_the_third::ffi::va_list;
 
-/// RAII guard that suppresses `FFmpeg`'s internal C log messages.
+/// Stderr ceilings requested by every live [`LogSuppressGuard`], as a multiset.
 ///
-/// Saves the current log level on creation, sets the requested suppression
-/// level, then restores the saved level on drop. Used during audio
-/// normalization decode loops to prevent the AAC decoder from spamming
-/// stderr with per-packet `get_buffer() failed` lines — we handle those
-/// errors at the Rust level.
+/// `FFmpeg`'s log level is one process-global (`av_log_set_level`), and a
+/// save-set-restore guard on it races: the first of two overlapping guards to
+/// drop restores *its* saved level underneath the other, and the last drop
+/// leaves whatever the first had set (#781). So no guard writes that global;
+/// each pushes the ceiling it wants here and removes it on drop, in any
+/// order, and the callback's stderr fall-through honours the strictest one
+/// that is live. Capture buffers and the forwarder are unaffected — `av_vlog`
+/// hands the callback every line regardless of level; only
+/// `av_log_default_callback` filters (libavutil/log.c).
+static SUPPRESS_CEILINGS: Mutex<Vec<Level>> = Mutex::new(Vec::new());
+
+/// Lock the ceiling multiset, recovering from poisoning: the guarded value is
+/// a list of levels whose only mutations are `push` and `remove`, so a panic
+/// elsewhere cannot leave it in a state that is wrong to keep using.
+fn suppress_ceilings() -> std::sync::MutexGuard<'static, Vec<Level>> {
+    SUPPRESS_CEILINGS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// RAII guard that keeps `FFmpeg`'s internal C log messages off stderr.
+///
+/// While alive, lines less important than the requested ceiling are not
+/// passed through to `av_log_default_callback` (stderr). Used during decode
+/// loops to stop the AAC decoder spamming per-packet `get_buffer() failed`
+/// lines — those errors are handled at the Rust level. Guards compose across
+/// threads and nest in any drop order; see [`SUPPRESS_CEILINGS`].
+///
+/// Pick the ceiling by what must stay diagnosable: [`Level::Error`] keeps
+/// muxer errors visible while dropping decoder WARNING spam; [`Level::Fatal`]
+/// silences everything but the fatal line itself.
 pub(crate) struct LogSuppressGuard {
-    /// Log level that was active before this guard was created; restored on drop.
-    saved_level: std::ffi::c_int,
+    /// The ceiling this guard registered; removed from the multiset on drop.
+    ceiling: Level,
 }
 
 impl LogSuppressGuard {
-    pub(crate) fn new() -> Self {
-        let saved_level = unsafe { ffmpeg_the_third::ffi::av_log_get_level() };
-        unsafe {
-            ffmpeg_the_third::ffi::av_log_set_level(ffmpeg_the_third::ffi::AV_LOG_FATAL);
-        }
-        Self { saved_level }
+    /// Keep lines less important than `ceiling` off stderr while this guard
+    /// is alive.
+    pub(crate) fn at(ceiling: Level) -> Self {
+        // The ceiling is applied by our callback, so it must be the one
+        // receiving the lines.
+        ensure_callback_installed();
+        suppress_ceilings().push(ceiling);
+        Self { ceiling }
     }
 
-    /// Suppress decoder WARNING spam while keeping muxer ERROR messages visible.
-    ///
-    /// Sets `av_log_set_level` to `AV_LOG_ERROR` instead of `AV_LOG_FATAL`.
-    /// Use this during encode loops where muxer errors must remain diagnosable
-    /// but decoder `get_buffer() failed` spam should be suppressed.
-    pub(crate) fn error_level() -> Self {
-        let saved_level = unsafe { ffmpeg_the_third::ffi::av_log_get_level() };
-        unsafe {
-            ffmpeg_the_third::ffi::av_log_set_level(ffmpeg_the_third::ffi::AV_LOG_ERROR);
-        }
-        Self { saved_level }
+    /// The strictest ceiling any live guard has requested, or `None` when no
+    /// guard is alive (stderr then sees whatever the global level admits).
+    pub(crate) fn active_ceiling() -> Option<Level> {
+        suppress_ceilings()
+            .iter()
+            .copied()
+            .min_by_key(|level| c_int::from(*level))
     }
 }
 
 impl Drop for LogSuppressGuard {
     fn drop(&mut self) {
-        unsafe {
-            ffmpeg_the_third::ffi::av_log_set_level(self.saved_level);
+        let mut ceilings = suppress_ceilings();
+        if let Some(pos) = ceilings.iter().position(|c| *c == self.ceiling) {
+            ceilings.remove(pos);
         }
     }
+}
+
+/// Whether a line at raw `level` may fall through to stderr under the live
+/// suppression ceiling. Raw because `av_vlog` adds a per-context offset to
+/// the level it hands the callback, so it is not always a named [`Level`].
+/// `av_log_default_callback` applies the operator's global level on top.
+fn passes_suppress_ceiling(level: c_int) -> bool {
+    LogSuppressGuard::active_ceiling().is_none_or(|ceiling| level <= c_int::from(ceiling))
 }
 
 // ── Install-once global callback + thread-local capture routing ───────────
@@ -264,25 +302,26 @@ pub fn bridge_ffmpeg_logs(
 /// While active, `FFmpeg` log messages at `AV_LOG_INFO` level and below are
 /// captured into this guard's own buffer (registered on the current thread's
 /// [`CAPTURE_STACK`]). Nested guards on the same thread stack; the innermost
-/// receives messages. On drop, the guard removes its buffer from the stack and
-/// restores the log level it raised. The global callback is install-once and is
-/// never uninstalled — when no guard is active it falls through to the default.
+/// receives messages. On drop, the guard removes its buffer from the stack; the
+/// global log level is never touched. The global callback is install-once and
+/// is never uninstalled — when no guard is active it falls through to the
+/// default.
 ///
 /// No process-wide lock is held, so nested or cross-thread captures cannot
 /// deadlock (the previous spinlock self-deadlocked under recode→salvage).
 pub(crate) struct LogCaptureGuard {
     /// This session's capture buffer, also referenced from `CAPTURE_STACK`.
     buffer: Arc<Mutex<Vec<String>>>,
-    /// Log level active before this guard raised it to INFO; restored on drop.
-    saved_level: std::ffi::c_int,
 }
 
 impl LogCaptureGuard {
     /// Begin capturing `FFmpeg` log messages on the current thread.
     ///
-    /// Installs the global capture callback once (idempotent), pushes a fresh
-    /// per-session buffer onto this thread's [`CAPTURE_STACK`], and raises the
-    /// log level to INFO so e.g. loudnorm output is emitted. Nesting is safe:
+    /// Installs the global capture callback once (idempotent) and pushes a
+    /// fresh per-session buffer onto this thread's [`CAPTURE_STACK`]. The
+    /// global log level is left alone: `av_vlog` delivers every line to the
+    /// callback unfiltered, so INFO output such as the loudnorm block is
+    /// captured whatever level the operator set. Nesting is safe:
     /// a second `begin()` on the same thread pushes another buffer; the
     /// innermost captures. There is no lock to contend on.
     ///
@@ -296,16 +335,7 @@ impl LogCaptureGuard {
         let buffer: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
         CAPTURE_STACK.with(|stack| stack.borrow_mut().push(Arc::clone(&buffer)));
 
-        // Raise to INFO so INFO-level output (loudnorm JSON, etc.) is delivered.
-        let saved_level = unsafe { ffmpeg_the_third::ffi::av_log_get_level() };
-        unsafe {
-            ffmpeg_the_third::ffi::av_log_set_level(ffmpeg_the_third::ffi::AV_LOG_INFO);
-        }
-
-        Ok(Self {
-            buffer,
-            saved_level,
-        })
+        Ok(Self { buffer })
     }
 
     /// Take all captured log lines, draining this session's buffer.
@@ -323,16 +353,13 @@ impl LogCaptureGuard {
 impl Drop for LogCaptureGuard {
     fn drop(&mut self) {
         // Remove THIS session's buffer from the thread-local stack (by identity,
-        // robust to out-of-order guard drops), then restore the log level.
+        // robust to out-of-order guard drops).
         CAPTURE_STACK.with(|stack| {
             let mut s = stack.borrow_mut();
             if let Some(pos) = s.iter().rposition(|b| Arc::ptr_eq(b, &self.buffer)) {
                 s.remove(pos);
             }
         });
-        unsafe {
-            ffmpeg_the_third::ffi::av_log_set_level(self.saved_level);
-        }
         // The global callback stays installed (install-once); it falls through
         // to av_log_default_callback whenever no capture/forwarder is active.
     }
@@ -360,6 +387,13 @@ unsafe extern "C" fn capture_callback(
     fmt: *const c_char,
     vl: VaListParam,
 ) {
+    // `AV_LOG_C(x)` colour bits live above the low byte; av_log_default_callback
+    // masks them (`level &= 0xff` for non-negative levels) before comparing, and
+    // so must every compare here, or a coloured ERROR line would be misread as
+    // less important than INFO. The raw value still goes to the default
+    // callback below, which uses those bits as its tint.
+    let raw_level = level;
+    let level = if level >= 0 { level & 0xff } else { level };
     // Capture/forward only AV_LOG_INFO (32) and more important (lower values).
     let level_ok = level <= ffmpeg_the_third::ffi::AV_LOG_INFO;
     let has_capture = level_ok && CAPTURE_STACK.with(|stack| stack.borrow().last().is_some());
@@ -371,11 +405,14 @@ unsafe extern "C" fn capture_callback(
         None
     };
 
-    // No active sink for this message → preserve default stderr behaviour.
+    // No active sink for this message → preserve default stderr behaviour,
+    // minus what a live `LogSuppressGuard` asked to keep off stderr.
     // The `va_list` has NOT been consumed yet, so it is safe to pass through.
     if !has_capture && forwarder.is_none() {
-        unsafe {
-            ffmpeg_the_third::ffi::av_log_default_callback(avcl, level, fmt, vl);
+        if passes_suppress_ceiling(level) {
+            unsafe {
+                ffmpeg_the_third::ffi::av_log_default_callback(avcl, raw_level, fmt, vl);
+            }
         }
         return;
     }
@@ -444,13 +481,18 @@ mod tests {
     use super::*;
 
     /// All tests in this module share process-global state (`LOG_FORWARDER`,
-    /// `av_log_set_level`) plus the per-thread `CAPTURE_STACK`. This mutex
+    /// `SUPPRESS_CEILINGS`) plus the per-thread `CAPTURE_STACK`. This mutex
     /// serializes them to prevent races when `cargo test` runs in parallel.
     ///
     /// Note: `TEST_MUTEX` must be acquired BEFORE `LogCaptureGuard::begin()`
     /// so it is held for the full duration of each test. The test mutex
     /// prevents test-level interference (e.g. stale `LOG_FORWARDER`
     /// from a prior test leaking into the next).
+    ///
+    /// Always lock it with `unwrap_or_else(PoisonError::into_inner)` (#704):
+    /// it guards nothing but the *ordering* of tests, so a panic in one test
+    /// leaves no state the next one must not see — propagating the poison
+    /// only turns one failure into a cascade that buries the real one.
     static TEST_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
@@ -509,7 +551,9 @@ mod tests {
 
     #[test]
     fn test_log_forwarder_receives_messages() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = TEST_MUTEX
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let received = Arc::new(Mutex::new(Vec::<(i32, String)>::new()));
         let received_clone = received.clone();
 
@@ -552,7 +596,9 @@ mod tests {
 
     #[test]
     fn test_clear_log_forwarder_stops_forwarding() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = TEST_MUTEX
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let received = Arc::new(Mutex::new(Vec::<(i32, String)>::new()));
         let received_clone = received.clone();
 
@@ -589,7 +635,9 @@ mod tests {
 
     #[test]
     fn test_bridge_ffmpeg_logs_captures_and_forwards() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = TEST_MUTEX
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let received = Arc::new(Mutex::new(Vec::<String>::new()));
         let received_clone = received.clone();
 
@@ -636,7 +684,9 @@ mod tests {
 
     #[test]
     fn test_log_forwarder_guard_drop_clears() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = TEST_MUTEX
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let received = Arc::new(Mutex::new(Vec::<(i32, String)>::new()));
         let received_clone = received;
 
@@ -655,7 +705,9 @@ mod tests {
 
     #[test]
     fn test_capture_stack_push_and_pop() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = TEST_MUTEX
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let depth = || CAPTURE_STACK.with(|s| s.borrow().len());
         let before = depth();
 
@@ -677,7 +729,9 @@ mod tests {
     /// (recode→salvage self-deadlock); the thread-local stack composes safely.
     #[test]
     fn test_nested_begin_does_not_deadlock_and_isolates() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = TEST_MUTEX
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let depth = || CAPTURE_STACK.with(|s| s.borrow().len());
         let base = depth();
 
@@ -727,36 +781,110 @@ mod tests {
         assert_eq!(depth(), base);
     }
 
+    /// #781: two overlapping guards must compose — the strictest ceiling wins
+    /// while both are alive, dropping the *first* one must not lift the
+    /// second's suppression, and the global level is never written. The old
+    /// save-set-restore design fails every one of these on this exact
+    /// single-thread sequence (drop A restores A's saved level under B).
     #[test]
-    fn test_log_suppress_guard_error_level() {
-        let _lock = TEST_MUTEX.lock().unwrap();
-        // error_level() sets AV_LOG_ERROR; drop restores the saved level
-        unsafe { ffmpeg_the_third::ffi::av_log_set_level(ffmpeg_the_third::ffi::AV_LOG_WARNING) };
-        let guard = LogSuppressGuard::error_level();
-        let level = unsafe { ffmpeg_the_third::ffi::av_log_get_level() };
-        assert_eq!(level, ffmpeg_the_third::ffi::AV_LOG_ERROR);
-        drop(guard);
-        // Must restore the level that was active before construction
-        let level = unsafe { ffmpeg_the_third::ffi::av_log_get_level() };
-        assert_eq!(level, ffmpeg_the_third::ffi::AV_LOG_WARNING);
-        // Restore process-wide level to a clean state
-        unsafe { ffmpeg_the_third::ffi::av_log_set_level(ffmpeg_the_third::ffi::AV_LOG_ERROR) };
+    fn suppress_guards_compose_in_any_drop_order_without_touching_the_global_level() {
+        let _lock = TEST_MUTEX
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let global_before = unsafe { ffmpeg_the_third::ffi::av_log_get_level() };
+        assert_eq!(LogSuppressGuard::active_ceiling(), None);
+
+        let a = LogSuppressGuard::at(Level::Fatal);
+        let b = LogSuppressGuard::at(Level::Error);
+        assert_eq!(
+            LogSuppressGuard::active_ceiling(),
+            Some(Level::Fatal),
+            "strictest live ceiling wins"
+        );
+
+        drop(a);
+        assert_eq!(
+            LogSuppressGuard::active_ceiling(),
+            Some(Level::Error),
+            "dropping the first guard must leave the second's ceiling in force"
+        );
+
+        drop(b);
+        assert_eq!(LogSuppressGuard::active_ceiling(), None);
+        assert_eq!(
+            unsafe { ffmpeg_the_third::ffi::av_log_get_level() },
+            global_before,
+            "guards must never write the process-global level"
+        );
+    }
+
+    /// Same invariant across threads: a barrier holds both guards alive at
+    /// once, then each thread drops its own.
+    #[test]
+    fn suppress_guards_on_two_threads_compose_and_clear() {
+        let _lock = TEST_MUTEX
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let global_before = unsafe { ffmpeg_the_third::ffi::av_log_get_level() };
+        let both_alive = Arc::new(std::sync::Barrier::new(3));
+
+        let spawn = |ceiling: Level| {
+            let barrier = Arc::clone(&both_alive);
+            std::thread::spawn(move || {
+                let guard = LogSuppressGuard::at(ceiling);
+                barrier.wait(); // both constructed
+                barrier.wait(); // main thread has observed the combined ceiling
+                drop(guard);
+            })
+        };
+        let ta = spawn(Level::Fatal);
+        let tb = spawn(Level::Error);
+
+        both_alive.wait();
+        assert_eq!(LogSuppressGuard::active_ceiling(), Some(Level::Fatal));
+        both_alive.wait();
+        ta.join().unwrap();
+        tb.join().unwrap();
+
+        assert_eq!(LogSuppressGuard::active_ceiling(), None);
+        assert_eq!(
+            unsafe { ffmpeg_the_third::ffi::av_log_get_level() },
+            global_before
+        );
     }
 
     #[test]
-    fn test_log_suppress_guard_fatal_level() {
-        let _lock = TEST_MUTEX.lock().unwrap();
-        // new() sets AV_LOG_FATAL; drop restores the saved level
-        unsafe { ffmpeg_the_third::ffi::av_log_set_level(ffmpeg_the_third::ffi::AV_LOG_WARNING) };
-        let guard = LogSuppressGuard::new();
-        let level = unsafe { ffmpeg_the_third::ffi::av_log_get_level() };
-        assert_eq!(level, ffmpeg_the_third::ffi::AV_LOG_FATAL);
+    fn stderr_fall_through_honours_the_live_ceiling_only() {
+        let _lock = TEST_MUTEX
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        use ffmpeg_the_third::ffi::{AV_LOG_ERROR, AV_LOG_FATAL, AV_LOG_WARNING};
+        assert!(
+            passes_suppress_ceiling(AV_LOG_WARNING),
+            "no guard: nothing held back"
+        );
+
+        let guard = LogSuppressGuard::at(Level::Error);
+        assert!(passes_suppress_ceiling(AV_LOG_ERROR));
+        assert!(passes_suppress_ceiling(AV_LOG_FATAL));
+        assert!(!passes_suppress_ceiling(AV_LOG_WARNING));
         drop(guard);
-        // Must restore the level that was active before construction
-        let level = unsafe { ffmpeg_the_third::ffi::av_log_get_level() };
-        assert_eq!(level, ffmpeg_the_third::ffi::AV_LOG_WARNING);
-        // Restore process-wide level to a clean state
-        unsafe { ffmpeg_the_third::ffi::av_log_set_level(ffmpeg_the_third::ffi::AV_LOG_ERROR) };
+
+        assert!(passes_suppress_ceiling(AV_LOG_WARNING));
+    }
+
+    /// A capture session must not change the operator's global level (it used
+    /// to raise it to INFO, which only added stderr noise on other threads).
+    #[test]
+    fn capture_guard_leaves_the_global_level_alone() {
+        let _lock = TEST_MUTEX
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let before = unsafe { ffmpeg_the_third::ffi::av_log_get_level() };
+        let guard = LogCaptureGuard::begin().expect("begin");
+        assert_eq!(unsafe { ffmpeg_the_third::ffi::av_log_get_level() }, before);
+        drop(guard);
+        assert_eq!(unsafe { ffmpeg_the_third::ffi::av_log_get_level() }, before);
     }
 
     /// When no capture buffer is active on the thread AND no forwarder is set,
@@ -766,7 +894,9 @@ mod tests {
     /// of `capture_callback` (the coverage gap noted in code review).
     #[test]
     fn test_no_active_sink_falls_through_without_capture() {
-        let _lock = TEST_MUTEX.lock().unwrap();
+        let _lock = TEST_MUTEX
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         clear_log_forwarder();
         // Ensure the callback is installed and no capture is active on this thread.
         drop(LogCaptureGuard::begin().expect("begin"));
