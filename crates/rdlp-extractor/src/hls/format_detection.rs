@@ -8,6 +8,7 @@ use super::types::HlsStreamFlags;
 use crate::base::common::BaseExtractor;
 use log::debug;
 use rdlp_types::Codec;
+use rdlp_types::media_name::{CodecKind, codec_identity};
 use std::sync::Arc;
 
 /// Default cap on the single-HEAD probe for non-HLS file size detection
@@ -49,31 +50,19 @@ fn slugify_tag(raw: &str) -> String {
     out
 }
 
-/// Detect video or audio codec from a format ID string.
+/// Detect the video or audio codec a format id embeds (`hls-av1-url`,
+/// `hls-h264-fallback`, `video-avc1-1080p`).
 ///
-/// Checks for common codec names embedded in format IDs like "hls-av1-url"
-/// or "hls-h264-fallback". Returns `None` if no codec is detected.
-fn detect_codec_from_id(format_id: &str, is_video: bool) -> Option<String> {
-    let id = format_id.to_lowercase();
-    if is_video {
-        if id.contains("av1") || id.contains("av01") {
-            Some("av1".to_string())
-        } else if id.contains("h264") || id.contains("avc") {
-            Some("h264".to_string())
-        } else if id.contains("h265") || id.contains("hevc") || id.contains("hvc") {
-            Some("hevc".to_string())
-        } else if id.contains("vp9") || id.contains("vp09") {
-            Some("vp9".to_string())
-        } else {
-            None
-        }
-    } else if id.contains("aac") || id.contains("mp4a") {
-        Some("aac".to_string())
-    } else if id.contains("opus") {
-        Some("opus".to_string())
-    } else {
-        None
-    }
+/// The id is split into alphanumeric tokens and each token is resolved
+/// through [`rdlp_types::media_name::codec_identity`] — the one identity
+/// table — so classification is by exact token, never by substring (#648),
+/// and an id with no recognised token is `None`, not a default.
+fn detect_codec_from_id(format_id: &str, wanted: CodecKind) -> Option<String> {
+    format_id
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter_map(codec_identity)
+        .find(|identity| identity.kind == wanted)
+        .map(|identity| identity.name.as_str().to_owned())
 }
 
 /// Enrich a single HLS format with metadata from `detect_hls_metadata()`.
@@ -317,7 +306,7 @@ pub(crate) fn apply_variant_labels(
                 .map(rdlp_types::media_name::MediaName::as_str)
                 .map(str::to_owned)
                 .or_else(|| parent_format.vcodec.as_str().map(str::to_owned))
-                .or_else(|| detect_codec_from_id(&parent_format.format_id, true)),
+                .or_else(|| detect_codec_from_id(&parent_format.format_id, CodecKind::Video)),
         );
         format.acodec = Codec::from(
             variant
@@ -326,7 +315,7 @@ pub(crate) fn apply_variant_labels(
                 .map(rdlp_types::media_name::MediaName::as_str)
                 .map(str::to_owned)
                 .or_else(|| parent_format.acodec.as_str().map(str::to_owned))
-                .or_else(|| detect_codec_from_id(&parent_format.format_id, false)),
+                .or_else(|| detect_codec_from_id(&parent_format.format_id, CodecKind::Audio)),
         );
     }
 
@@ -879,5 +868,39 @@ mod fan_out_bound_tests {
             "in-flight probes peaked at {peak}, above the {MAX_CONCURRENT_VARIANT_FETCHES} bound"
         );
         drop(server);
+    }
+}
+
+#[cfg(test)]
+mod codec_from_id_tests {
+    use super::*;
+
+    #[test]
+    fn a_format_id_is_classified_by_its_exact_tokens() {
+        let v = |id| detect_codec_from_id(id, CodecKind::Video);
+        let a = |id| detect_codec_from_id(id, CodecKind::Audio);
+        assert_eq!(v("hls-av1-url").as_deref(), Some("av1"));
+        assert_eq!(v("hls-h264-fallback").as_deref(), Some("h264"));
+        assert_eq!(v("video_avc1_1080p").as_deref(), Some("h264"));
+        assert_eq!(v("hls-avc-main").as_deref(), Some("h264"));
+        assert_eq!(v("hls-hvc1-4k").as_deref(), Some("hevc"));
+        assert_eq!(a("audio-aac-128k").as_deref(), Some("aac"));
+        assert_eq!(a("hls-mp4a").as_deref(), Some("aac"));
+        assert_eq!(a("hls-opus").as_deref(), Some("opus"));
+        // The kind filter: a video id yields no audio codec and vice versa.
+        assert_eq!(a("hls-h264-fallback"), None);
+        assert_eq!(v("audio-aac-128k"), None);
+    }
+
+    /// The defect class: a token that merely CONTAINS a codec name must not
+    /// classify, and an unrecognised id stays unclassified.
+    #[test]
+    fn substrings_and_unknown_ids_do_not_classify() {
+        let v = |id| detect_codec_from_id(id, CodecKind::Video);
+        let a = |id| detect_codec_from_id(id, CodecKind::Audio);
+        assert_eq!(a("hls-isaac-1"), None, "`isaac` is not `aac`");
+        assert_eq!(v("hls-xavc-1"), None, "`xavc` is not `avc`");
+        assert_eq!(v("hls-720p"), None);
+        assert_eq!(a("hls-720p"), None);
     }
 }

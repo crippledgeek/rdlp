@@ -58,6 +58,7 @@ pub use format_detection::{
 pub use types::{HlsInfo, HlsStreamFlags, HlsVariantInfo};
 
 use rdlp_types::Rfc6381Codec;
+use rdlp_types::media_name::{CodecKind, codec_identity};
 
 /// Parsed entry from an HLS master playlist — schema mirrors yt-dlp's
 /// `_extract_m3u8_formats_and_subtitles` per-format dict, lossless.
@@ -167,16 +168,17 @@ fn split_codecs(codecs: Option<&str>) -> (Option<Rfc6381Codec>, Option<Rfc6381Co
     let Some(s) = codecs else {
         return (None, None);
     };
+    // Which slot a token fills is decided by the one identity table
+    // (`codec_identity`), not by a prefix test here (#648): `hvc1`, `av01`,
+    // `ec-3`, `fLaC` all classify, and an unrecognised token is skipped.
     let mut v = None;
     let mut a = None;
     for tok in s.split(',') {
         let t = tok.trim();
-        if v.is_none() && (t.starts_with("avc") || t.starts_with("hev") || t.starts_with("vp")) {
-            v = Rfc6381Codec::new(t).ok();
-        } else if a.is_none()
-            && (t.starts_with("mp4a") || t.starts_with("opus") || t.starts_with("aac"))
-        {
-            a = Rfc6381Codec::new(t).ok();
+        match codec_identity(t).map(|id| id.kind) {
+            Some(CodecKind::Video) if v.is_none() => v = Rfc6381Codec::new(t).ok(),
+            Some(CodecKind::Audio) if a.is_none() => a = Rfc6381Codec::new(t).ok(),
+            _ => {}
         }
     }
     (v, a)
