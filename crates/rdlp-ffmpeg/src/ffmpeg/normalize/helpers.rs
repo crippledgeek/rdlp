@@ -23,6 +23,7 @@
 use std::path::Path;
 
 use log::{debug, warn};
+use serde::{Deserialize, Deserializer};
 
 use rdlp_types::ContainerFormat;
 
@@ -132,65 +133,75 @@ pub(super) fn build_loudnorm_pass2_filter(
     }
 }
 
-/// Parse loudnorm JSON output from captured `FFmpeg` log lines.
+/// The JSON block `loudnorm` prints at `print_format=json`
+/// (`libavfilter/af_loudnorm.c`, `uninit`, `case JSON`).
 ///
-/// Looks for lines containing `"input_i"`, `"input_tp"`, etc. and extracts
-/// the values from the JSON block emitted by `loudnorm print_format=json`.
-pub(super) fn parse_loudnorm_json(lines: &[String]) -> Result<LoudnormMeasurements> {
-    let full_text = lines.join("");
-
-    let input_i = extract_json_value(&full_text, "input_i").ok_or_else(|| {
-        PostProcessError::NormalizationFailed {
-            message: "missing 'input_i' in loudnorm output".into(),
-        }
-    })?;
-    let input_tp = extract_json_value(&full_text, "input_tp").ok_or_else(|| {
-        PostProcessError::NormalizationFailed {
-            message: "missing 'input_tp' in loudnorm output".into(),
-        }
-    })?;
-    let input_lra = extract_json_value(&full_text, "input_lra").ok_or_else(|| {
-        PostProcessError::NormalizationFailed {
-            message: "missing 'input_lra' in loudnorm output".into(),
-        }
-    })?;
-    let input_thresh = extract_json_value(&full_text, "input_thresh").ok_or_else(|| {
-        PostProcessError::NormalizationFailed {
-            message: "missing 'input_thresh' in loudnorm output".into(),
-        }
-    })?;
-    let target_offset = extract_json_value(&full_text, "target_offset").ok_or_else(|| {
-        PostProcessError::NormalizationFailed {
-            message: "missing 'target_offset' in loudnorm output".into(),
-        }
-    })?;
-
-    Ok(LoudnormMeasurements {
-        input_i,
-        input_tp,
-        input_lra,
-        input_thresh,
-        target_offset,
-    })
+/// `FFmpeg` emits every member as a JSON *string* holding a C `"%.2f"`
+/// (`"%+.2f"` for `output_tp`) rendered by `vsnprintf` in the C locale, so
+/// the text is `-24.50`, `+0.50`, or — for silent input, where ebur128
+/// reports `-HUGE_VAL` and the peak is `20·log10(0)` — `-inf`. All of those
+/// are inside [`f64::from_str`]'s grammar (`Sign? ('inf' | 'infinity' |
+/// 'nan' | Number)`, case-insensitive, no surrounding whitespace), which is
+/// what [`f64_from_str`] applies. The `output_*` / `normalization_type`
+/// members are not needed and are ignored by serde's default.
+#[derive(Deserialize)]
+struct LoudnormJson {
+    #[serde(deserialize_with = "f64_from_str")]
+    input_i: f64,
+    #[serde(deserialize_with = "f64_from_str")]
+    input_tp: f64,
+    #[serde(deserialize_with = "f64_from_str")]
+    input_lra: f64,
+    #[serde(deserialize_with = "f64_from_str")]
+    input_thresh: f64,
+    #[serde(deserialize_with = "f64_from_str")]
+    target_offset: f64,
 }
 
-/// Extract a numeric value from loudnorm JSON output for a given key.
+impl From<LoudnormJson> for LoudnormMeasurements {
+    fn from(j: LoudnormJson) -> Self {
+        Self {
+            input_i: j.input_i,
+            input_tp: j.input_tp,
+            input_lra: j.input_lra,
+            input_thresh: j.input_thresh,
+            target_offset: j.target_offset,
+        }
+    }
+}
+
+/// Deserialize `FFmpeg`'s string-encoded `"%.2f"` number as an `f64` (see
+/// [`LoudnormJson`] for the exact text `FFmpeg` produces).
+fn f64_from_str<'de, D: Deserializer<'de>>(deserializer: D) -> std::result::Result<f64, D::Error> {
+    let s = <&str>::deserialize(deserializer)?;
+    s.parse()
+        .map_err(|e| serde::de::Error::custom(format!("{s:?} is not a loudnorm number: {e}")))
+}
+
+/// Parse loudnorm JSON output from captured `FFmpeg` log lines.
 ///
-/// Handles the format: `"key" : "value"` where value may be a number string.
-pub(super) fn extract_json_value(text: &str, key: &str) -> Option<f64> {
-    let search = format!("\"{key}\"");
-    let pos = text.find(&search)?;
-    let after_key = &text[pos + search.len()..];
-
-    let after_colon = after_key.find(':')? + 1;
-    let value_start = &after_key[after_colon..];
-
-    let quote_start = value_start.find('"')? + 1;
-    let value_after_quote = &value_start[quote_start..];
-    let quote_end = value_after_quote.find('"')?;
-    let value_str = &value_after_quote[..quote_end];
-
-    value_str.trim().parse::<f64>().ok()
+/// The capture holds every line `FFmpeg` logged while the graph was alive, so
+/// the block is embedded in unrelated text. Each `{` is offered to
+/// `serde_json` as a candidate start; the deserializer stops at the end of
+/// the object and ignores what follows, so no brace matching is needed. The
+/// error of the last candidate is reported when none parses — for a block
+/// with a missing or malformed member that is serde's own message naming it.
+pub(super) fn parse_loudnorm_json(lines: &[String]) -> Result<LoudnormMeasurements> {
+    let full_text = lines.concat();
+    let mut last_err = None;
+    for (pos, _) in full_text.match_indices('{') {
+        let mut de = serde_json::Deserializer::from_str(full_text.get(pos..).unwrap_or_default());
+        match LoudnormJson::deserialize(&mut de) {
+            Ok(j) => return Ok(j.into()),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    Err(PostProcessError::NormalizationFailed {
+        message: last_err.map_or_else(
+            || "no JSON block in loudnorm output".to_owned(),
+            |e| format!("malformed loudnorm JSON: {e}"),
+        ),
+    })
 }
 
 /// Get a sensible default bitrate (in bps) for an encoder.
