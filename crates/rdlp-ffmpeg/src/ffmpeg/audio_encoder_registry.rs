@@ -126,8 +126,8 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::ThreeGp,
             ContainerFormat::M4v,
             ContainerFormat::F4v,
-            // `flvenc.c` `flv_audio_codec_ids` tags AAC (FLV_CODECID_AAC);
-            // `nut.c` reaches AAC through `ff_codec_wav_tags` (0x00ff).
+            // Flv: `flvenc.c` `flv_audio_codec_ids` tags AAC (FLV_CODECID_AAC).
+            // Nut: `ff_codec_wav_tags` 0x00ff, reached by `ff_nut_codec_tags` (nut.c).
             ContainerFormat::Flv,
             ContainerFormat::Nut,
         ],
@@ -149,7 +149,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Mp3,
             // Flv's muxer declares mp3 as its default audio codec.
             ContainerFormat::Flv,
-            // `ff_nut_audio_extra_tags` carries MP3 explicitly.
+            // `ff_nut_audio_extra_tags` MP3, reached by `ff_nut_codec_tags` (nut.c).
             ContainerFormat::Nut,
         ],
         aliases: &[],
@@ -167,7 +167,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::WebM,
             ContainerFormat::Ogg,
             ContainerFormat::Opus,
-            // `ff_nut_audio_extra_tags` carries OPUS.
+            // `ff_nut_audio_extra_tags` OPUS, reached by `ff_nut_codec_tags` (nut.c).
             ContainerFormat::Nut,
         ],
         aliases: &[],
@@ -195,7 +195,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Mkv,
             ContainerFormat::Ogg,
             ContainerFormat::Flac,
-            // `ff_codec_wav_tags` 0xF1AC, reached by `ff_nut_codec_tags`.
+            // `ff_codec_wav_tags` 0xF1AC, reached by `ff_nut_codec_tags` (nut.c).
             ContainerFormat::Nut,
         ],
         aliases: &[],
@@ -222,7 +222,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Avi,
             ContainerFormat::Ts,
             ContainerFormat::Ac3,
-            // `ff_codec_wav_tags` 0x2000, reached by `ff_nut_codec_tags`.
+            // `ff_codec_wav_tags` 0x2000, reached by `ff_nut_codec_tags` (nut.c).
             ContainerFormat::Nut,
         ],
         aliases: &[],
@@ -236,7 +236,8 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Mov,
             ContainerFormat::Mkv,
             ContainerFormat::Ts,
-            // `ff_codec_wav_tags` (E-AC-3 shares AC-3's 0x2000), via NUT.
+            // `ff_codec_wav_tags` 0x2000 (shared with AC-3), reached by
+            // `ff_nut_codec_tags` (nut.c).
             ContainerFormat::Nut,
         ],
         aliases: &[],
@@ -245,7 +246,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         codec: CodecName::from_static("dts"),
         display_name: "DTS",
         encoders: &[(AudioEncoderName::from_static("dca"), "DTS (built-in)")],
-        // `ff_codec_wav_tags` 0x2001, reached by `ff_nut_codec_tags`.
+        // `ff_codec_wav_tags` 0x2001, reached by `ff_nut_codec_tags` (nut.c).
         supported_containers: &[ContainerFormat::Mkv, ContainerFormat::Nut],
         aliases: &[],
     },
@@ -259,7 +260,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             // Mpg/Vob's muxers both declare mp2 as their default audio codec.
             ContainerFormat::Mpg,
             ContainerFormat::Vob,
-            // `ff_codec_wav_tags` 0x0050, reached by `ff_nut_codec_tags`.
+            // `ff_codec_wav_tags` 0x0050, reached by `ff_nut_codec_tags` (nut.c).
             ContainerFormat::Nut,
         ],
         aliases: &[],
@@ -292,7 +293,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             // audio codec (caught by the sweep test, not the review's table).
             ContainerFormat::Mxf,
             ContainerFormat::Dv,
-            // `ff_nut_audio_tags` carries every PCM layout natively.
+            // `ff_nut_audio_tags` PCM, reached by `ff_nut_codec_tags` (nut.c).
             ContainerFormat::Nut,
         ],
         aliases: &[CodecName::from_static("pcm")],
@@ -316,7 +317,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             AudioEncoderName::from_static("pcm_s16be"),
             "PCM 16-bit big-endian (built-in)",
         )],
-        // `ff_nut_audio_tags` carries every PCM layout natively.
+        // `ff_nut_audio_tags` PCM, reached by `ff_nut_codec_tags` (nut.c).
         supported_containers: &[
             ContainerFormat::Aiff,
             ContainerFormat::Caf,
@@ -331,7 +332,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             AudioEncoderName::from_static("wavpack"),
             "WavPack (built-in)",
         )],
-        // `ff_nut_audio_extra_tags` carries WAVPACK.
+        // `ff_nut_audio_extra_tags` WAVPACK, reached by `ff_nut_codec_tags` (nut.c).
         supported_containers: &[
             ContainerFormat::Mkv,
             ContainerFormat::Wv,
@@ -358,7 +359,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Wma,
             ContainerFormat::Wmv,
             ContainerFormat::Asf,
-            // `ff_codec_wav_tags` 0x0161, reached by `ff_nut_codec_tags`.
+            // `ff_codec_wav_tags` 0x0161, reached by `ff_nut_codec_tags` (nut.c).
             ContainerFormat::Nut,
         ],
         aliases: &[],
@@ -698,6 +699,9 @@ fn resolve_declared_codec(
 pub(crate) mod test_ext {
     use rdlp_types::media_name::AudioEncoderName;
 
+    // `pub`, not `pub(crate)`: the module is `pub(crate)`, so this is still
+    // crate-internal, and clippy's `redundant_pub_crate` rejects the narrower
+    // spelling (same rule as `KNOWN_UNDECLARED_SUPPORT`).
     pub trait EncoderNameExt {
         fn name(&self) -> Option<&str>;
     }
@@ -927,7 +931,7 @@ mod tests {
         );
     }
 
-    /// The four overrides, asserted against literal encoder names — NOT
+    /// The three overrides, asserted against literal encoder names — NOT
     /// against `declared_codec(..)`, which would be a tautology that
     /// survives mutating the override away. Guarded the same honest way as
     /// `asf_family_gets_wmav2`: only asserted when the encoder is
@@ -1375,9 +1379,11 @@ mod matrix_soundness {
     }
 
     /// #627's two named gaps, pinned so they cannot be dropped by a later
-    /// "tidy" of the table.
+    /// "tidy" of the table: Flv carries AAC, and Nut carries every codec that
+    /// has a tag in `ff_nut_codec_tags` (aac, mp3, opus, vorbis, flac, ac3,
+    /// eac3, dts, mp2 here — NOT alac, which has no NUT tag).
     #[test]
-    fn flv_carries_aac_and_nut_is_codec_agnostic() {
+    fn flv_carries_aac_and_nut_carries_every_tagged_codec() {
         let aac = &CodecName::AAC;
         assert!(container_supports_audio_codec(ContainerFormat::Flv, aac));
         for codec in [

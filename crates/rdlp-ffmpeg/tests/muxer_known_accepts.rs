@@ -119,6 +119,20 @@ const CASES: &[KnownAccept] = &[
     },
 ];
 
+/// Whether this build can synthesise the case's source at all; an absent
+/// encoder is a `[SKIP]`, not a failed proof (the sibling matrix suites do
+/// the same).
+fn source_encoder_available(case: &KnownAccept) -> bool {
+    match case.source {
+        Source::Sine { encoder } => {
+            rdlp_ffmpeg::ffmpeg::audio_encoder_registry::is_audio_encoder_available(
+                &rdlp_types::media_name::AudioEncoderName::from_static(encoder),
+            )
+        }
+        Source::Cli(_) => ffmpeg_available(),
+    }
+}
+
 fn build_source(case: &KnownAccept, path: &Path) -> bool {
     match case.source {
         Source::Sine { encoder } => write_sine_audio(
@@ -157,8 +171,8 @@ fn ffmpeg_copies(src: &Path, dst: &Path) -> bool {
 ///
 /// The three table-driven tests below iterate `CASES`, which is deliberately
 /// an independent list — reading the production table would make the predicate
-/// assertion a tautology, and `CASES` additionally carries the `ffmpeg` args
-/// needed to synthesise a source. But independence cuts both ways: without
+/// assertion a tautology, and `CASES` additionally carries how to synthesise
+/// a source (`Source`). But independence cuts both ways: without
 /// this check, adding a row to `KNOWN_UNDECLARED_SUPPORT` and forgetting
 /// `CASES` ships an entirely unproven entry and **no test fails** — the exact
 /// #630 hazard the table's own rules warn about, with the audit silently
@@ -217,6 +231,14 @@ fn every_known_accept_entry_is_confirmed_by_a_real_mux() {
     let dir = tempfile::tempdir().expect("tempdir");
 
     for case in CASES {
+        if !source_encoder_available(case) {
+            eprintln!(
+                "[SKIP] {} + {}: source encoder not in this build",
+                case.container.as_ext(),
+                case.codec
+            );
+            continue;
+        }
         let src = dir
             .path()
             .join(format!("src_{}.{}", case.codec, case.source_ext));
@@ -295,6 +317,14 @@ async fn every_known_accept_entry_survives_rdlps_own_remux() {
     let runner = rdlp_ffmpeg::FFmpegRunner::new().expect("FFmpegRunner");
 
     for case in CASES {
+        if !source_encoder_available(case) {
+            eprintln!(
+                "[SKIP] {} + {}: source encoder not in this build",
+                case.container.as_ext(),
+                case.codec
+            );
+            continue;
+        }
         let src = dir
             .path()
             .join(format!("rdlp_src_{}.{}", case.codec, case.source_ext));

@@ -212,12 +212,12 @@ pub fn is_encoder_available(encoder: &str) -> bool {
 /// [`enable_experimental_if_flagged`]).
 #[must_use]
 pub fn is_experimental_encoder(encoder: &str) -> bool {
-    ffmpeg_the_third::codec::encoder::find_by_name(encoder).is_some_and(is_experimental)
+    ffmpeg_the_third::codec::encoder::find_by_name(encoder).is_some_and(is_experimental_codec)
 }
 
 /// Whether `codec` carries `AV_CODEC_CAP_EXPERIMENTAL`.
 #[must_use]
-pub fn is_experimental(codec: ffmpeg_the_third::Codec) -> bool {
+pub fn is_experimental_codec(codec: ffmpeg_the_third::Codec) -> bool {
     codec
         .capabilities()
         .contains(ffmpeg_the_third::codec::Capabilities::EXPERIMENTAL)
@@ -232,7 +232,7 @@ pub fn enable_experimental_if_flagged(
     ctx: &mut ffmpeg_the_third::codec::Context,
     codec: ffmpeg_the_third::Codec,
 ) {
-    if is_experimental(codec) {
+    if is_experimental_codec(codec) {
         log::info!(
             "encoder '{}' is marked experimental by this FFmpeg build; enabling \
              FF_COMPLIANCE_EXPERIMENTAL for it (the equivalent of -strict -2)",
