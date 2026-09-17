@@ -321,34 +321,13 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
             .await
         {
             Ok(response) => {
-                if response.results.is_empty() {
+                if args.dump_json {
+                    // Data on stdout, like `--dump-json` for extraction.
+                    println!("{}", search_json(&response)?);
+                } else if response.results.is_empty() {
                     eprintln!("No results found for '{query_text}'.");
                 } else {
-                    let page_info = if response.has_more {
-                        format!(" (page {}, more available)", response.page)
-                    } else {
-                        format!(" (page {})", response.page)
-                    };
-                    eprintln!("Found {} results{}:\n", response.results.len(), page_info);
-                    for (i, r) in response.results.iter().enumerate() {
-                        eprintln!("{:>3}. {}", i + 1, sanitize_for_terminal(&r.title));
-                        eprintln!("     {}", sanitize_for_terminal(&r.video_url));
-                        if let Some(d) = r.duration {
-                            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                            // d is a non-negative duration in seconds; values up to ~136 years fit u32
-                            let mins = d as u32 / 60;
-                            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                            let secs = d as u32 % 60;
-                            eprint!("     Duration: {mins}:{secs:02}");
-                        }
-                        if let Some(views) = r.view_count {
-                            eprint!("  Views: {views}");
-                        }
-                        if let Some(uploader) = &r.uploader {
-                            eprint!("  Uploader: {}", sanitize_for_terminal(uploader));
-                        }
-                        eprintln!();
-                    }
+                    eprint!("{}", search_text(&response));
                 }
             }
             Err(e) => fail_with(Action::new("search"), &e, verbose),
@@ -525,9 +504,107 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
     result
 }
 
+/// A search page as `--dump-json` reports it: the whole `SearchPageResponse`,
+/// one object, deserialisable with the same type.
+fn search_json(response: &rdlp_api::SearchPageResponse) -> Result<String> {
+    serde_json::to_string_pretty(response).context("failed to serialize search page to JSON")
+}
+
+/// A search page as the terminal listing reports it.
+fn search_text(response: &rdlp_api::SearchPageResponse) -> String {
+    use std::fmt::Write as _;
+
+    let more = if response.has_more {
+        ", more available"
+    } else {
+        ""
+    };
+    let mut out = String::new();
+    // Writing to a String cannot fail; the results are discarded as such.
+    let _ = writeln!(
+        out,
+        "Found {} results (page {}{more}):\n",
+        response.results.len(),
+        response.page
+    );
+    for (i, r) in response.results.iter().enumerate() {
+        let _ = writeln!(out, "{:>3}. {}", i + 1, sanitize_for_terminal(&r.title));
+        let _ = writeln!(out, "     {}", sanitize_for_terminal(&r.video_url));
+        if let Some(d) = r.duration {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            // d is a non-negative duration in seconds; values up to ~136 years fit u32
+            let mins = d as u32 / 60;
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let secs = d as u32 % 60;
+            let _ = write!(out, "     Duration: {mins}:{secs:02}");
+        }
+        if let Some(views) = r.view_count {
+            let _ = write!(out, "  Views: {views}");
+        }
+        if let Some(uploader) = &r.uploader {
+            let _ = write!(out, "  Uploader: {}", sanitize_for_terminal(uploader));
+        }
+        let _ = writeln!(out);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `--search … --dump-json` is the machine-readable search surface: the
+    /// whole `SearchPageResponse`, deserialisable with the same type, so a
+    /// script never parses the `Found N results` text.
+    #[test]
+    fn search_report_json_round_trips_the_response() {
+        let response = rdlp_api::SearchPageResponse {
+            results: vec![rdlp_api::SearchResultPreview {
+                video_url: "https://x.test/v/1".into(),
+                title: "One".into(),
+                thumbnail_url: None,
+                duration: Some(61.0),
+                uploader: None,
+                uploader_url: None,
+                actors: vec![],
+                view_count: None,
+                upload_date: None,
+            }],
+            page: 1,
+            has_more: true,
+            total_estimate: None,
+        };
+        let json = search_json(&response).unwrap();
+        let back: rdlp_api::SearchPageResponse = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, response);
+    }
+
+    /// The terminal listing, byte for byte (the blank line after the
+    /// heading, the suffixes, the trailing newline), as a reviewed snapshot.
+    #[test]
+    fn search_text_snapshot() {
+        let response = rdlp_api::SearchPageResponse {
+            results: vec![rdlp_api::SearchResultPreview {
+                video_url: "https://x.test/v/1".into(),
+                title: "One".into(),
+                thumbnail_url: None,
+                duration: Some(61.0),
+                uploader: Some("up".into()),
+                uploader_url: None,
+                actors: vec![],
+                view_count: Some(7),
+                upload_date: None,
+            }],
+            page: 1,
+            has_more: true,
+            total_estimate: None,
+        };
+        let text = search_text(&response);
+        // insta normalises the trailing newline; the caller prints with
+        // `eprint!`, so the listing must end its own last line.
+        assert!(text.ends_with('\n'), "{text:?}");
+        insta::assert_snapshot!(text);
+    }
 
     /// `default_filter` builds its directive with `Level`'s `Display`, which
     /// is uppercase (`INFO`), while the directive it is concatenated with is

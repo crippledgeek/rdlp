@@ -1,0 +1,9 @@
+---
+source: crates/rdlp-cli/src/main.rs
+expression: search_text(&response)
+---
+Found 1 results (page 1, more available):
+
+  1. One
+     https://x.test/v/1
+     Duration: 1:01  Views: 7  Uploader: up
