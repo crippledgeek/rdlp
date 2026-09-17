@@ -128,6 +128,12 @@ pub struct PostProcess {
     /// Re-encode video to this container format.
     pub recode_video: Option<ContainerFormat>,
     /// Remux (container-only copy) to this format.
+    ///
+    /// Promises both the container and its canonical extension: an input
+    /// already carrying that extension is left alone; anything else —
+    /// including an alias spelling such as `.matroska` — is remuxed, which
+    /// is what produces the canonical name (see
+    /// [`ContainerFormat::is_canonical_ext`], #619).
     pub remux_container: Option<ContainerFormat>,
     /// Preferred output container when merging separate streams.
     pub merge_output_format: Option<ContainerFormat>,

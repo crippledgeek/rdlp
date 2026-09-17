@@ -139,10 +139,7 @@ fn rule_for(input_ext: &str, output: ContainerFormat) -> VideoRule {
         | ContainerFormat::Aiff
         | ContainerFormat::Wv
         | ContainerFormat::Caf
-        | ContainerFormat::Ac3 => {
-            let matches_ext = input_ext.eq_ignore_ascii_case(output.as_ext());
-            Box::new(always(matches_ext))
-        }
+        | ContainerFormat::Ac3 => Box::new(always(output.is_canonical_ext(input_ext))),
     }
 }
 
@@ -531,7 +528,7 @@ impl PipelineStage for RecodeStage {
             .and_then(|e| e.to_str())
             .unwrap_or("");
 
-        if input_ext.eq_ignore_ascii_case(target_ext) && video_encoder.is_none() {
+        if target.is_canonical_ext(input_ext) && video_encoder.is_none() {
             debug!(
                 "RecodeStage: file already in target format ({target_ext}) and no encoder override, skipping"
             );

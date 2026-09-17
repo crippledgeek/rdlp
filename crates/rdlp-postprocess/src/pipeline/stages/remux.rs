@@ -36,7 +36,11 @@ impl RemuxStage {
 
     /// Determine the target container for remuxing.
     ///
-    /// Returns `None` if the file is already in the target container.
+    /// Returns `None` if the file is already in the target container —
+    /// meaning it already carries that container's canonical extension
+    /// (`ContainerFormat::is_canonical_ext`); an alias-spelled input such as
+    /// `.matroska` is remuxed, and the remux is what canonicalises its name
+    /// (#619).
     ///
     /// Returns the `ContainerFormat` itself rather than its extension: the
     /// decision originates from `config.remux_container`, which is already
@@ -46,13 +50,13 @@ impl RemuxStage {
     /// list silently drifted out of sync with `supports_faststart()` (#539).
     fn target_container(msg: &PipelineMessage, input_ext: &str) -> Option<ContainerFormat> {
         if let Some(container) = msg.config.remux_container {
-            if input_ext.eq_ignore_ascii_case(container.as_ext()) {
+            if container.is_canonical_ext(input_ext) {
                 return None; // already in target container
             }
             return Some(container);
         }
         // HLS auto-remux: .ts → .mp4
-        if msg.is_hls && !input_ext.eq_ignore_ascii_case(ContainerFormat::Mp4.as_ext()) {
+        if msg.is_hls && !ContainerFormat::Mp4.is_canonical_ext(input_ext) {
             return Some(ContainerFormat::Mp4);
         }
         None
@@ -347,6 +351,54 @@ mod tests {
                 container.as_ext()
             );
         }
+    }
+
+    /// #619: `--remux=<c>` promises the container AND its canonical
+    /// extension. An input spelled with a parse-only alias (`.matroska`,
+    /// `.quicktime`, `.mpegts`) resolves to the same `ContainerFormat`, but
+    /// no muxer declares those as extensions, so it is NOT already in the
+    /// target: the remux runs, and its output is named `as_ext()` — that
+    /// remux is the canonicalisation. Both halves are pinned here: the
+    /// decision to do work, and the extension the work is named with.
+    #[test]
+    fn alias_spelled_input_is_remuxed_to_the_canonical_extension() {
+        for (input_ext, container, want_ext) in [
+            ("matroska", ContainerFormat::Mkv, "mkv"),
+            ("quicktime", ContainerFormat::Mov, "mov"),
+            ("mpegts", ContainerFormat::Ts, "ts"),
+        ] {
+            // The alias really does parse to the target — the whole point is
+            // that parsing equality is NOT the "already in target" test.
+            assert_eq!(
+                ContainerFormat::from_path(std::path::Path::new(&format!("/tmp/v.{input_ext}"))),
+                Some(container)
+            );
+            let config = PostProcess {
+                remux_container: Some(container),
+                ..PostProcess::default()
+            };
+            let msg = make_msg_with_config(
+                vec![PathBuf::from(format!("/tmp/v.{input_ext}"))],
+                config,
+                false,
+            );
+            let target = RemuxStage::target_container(&msg, input_ext)
+                .unwrap_or_else(|| panic!(".{input_ext} + --remux={want_ext} must remux"));
+            assert_eq!(target.as_ext(), want_ext, "output is named canonically");
+            // And the canonical spelling is left alone.
+            assert_eq!(RemuxStage::target_container(&msg, want_ext), None);
+        }
+
+        // HLS auto-remux: `.mpegts` is not `.mp4`, so it is remuxed too.
+        let msg = make_msg_with_config(
+            vec![PathBuf::from("/tmp/v.mpegts")],
+            PostProcess::default(),
+            true,
+        );
+        assert_eq!(
+            RemuxStage::target_container(&msg, "mpegts"),
+            Some(ContainerFormat::Mp4)
+        );
     }
 
     /// An explicit target is honoured verbatim, aliases included.

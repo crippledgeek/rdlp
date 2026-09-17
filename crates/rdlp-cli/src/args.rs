@@ -405,7 +405,9 @@ pub struct Args {
     pub recode_speed_level: Option<u32>,
 
     /// Remux to container for better seeking - no re-encoding
-    /// Use --remux for interactive, --remux=mp4 for direct
+    /// Use --remux for interactive, --remux=mp4 for direct.
+    /// The output gets the container's canonical extension; a file that
+    /// already has it is left as is
     #[arg(long, num_args = 0..=1, default_missing_value = "interactive", require_equals = true, value_parser = non_blank, value_name = "FORMAT", help_heading = HELP_HEADING_POSTPROCESS)]
     pub remux: Option<String>,
 
