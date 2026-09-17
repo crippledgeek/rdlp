@@ -49,7 +49,10 @@ impl SpankBangExtractor {
         streamkey: &str,
         page_url: &str,
     ) -> Result<Value> {
-        let body = format!("id={}&data=0", urlencoding::encode(streamkey));
+        let body = format!(
+            "id={}&data=0",
+            rdlp_security::percent_encode_query_value(streamkey)
+        );
         let resp = ctx
             .http_client
             .post(FORMATS_API_URL)

@@ -29,7 +29,6 @@ url = { workspace = true }
 base64 = { workspace = true }
 m3u8-rs = { workspace = true }
 futures = { workspace = true }
-urlencoding = "2"
 
 [features]
 # Widens the `#[cfg(test)]` mockito-loopback exemption in

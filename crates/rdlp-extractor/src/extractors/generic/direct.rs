@@ -107,7 +107,7 @@ pub(crate) fn title_from_url(url: &str) -> String {
             let path = u.path();
             let filename = path.rsplit('/').next()?;
             let name = filename.split('.').next()?;
-            let decoded = urlencoding::decode(name).ok()?;
+            let decoded = rdlp_security::percent_decode(name)?;
             let name = decoded.trim();
             if name.is_empty() {
                 return None;

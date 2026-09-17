@@ -29,7 +29,7 @@ const MAX_PLAYLIST_SIZE: usize = 500;
 
 /// Build the search URL for a given query and 0-indexed page number.
 fn build_search_url(query: &SearchQuery, page: u32) -> String {
-    let kw = urlencoding::encode(&query.query);
+    let kw = rdlp_security::percent_encode_query_value(&query.query);
     let sort_top = query
         .filters
         .iter()

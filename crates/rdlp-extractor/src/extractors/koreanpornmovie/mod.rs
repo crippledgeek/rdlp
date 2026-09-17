@@ -353,7 +353,7 @@ impl KoreanPornMovieExtractor {
         page: u32,
     ) -> Result<SearchPage> {
         let per_page = 20;
-        let encoded_query = urlencoding::encode(&query.query);
+        let encoded_query = rdlp_security::percent_encode_query_value(&query.query);
         let api_url = format!(
             "https://koreanpornmovie.com/wp-json/wp/v2/posts?search={encoded_query}&page={page}&per_page={per_page}&_embed",
         );

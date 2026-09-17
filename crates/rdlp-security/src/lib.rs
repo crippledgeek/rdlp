@@ -690,5 +690,8 @@ pub fn sanitize_for_logging(s: &str) -> String {
     rdlp_redact::redact_str(s)
 }
 
+pub mod percent;
+pub use percent::{percent_decode, percent_encode_query_value};
+
 #[cfg(test)]
 mod tests;

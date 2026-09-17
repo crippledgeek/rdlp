@@ -49,7 +49,7 @@ pub(crate) struct Listing {
 }
 
 pub(crate) fn build_search_url(origin: &SearchOrigin, query: &SearchQuery, page: u32) -> String {
-    let q = urlencoding::encode(&query.query);
+    let q = rdlp_security::percent_encode_query_value(&query.query);
     format!("{origin}/search/?q={q}&page={page}")
 }
 
