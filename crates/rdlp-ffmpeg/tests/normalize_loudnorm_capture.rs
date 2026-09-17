@@ -10,56 +10,16 @@
 //! test pins that a full two-pass loudnorm normalization succeeds at the
 //! operator's ERROR level — i.e. the INFO block was captured without touching
 //! the global.
-//!
-//! Self-skips when the system `ffmpeg` CLI is absent (used only to build the
-//! fixture).
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::disallowed_methods)]
+#![allow(clippy::unwrap_used, clippy::expect_used)]
 
-use std::path::Path;
-use std::process::Command;
-
+use rdlp_ffmpeg::test_support::{SineAudio, write_sine_audio};
 use rdlp_ffmpeg::{AudioNormMode, FFmpegRunner, NormalizeOptions};
-
-fn ffmpeg_available() -> bool {
-    Command::new("ffmpeg")
-        .arg("-version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false)
-}
-
-fn build_audio_fixture(dir: &Path) -> Option<std::path::PathBuf> {
-    let src = dir.join("src.m4a");
-    let ok = Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=440:duration=2",
-            "-c:a",
-            "aac",
-            src.to_str().unwrap(),
-        ])
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
-    ok.then_some(src)
-}
 
 #[tokio::test]
 async fn loudnorm_two_pass_succeeds_at_the_operator_error_log_level() {
-    if !ffmpeg_available() {
-        eprintln!("[SKIP] ffmpeg not available");
-        return;
-    }
     let dir = tempfile::tempdir().expect("tempdir");
-    let Some(src) = build_audio_fixture(dir.path()) else {
-        eprintln!("[SKIP] fixture build failed");
-        return;
-    };
+    let src = dir.path().join("src.m4a");
+    write_sine_audio(&src, &SineAudio::default()).expect("synthesise fixture");
 
     let runner = FFmpegRunner::new().expect("FFmpegRunner::new");
     // The operator level after init is ERROR; pass 1 must still see loudnorm's
@@ -79,7 +39,8 @@ async fn loudnorm_two_pass_succeeds_at_the_operator_error_log_level() {
         "loudnorm normalize failed: {:#}",
         res.unwrap_err()
     );
-    assert!(out.exists() && std::fs::metadata(&out).unwrap().len() > 0);
+    let written = tokio::fs::metadata(&out).await.expect("output exists");
+    assert!(written.len() > 0, "output is empty");
     assert_eq!(
         ffmpeg_the_third::log::get_level().expect("named level"),
         level_before,

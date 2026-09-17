@@ -1,8 +1,8 @@
 //! Thread-safe `FFmpeg` log capture and stderr suppression via one
 //! install-once `av_log_set_callback`.
 //!
-//! [`LogCaptureGuard`] captures a thread's `FFmpeg` log lines (e.g. the
-//! loudnorm JSON block); [`LogSuppressGuard`] keeps noise off stderr. Neither
+//! `LogCaptureGuard` captures a thread's `FFmpeg` log lines (e.g. the
+//! loudnorm JSON block); `LogSuppressGuard` keeps noise off stderr. Neither
 //! writes `FFmpeg`'s process-global log level — that is the operator's
 //! setting (`ensure_init` / `set_verbose`) and the callback does its own
 //! routing and filtering on top of it.
@@ -302,9 +302,10 @@ pub fn bridge_ffmpeg_logs(
 /// While active, `FFmpeg` log messages at `AV_LOG_INFO` level and below are
 /// captured into this guard's own buffer (registered on the current thread's
 /// [`CAPTURE_STACK`]). Nested guards on the same thread stack; the innermost
-/// receives messages. On drop, the guard removes its buffer from the stack and
-/// restores the log level it raised. The global callback is install-once and is
-/// never uninstalled — when no guard is active it falls through to the default.
+/// receives messages. On drop, the guard removes its buffer from the stack; the
+/// global log level is never touched. The global callback is install-once and
+/// is never uninstalled — when no guard is active it falls through to the
+/// default.
 ///
 /// No process-wide lock is held, so nested or cross-thread captures cannot
 /// deadlock (the previous spinlock self-deadlocked under recode→salvage).
@@ -386,6 +387,11 @@ unsafe extern "C" fn capture_callback(
     fmt: *const c_char,
     vl: VaListParam,
 ) {
+    // `AV_LOG_C(x)` colour bits live above the low byte; av_log_default_callback
+    // masks them (`level &= 0xff` for non-negative levels) before comparing, and
+    // so must every compare here, or a coloured ERROR line would be misread as
+    // less important than INFO.
+    let level = if level >= 0 { level & 0xff } else { level };
     // Capture/forward only AV_LOG_INFO (32) and more important (lower values).
     let level_ok = level <= ffmpeg_the_third::ffi::AV_LOG_INFO;
     let has_capture = level_ok && CAPTURE_STACK.with(|stack| stack.borrow().last().is_some());

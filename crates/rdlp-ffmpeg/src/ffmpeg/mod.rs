@@ -73,6 +73,9 @@ pub mod source;
 #[doc(hidden)]
 pub mod salvage;
 pub mod speed_controls;
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub mod test_support;
 mod thumbnail;
 pub use thumbnail::{supports_thumbnail_embed, uses_native_attachment};
 mod transcode;

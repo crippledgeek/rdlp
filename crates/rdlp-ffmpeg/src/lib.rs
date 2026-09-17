@@ -50,6 +50,9 @@ pub mod ffmpeg;
 
 // Re-export main types at crate root
 pub use error::{CorruptionKind, Medium, PostProcessError, Result};
+#[cfg(feature = "test-support")]
+#[doc(hidden)]
+pub use ffmpeg::test_support;
 pub use ffmpeg::{
     AudioCodecInfo, AudioEncoderInfo, AudioExtractOptions, AudioNormMode, ChapterEntry,
     FFmpegRunner, FfmpegLogBridge, LogForwarderGuard, LoudnormMeasurements, LoudnormPreset,
