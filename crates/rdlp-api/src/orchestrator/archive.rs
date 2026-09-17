@@ -138,7 +138,7 @@ pub fn record_in_archive(path: &Path, extractor: &str, id: &str) -> std::io::Res
     }
 
     // Windows note: opening with `.append(true)` alone produces a handle with
-    // only FILE_APPEND_DATA access. LockFileEx (what fs4 calls underneath)
+    // only FILE_APPEND_DATA access. LockFileEx (what `File::lock` calls underneath)
     // requires GENERIC_READ or GENERIC_WRITE on the handle and fails with
     // ERROR_ACCESS_DENIED otherwise. Adding `.read(true)` widens the desired
     // access mask without changing the append semantic — the kernel still

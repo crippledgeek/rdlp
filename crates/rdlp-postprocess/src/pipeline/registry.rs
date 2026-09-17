@@ -137,14 +137,6 @@ struct TempEntry {
     kind: EntryKind,
 }
 
-/// Global registry of pipeline temp files for crash-safe cleanup.
-///
-/// Share as `Arc<TempRegistry>` across stages.
-pub struct TempRegistry {
-    /// Maps temp path → its lock entry (holds the advisory lock open).
-    active: Mutex<HashMap<PathBuf, TempEntry>>,
-}
-
 /// Outcome of a non-blocking exclusive lock attempt, in the three-way
 /// vocabulary the fail-closed logic here needs (#572): acquired, held by a
 /// live process, or could not be attempted at all.
@@ -152,18 +144,26 @@ pub struct TempRegistry {
 /// `std::fs::File::try_lock` folds the middle case into its error type as
 /// [`TryLockError::WouldBlock`]; splitting it back out here keeps every
 /// caller from having to remember that "held elsewhere" arrives as an `Err`.
-enum TryLock {
+enum LockAttempt {
     Acquired,
     HeldElsewhere,
     Failed(io::Error),
 }
 
-fn try_lock_exclusive(file: &File) -> TryLock {
+fn try_lock_exclusive(file: &File) -> LockAttempt {
     match file.try_lock() {
-        Ok(()) => TryLock::Acquired,
-        Err(TryLockError::WouldBlock) => TryLock::HeldElsewhere,
-        Err(TryLockError::Error(e)) => TryLock::Failed(e),
+        Ok(()) => LockAttempt::Acquired,
+        Err(TryLockError::WouldBlock) => LockAttempt::HeldElsewhere,
+        Err(TryLockError::Error(e)) => LockAttempt::Failed(e),
     }
+}
+
+/// Global registry of pipeline temp files for crash-safe cleanup.
+///
+/// Share as `Arc<TempRegistry>` across stages.
+pub struct TempRegistry {
+    /// Maps temp path → its lock entry (holds the advisory lock open).
+    active: Mutex<HashMap<PathBuf, TempEntry>>,
 }
 
 impl TempRegistry {
@@ -297,15 +297,15 @@ impl TempRegistry {
             }
         };
         match try_lock_exclusive(&lock_file) {
-            TryLock::Acquired => {}
-            TryLock::HeldElsewhere => {
+            LockAttempt::Acquired => {}
+            LockAttempt::HeldElsewhere => {
                 // Held by a live process — the whole point of #572: refuse
                 // rather than silently register a second, unlocked claim.
                 return Err(RegistryError::HeldElsewhere {
                     path: path.to_path_buf(),
                 });
             }
-            TryLock::Failed(e) => {
+            LockAttempt::Failed(e) => {
                 // Same fail-closed reasoning as the File::create branch
                 // above: a Claim whose lock couldn't even be ATTEMPTED must
                 // not report success.
@@ -477,14 +477,14 @@ impl TempRegistry {
             let live_process_holds_lock = if lock_path.exists() {
                 match File::open(&lock_path) {
                     Ok(f) => match try_lock_exclusive(&f) {
-                        TryLock::Acquired => {
+                        LockAttempt::Acquired => {
                             // We got the lock → orphaned. Unlock before deleting
                             // so the OS can clean up the lock state.
                             let _ = f.unlock();
                             false // not held by another process
                         }
-                        TryLock::HeldElsewhere => true, // held by another live process
-                        TryLock::Failed(_) => false,    // can't take lock → treat as orphaned
+                        LockAttempt::HeldElsewhere => true, // held by another live process
+                        LockAttempt::Failed(_) => false,    // can't take lock → treat as orphaned
                     },
                     Err(_) => false, // can't open → treat as orphaned
                 }
