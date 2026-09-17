@@ -239,7 +239,8 @@ pub struct Args {
     #[arg(short = 's', long, help_heading = HELP_HEADING_INFO)]
     pub simulate: bool,
 
-    /// Dump full metadata as JSON to stdout (no download)
+    /// Dump full metadata as JSON to stdout (no download); with --search,
+    /// the result page as one JSON object
     #[arg(short = 'j', long, help_heading = HELP_HEADING_INFO)]
     pub dump_json: bool,
 
