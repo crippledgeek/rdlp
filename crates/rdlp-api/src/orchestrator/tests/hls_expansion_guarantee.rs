@@ -309,3 +309,34 @@ async fn hls_expansion_timeout_override_is_read_at_the_boundary() {
     );
     drop(server);
 }
+
+/// An unset `Config::hls_expansion_timeout` resolves through the one owner
+/// (`EffectiveNetwork::DEFAULT`), not a literal of this crate's own; a set
+/// value passes through unchanged (#611).
+#[test]
+fn hls_expansion_budget_reads_the_owner() {
+    use rdlp_types::EffectiveNetwork;
+    use std::time::Duration;
+
+    let info = InfoDict::new("budget-owner", "t", "test", WEBPAGE_URL);
+    let unset = orchestrator_with_fake_extractor_and_config(
+        info.clone(),
+        rdlp_types::Config {
+            hls_expansion_timeout: None,
+            ..fast_failing_config()
+        },
+    );
+    assert_eq!(
+        unset.hls_expansion_budget(),
+        Duration::from_secs(EffectiveNetwork::DEFAULT.hls_expansion_timeout_secs)
+    );
+
+    let set = orchestrator_with_fake_extractor_and_config(
+        info,
+        rdlp_types::Config {
+            hls_expansion_timeout: Some(7),
+            ..fast_failing_config()
+        },
+    );
+    assert_eq!(set.hls_expansion_budget(), Duration::from_secs(7));
+}

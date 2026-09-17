@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import { render } from "@/test/test-utils";
 import { SettingsView } from "./SettingsView";
 import { invokeTyped } from "@/api/invokeClient";
-import { builtinNetworkStub, effectiveNetworkStub } from "@/test/effectiveNetworkStub";
+import { networkDefaultsStub } from "@/test/effectiveNetworkStub";
 import { effectiveNormalizeStub, loudnormPresetsStub } from "@/test/effectiveNormalizeStub";
 import { appSettingsStub } from "@/test/appSettingsStub";
 import userEvent from "@testing-library/user-event";
@@ -17,27 +17,35 @@ vi.mock("@/api/invokeClient", async (importOriginal) => ({
 
 const invokeMock = vi.mocked(invokeTyped);
 
-/** Reject exactly one command (with an `AppError`-shaped payload); resolve the other. */
-function rejectOnly(
-    failing: "settings" | "effective_network" | "builtin_network_defaults" | "effective_normalize" | "loudnorm_presets",
-    message: string,
-) {
+type Command = "settings" | "network_defaults" | "effective_normalize" | "loudnorm_presets";
+
+/** Resolve every gating command with its stub (`settings` with `appSettingsStub`). */
+function resolveAll(cmd: string): Promise<unknown> {
+    switch (cmd) {
+        case "settings":
+            return Promise.resolve(appSettingsStub);
+        case "network_defaults":
+            return Promise.resolve(networkDefaultsStub);
+        case "effective_normalize":
+            return Promise.resolve(effectiveNormalizeStub);
+        case "loudnorm_presets":
+            return Promise.resolve(loudnormPresetsStub);
+        default:
+            return Promise.reject(new Error(`unexpected command ${cmd}`));
+    }
+}
+
+/** Reject exactly one command (with an `AppError`-shaped payload); resolve the others. */
+function rejectOnly(failing: Command, message: string) {
     invokeMock.mockImplementation((cmd: string) => {
         if (cmd === failing) {
             return Promise.reject({ kind: "Internal", data: { message } });
         }
-        if (cmd === "effective_network") return Promise.resolve(effectiveNetworkStub);
-        if (cmd === "builtin_network_defaults") return Promise.resolve(builtinNetworkStub);
-        if (cmd === "effective_normalize") return Promise.resolve(effectiveNormalizeStub);
-        if (cmd === "loudnorm_presets") return Promise.resolve(loudnormPresetsStub);
-        // `settings` never resolves in these tests: a settled `settings` would
-        // need a full AppSettings fixture, and the failure branch under test
-        // must win regardless of what the other query does.
-        return new Promise(() => {});
+        return resolveAll(cmd);
     });
 }
 
-// The view gates the form on FIVE queries. A failure of any must surface as
+// The view gates the form on FOUR queries. A failure of any must surface as
 // an error, not leave the pulse "Loading settings…" on screen forever — which
 // is what a failed `settings` load did before #611's SettingsView change.
 describe("SettingsView load errors", () => {
@@ -54,8 +62,8 @@ describe("SettingsView load errors", () => {
         expect(screen.queryByText(/loading settings/i)).not.toBeInTheDocument();
     });
 
-    it("shows the error when the effective-network query rejects", async () => {
-        rejectOnly("effective_network", "engine config unavailable");
+    it("shows the error when the network-defaults query rejects", async () => {
+        rejectOnly("network_defaults", "engine config unavailable");
         render(<SettingsView />);
         const alert = await screen.findByRole("alert");
         expect(alert).toHaveTextContent(/failed to load settings/i);
@@ -63,6 +71,9 @@ describe("SettingsView load errors", () => {
         expect(screen.queryByText(/loading settings/i)).not.toBeInTheDocument();
     });
 
+    // `effective_normalize` only runs once `settings` has resolved (it takes
+    // the draft's preset), so `settings` resolves here and the normalize
+    // query is the one that fails.
     it("shows the error when the effective-normalize query rejects", async () => {
         rejectOnly("effective_normalize", "normalize defaults unavailable");
         render(<SettingsView />);
@@ -78,13 +89,42 @@ describe("SettingsView load errors", () => {
         expect(alert).toHaveTextContent("preset catalogue unavailable");
         expect(screen.queryByText(/loading settings/i)).not.toBeInTheDocument();
     });
+});
 
-    it("shows the error when the built-in-defaults query rejects", async () => {
-        rejectOnly("builtin_network_defaults", "defaults unavailable");
+// The normalize payload is keyed by the DRAFT'S preset, and the draft does not
+// exist until `settings` resolves. Fetching `effective_normalize(null)` before
+// that and again with the real preset is a wasted round trip and, worse, a
+// wrong payload on screen for one render (#611 review). The query is gated
+// with `skipToken` until the settings arrive.
+describe("SettingsView effective-normalize gating", () => {
+    beforeEach(() => {
+        invokeMock.mockReset();
+    });
+
+    it("does not invoke effective_normalize until settings resolve", async () => {
+        invokeMock.mockImplementation((cmd: string) =>
+            // `settings` never resolves: the sibling queries fire in the same
+            // render, so once one of them has been invoked, an ungated
+            // normalize query would have been invoked too.
+            cmd === "settings" ? new Promise(() => {}) : resolveAll(cmd),
+        );
         render(<SettingsView />);
-        const alert = await screen.findByRole("alert");
-        expect(alert).toHaveTextContent("defaults unavailable");
-        expect(screen.queryByText(/loading settings/i)).not.toBeInTheDocument();
+        await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("loudnorm_presets"));
+        await waitFor(() => expect(invokeMock).toHaveBeenCalledWith("network_defaults"));
+        expect(invokeMock).not.toHaveBeenCalledWith("effective_normalize", expect.anything());
+        expect(screen.getByText(/loading settings/i)).toBeInTheDocument();
+    });
+
+    it("invokes effective_normalize exactly once, with the stored preset", async () => {
+        invokeMock.mockImplementation((cmd: string) =>
+            cmd === "settings"
+                ? Promise.resolve({ ...appSettingsStub, loudnorm_preset: "loud" })
+                : resolveAll(cmd),
+        );
+        render(<SettingsView />);
+        await screen.findByRole("button", { name: /save settings/i });
+        const normalizeCalls = invokeMock.mock.calls.filter(([cmd]) => cmd === "effective_normalize");
+        expect(normalizeCalls).toEqual([["effective_normalize", { preset: "loud" }]]);
     });
 });
 
@@ -105,18 +145,10 @@ describe("SettingsView save path", () => {
                 case "settings":
                     // Out of range on purpose: the old client-side table blocked this.
                     return Promise.resolve({ ...appSettingsStub, normalize_audio: true, loudnorm: true, loudnorm_target_lra: 0 });
-                case "effective_network":
-                    return Promise.resolve(effectiveNetworkStub);
-                case "builtin_network_defaults":
-                    return Promise.resolve(builtinNetworkStub);
-                case "effective_normalize":
-                    return Promise.resolve(effectiveNormalizeStub);
-                case "loudnorm_presets":
-                    return Promise.resolve(loudnormPresetsStub);
                 case "update_settings":
                     return Promise.reject({ kind: "InvalidInput", data: { field: "loudnorm_target_lra", message: verdict } });
                 default:
-                    return Promise.reject(new Error(`unexpected command ${cmd}`));
+                    return resolveAll(cmd);
             }
         });
         const user = userEvent.setup();

@@ -101,15 +101,9 @@ describe("queryKeys.settings", () => {
     });
 });
 
-describe("queryKeys.effectiveNetwork", () => {
-    test("returns ['effective-network']", () => {
-        expect(queryKeys.effectiveNetwork()).toEqual(["effective-network"]);
-    });
-});
-
-describe("queryKeys.builtinNetworkDefaults", () => {
-    test("returns ['builtin-network-defaults']", () => {
-        expect(queryKeys.builtinNetworkDefaults()).toEqual(["builtin-network-defaults"]);
+describe("queryKeys.networkDefaults", () => {
+    test("returns ['network-defaults']", () => {
+        expect(queryKeys.networkDefaults()).toEqual(["network-defaults"]);
     });
 });
 

@@ -541,8 +541,8 @@ fn hls_head_probe_timeout_above_max_rejected() {
 
 #[test]
 fn hls_expansion_timeout_default_is_none() {
-    // Unset keeps rdlp-api's `DEFAULT_HLS_EXPANSION_TIMEOUT_SECS`, the same
-    // "None = consumer default" shape `download_timeout`/`merge_timeout` use.
+    // Unset resolves through `effective_network()` to `EffectiveNetwork::DEFAULT`,
+    // the same "None = inherit" shape `download_timeout`/`merge_timeout` use.
     assert_eq!(Config::default().hls_expansion_timeout, None);
 }
 
@@ -1180,6 +1180,7 @@ fn effective_network_none_fields_resolve_to_default() {
         merge_timeout: None,
         parallel_threshold: None,
         hls_head_probe_timeout: None,
+        hls_expansion_timeout: None,
         ..Config::default()
     };
     let d = crate::EffectiveNetwork::DEFAULT;
@@ -1193,6 +1194,7 @@ fn effective_network_none_fields_resolve_to_default() {
         buffer_size,
         parallel_threshold,
         hls_head_probe_timeout_secs,
+        hls_expansion_timeout_secs,
     } = config.effective_network();
     assert_eq!(socket_timeout_secs, d.socket_timeout_secs);
     assert_eq!(read_timeout_secs, d.read_timeout_secs);
@@ -1203,6 +1205,7 @@ fn effective_network_none_fields_resolve_to_default() {
     assert_eq!(buffer_size, d.buffer_size);
     assert_eq!(parallel_threshold, d.parallel_threshold);
     assert_eq!(hls_head_probe_timeout_secs, d.hls_head_probe_timeout_secs);
+    assert_eq!(hls_expansion_timeout_secs, d.hls_expansion_timeout_secs);
 }
 
 /// Every `Some(x)` (and every concrete field) resolves to `x`, not to the
@@ -1220,6 +1223,7 @@ fn effective_network_some_fields_resolve_to_their_value() {
         buffer_size: 4096,
         parallel_threshold: Some(17),
         hls_head_probe_timeout: Some(18),
+        hls_expansion_timeout: Some(19),
         ..Config::default()
     };
     let crate::EffectiveNetwork {
@@ -1232,6 +1236,7 @@ fn effective_network_some_fields_resolve_to_their_value() {
         buffer_size,
         parallel_threshold,
         hls_head_probe_timeout_secs,
+        hls_expansion_timeout_secs,
     } = config.effective_network();
     assert_eq!(socket_timeout_secs, 11);
     assert_eq!(read_timeout_secs, 12);
@@ -1245,6 +1250,123 @@ fn effective_network_some_fields_resolve_to_their_value() {
     assert_eq!(buffer_size, 4096);
     assert_eq!(parallel_threshold, 17);
     assert_eq!(hls_head_probe_timeout_secs, 18);
+    assert_eq!(hls_expansion_timeout_secs, 19);
+}
+
+/// `Config::validate` reads the network bounds from `EffectiveNetwork::RANGES`
+/// — every field is accepted at both ends of its owning range and rejected
+/// one past each, with the reason citing the owner's bounds. A validator
+/// restating a literal could agree with the owner only by coincidence; this
+/// probes each pair the owner declares.
+#[test]
+fn validate_network_bounds_come_from_the_owner() {
+    type Setter = fn(&mut Config, Option<u64>);
+    let r = crate::EffectiveNetwork::RANGES;
+    let fields: [(&str, Setter, crate::effective_network::NetworkRange); 8] = [
+        (
+            "socket_timeout",
+            |c, v| c.socket_timeout = v,
+            r.socket_timeout_secs,
+        ),
+        (
+            "read_timeout",
+            |c, v| c.read_timeout = v,
+            r.read_timeout_secs,
+        ),
+        (
+            "pool_idle_timeout",
+            |c, v| c.pool_idle_timeout = v,
+            r.pool_idle_timeout_secs,
+        ),
+        (
+            "download_timeout",
+            |c, v| c.download_timeout = v,
+            r.download_timeout_secs,
+        ),
+        (
+            "merge_timeout",
+            |c, v| c.merge_timeout = v,
+            r.merge_timeout_secs,
+        ),
+        (
+            "parallel_threshold",
+            |c, v| c.parallel_threshold = v,
+            r.parallel_threshold,
+        ),
+        (
+            "hls_head_probe_timeout",
+            |c, v| c.hls_head_probe_timeout = v,
+            r.hls_head_probe_timeout_secs,
+        ),
+        (
+            "hls_expansion_timeout",
+            |c, v| c.hls_expansion_timeout = v,
+            r.hls_expansion_timeout_secs,
+        ),
+    ];
+    for (field, set, range) in fields {
+        for accepted in [range.min, range.max] {
+            let mut cfg = Config::default();
+            set(&mut cfg, Some(accepted));
+            cfg.validate()
+                .unwrap_or_else(|e| panic!("{field}={accepted} must be accepted: {e}"));
+        }
+        let rejected: Vec<u64> = [range.min.checked_sub(1), Some(range.max + 1)]
+            .into_iter()
+            .flatten()
+            .collect();
+        for value in rejected {
+            let mut cfg = Config::default();
+            set(&mut cfg, Some(value));
+            match cfg.validate() {
+                Err(ConfigValidationError::OutOfRange { field: f, reason }) if f == field => {
+                    assert!(
+                        reason.contains(&format!("{}..={}", range.min, range.max)),
+                        "{field}: the reason must cite the owner's bounds: {reason:?}"
+                    );
+                }
+                other => panic!("{field}={value}: got {other:?}"),
+            }
+        }
+    }
+    // The two concrete fields: upper bound from the owner, zero keeps its
+    // dedicated variant.
+    let max_frag = usize::try_from(r.concurrent_fragments.max).expect("fits");
+    Config {
+        concurrent_fragments: max_frag,
+        ..Config::default()
+    }
+    .validate()
+    .expect("max concurrent_fragments accepted");
+    assert!(matches!(
+        Config {
+            concurrent_fragments: max_frag + 1,
+            ..Config::default()
+        }
+        .validate(),
+        Err(ConfigValidationError::OutOfRange {
+            field: "concurrent_fragments",
+            ..
+        })
+    ));
+    let max_buf = usize::try_from(r.buffer_size.max).expect("fits");
+    Config {
+        buffer_size: max_buf,
+        ..Config::default()
+    }
+    .validate()
+    .expect("max buffer_size accepted");
+    assert!(matches!(
+        Config {
+            buffer_size: max_buf + 1,
+            ..Config::default()
+        }
+        .validate(),
+        Err(ConfigValidationError::OutOfRange {
+            field: "buffer_size",
+            ..
+        })
+    ));
 }
 
 // --- normalization targets reach FFmpeg's filter graph unchecked otherwise ---

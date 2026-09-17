@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use crate::browser_emulation::BrowserEmulation;
 use crate::browser_type::BrowserType;
-use crate::effective_network::EffectiveNetwork;
+use crate::effective_network::{EffectiveNetwork, NetworkDefaults, NetworkFields};
 use crate::playlist_items::PlaylistItems;
 use crate::postprocess::PostProcess;
 use crate::subtitle_format::SubtitleFormat;
@@ -78,9 +78,9 @@ pub const MAX_PLAYLIST_CONCURRENCY: usize = 16;
 
 /// Ceiling for [`Config::playlist_item_timeout`].
 ///
-/// 600 s, the same ten-minute cap every other per-request timeout in this
-/// file (`socket_timeout`, `read_timeout`, `hls_expansion_timeout`) is held
-/// to.
+/// 600 s, the same ten-minute cap every other per-request timeout (the
+/// `read_timeout`/`hls_expansion_timeout` bounds on
+/// [`EffectiveNetwork::RANGES`]) is held to.
 pub const MAX_PLAYLIST_ITEM_TIMEOUT_SECS: u64 = 600;
 
 // The `OutOfRange` reasons for the six bounds above, formatted at compile
@@ -213,7 +213,7 @@ pub struct Config {
     ///
     /// Default `8`: power-of-two, well below H2 `SETTINGS_MAX_CONCURRENT_STREAMS`
     /// (RFC default 100; Cloudflare advertises 100), conservative enough for
-    /// H1.1 fallback. Validated 1..=64.
+    /// H1.1 fallback. Bounds on [`EffectiveNetwork::RANGES`].
     ///
     /// Memory note: under the parallel pre-resolved-fragments path, peak
     /// transient memory ≈ `concurrent_fragments × max_fragment_bytes`. With the
@@ -242,7 +242,8 @@ pub struct Config {
     pub retry_backoff_multiplier: f64,
 
     /// Buffer size for downloads (bytes). Default:
-    /// `buffer_size` on [`EffectiveNetwork::DEFAULT`].
+    /// `buffer_size` on [`EffectiveNetwork::DEFAULT`]; bounds on
+    /// [`EffectiveNetwork::RANGES`].
     pub buffer_size: usize,
 
     // === Network options ===
@@ -251,8 +252,8 @@ pub struct Config {
 
     /// Connect-axis timeout in seconds (TCP + TLS handshake).
     ///
-    /// Default: `socket_timeout_secs` on [`EffectiveNetwork::DEFAULT`]. Range
-    /// validation enforces 1..=300 if set.
+    /// Default: `socket_timeout_secs` on [`EffectiveNetwork::DEFAULT`]; bounds
+    /// on [`EffectiveNetwork::RANGES`] if set.
     ///
     /// Named `socket_timeout` for historical compatibility with the
     /// pre-1.0 single-knob model; the actual semantics are connect-only.
@@ -263,12 +264,13 @@ pub struct Config {
     /// Read-axis timeout in seconds (per-read inactivity, not total).
     ///
     /// `None` here in [`Config::default()`]; [`Config::effective_network`]
-    /// resolves it to `read_timeout_secs` on [`EffectiveNetwork::DEFAULT`].
-    /// Range: 1..=600.
+    /// resolves it to `read_timeout_secs` on [`EffectiveNetwork::DEFAULT`];
+    /// bounds on [`EffectiveNetwork::RANGES`].
     #[serde(default)]
     pub read_timeout: Option<u64>,
 
-    /// Pool idle-connection timeout in seconds. Range: 0..=3600.
+    /// Pool idle-connection timeout in seconds; bounds on
+    /// [`EffectiveNetwork::RANGES`].
     ///
     /// `None` here in [`Config::default()`]; [`Config::effective_network`]
     /// resolves it to `pool_idle_timeout_secs` on [`EffectiveNetwork::DEFAULT`],
@@ -285,7 +287,8 @@ pub struct Config {
     pub pool_idle_timeout: Option<u64>,
 
     /// Total download timeout in seconds — the entire download of one
-    /// file/format must complete within this. Range: 1..=86400.
+    /// file/format must complete within this; bounds on
+    /// [`EffectiveNetwork::RANGES`].
     ///
     /// `None` here in [`Config::default()`]; [`Config::effective_network`]
     /// resolves it to `download_timeout_secs` on [`EffectiveNetwork::DEFAULT`].
@@ -293,7 +296,8 @@ pub struct Config {
     pub download_timeout: Option<u64>,
 
     /// Merge (mux/concat) operation timeout in seconds — the chunk/segment
-    /// merge must complete within this. Range: 1..=86400.
+    /// merge must complete within this; bounds on
+    /// [`EffectiveNetwork::RANGES`].
     ///
     /// `None` here in [`Config::default()`]; [`Config::effective_network`]
     /// resolves it to `merge_timeout_secs` on [`EffectiveNetwork::DEFAULT`].
@@ -305,7 +309,8 @@ pub struct Config {
     /// Range-GET fallback. `None` resolves through
     /// [`Config::effective_network`] to
     /// `hls_head_probe_timeout_secs` on [`EffectiveNetwork::DEFAULT`].
-    /// Validated post-load by `Config::validate()`: must be 1..=300 seconds.
+    /// Validated post-load by `Config::validate()` against
+    /// [`EffectiveNetwork::RANGES`].
     pub hls_head_probe_timeout: Option<u64>,
 
     /// Wall-clock budget, in seconds, for the orchestrator's HLS-expansion
@@ -313,8 +318,10 @@ pub struct Config {
     /// pre-resolved fragments (a plugin's rows always do — the WIT `format`
     /// record has no fragments field) is expanded within this budget, and
     /// rows still unexpanded when it runs out are dropped with one warning.
-    /// Unset keeps rdlp-api's default (`DEFAULT_HLS_EXPANSION_TIMEOUT_SECS`).
-    /// Validated post-load by `Config::validate()`: must be 1..=600 seconds.
+    /// `None` resolves through [`Config::effective_network`] to
+    /// `hls_expansion_timeout_secs` on [`EffectiveNetwork::DEFAULT`].
+    /// Validated post-load by `Config::validate()` against
+    /// [`EffectiveNetwork::RANGES`].
     #[serde(default)]
     pub hls_expansion_timeout: Option<u64>,
 
@@ -323,7 +330,8 @@ pub struct Config {
     /// overhead (HEAD probes, chunk-merge step) outweighs the throughput gain.
     /// `None` resolves through [`Config::effective_network`] to
     /// `parallel_threshold` on [`EffectiveNetwork::DEFAULT`].
-    /// Validated post-load by `Config::validate()`: must be `1..=1_073_741_824` bytes (1 GiB).
+    /// Validated post-load by `Config::validate()` against
+    /// [`EffectiveNetwork::RANGES`] (1 GiB ceiling).
     pub parallel_threshold: Option<u64>,
 
     /// Ceiling on a single HLS/DASH fragment or segment body, in bytes.
@@ -664,11 +672,11 @@ impl Default for Config {
 impl Config {
     /// Materialise the network/download settings a runtime consumer reads.
     ///
-    /// The single resolution step for the nine fields: every `None`
+    /// The single resolution step for the ten fields: every `None`
     /// (inherit) collapses to its [`EffectiveNetwork::DEFAULT`] value, every
     /// `Some(x)` to `x`, and the two concrete fields pass through. rdlp-http,
-    /// rdlp-downloader and rdlp-extractor read these values from here rather
-    /// than each carrying an `unwrap_or(<literal>)` (#611).
+    /// rdlp-downloader, rdlp-extractor and rdlp-api read these values from
+    /// here rather than each carrying an `unwrap_or(<literal>)` (#611).
     #[must_use]
     pub fn effective_network(&self) -> EffectiveNetwork {
         let d = EffectiveNetwork::DEFAULT;
@@ -684,6 +692,41 @@ impl Config {
             hls_head_probe_timeout_secs: self
                 .hls_head_probe_timeout
                 .unwrap_or(d.hls_head_probe_timeout_secs),
+            hls_expansion_timeout_secs: self
+                .hls_expansion_timeout
+                .unwrap_or(d.hls_expansion_timeout_secs),
+        }
+    }
+
+    /// The desktop Settings view's network payload: the resolved values, the
+    /// built-in defaults and the owning ranges, in one IPC round trip.
+    #[must_use]
+    pub fn network_defaults(&self) -> NetworkDefaults {
+        NetworkDefaults {
+            effective: self.effective_network(),
+            builtin: EffectiveNetwork::DEFAULT,
+            ranges: EffectiveNetwork::RANGES,
+        }
+    }
+
+    /// The ten network fields as this layer holds them, for the shared range
+    /// check [`NetworkFields::first_out_of_range`]. The two concrete fields
+    /// are always `Some`.
+    fn network_fields(&self) -> NetworkFields {
+        // `usize` → `u64` cannot fail on any supported target; saturating keeps
+        // the projection total rather than adding an unreachable error path.
+        let widen = |n: usize| u64::try_from(n).unwrap_or(u64::MAX);
+        NetworkFields {
+            socket_timeout: self.socket_timeout,
+            read_timeout: self.read_timeout,
+            pool_idle_timeout: self.pool_idle_timeout,
+            download_timeout: self.download_timeout,
+            merge_timeout: self.merge_timeout,
+            concurrent_fragments: Some(widen(self.concurrent_fragments)),
+            buffer_size: Some(widen(self.buffer_size)),
+            parallel_threshold: self.parallel_threshold,
+            hls_head_probe_timeout: self.hls_head_probe_timeout,
+            hls_expansion_timeout: self.hls_expansion_timeout,
         }
     }
 
@@ -704,14 +747,10 @@ impl Config {
     /// invalid `playlist_start`).
     #[allow(clippy::too_many_lines)] // Linear sequence of independent range checks; splitting harms readability.
     pub fn validate(&self) -> Result<(), ConfigValidationError> {
+        // The two concrete network fields keep their dedicated zero variants;
+        // the upper bounds are checked with the other network fields below.
         if self.concurrent_fragments == 0 {
             return Err(ConfigValidationError::InvalidConcurrentFragments);
-        }
-        if self.concurrent_fragments > 64 {
-            return Err(ConfigValidationError::OutOfRange {
-                field: "concurrent_fragments",
-                reason: "must be 1..=64 (caps peak transient memory under parallel fragment fetch)",
-            });
         }
         if let Some(threads) = self.postprocess.recode_threads
             && !(1..=MAX_RECODE_THREADS).contains(&threads)
@@ -768,12 +807,6 @@ impl Config {
         }
         if self.buffer_size == 0 {
             return Err(ConfigValidationError::InvalidBufferSize);
-        }
-        if self.buffer_size > 1024 * 1024 * 1024 {
-            return Err(ConfigValidationError::OutOfRange {
-                field: "buffer_size",
-                reason: "must be 1..=1_073_741_824 bytes (1 GiB)",
-            });
         }
         if self.playlist_start == 0 {
             return Err(ConfigValidationError::InvalidPlaylistStart);
@@ -861,70 +894,12 @@ impl Config {
             return Err(ConfigValidationError::OutOfRange { field, reason });
         }
 
-        // HTTP timeout range checks
-        if let Some(t) = self.socket_timeout
-            && !(1..=300).contains(&t)
-        {
-            return Err(ConfigValidationError::OutOfRange {
-                field: "socket_timeout",
-                reason: "must be 1..=300 seconds",
-            });
-        }
-        if let Some(t) = self.read_timeout
-            && !(1..=600).contains(&t)
-        {
-            return Err(ConfigValidationError::OutOfRange {
-                field: "read_timeout",
-                reason: "must be 1..=600 seconds",
-            });
-        }
-        if let Some(t) = self.pool_idle_timeout
-            && t > 3600
-        {
-            return Err(ConfigValidationError::OutOfRange {
-                field: "pool_idle_timeout",
-                reason: "must be 0..=3600 seconds (0 = disabled)",
-            });
-        }
-        if let Some(t) = self.download_timeout
-            && !(1..=86400).contains(&t)
-        {
-            return Err(ConfigValidationError::OutOfRange {
-                field: "download_timeout",
-                reason: "must be 1..=86400 seconds",
-            });
-        }
-        if let Some(t) = self.merge_timeout
-            && !(1..=86400).contains(&t)
-        {
-            return Err(ConfigValidationError::OutOfRange {
-                field: "merge_timeout",
-                reason: "must be 1..=86400 seconds",
-            });
-        }
-        if let Some(t) = self.hls_head_probe_timeout
-            && !(1..=300).contains(&t)
-        {
-            return Err(ConfigValidationError::OutOfRange {
-                field: "hls_head_probe_timeout",
-                reason: "must be 1..=300 seconds",
-            });
-        }
-        if let Some(t) = self.hls_expansion_timeout
-            && !(1..=600).contains(&t)
-        {
-            return Err(ConfigValidationError::OutOfRange {
-                field: "hls_expansion_timeout",
-                reason: "must be 1..=600 seconds",
-            });
-        }
-        if let Some(t) = self.parallel_threshold
-            && !(1..=1024 * 1024 * 1024).contains(&t)
-        {
-            return Err(ConfigValidationError::OutOfRange {
-                field: "parallel_threshold",
-                reason: "must be 1..=1_073_741_824 bytes (1 GiB)",
-            });
+        // Network/download bounds: the SAME check the desktop's
+        // `AppSettings::validate_security` runs, on the same owner
+        // (`EffectiveNetwork::RANGES`), so neither validator can hold a bound
+        // the other lacks (#611 review).
+        if let Some((field, reason)) = self.network_fields().first_out_of_range() {
+            return Err(ConfigValidationError::OutOfRange { field, reason });
         }
         if let Some(t) = self.max_fragment_bytes
             && !(1..=MAX_FRAGMENT_BYTES_UPPER_BOUND).contains(&t)

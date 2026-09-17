@@ -16,7 +16,7 @@ use crate::error::AppError;
 use crate::state::{AppSettings, AppState, SettingsValidationError};
 use rdlp_types::boundary::{Action, Subject};
 use rdlp_types::{
-    EffectiveNetwork, EffectiveNormalize, LoudnormPreset, LoudnormPresetInfo, PostProcess,
+    EffectiveNormalize, LoudnormPreset, LoudnormPresetInfo, NetworkDefaults, PostProcess,
 };
 
 /// Retrieve the current application settings.
@@ -47,41 +47,30 @@ pub async fn settings(state: State<'_, AppState>) -> Result<AppSettings, AppErro
     Ok(settings)
 }
 
-/// The network/download values the engine runs with when an
-/// [`AppSettings`] field is `None` (inherit).
+/// The network/download payload the Settings view reads in one round trip:
+/// the values an empty ([`AppSettings`] `None` = inherit) field resolves to,
+/// the built-in defaults, and the owning ranges.
 ///
-/// Resolves the client's base [`Config`](rdlp_types::Config) — `config.toml`
-/// or the built-in defaults — through the single resolver
-/// `Config::effective_network()`, so the GUI's "inherit" placeholders show
-/// the value a download will actually use instead of carrying their own copy
-/// of the defaults (#611). The base config is loaded once per process, so
-/// the frontend caches this indefinitely.
-///
-/// # Errors
-///
-/// This function does not currently return errors but returns
-/// `Result` for forward-compatible IPC signatures.
-#[tauri::command]
-pub async fn effective_network(state: State<'_, AppState>) -> Result<EffectiveNetwork, AppError> {
-    Ok(state.client.config().effective_network())
-}
-
-/// The built-in network/download defaults, `EffectiveNetwork::DEFAULT`,
-/// before any `config.toml` layering.
-///
-/// Distinct from [`effective_network`]: that is what an empty field
-/// *inherits*; this is what the GUI *seeds* when the inherited value cannot
-/// express the user's intent — e.g. re-enabling idle-connection eviction
-/// when the base configuration has disabled it with the `0` sentinel. Serving
-/// it over IPC keeps the desktop free of its own copy of the number (#611).
+/// `effective` resolves the client's base [`Config`](rdlp_types::Config) —
+/// `config.toml` or the built-in defaults — through the single resolver
+/// `Config::effective_network()`, so the GUI's "inherit" placeholders show the
+/// value a download will actually use. `builtin` is `EffectiveNetwork::DEFAULT`
+/// before any `config.toml` layering: what the GUI *seeds* when the inherited
+/// value cannot express the user's intent (re-enabling idle-connection
+/// eviction over an inherited `0` sentinel). `ranges` is
+/// `EffectiveNetwork::RANGES`, the bounds the numeric controls clamp to — the
+/// same table `Config::validate` and [`AppSettings::validate_security`]
+/// enforce. Serving all three over IPC keeps the desktop free of its own copy
+/// of any of these numbers (#611). The base config is loaded once per
+/// process, so the frontend caches this indefinitely.
 ///
 /// # Errors
 ///
 /// This function does not currently return errors but returns
 /// `Result` for forward-compatible IPC signatures.
 #[tauri::command]
-pub async fn builtin_network_defaults() -> Result<EffectiveNetwork, AppError> {
-    Ok(EffectiveNetwork::DEFAULT)
+pub async fn network_defaults(state: State<'_, AppState>) -> Result<NetworkDefaults, AppError> {
+    Ok(state.client.config().network_defaults())
 }
 
 /// The normalization values the engine runs with for a given preset when the

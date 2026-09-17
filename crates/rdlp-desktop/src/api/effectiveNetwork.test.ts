@@ -1,32 +1,32 @@
-// The effective-network query: the base configuration is loaded once per
-// process, so its resolved values never go stale while the app runs (#611).
+// The network-defaults query: the base configuration is loaded once per
+// process and the built-in defaults and ranges are constants, so the payload
+// never goes stale while the app runs (#611).
 
-import { describe, it, expect } from "vitest";
-import { builtinNetworkDefaultsQueryOptions, effectiveNetworkQueryOptions } from "./effectiveNetwork";
+import { describe, it, expect, vi } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
+import { networkDefaultsQueryOptions } from "./effectiveNetwork";
 import { queryKeys } from "../query/queryKeys";
+import { invokeTyped } from "./invokeClient";
 
-describe("effectiveNetworkQueryOptions", () => {
+vi.mock("./invokeClient", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("./invokeClient")>()),
+    invokeTyped: vi.fn(),
+}));
+
+describe("networkDefaultsQueryOptions", () => {
     it("uses the centralized query key", () => {
-        expect(effectiveNetworkQueryOptions().queryKey).toEqual(queryKeys.effectiveNetwork());
+        expect(networkDefaultsQueryOptions().queryKey).toEqual(queryKeys.networkDefaults());
     });
 
     it("never goes stale — the base configuration is read once per process", () => {
-        expect(effectiveNetworkQueryOptions().staleTime).toBe(Infinity);
+        expect(networkDefaultsQueryOptions().staleTime).toBe(Infinity);
     });
 
-    it("has a real queryFn (not lazily gated)", () => {
-        expect(typeof effectiveNetworkQueryOptions().queryFn).toBe("function");
-    });
-});
-
-describe("builtinNetworkDefaultsQueryOptions", () => {
-    it("uses its own centralized query key, distinct from the effective-network key", () => {
-        const opts = builtinNetworkDefaultsQueryOptions();
-        expect(opts.queryKey).toEqual(queryKeys.builtinNetworkDefaults());
-        expect(opts.queryKey).not.toEqual(effectiveNetworkQueryOptions().queryKey);
-    });
-
-    it("never goes stale — compile-time constants", () => {
-        expect(builtinNetworkDefaultsQueryOptions().staleTime).toBe(Infinity);
+    it("invokes the one network_defaults command", async () => {
+        const invokeMock = vi.mocked(invokeTyped);
+        invokeMock.mockResolvedValueOnce({});
+        await new QueryClient().fetchQuery(networkDefaultsQueryOptions());
+        expect(invokeMock).toHaveBeenCalledTimes(1);
+        expect(invokeMock).toHaveBeenCalledWith("network_defaults");
     });
 });

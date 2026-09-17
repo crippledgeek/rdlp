@@ -2,16 +2,10 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DownloadSection } from "./DownloadSection";
-import { effectiveNetworkStub } from "@/test/effectiveNetworkStub";
-import { bytesToMibDisplay } from "@/views/settings/byteUnits";
+import { effectiveNetworkStub, networkDefaultsStub, networkRangesStub } from "@/test/effectiveNetworkStub";
+import { appSettingsStub as baseDraft } from "@/test/appSettingsStub";
+import { byteRangeToMib, bytesToMibDisplay } from "@/views/settings/byteUnits";
 import type { AppSettings } from "@/types";
-
-const baseDraft = {
-    concurrent_fragments: null,
-    buffer_size: null,
-    parallel_threshold: null,
-    hls_head_probe_timeout: null,
-} as unknown as AppSettings;
 
 // NOTE (empirically established in Task 2 — do NOT use `role="spinbutton"` here):
 // React Aria's `useNumberField` deliberately sets `role: null` and nulls
@@ -21,7 +15,7 @@ const baseDraft = {
 // `aria-roledescription="Number field"`. The queryable role is therefore `textbox`.
 describe("DownloadSection", () => {
     it("renders all four numeric controls", () => {
-        render(<DownloadSection draft={baseDraft} defaults={effectiveNetworkStub} onChange={vi.fn()} />);
+        render(<DownloadSection draft={baseDraft} network={networkDefaultsStub} onChange={vi.fn()} />);
         expect(screen.getByRole("textbox", { name: /concurrent fragments/i })).toBeInTheDocument();
         expect(screen.getByRole("textbox", { name: /buffer size/i })).toBeInTheDocument();
         expect(screen.getByRole("textbox", { name: /parallel threshold/i })).toBeInTheDocument();
@@ -30,7 +24,7 @@ describe("DownloadSection", () => {
 
     it("displays a byte-valued setting in MiB, not bytes", () => {
         const draft = { ...baseDraft, buffer_size: 2 * 1_048_576 } as AppSettings;
-        render(<DownloadSection draft={draft} defaults={effectiveNetworkStub} onChange={vi.fn()} />);
+        render(<DownloadSection draft={draft} network={networkDefaultsStub} onChange={vi.fn()} />);
         expect(screen.getByRole("textbox", { name: /buffer size/i })).toHaveValue("2");
     });
 
@@ -38,7 +32,7 @@ describe("DownloadSection", () => {
         const user = userEvent.setup();
         const onChange = vi.fn();
         const draft = { ...baseDraft, buffer_size: 2 * 1_048_576 } as AppSettings;
-        render(<DownloadSection draft={draft} defaults={effectiveNetworkStub} onChange={onChange} />);
+        render(<DownloadSection draft={draft} network={networkDefaultsStub} onChange={onChange} />);
         const input = screen.getByRole("textbox", { name: /buffer size/i });
         await user.clear(input);
         await user.type(input, "8");
@@ -50,7 +44,7 @@ describe("DownloadSection", () => {
         const user = userEvent.setup();
         const onChange = vi.fn();
         const draft = { ...baseDraft, buffer_size: 2 * 1_048_576 } as AppSettings;
-        render(<DownloadSection draft={draft} defaults={effectiveNetworkStub} onChange={onChange} />);
+        render(<DownloadSection draft={draft} network={networkDefaultsStub} onChange={onChange} />);
         const input = screen.getByRole("textbox", { name: /buffer size/i });
         await user.clear(input);
         await user.tab();
@@ -71,7 +65,7 @@ describe("DownloadSection", () => {
         const user = userEvent.setup();
         const onChange = vi.fn();
         const draft = { ...baseDraft, buffer_size: 500_000 } as AppSettings;
-        render(<DownloadSection draft={draft} defaults={effectiveNetworkStub} onChange={onChange} />);
+        render(<DownloadSection draft={draft} network={networkDefaultsStub} onChange={onChange} />);
         const input = screen.getByRole("textbox", { name: /buffer size/i });
         await user.click(input);
         await user.tab();
@@ -80,7 +74,7 @@ describe("DownloadSection", () => {
 
     it("renders the true byte count for a sub-MiB value instead of a misleading 0", () => {
         const draft = { ...baseDraft, buffer_size: 500_000 } as AppSettings;
-        render(<DownloadSection draft={draft} defaults={effectiveNetworkStub} onChange={vi.fn()} />);
+        render(<DownloadSection draft={draft} network={networkDefaultsStub} onChange={vi.fn()} />);
         const input = screen.getByRole("textbox", { name: /buffer size/i });
         expect(input).toHaveValue("");
         expect(input).toHaveAttribute("placeholder", "500,000 B");
@@ -98,7 +92,7 @@ describe("DownloadSection", () => {
         const user = userEvent.setup();
         const onChange = vi.fn();
         const draft = { ...baseDraft, buffer_size: 2 * 1_048_576 } as AppSettings;
-        render(<DownloadSection draft={draft} defaults={effectiveNetworkStub} onChange={onChange} />);
+        render(<DownloadSection draft={draft} network={networkDefaultsStub} onChange={onChange} />);
         const input = screen.getByRole("textbox", { name: /buffer size/i });
         await user.clear(input);
         await user.type(input, "3.5");
@@ -110,7 +104,7 @@ describe("DownloadSection", () => {
     it("passes a unitless count straight through without conversion", async () => {
         const user = userEvent.setup();
         const onChange = vi.fn();
-        render(<DownloadSection draft={baseDraft} defaults={effectiveNetworkStub} onChange={onChange} />);
+        render(<DownloadSection draft={baseDraft} network={networkDefaultsStub} onChange={onChange} />);
         const input = screen.getByRole("textbox", { name: /concurrent fragments/i });
         await user.type(input, "16");
         await user.tab();
@@ -121,7 +115,7 @@ describe("DownloadSection", () => {
     // IPC-sourced `EffectiveNetwork` payload, never a literal. Byte-valued fields
     // show the payload's bytes projected to whole MiB, matching the field's unit.
     it("every numeric placeholder is derived from the effective-network payload", () => {
-        render(<DownloadSection draft={baseDraft} defaults={effectiveNetworkStub} onChange={vi.fn()} />);
+        render(<DownloadSection draft={baseDraft} network={networkDefaultsStub} onChange={vi.fn()} />);
         const stub = effectiveNetworkStub;
         expect(screen.getByRole("textbox", { name: /concurrent fragments/i })).toHaveAttribute(
             "placeholder",
@@ -142,7 +136,7 @@ describe("DownloadSection", () => {
     });
 
     it("describes an empty field as inheriting from the base configuration, not a \"default\"", () => {
-        render(<DownloadSection draft={baseDraft} defaults={effectiveNetworkStub} onChange={vi.fn()} />);
+        render(<DownloadSection draft={baseDraft} network={networkDefaultsStub} onChange={vi.fn()} />);
         const input = screen.getByRole("textbox", { name: /concurrent fragments/i });
         const describedBy = input.getAttribute("aria-describedby") ?? "";
         const description = describedBy
@@ -152,5 +146,53 @@ describe("DownloadSection", () => {
         expect(description).toMatch(/inherit/i);
         expect(description).toMatch(/base configuration/i);
         expect(description).not.toMatch(/default/i);
+    });
+});
+
+// #611 review: every `minValue`/`maxValue` comes from the IPC-sourced `ranges`
+// (the byte-valued ones projected to whole MiB), never a copied literal. Under
+// NumericField's clamping contract an out-of-range entry commits as the bound,
+// which is how the bounds are observable. The stub's bounds differ from the
+// real ones, so a control clamping to a literal fails.
+describe("DownloadSection — bounds derive from the network payload", () => {
+    it("clamps the count and timeout controls to the payload's ranges", async () => {
+        const user = userEvent.setup();
+        const onChange = vi.fn();
+        render(<DownloadSection draft={baseDraft} network={networkDefaultsStub} onChange={onChange} />);
+        const r = networkRangesStub;
+        const cases: [RegExp, keyof AppSettings, { min: number; max: number }][] = [
+            [/concurrent fragments/i, "concurrent_fragments", r.concurrent_fragments],
+            [/probe timeout/i, "hls_head_probe_timeout", r.hls_head_probe_timeout_secs],
+        ];
+        for (const [label, field, range] of cases) {
+            const input = screen.getByRole("textbox", { name: label });
+            await user.clear(input);
+            await user.type(input, "0");
+            await user.tab();
+            expect(onChange).toHaveBeenLastCalledWith({ [field]: range.min });
+            await user.clear(input);
+            await user.type(input, "99999999");
+            await user.tab();
+            expect(onChange).toHaveBeenLastCalledWith({ [field]: range.max });
+        }
+    });
+
+    it("clamps the byte-valued controls to the payload's ranges in whole MiB", async () => {
+        const user = userEvent.setup();
+        const onChange = vi.fn();
+        render(<DownloadSection draft={baseDraft} network={networkDefaultsStub} onChange={onChange} />);
+        const cases: [RegExp, keyof AppSettings, { min: number; max: number }][] = [
+            [/buffer size/i, "buffer_size", byteRangeToMib(networkRangesStub.buffer_size)],
+            [/parallel threshold/i, "parallel_threshold", byteRangeToMib(networkRangesStub.parallel_threshold)],
+        ];
+        for (const [label, field, mib] of cases) {
+            const input = screen.getByRole("textbox", { name: label });
+            await user.clear(input);
+            await user.type(input, "99999999");
+            await user.tab();
+            expect(onChange).toHaveBeenLastCalledWith({ [field]: mib.max * 1_048_576 });
+            // The whole-MiB floor is 1 MiB: 1 byte cannot be expressed in MiB.
+            expect(mib.min).toBe(1);
+        }
     });
 });

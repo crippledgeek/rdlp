@@ -3,11 +3,12 @@
 # config structs, and their consumers, have not drifted from the Rust owners
 # of the defaults (#611).
 #
-# Four struct/interface pairs today: `EffectiveNetwork` (the nine
-# network/download defaults), `EffectiveNormalize` (the preset-dependent
-# normalization defaults), and the preset catalogue `LoudnormPresetInfo` /
-# `LoudnormTargets` served to the preset picker. Add a row to PAIRS for the
-# next one.
+# Seven struct/interface pairs today: `EffectiveNetwork` (the ten
+# network/download defaults) with its `NetworkRange`/`NetworkRanges` bounds and
+# the `NetworkDefaults` payload that carries all three, `EffectiveNormalize`
+# (the preset-dependent normalization defaults), and the preset catalogue
+# `LoudnormPresetInfo` / `LoudnormTargets` served to the preset picker. Add a
+# row to PAIRS for the next one.
 #
 # Two invariants:
 #
@@ -21,14 +22,17 @@
 #      layer, and the GUI treats its values as final. A TS field is `number`
 #      or a named union type (`LoudnormPreset`); an optional `?` is drift.
 #
-#  (b) NO LITERAL PLACEHOLDERS — the settings sections listed in
-#      SECTION_FILES must not carry a numeric placeholder literal:
-#      `placeholder="8"`, `placeholder: "-14.0"` in a field table, or a
+#  (b) NO LITERAL PLACEHOLDERS OR BOUNDS — the settings sections listed in
+#      SECTION_FILES must not carry a numeric literal as a `placeholder`, `min`,
+#      `max`, `minValue` or `maxValue`: `placeholder="8"`, `minValue={1}`,
+#      `max="30"`, `placeholder: "-14.0"` / `max: 30` in a field table, or a
 #      `byteFieldPlaceholder(x, "10")`-style trailing string argument. Every
-#      placeholder derives from the IPC-sourced payload; a literal is another
-#      copy of a default, which is exactly the drift #611 removed — and for the
-#      loudnorm targets the copy was Streaming-only, so it was WRONG under any
-#      other preset.
+#      placeholder derives from the IPC-sourced payload and every bound from
+#      its `ranges` (`NetworkDefaults.ranges`, projected to MiB where the control
+#      is MiB-granular); a literal is another copy of a default or of a range
+#      the engine validates, which is exactly the drift #611 removed — the
+#      loudnorm placeholders were Streaming-only, and the copied LRA range said
+#      1..30 where the owner says 1..50. No section is exempt.
 #
 # The Rust side is parsed from the struct body itself, never a hand-copied
 # list, so the gate cannot silently agree with a stale mirror. Both parsers are
@@ -38,12 +42,14 @@
 #
 # Fix when this fails: (a) edit the TS interface to match the reported Rust
 # field set; (b) replace the literal with `String(payload.<field>)` (or
-# `payload.<field>` for the byte-field helpers).
+# `payload.<field>` for the byte-field helpers) / `ranges.<field>.min|max`,
+# or drop the client-side bound and let the engine's `OutOfRange` verdict
+# surface (the normalization inputs).
 #
 # Usage: scripts/check-effective-config-drift.sh [--self-test]
 #   --self-test: prove both checks still FAIL on a synthetic field mismatch and
-#                a synthetic literal placeholder, in a temp dir. check-all.sh
-#                runs it every time.
+#                on synthetic literal placeholders/bounds, in a temp dir.
+#                check-all.sh runs it every time.
 
 set -euo pipefail
 
@@ -60,6 +66,9 @@ TS_FILE="crates/rdlp-desktop/src/types/index.ts"
 # rust_file:struct_name — the TS interface carries the same name.
 PAIRS=(
     "crates/rdlp-types/src/effective_network.rs:EffectiveNetwork"
+    "crates/rdlp-types/src/effective_network.rs:NetworkRange"
+    "crates/rdlp-types/src/effective_network.rs:NetworkRanges"
+    "crates/rdlp-types/src/effective_network.rs:NetworkDefaults"
     "crates/rdlp-types/src/effective_normalize.rs:EffectiveNormalize"
     "crates/rdlp-types/src/loudnorm_preset.rs:LoudnormTargets"
     "crates/rdlp-types/src/loudnorm_preset.rs:LoudnormPresetInfo"
@@ -163,26 +172,29 @@ EOM
     echo "$name ↔ TS interface OK ($(echo "$rust_set" | wc -l) fields)"
 }
 
-# (b) Reject numeric placeholder literals in the given section files.
+# (b) Reject numeric placeholder and bound literals in the given section files.
 # 0 = clean, 1 = a literal was found.
 check_no_literal_placeholders() {
-    local hits
+    local hits attr
+    attr='(placeholder|min|max|minValue|maxValue)'
     # `|| true`: grep exits 1 on zero matches, which is the PASSING case here.
-    # Three shapes: a JSX attribute literal, a `placeholder:` object-field
-    # literal (the loudnorm target table), and a helper's trailing string arg.
-    hits=$(grep -nE 'placeholder="-?[0-9.]+"|placeholder: "-?[0-9.]+"|, "-?[0-9.]+"\)' "$@" || true)
+    # Four shapes: a quoted JSX attribute literal (`min="-30"`), a braced one
+    # (`minValue={1}`), an object-field literal in a field table
+    # (`placeholder: "-14.0"`, `max: 30`), and a helper's trailing string arg.
+    hits=$(grep -nE "${attr}=\"-?[0-9.]+\"|${attr}=\{-?[0-9.]+\}|${attr}: \"-?[0-9.]+\"|${attr}: -?[0-9.]+[,} ]|, \"-?[0-9.]+\"\)" "$@" || true)
     if [ -n "$hits" ]; then
         cat <<EOM >&2
 
-ERROR: numeric placeholder literal(s) in the settings sections. Every
+ERROR: numeric placeholder/bound literal(s) in the settings sections. Every
 placeholder must derive from the IPC-sourced effective-config payload
-(\`String(payload.<field>)\`), never a literal copy of a default (#611):
+(\`String(payload.<field>)\`) and every min/max from its \`ranges\`, never a
+literal copy of a default or of a range the engine validates (#611):
 
 $hits
 EOM
         return 1
     fi
-    echo "no literal placeholders in ${#@} section file(s) OK"
+    echo "no literal placeholders or bounds in ${#@} section file(s) OK"
 }
 
 if [ "$SELF_TEST" -eq 1 ]; then
@@ -234,12 +246,18 @@ export interface EffectiveThing {
     preset: SomePreset;
 }
 FIXTURE
-    # Section fixtures: clean, a bare literal, a negative-float object-field
-    # literal, and a helper-argument literal.
-    printf '<NumericField placeholder={String(defaults.alpha_secs)} />\n{ placeholder: String(effective.target_i) }\n' > "$tmp/clean.tsx"
+    # Section fixtures: clean (payload-derived placeholder AND bounds, plus the
+    # attributes the matcher must ignore), then one violation per shape: a bare
+    # placeholder literal, a negative-float object-field literal, a
+    # helper-argument literal, a braced bound, a quoted bound, and an
+    # object-field bound.
+    printf '<NumericField placeholder={String(defaults.alpha_secs)} minValue={ranges.alpha_secs.min} maxValue={byteRangeToMib(ranges.beta).max} />\n{ placeholder: String(effective.target_i) }\n<Input step="0.1" formatOptions={{ maximumFractionDigits: 0 }} />\nminValue={poolIdleNumericMin(ranges.pool)}\n' > "$tmp/clean.tsx"
     printf '<NumericField placeholder="8" />\n' > "$tmp/literal.tsx"
     printf '{ id: "x", placeholder: "-14.0" },\n' > "$tmp/field-literal.tsx"
     printf 'placeholder={byteFieldPlaceholder(draft.buffer_size, "10")}\n' > "$tmp/helper-literal.tsx"
+    printf '<NumericField minValue={1} />\n' > "$tmp/braced-bound.tsx"
+    printf '<Input min="-30" />\n' > "$tmp/quoted-bound.tsx"
+    printf '{ id: "x", max: 30 },\n' > "$tmp/field-bound.tsx"
 
     ok=1
     check_field_set "$tmp/good.rs" "$tmp/good.ts" EffectiveThing >/dev/null 2>&1 || ok=0
@@ -250,13 +268,13 @@ FIXTURE
     rc=0; check_field_set "$tmp/good.rs" "$tmp/optional.ts" EffectiveThing >/dev/null 2>&1 || rc=$?
     [ "$rc" -eq 2 ] || ok=0
     check_no_literal_placeholders "$tmp/clean.tsx" >/dev/null 2>&1 || ok=0
-    for f in literal field-literal helper-literal; do
+    for f in literal field-literal helper-literal braced-bound quoted-bound field-bound; do
         rc=0; check_no_literal_placeholders "$tmp/$f.tsx" >/dev/null 2>&1 || rc=$?
         [ "$rc" -eq 1 ] || ok=0
     done
 
     if [ "$ok" -eq 1 ]; then
-        echo "SELF-TEST OK: field-set diff and literal-placeholder matcher both still fire on synthetic drift."
+        echo "SELF-TEST OK: field-set diff and literal placeholder/bound matcher both still fire on synthetic drift."
         exit 0
     fi
     echo "SELF-TEST FAILED: a check did NOT flag a known violation (or rejected a clean fixture) - it is broken."

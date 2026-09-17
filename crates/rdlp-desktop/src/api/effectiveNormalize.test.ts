@@ -2,7 +2,7 @@
 // the previous preset's payload while the next one loads (#611).
 
 import { describe, it, expect, vi } from "vitest";
-import { QueryClient, keepPreviousData } from "@tanstack/react-query";
+import { QueryClient, keepPreviousData, skipToken } from "@tanstack/react-query";
 import { effectiveNormalizeQueryOptions, loudnormPresetsQueryOptions } from "./effectiveNormalize";
 import { queryKeys } from "../query/queryKeys";
 import { invokeTyped } from "./invokeClient";
@@ -24,6 +24,15 @@ describe("effectiveNormalizeQueryOptions", () => {
 
     it("keeps the previous preset's payload while the next one loads", () => {
         expect(effectiveNormalizeQueryOptions(null).placeholderData).toBe(keepPreviousData);
+    });
+
+    // No draft yet (`undefined`) gates the query; the stored "inherit" (`null`)
+    // does not — the two must not collapse into one, or the view would either
+    // never fetch for an inheriting draft or fetch before the draft exists.
+    it("is gated with skipToken until the draft exists, and fetches for a null (inherit) preset", () => {
+        expect(effectiveNormalizeQueryOptions(undefined).queryFn).toBe(skipToken);
+        expect(effectiveNormalizeQueryOptions(undefined).queryKey).toEqual(queryKeys.effectiveNormalize(null));
+        expect(typeof effectiveNormalizeQueryOptions(null).queryFn).toBe("function");
     });
 
     // The command takes the preset as its argument; a query that forgot to

@@ -487,9 +487,9 @@ export interface AppSettings {
  * `scripts/check-effective-config-drift.sh` fails the build if the two key
  * sets diverge.
  *
- * Served by the `effective_network` command. The Settings UI derives every
- * numeric placeholder from this payload rather than carrying a copy of the
- * defaults (#611).
+ * Served inside `NetworkDefaults` by the `network_defaults` command. The
+ * Settings UI derives every numeric placeholder from this payload rather than
+ * carrying a copy of the defaults (#611).
  */
 export interface EffectiveNetwork {
     socket_timeout_secs: number;
@@ -504,6 +504,53 @@ export interface EffectiveNetwork {
     /** Bytes. */
     parallel_threshold: number;
     hls_head_probe_timeout_secs: number;
+    /** No Settings control yet (#602); carried so the mirror stays complete. */
+    hls_expansion_timeout_secs: number;
+}
+
+/**
+ * An inclusive `{min, max}` bound on one network/download field, in the
+ * field's own unit. Mirrors `rdlp_types::NetworkRange` (drift-gated).
+ */
+export interface NetworkRange {
+    min: number;
+    max: number;
+}
+
+/**
+ * The allowed range of every `EffectiveNetwork` field, under the same name.
+ * Mirrors `rdlp_types::NetworkRanges` (drift-gated). The Settings UI's
+ * numeric controls take `minValue`/`maxValue` from here — the same table
+ * `Config::validate` and `AppSettings::validate_security` enforce — so no
+ * bound is a literal in a section (#611).
+ */
+export interface NetworkRanges {
+    socket_timeout_secs: NetworkRange;
+    read_timeout_secs: NetworkRange;
+    /** `min` is the `0` "eviction disabled" sentinel, owned by the checkbox. */
+    pool_idle_timeout_secs: NetworkRange;
+    download_timeout_secs: NetworkRange;
+    merge_timeout_secs: NetworkRange;
+    concurrent_fragments: NetworkRange;
+    /** Bytes. */
+    buffer_size: NetworkRange;
+    /** Bytes. */
+    parallel_threshold: NetworkRange;
+    hls_head_probe_timeout_secs: NetworkRange;
+    hls_expansion_timeout_secs: NetworkRange;
+}
+
+/**
+ * The one network payload the Settings view fetches (`network_defaults`).
+ * Mirrors `rdlp_types::NetworkDefaults` (drift-gated).
+ */
+export interface NetworkDefaults {
+    /** What an empty (inherit) field resolves to. */
+    effective: EffectiveNetwork;
+    /** `EffectiveNetwork::DEFAULT`: what the GUI seeds when the inherited value cannot express the user's intent. */
+    builtin: EffectiveNetwork;
+    /** `EffectiveNetwork::RANGES`: the bounds the numeric controls clamp to. */
+    ranges: NetworkRanges;
 }
 
 /**

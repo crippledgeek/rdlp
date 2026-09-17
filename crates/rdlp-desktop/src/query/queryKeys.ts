@@ -44,8 +44,7 @@ export const queryKeys = {
     },
     formats: (url: string) => ["formats", url] as const,
     settings: () => ["settings"] as const,
-    effectiveNetwork: () => ["effective-network"] as const,
-    builtinNetworkDefaults: () => ["builtin-network-defaults"] as const,
+    networkDefaults: () => ["network-defaults"] as const,
     /** Keyed by preset: the I/TP/LRA values differ per preset (`null` = inherit). */
     effectiveNormalize: (preset: LoudnormPreset | null) => ["effective-normalize", preset] as const,
     loudnormPresets: () => ["loudnorm-presets"] as const,

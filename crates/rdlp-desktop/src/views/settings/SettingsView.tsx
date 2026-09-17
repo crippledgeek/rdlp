@@ -5,7 +5,7 @@ import { useState } from "react";
 import { extractErrorMessage } from "@/api/invokeClient";
 import { useQuery } from "@tanstack/react-query";
 import { settingsQueryOptions, updateSettings } from "@/api/settings";
-import { builtinNetworkDefaultsQueryOptions, effectiveNetworkQueryOptions } from "@/api/effectiveNetwork";
+import { networkDefaultsQueryOptions } from "@/api/effectiveNetwork";
 import { effectiveNormalizeQueryOptions, loudnormPresetsQueryOptions } from "@/api/effectiveNormalize";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
@@ -21,13 +21,11 @@ import type { AppSettings } from "@/types";
 
 export function SettingsView() {
     const { data: settings, error: settingsError } = useQuery(settingsQueryOptions());
-    // The values an empty (inherit) field resolves to — the sections derive
-    // their placeholders from this instead of carrying a copy of the defaults
-    // (#611). Fetched in parallel with the settings; both gate the form.
-    const { data: defaults, error: defaultsError } = useQuery(effectiveNetworkQueryOptions());
-    // The built-in defaults, for the one control whose inherited value can be
-    // a sentinel that cannot express "on" (idle eviction over an inherited 0).
-    const { data: builtin, error: builtinError } = useQuery(builtinNetworkDefaultsQueryOptions());
+    // The network payload: what an empty (inherit) field resolves to, the
+    // built-in defaults, and the owning ranges — the sections derive every
+    // placeholder and bound from it instead of carrying a copy (#611).
+    // Fetched in parallel with the settings; both gate the form.
+    const { data: network, error: networkError } = useQuery(networkDefaultsQueryOptions());
     // Track edits as a partial overlay on top of server data.
     // null = no edits yet, show server data as-is.
     const [edits, setEdits] = useState<Partial<AppSettings> | null>(null);
@@ -39,16 +37,18 @@ export function SettingsView() {
 
     // The normalization values for the DRAFT'S preset — re-fetched when the
     // preset changes, because the I/TP/LRA defaults are preset-dependent
-    // (#611). `keepPreviousData` in the options holds the last payload while
-    // the next loads, so a preset switch never blanks the placeholders.
+    // (#611). Gated (`skipToken`) until the settings resolve: `undefined` here
+    // is "no draft yet", `null` is the stored "inherit". `keepPreviousData` in
+    // the options holds the last payload while the next loads, so a preset
+    // switch never blanks the placeholders.
     const { data: normalize, error: normalizeError } = useQuery(
-        effectiveNormalizeQueryOptions(draft?.loudnorm_preset ?? null),
+        effectiveNormalizeQueryOptions(draft?.loudnorm_preset),
     );
 
     // The preset catalogue for the picker's per-item labels (#611).
     const { data: presets, error: presetsError } = useQuery(loudnormPresetsQueryOptions());
 
-    const loadError = settingsError ?? defaultsError ?? builtinError ?? normalizeError ?? presetsError;
+    const loadError = settingsError ?? networkError ?? normalizeError ?? presetsError;
     if (loadError) {
         return (
             <div className="max-w-2xl mx-auto px-4 py-6">
@@ -61,7 +61,7 @@ export function SettingsView() {
         );
     }
 
-    if (!draft || !defaults || !builtin || !normalize || !presets) {
+    if (!draft || !network || !normalize || !presets) {
         return (
             <div className="flex items-center justify-center h-full">
                 <p className="text-[13px] text-[var(--text-muted)] animate-pulse">Loading settings…</p>
@@ -101,10 +101,10 @@ export function SettingsView() {
                 <GeneralSection draft={draft} onChange={handleChange} />
                 <OutputSection draft={draft} onChange={handleChange} />
                 <PostProcessSection draft={draft} onChange={handleChange} />
-                <DownloadSection draft={draft} defaults={defaults} onChange={handleChange} />
+                <DownloadSection draft={draft} network={network} onChange={handleChange} />
                 <SubtitlesSection draft={draft} onChange={handleChange} />
                 <NormalizationSection draft={draft} effective={normalize} presets={presets} onChange={handleChange} />
-                <NetworkSection draft={draft} defaults={defaults} builtin={builtin} onChange={handleChange} />
+                <NetworkSection draft={draft} network={network} onChange={handleChange} />
                 <SystemSection />
 
                 {/* Save */}

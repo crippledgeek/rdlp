@@ -1,35 +1,23 @@
-// TanStack Query options for the engine's network/download values: the
-// RESOLVED ones an empty field inherits, and the BUILT-IN defaults.
+// TanStack Query options for the engine's network/download payload: the
+// RESOLVED values an empty field inherits, the BUILT-IN defaults, and the
+// owning ranges — one command, one round trip (#611).
 
 import { queryOptions } from "@tanstack/react-query";
 import { invokeTyped } from "./invokeClient";
 import { queryKeys } from "../query/queryKeys";
-import type { EffectiveNetwork } from "../types";
+import type { NetworkDefaults } from "../types";
 
 /**
- * Fetch the values the engine runs with when a setting is left to inherit.
+ * Fetch `NetworkDefaults` from the `network_defaults` command.
  *
  * `staleTime: Infinity`: the base configuration (`config.toml`) is loaded once
- * per process, so the resolved values cannot change while the app runs.
+ * per process and the built-in defaults and ranges are compile-time constants,
+ * so nothing in the payload can change while the app runs.
  */
-export function effectiveNetworkQueryOptions() {
+export function networkDefaultsQueryOptions() {
     return queryOptions({
-        queryKey: queryKeys.effectiveNetwork(),
-        queryFn: () => invokeTyped<EffectiveNetwork>("effective_network"),
-        staleTime: Infinity,
-    });
-}
-
-/**
- * Fetch the built-in defaults (`EffectiveNetwork::DEFAULT`), before any
- * `config.toml` layering. Used to seed a field when the inherited value cannot
- * express the user's intent (re-enabling idle eviction over an inherited `0`).
- * Compile-time constants on the Rust side: never stale.
- */
-export function builtinNetworkDefaultsQueryOptions() {
-    return queryOptions({
-        queryKey: queryKeys.builtinNetworkDefaults(),
-        queryFn: () => invokeTyped<EffectiveNetwork>("builtin_network_defaults"),
+        queryKey: queryKeys.networkDefaults(),
+        queryFn: () => invokeTyped<NetworkDefaults>("network_defaults"),
         staleTime: Infinity,
     });
 }

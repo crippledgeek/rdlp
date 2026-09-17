@@ -5,24 +5,26 @@
 
 import { Gauge } from "lucide-react";
 import { NumericField } from "@/views/settings/NumericField";
-import { bytesToMibDisplay, mibDisplayToBytes } from "@/views/settings/byteUnits";
+import { byteRangeToMib, bytesToMibDisplay, mibDisplayToBytes } from "@/views/settings/byteUnits";
 import { withInheritHint } from "@/views/settings/inheritHint";
-import type { AppSettings, EffectiveNetwork } from "@/types";
+import type { AppSettings, NetworkDefaults } from "@/types";
 
 interface Props {
     draft: AppSettings;
     /**
-     * The values the engine runs with when a field is left empty (inherit),
-     * served over IPC. Every placeholder below derives from it — none is a
-     * literal (#611; enforced by `scripts/check-effective-config-drift.sh`).
+     * The engine's network payload, served over IPC: `effective` is what a
+     * field left empty (inherit) runs with, `ranges` the bounds the engine
+     * enforces. Every placeholder and every `minValue`/`maxValue` below derives
+     * from it — none is a literal (#611; enforced by
+     * `scripts/check-effective-config-drift.sh`).
      */
-    defaults: EffectiveNetwork;
+    network: NetworkDefaults;
     onChange: (update: Partial<AppSettings>) => void;
 }
 
 /**
  * A stored byte value below ~512 KiB rounds to 0 MiB under `bytesToMibDisplay`
- * (`Math.round`), and 0 is below the field's `minValue={1}`. Passing that 0 straight
+ * (`Math.round`), and 0 is below the field's whole-MiB `minValue`. Passing that 0 straight
  * through as `NumericField`'s controlled `value` is worse than a clamp-on-blur: React
  * Aria's `useNumberFieldState` clamps a controlled `value` prop to `[minValue, maxValue]`
  * BEFORE it ever becomes `numberValue` (verified against the installed
@@ -67,7 +69,10 @@ function byteFieldHelper(bytes: number | null, helper: string): string {
     return helper;
 }
 
-export function DownloadSection({ draft, defaults, onChange }: Props) {
+export function DownloadSection({ draft, network, onChange }: Props) {
+    const { effective: defaults, ranges } = network;
+    const bufferMib = byteRangeToMib(ranges.buffer_size);
+    const thresholdMib = byteRangeToMib(ranges.parallel_threshold);
     return (
         <section
             id="settings-download"
@@ -85,8 +90,8 @@ export function DownloadSection({ draft, defaults, onChange }: Props) {
                     label="Concurrent Fragments"
                     helper={withInheritHint("Parallel fragment downloads. Higher uses more memory.")}
                     value={draft.concurrent_fragments}
-                    minValue={1}
-                    maxValue={64}
+                    minValue={ranges.concurrent_fragments.min}
+                    maxValue={ranges.concurrent_fragments.max}
                     onCommit={(v) => onChange({ concurrent_fragments: v })}
                 />
                 <NumericField
@@ -95,8 +100,8 @@ export function DownloadSection({ draft, defaults, onChange }: Props) {
                     label="HLS Probe Timeout"
                     helper={withInheritHint("Timeout for the HLS HEAD probe.")}
                     value={draft.hls_head_probe_timeout}
-                    minValue={1}
-                    maxValue={300}
+                    minValue={ranges.hls_head_probe_timeout_secs.min}
+                    maxValue={ranges.hls_head_probe_timeout_secs.max}
                     onCommit={(v) => onChange({ hls_head_probe_timeout: v })}
                     suffix="s"
                 />
@@ -111,8 +116,8 @@ export function DownloadSection({ draft, defaults, onChange }: Props) {
                         ),
                     )}
                     value={byteFieldValue(draft.buffer_size)}
-                    minValue={1}
-                    maxValue={1024}
+                    minValue={bufferMib.min}
+                    maxValue={bufferMib.max}
                     onCommit={(mib) =>
                         onChange({ buffer_size: mib === null ? null : mibDisplayToBytes(mib) })
                     }
@@ -127,8 +132,8 @@ export function DownloadSection({ draft, defaults, onChange }: Props) {
                         withInheritHint("Files at least this large are downloaded in parallel chunks."),
                     )}
                     value={byteFieldValue(draft.parallel_threshold)}
-                    minValue={1}
-                    maxValue={1024}
+                    minValue={thresholdMib.min}
+                    maxValue={thresholdMib.max}
                     onCommit={(mib) =>
                         onChange({ parallel_threshold: mib === null ? null : mibDisplayToBytes(mib) })
                     }

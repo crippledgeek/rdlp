@@ -16,19 +16,38 @@
 // `formStateToPoolIdleTimeout`/`poolIdleTimeoutToFormState` below, which the
 // checkbox still drives.
 
+import type { NetworkRange } from "@/types";
+
 export interface PoolIdleFormState {
     evictIdle: boolean;
     secondsInput: string;
 }
 
+/**
+ * The stored `pool_idle_timeout` that means "idle eviction disabled" — the
+ * engine's sentinel (`EffectiveNetwork::pool_idle_timeout_secs` doc), which the
+ * checkbox owns and the numeric control must never produce.
+ */
+export const POOL_IDLE_DISABLED = 0;
+
+/**
+ * The numeric idle-timeout control's lower bound. The owner's range starts at
+ * `POOL_IDLE_DISABLED`, but a typed 0 would silently turn eviction off from a
+ * control whose visible meaning is "after N seconds"; the control therefore
+ * starts one past the sentinel while its upper bound stays the owner's.
+ */
+export function poolIdleNumericMin(range: NetworkRange): number {
+    return Math.max(range.min, POOL_IDLE_DISABLED + 1);
+}
+
 export function formStateToPoolIdleTimeout(state: PoolIdleFormState): number | null {
-    if (!state.evictIdle) return 0; // sentinel: disable eviction
+    if (!state.evictIdle) return POOL_IDLE_DISABLED;
     if (state.secondsInput.trim() === "") return null; // use default
     return Number(state.secondsInput);
 }
 
 export function poolIdleTimeoutToFormState(value: number | null): PoolIdleFormState {
-    if (value === 0) return { evictIdle: false, secondsInput: "" };
+    if (value === POOL_IDLE_DISABLED) return { evictIdle: false, secondsInput: "" };
     if (value === null) return { evictIdle: true, secondsInput: "" };
     return { evictIdle: true, secondsInput: String(value) };
 }

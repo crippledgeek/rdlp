@@ -28,8 +28,14 @@ use serde::{Deserialize, Deserializer, Serialize};
 /// does not pass to a `deserialize_with` function.
 ///
 /// The rejected value is rendered as JSON (`serde_json::Value`'s `Display`),
-/// so control characters arrive escaped; these are enum spellings, not URLs,
-/// so no redaction applies.
+/// so control characters arrive escaped, then redacted and bounded by
+/// [`bounded_redacted`].
+///
+/// This runs on every `AppSettings` deserialization, so ALSO on the
+/// `update_settings` IPC path: an unknown enum spelling sent by the frontend
+/// is warned-and-dropped (the field saves as `None` = inherit), not rejected
+/// with an error. The frontend's typed unions make that unreachable from the
+/// shipped UI; it matters for a hand-crafted IPC call.
 fn lenient_option<'de, D, T>(deserializer: D, field: &'static str) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
@@ -38,7 +44,9 @@ where
     let Some(raw) = Option::<serde_json::Value>::deserialize(deserializer)? else {
         return Ok(None);
     };
-    match T::deserialize(raw.clone()) {
+    // `&serde_json::Value` is itself a `Deserializer`, so no clone is needed
+    // to keep `raw` for the log line.
+    match T::deserialize(&raw) {
         Ok(value) => Ok(Some(value)),
         Err(e) => {
             // Both the value and the parse error echo user-typed text (the
@@ -171,7 +179,9 @@ pub struct AppSettings {
     /// Write (keep) downloaded thumbnail as a separate file alongside the output.
     #[serde(default)]
     pub write_thumbnail: bool,
-    /// Gain in dB applied on top of normalization (peak or loudnorm).
+    /// Peak-mode target level in dBFS; `None` = inherit
+    /// `EffectiveNormalize::PEAK_TARGET_DB`. Bounded by
+    /// `EffectiveNormalize::PEAK_TARGET_DB_RANGE` (the alimiter's floor).
     #[serde(default)]
     pub audio_gain_target: Option<f64>,
     /// Browser to extract cookies from for age-gated content.
@@ -196,28 +206,26 @@ pub struct AppSettings {
     /// Embed subtitles into the output container.
     #[serde(default)]
     pub embed_subtitles: bool,
-    /// Connect/handshake timeout in seconds. `None` uses default (30).
-    /// Validated post-load by `Config::validate()`: must be 1..=300.
+    /// Connect/handshake timeout in seconds. `None` = inherit.
+    /// Bounded by `EffectiveNetwork::RANGES` via [`AppSettings::validate_security`].
     #[serde(default)]
     pub socket_timeout: Option<u64>,
-    /// Per-read idle timeout in seconds. `None` uses default.
-    /// Validated post-load by `Config::validate()`: must be 1..=600.
+    /// Per-read idle timeout in seconds. `None` = inherit.
+    /// Bounded by `EffectiveNetwork::RANGES` via [`AppSettings::validate_security`].
     #[serde(default)]
     pub read_timeout: Option<u64>,
     /// Idle keep-alive socket eviction timeout in seconds. `None` uses default;
     /// `Some(0)` disables eviction (sentinel translated downstream by
     /// `HttpClientConfig::from_rdlp_config`).
-    /// Validated post-load by `Config::validate()`: must be 0..=3600.
+    /// Bounded by `EffectiveNetwork::RANGES` via [`AppSettings::validate_security`].
     #[serde(default)]
     pub pool_idle_timeout: Option<u64>,
-    /// Total download timeout in seconds. `None` uses default (3600).
-    /// Validated by `AppSettings::validate()` (range mirrors `rdlp_types`
-    /// `Config::validate()`): must be 1..=86400.
+    /// Total download timeout in seconds. `None` = inherit.
+    /// Bounded by `EffectiveNetwork::RANGES` via [`AppSettings::validate_security`].
     #[serde(default)]
     pub download_timeout: Option<u64>,
-    /// Merge (mux/concat) timeout in seconds. `None` uses default (1800).
-    /// Validated by `AppSettings::validate()` (range mirrors `rdlp_types`
-    /// `Config::validate()`): must be 1..=86400.
+    /// Merge (mux/concat) timeout in seconds. `None` = inherit.
+    /// Bounded by `EffectiveNetwork::RANGES` via [`AppSettings::validate_security`].
     #[serde(default)]
     pub merge_timeout: Option<u64>,
     /// Download subtitles by default.
@@ -235,23 +243,23 @@ pub struct AppSettings {
     /// Retry failed subtitle downloads.
     #[serde(default)]
     pub retry_subs: bool,
-    /// Number of concurrent fragment/chunk downloads. `None` uses default (8).
-    /// Validated by [`AppSettings::validate_security`]: must be 1..=64.
+    /// Number of concurrent fragment/chunk downloads. `None` = inherit.
+    /// Bounded by `EffectiveNetwork::RANGES` via [`AppSettings::validate_security`].
     #[serde(default)]
     pub concurrent_fragments: Option<u32>,
-    /// Download buffer size in **bytes**. `None` uses default (2 MiB).
-    /// Validated by [`AppSettings::validate_security`]: must be 1..=1 GiB.
+    /// Download buffer size in **bytes**. `None` = inherit.
+    /// Bounded by `EffectiveNetwork::RANGES` via [`AppSettings::validate_security`].
     ///
     /// The Settings UI presents this in MiB; bytes remain the stored truth.
     #[serde(default)]
     pub buffer_size: Option<u64>,
     /// Minimum file size in **bytes** before parallel chunked download is used.
-    /// `None` uses default (10 MiB). Validated: must be 1..=1 GiB (mirrors
-    /// `rdlp_types::Config::validate()`).
+    /// `None` = inherit. Bounded by `EffectiveNetwork::RANGES` via
+    /// [`AppSettings::validate_security`].
     #[serde(default)]
     pub parallel_threshold: Option<u64>,
-    /// HLS HEAD-probe timeout in seconds. `None` uses default (5).
-    /// Validated by [`AppSettings::validate_security`]: must be 1..=300.
+    /// HLS HEAD-probe timeout in seconds. `None` = inherit.
+    /// Bounded by `EffectiveNetwork::RANGES` via [`AppSettings::validate_security`].
     #[serde(default)]
     pub hls_head_probe_timeout: Option<u64>,
 }
@@ -598,18 +606,6 @@ impl std::fmt::Display for SettingsValidationError {
 
 impl std::error::Error for SettingsValidationError {}
 
-/// Upper bound for byte-valued settings, in bytes (1 GiB).
-///
-/// Mirrors `rdlp_types::Config::validate()`'s `parallel_threshold` and `buffer_size`
-/// ceilings rather than introducing a second magic number. `Config::validate()` is not
-/// called on the desktop path (see `commands::download`), so `validate_security` is this
-/// field's enforcement point on that path — run on both `AppSettings::load()` and the
-/// `update_settings` save command, so neither a hand-edited `settings.json` nor a save
-/// from the UI can carry an out-of-range value. No cross-crate test enforces the two
-/// literals staying in sync, so a future change to either ceiling must be mirrored
-/// manually in the other crate.
-const MAX_BYTE_SETTING: u64 = 1024 * 1024 * 1024;
-
 /// Maximum number of entries in `default_subtitle_langs`.
 ///
 /// The list is compared against every subtitle track of every download
@@ -662,79 +658,27 @@ impl AppSettings {
                 .map_err(|e| SettingsValidationError::InvalidProxy(e.to_string()))?;
         }
 
-        // HTTP timeout ranges — mirror `rdlp_types::Config::validate()` so a
-        // hand-edited settings.json can't bypass the frontend's zod parsing.
-        if let Some(t) = self.socket_timeout
-            && !(1..=300).contains(&t)
-        {
-            return Err(SettingsValidationError::OutOfRange {
-                field: "socket_timeout",
-                reason: "must be 1..=300 seconds",
-            });
-        }
-        if let Some(t) = self.read_timeout
-            && !(1..=600).contains(&t)
-        {
-            return Err(SettingsValidationError::OutOfRange {
-                field: "read_timeout",
-                reason: "must be 1..=600 seconds",
-            });
-        }
-        if let Some(t) = self.pool_idle_timeout
-            && t > 3600
-        {
-            return Err(SettingsValidationError::OutOfRange {
-                field: "pool_idle_timeout",
-                reason: "must be 0..=3600 seconds (0 = disabled)",
-            });
-        }
-        if let Some(t) = self.download_timeout
-            && !(1..=86400).contains(&t)
-        {
-            return Err(SettingsValidationError::OutOfRange {
-                field: "download_timeout",
-                reason: "must be 1..=86400 seconds",
-            });
-        }
-        if let Some(t) = self.merge_timeout
-            && !(1..=86400).contains(&t)
-        {
-            return Err(SettingsValidationError::OutOfRange {
-                field: "merge_timeout",
-                reason: "must be 1..=86400 seconds",
-            });
-        }
-        if let Some(n) = self.concurrent_fragments
-            && !(1..=64).contains(&n)
-        {
-            return Err(SettingsValidationError::OutOfRange {
-                field: "concurrent_fragments",
-                reason: "must be 1..=64 (caps peak transient memory under parallel fetch)",
-            });
-        }
-        if let Some(n) = self.buffer_size
-            && !(1..=MAX_BYTE_SETTING).contains(&n)
-        {
-            return Err(SettingsValidationError::OutOfRange {
-                field: "buffer_size",
-                reason: "must be 1..=1_073_741_824 bytes (1 GiB)",
-            });
-        }
-        if let Some(n) = self.parallel_threshold
-            && !(1..=MAX_BYTE_SETTING).contains(&n)
-        {
-            return Err(SettingsValidationError::OutOfRange {
-                field: "parallel_threshold",
-                reason: "must be 1..=1_073_741_824 bytes (1 GiB)",
-            });
-        }
-        if let Some(t) = self.hls_head_probe_timeout
-            && !(1..=300).contains(&t)
-        {
-            return Err(SettingsValidationError::OutOfRange {
-                field: "hls_head_probe_timeout",
-                reason: "must be 1..=300 seconds",
-            });
+        // Network/download bounds: the SAME check `Config::validate` runs, on
+        // the same owner (`rdlp_types::EffectiveNetwork::RANGES`), so a
+        // hand-edited settings.json cannot bypass a bound the engine enforces
+        // and neither validator can hold a bound the other lacks (#611
+        // review). `Config::validate()` is not called on the desktop path
+        // (see `commands::download`), so this is the enforcement point here —
+        // run on both `AppSettings::load()` and the `update_settings` command.
+        let network = rdlp_types::NetworkFields {
+            socket_timeout: self.socket_timeout,
+            read_timeout: self.read_timeout,
+            pool_idle_timeout: self.pool_idle_timeout,
+            download_timeout: self.download_timeout,
+            merge_timeout: self.merge_timeout,
+            concurrent_fragments: self.concurrent_fragments.map(u64::from),
+            buffer_size: self.buffer_size,
+            parallel_threshold: self.parallel_threshold,
+            hls_head_probe_timeout: self.hls_head_probe_timeout,
+            hls_expansion_timeout: None,
+        };
+        if let Some((field, reason)) = network.first_out_of_range() {
+            return Err(SettingsValidationError::OutOfRange { field, reason });
         }
 
         // Normalization targets: the SAME check `Config::validate` runs, on the
@@ -814,6 +758,86 @@ mod tests {
             ..AppSettings::default()
         };
         assert!(settings.validate_security().is_ok());
+    }
+
+    /// `validate_security` reads the network bounds from
+    /// `EffectiveNetwork::RANGES`: each field is accepted at both ends of its
+    /// owning range and rejected one past each, with the reason citing the
+    /// owner's bounds. Mutating the owner moves this test's expectations with
+    /// it; a copied literal in the validator would then fail here.
+    #[test]
+    fn validate_security_network_bounds_come_from_the_owner() {
+        type Setter = fn(&mut AppSettings, Option<u64>);
+        let r = rdlp_types::EffectiveNetwork::RANGES;
+        let fields: [(&str, Setter, rdlp_types::NetworkRange); 9] = [
+            (
+                "socket_timeout",
+                |s, v| s.socket_timeout = v,
+                r.socket_timeout_secs,
+            ),
+            (
+                "read_timeout",
+                |s, v| s.read_timeout = v,
+                r.read_timeout_secs,
+            ),
+            (
+                "pool_idle_timeout",
+                |s, v| s.pool_idle_timeout = v,
+                r.pool_idle_timeout_secs,
+            ),
+            (
+                "download_timeout",
+                |s, v| s.download_timeout = v,
+                r.download_timeout_secs,
+            ),
+            (
+                "merge_timeout",
+                |s, v| s.merge_timeout = v,
+                r.merge_timeout_secs,
+            ),
+            (
+                "concurrent_fragments",
+                |s, v| s.concurrent_fragments = v.map(|n| u32::try_from(n).expect("fits")),
+                r.concurrent_fragments,
+            ),
+            ("buffer_size", |s, v| s.buffer_size = v, r.buffer_size),
+            (
+                "parallel_threshold",
+                |s, v| s.parallel_threshold = v,
+                r.parallel_threshold,
+            ),
+            (
+                "hls_head_probe_timeout",
+                |s, v| s.hls_head_probe_timeout = v,
+                r.hls_head_probe_timeout_secs,
+            ),
+        ];
+        for (field, set, range) in fields {
+            for accepted in [range.min, range.max] {
+                let mut settings = AppSettings::default();
+                set(&mut settings, Some(accepted));
+                settings
+                    .validate_security()
+                    .unwrap_or_else(|e| panic!("{field}={accepted} must be accepted: {e}"));
+            }
+            let rejected: Vec<u64> = [range.min.checked_sub(1), Some(range.max + 1)]
+                .into_iter()
+                .flatten()
+                .collect();
+            for value in rejected {
+                let mut settings = AppSettings::default();
+                set(&mut settings, Some(value));
+                match settings.validate_security() {
+                    Err(SettingsValidationError::OutOfRange { field: f, reason }) if f == field => {
+                        assert!(
+                            reason.contains(&format!("{}..={}", range.min, range.max)),
+                            "{field}: the reason must cite the owner's bounds: {reason:?}"
+                        );
+                    }
+                    other => panic!("{field}={value}: got {other:?}"),
+                }
+            }
+        }
     }
 
     #[test]
@@ -1248,8 +1272,6 @@ mod tests {
         );
     }
 
-    /// Settings JSON that predates the normalization fields (i.e. produced
-    /// by an older version of the application) MUST deserialize without
     /// An unrecognised spelling in ONE typed `Option<enum>` field must cost that
     /// field only — never the whole file. Before the lenient deserializer, serde
     /// rejected the entire document and `parse_and_validate` fell back to
@@ -1343,6 +1365,8 @@ mod tests {
         });
     }
 
+    /// Settings JSON that predates the normalization fields (i.e. produced
+    /// by an older version of the application) MUST deserialize without
     /// error, with all normalization fields falling back to their defaults.
     #[test]
     fn test_load_legacy_settings_without_normalization_fields() {
@@ -1417,7 +1441,7 @@ mod tests {
             normalize_boost: true,
             normalize_boost_db: Some(8.0),
             write_thumbnail: true,
-            audio_gain_target: Some(3.0),
+            audio_gain_target: Some(-3.0),
             cookies_from_browser: Some(BrowserType::Firefox),
             cookies_file: Some(PathBuf::from("/tmp/cookies.txt")),
             proxy: Some("http://proxy.example.com:3128".to_owned()),
@@ -1464,7 +1488,7 @@ mod tests {
         assert!(restored.normalize_boost);
         assert_eq!(restored.normalize_boost_db, Some(8.0));
         assert!(restored.write_thumbnail);
-        assert_eq!(restored.audio_gain_target, Some(3.0));
+        assert_eq!(restored.audio_gain_target, Some(-3.0));
         assert_eq!(restored.cookies_from_browser, Some(BrowserType::Firefox));
         assert_eq!(
             restored.cookies_file.as_deref(),
