@@ -51,16 +51,28 @@ SCAN_ROOTS=(crates/rdlp-ffmpeg/src)
 if [ "$SELF_TEST" -eq 1 ]; then
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT
-    cat > "$tmp/unguarded.rs" <<'FIXTURE'
+    # Positive canary: an unguarded open must be flagged.
+    mkdir -p "$tmp/bad" "$tmp/good"
+    cat > "$tmp/bad/unguarded.rs" <<'FIXTURE'
 fn open(ctx: Audio, codec: Codec) -> Result<Encoder> {
     ctx.open_as(codec)
 }
 FIXTURE
-    if [ -n "$(scan "$tmp")" ]; then
-        echo "SELF-TEST OK: the gate still flags an unguarded encoder open."
+    # Negative canary: a guarded open, and a doc comment naming the call,
+    # must NOT be flagged — otherwise a scanner that flags everything would
+    # pass the positive check.
+    cat > "$tmp/good/guarded.rs" <<'FIXTURE'
+/// Call before `.open_as()`.
+fn open(mut ctx: Audio, codec: Codec) -> Result<Encoder> {
+    crate::ffmpeg::codec_registry::enable_experimental_if_flagged(&mut ctx, codec);
+    ctx.open_as(codec)
+}
+FIXTURE
+    if [ -n "$(scan "$tmp/bad")" ] && [ -z "$(scan "$tmp/good")" ]; then
+        echo "SELF-TEST OK: the gate flags an unguarded encoder open and passes a guarded one."
         exit 0
     fi
-    echo "SELF-TEST FAILED: the gate did NOT flag a known unguarded open — it is broken."
+    echo "SELF-TEST FAILED: the gate misjudged a known fixture — it is broken."
     exit 1
 fi
 
