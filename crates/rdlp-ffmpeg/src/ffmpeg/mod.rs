@@ -100,9 +100,7 @@ pub use codec_registry::MediaKind;
 pub use fixup::FixupIssue;
 pub use log_capture::{FfmpegLogBridge, LogForwarderGuard, bridge_ffmpeg_logs};
 pub use muxer_defaults::{known_undeclared_support_named, muxer_can_represent};
-pub use normalize_types::{
-    AudioNormMode, LoudnormMeasurements, LoudnormPreset, NormalizeOptions, PeakAnalysis,
-};
+pub use normalize_types::{AudioNormMode, LoudnormMeasurements, NormalizeOptions, PeakAnalysis};
 pub use options::{AudioExtractOptions, ChapterEntry, RemuxOptions, VideoConvertOptions};
 pub use probe::{MediaInfo, StreamInfo, StreamKind};
 // `source::{Audio, Source, SourceAudio, SourceState, SourceVideo, Video}` are
@@ -327,7 +325,7 @@ mod tests {
     #[test]
     fn test_normalize_options_default_reads_the_owner() {
         let opts = NormalizeOptions::default();
-        let targets = LoudnormPreset::default().targets();
+        let targets = rdlp_types::LoudnormPreset::default().targets();
         assert_eq!(opts.target_i, targets.integrated_lufs);
         assert_eq!(opts.target_tp, targets.true_peak_dbtp);
         assert_eq!(opts.target_lra, targets.range_lu);

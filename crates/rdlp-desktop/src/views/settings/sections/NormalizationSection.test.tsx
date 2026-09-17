@@ -2,21 +2,15 @@ import { describe, it, expect, vi } from "vitest";
 import { fireEvent, render, screen } from "@/test/test-utils";
 import { NormalizationSection } from "./NormalizationSection";
 import { effectiveNormalizeLoudStub, effectiveNormalizeStub, loudnormPresetsStub } from "@/test/effectiveNormalizeStub";
+import { appSettingsStub } from "@/test/appSettingsStub";
 import type { AppSettings } from "@/types";
 
-const baseDraft = {
+const baseDraft: AppSettings = {
+    ...appSettingsStub,
     normalize_audio: true,
     loudnorm: true,
-    audio_gain_target: null,
-    loudnorm_preset: null,
-    loudnorm_target_i: null,
-    loudnorm_target_tp: null,
-    loudnorm_target_lra: null,
-    loudnorm_dynamic: false,
-    loudnorm_precompress: false,
     normalize_boost: true,
-    normalize_boost_db: null,
-} as unknown as AppSettings;
+};
 
 // #611: the placeholder is the "inherit" hint, so it must state the value the
 // engine actually uses for the DRAFT'S preset. That arrives over IPC as the
@@ -27,9 +21,9 @@ describe("NormalizationSection — placeholders derive from the effective-normal
     it("every loudnorm target placeholder is the payload's value", () => {
         render(<NormalizationSection draft={baseDraft} effective={effectiveNormalizeStub} presets={loudnormPresetsStub} onChange={vi.fn()} />);
         const stub = effectiveNormalizeStub;
-        expect(screen.getByLabelText(/loudness \(lufs\)/i)).toHaveAttribute("placeholder", String(stub.target_i));
-        expect(screen.getByLabelText(/true peak \(dbtp\)/i)).toHaveAttribute("placeholder", String(stub.target_tp));
-        expect(screen.getByLabelText(/range \(lu\)/i)).toHaveAttribute("placeholder", String(stub.target_lra));
+        expect(screen.getByLabelText(/loudness \(lufs\)/i)).toHaveAttribute("placeholder", String(stub.targets.integrated_lufs));
+        expect(screen.getByLabelText(/true peak \(dbtp\)/i)).toHaveAttribute("placeholder", String(stub.targets.true_peak_dbtp));
+        expect(screen.getByLabelText(/range \(lu\)/i)).toHaveAttribute("placeholder", String(stub.targets.range_lu));
         expect(screen.getByLabelText(/boost gain/i)).toHaveAttribute("placeholder", String(stub.boost_gain_db));
     });
 
@@ -42,6 +36,24 @@ describe("NormalizationSection — placeholders derive from the effective-normal
         );
     });
 
+    // The ranges have ONE owner (`rdlp_types::EffectiveNormalize::*_RANGE`),
+    // enforced behind `update_settings`; a client-side `min`/`max` would be a
+    // second copy of it — and the copies had already drifted (#611 review).
+    it("no target input carries a client-side min/max", () => {
+        const { rerender } = render(
+            <NormalizationSection draft={{ ...baseDraft, loudnorm: false }} effective={effectiveNormalizeStub} presets={loudnormPresetsStub} onChange={vi.fn()} />,
+        );
+        const peak = screen.getByLabelText(/peak target/i);
+        expect(peak).not.toHaveAttribute("min");
+        expect(peak).not.toHaveAttribute("max");
+        rerender(<NormalizationSection draft={baseDraft} effective={effectiveNormalizeStub} presets={loudnormPresetsStub} onChange={vi.fn()} />);
+        for (const label of [/loudness \(lufs\)/i, /true peak \(dbtp\)/i, /range \(lu\)/i, /boost gain/i]) {
+            const input = screen.getByLabelText(label);
+            expect(input).not.toHaveAttribute("min");
+            expect(input).not.toHaveAttribute("max");
+        }
+    });
+
     // The I/TP/LRA defaults are preset-dependent. Before #611 the hints were
     // Streaming-only literals, so they were WRONG under Loud/Broadcast.
     it("switching the preset changes the loudnorm target placeholders", () => {
@@ -50,7 +62,7 @@ describe("NormalizationSection — placeholders derive from the effective-normal
         );
         expect(screen.getByLabelText(/loudness \(lufs\)/i)).toHaveAttribute(
             "placeholder",
-            String(effectiveNormalizeStub.target_i),
+            String(effectiveNormalizeStub.targets.integrated_lufs),
         );
         rerender(
             <NormalizationSection
@@ -62,11 +74,11 @@ describe("NormalizationSection — placeholders derive from the effective-normal
         );
         expect(screen.getByLabelText(/loudness \(lufs\)/i)).toHaveAttribute(
             "placeholder",
-            String(effectiveNormalizeLoudStub.target_i),
+            String(effectiveNormalizeLoudStub.targets.integrated_lufs),
         );
         expect(screen.getByLabelText(/range \(lu\)/i)).toHaveAttribute(
             "placeholder",
-            String(effectiveNormalizeLoudStub.target_lra),
+            String(effectiveNormalizeLoudStub.targets.range_lu),
         );
     });
 

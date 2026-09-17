@@ -4,7 +4,7 @@ use std::sync::LazyLock;
 
 use serde::Serialize;
 
-use crate::loudnorm_preset::LoudnormPreset;
+use crate::loudnorm_preset::{LoudnormPreset, LoudnormTargets};
 use crate::postprocess::PostProcess;
 
 /// An inclusive, finite bound on one normalization target, in the unit the
@@ -40,7 +40,7 @@ impl NormalizeRange {
 
     /// The `OutOfRange` reason text, rendered from the bounds so it cannot
     /// drift from them. (Not `const`: `const_format` 0.2 cannot format
-    /// floats, so the validators read the `*_REASON` statics below.)
+    /// floats, so the validators read it once via [`NORMALIZE_TARGET_BOUNDS`].)
     #[must_use]
     pub fn describe(self) -> String {
         format!(
@@ -83,12 +83,11 @@ impl NormalizeRange {
 pub struct EffectiveNormalize {
     /// The preset in force — explicit, or [`LoudnormPreset::default()`].
     pub preset: LoudnormPreset,
-    /// Integrated loudness target for `loudnorm`, in LUFS.
-    pub target_i: f64,
-    /// True-peak ceiling for `loudnorm`, in dBTP.
-    pub target_tp: f64,
-    /// Loudness range target for `loudnorm`, in LU.
-    pub target_lra: f64,
+    /// The `loudnorm` I/TP/LRA targets in force: the resolved preset's
+    /// [`targets`](LoudnormPreset::targets) with each explicit override
+    /// applied. The same named type the preset owns, so the two cannot
+    /// name the same three values differently.
+    pub targets: LoudnormTargets,
     /// Peak-mode target level, in dBFS.
     pub peak_target_db: f64,
     /// Gain applied by the limiter-boost fallback, in dB.
@@ -158,57 +157,30 @@ impl EffectiveNormalize {
     };
 }
 
-/// `OutOfRange` reason for [`EffectiveNormalize::PEAK_TARGET_DB_RANGE`],
-/// rendered once from the bounds (a `&'static str` for the error variants).
-pub static PEAK_TARGET_DB_REASON: LazyLock<String> =
-    LazyLock::new(|| EffectiveNormalize::PEAK_TARGET_DB_RANGE.describe());
-/// `OutOfRange` reason for [`EffectiveNormalize::TARGET_I_RANGE`].
-pub static TARGET_I_REASON: LazyLock<String> =
-    LazyLock::new(|| EffectiveNormalize::TARGET_I_RANGE.describe());
-/// `OutOfRange` reason for [`EffectiveNormalize::TARGET_TP_RANGE`].
-pub static TARGET_TP_REASON: LazyLock<String> =
-    LazyLock::new(|| EffectiveNormalize::TARGET_TP_RANGE.describe());
-/// `OutOfRange` reason for [`EffectiveNormalize::TARGET_LRA_RANGE`].
-pub static TARGET_LRA_REASON: LazyLock<String> =
-    LazyLock::new(|| EffectiveNormalize::TARGET_LRA_RANGE.describe());
-/// `OutOfRange` reason for [`EffectiveNormalize::BOOST_GAIN_DB_RANGE`].
-pub static BOOST_GAIN_DB_REASON: LazyLock<String> =
-    LazyLock::new(|| EffectiveNormalize::BOOST_GAIN_DB_RANGE.describe());
-
-/// The five bounded `PostProcess` targets: `(field name, range, reason)`.
+/// The five bounded `PostProcess` targets: `(field name, range, reason)`,
+/// the reason rendered once from its range so it cannot drift from it.
 ///
 /// The single table both validators iterate, so neither can omit a field the
-/// other checks. `field` is the `PostProcess`/`AppSettings` identifier.
-#[must_use]
-pub fn normalize_target_bounds() -> [(&'static str, NormalizeRange, &'static str); 5] {
-    [
-        (
-            "audio_gain_target",
-            EffectiveNormalize::PEAK_TARGET_DB_RANGE,
-            PEAK_TARGET_DB_REASON.as_str(),
-        ),
-        (
-            "loudnorm_target_i",
-            EffectiveNormalize::TARGET_I_RANGE,
-            TARGET_I_REASON.as_str(),
-        ),
-        (
-            "loudnorm_target_tp",
-            EffectiveNormalize::TARGET_TP_RANGE,
-            TARGET_TP_REASON.as_str(),
-        ),
-        (
-            "loudnorm_target_lra",
-            EffectiveNormalize::TARGET_LRA_RANGE,
-            TARGET_LRA_REASON.as_str(),
-        ),
-        (
-            "normalize_boost_db",
-            EffectiveNormalize::BOOST_GAIN_DB_RANGE,
-            BOOST_GAIN_DB_REASON.as_str(),
-        ),
-    ]
-}
+/// other checks. `field` is the `PostProcess`/`AppSettings` identifier. A
+/// `static` because `const_format` 0.2 cannot format floats, and the
+/// `OutOfRange` variants want a `&'static str`.
+pub static NORMALIZE_TARGET_BOUNDS: LazyLock<[(&str, NormalizeRange, String); 5]> =
+    LazyLock::new(|| {
+        [
+            (
+                "audio_gain_target",
+                EffectiveNormalize::PEAK_TARGET_DB_RANGE,
+            ),
+            ("loudnorm_target_i", EffectiveNormalize::TARGET_I_RANGE),
+            ("loudnorm_target_tp", EffectiveNormalize::TARGET_TP_RANGE),
+            ("loudnorm_target_lra", EffectiveNormalize::TARGET_LRA_RANGE),
+            (
+                "normalize_boost_db",
+                EffectiveNormalize::BOOST_GAIN_DB_RANGE,
+            ),
+        ]
+        .map(|(field, range)| (field, range, range.describe()))
+    });
 
 impl PostProcess {
     /// The first normalization target outside its owning range, as
@@ -217,7 +189,7 @@ impl PostProcess {
     /// The ONE range check both `Config::validate` and the desktop's
     /// `AppSettings::validate_security` call, so the bounds and the field
     /// names cannot drift between them. Checked in the order of
-    /// [`normalize_target_bounds`].
+    /// [`NORMALIZE_TARGET_BOUNDS`].
     #[must_use]
     pub fn first_target_out_of_range(&self) -> Option<(&'static str, &'static str)> {
         let values = [
@@ -227,18 +199,16 @@ impl PostProcess {
             self.loudnorm_target_lra,
             self.normalize_boost_db,
         ];
-        normalize_target_bounds()
-            .into_iter()
+        NORMALIZE_TARGET_BOUNDS
+            .iter()
             .zip(values)
             .find(|((_, range, _), value)| value.is_some_and(|v| !range.contains(v)))
-            .map(|((field, _, reason), _)| (field, reason))
+            .map(|((field, _, reason), _)| (*field, reason.as_str()))
     }
-}
 
-impl PostProcess {
     /// Materialise the normalization settings the post-process stage reads.
     ///
-    /// The single resolution step for the six values: the preset collapses to
+    /// The single resolution step for the values: the preset collapses to
     /// [`LoudnormPreset::default()`], each unset I/TP/LRA to the resolved
     /// preset's [`targets`](LoudnormPreset::targets), and the peak target and
     /// boost gain to [`EffectiveNormalize::PEAK_TARGET_DB`] and
@@ -247,12 +217,18 @@ impl PostProcess {
     #[must_use]
     pub fn effective_normalize(&self) -> EffectiveNormalize {
         let preset = self.loudnorm_preset.unwrap_or_default();
-        let targets = preset.targets();
+        let preset_targets = preset.targets();
         EffectiveNormalize {
             preset,
-            target_i: self.loudnorm_target_i.unwrap_or(targets.integrated_lufs),
-            target_tp: self.loudnorm_target_tp.unwrap_or(targets.true_peak_dbtp),
-            target_lra: self.loudnorm_target_lra.unwrap_or(targets.range_lu),
+            targets: LoudnormTargets {
+                integrated_lufs: self
+                    .loudnorm_target_i
+                    .unwrap_or(preset_targets.integrated_lufs),
+                true_peak_dbtp: self
+                    .loudnorm_target_tp
+                    .unwrap_or(preset_targets.true_peak_dbtp),
+                range_lu: self.loudnorm_target_lra.unwrap_or(preset_targets.range_lu),
+            },
             peak_target_db: self
                 .audio_gain_target
                 .unwrap_or(EffectiveNormalize::PEAK_TARGET_DB),
@@ -361,8 +337,27 @@ mod tests {
         };
         assert_eq!(
             bad.first_target_out_of_range(),
-            Some(("loudnorm_target_lra", TARGET_LRA_REASON.as_str()))
+            Some((
+                "loudnorm_target_lra",
+                EffectiveNormalize::TARGET_LRA_RANGE.describe().as_str()
+            ))
         );
+        // The table's rows are the five targets in `PostProcess` order, each
+        // reason rendered from its own range.
+        let fields: Vec<&str> = NORMALIZE_TARGET_BOUNDS.iter().map(|(f, _, _)| *f).collect();
+        assert_eq!(
+            fields,
+            [
+                "audio_gain_target",
+                "loudnorm_target_i",
+                "loudnorm_target_tp",
+                "loudnorm_target_lra",
+                "normalize_boost_db"
+            ]
+        );
+        for (_, range, reason) in NORMALIZE_TARGET_BOUNDS.iter() {
+            assert_eq!(*reason, range.describe());
+        }
     }
 
     /// The desktop reads this over IPC; the wire shape is the field names as
@@ -377,7 +372,12 @@ mod tests {
         let json = serde_json::to_value(eff).expect("serialize");
         let fields = json.as_object().expect("a JSON object");
         assert_eq!(fields.get("preset"), Some(&"loud".into()));
-        assert_eq!(fields.get("target_i"), Some(&(-11.0).into()));
+        // `targets` is the nested `LoudnormTargets` object, not three flat keys.
+        assert_eq!(
+            fields.get("targets"),
+            Some(&serde_json::to_value(LoudnormPreset::Loud.targets()).expect("serialize"))
+        );
+        assert_eq!(fields.get("target_i"), None, "no flat copy of a target");
         assert_eq!(
             fields.get("peak_target_db"),
             Some(&EffectiveNormalize::PEAK_TARGET_DB.into())
@@ -386,6 +386,6 @@ mod tests {
             fields.get("boost_gain_db"),
             Some(&EffectiveNormalize::BOOST_GAIN_DB.into())
         );
-        assert_eq!(fields.len(), 6, "exactly six fields on the wire");
+        assert_eq!(fields.len(), 4, "exactly four fields on the wire");
     }
 }

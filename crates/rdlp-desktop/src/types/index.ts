@@ -520,12 +520,8 @@ export interface EffectiveNetwork {
 export interface EffectiveNormalize {
     /** The preset in force — the draft's, or the one the base config resolved to. */
     preset: LoudnormPreset;
-    /** LUFS. */
-    target_i: number;
-    /** dBTP. */
-    target_tp: number;
-    /** LU. */
-    target_lra: number;
+    /** The `loudnorm` I/TP/LRA targets in force: the preset's, with explicit overrides applied. */
+    targets: LoudnormTargets;
     /** dBFS, peak mode. */
     peak_target_db: number;
     /** dB, limiter-boost fallback. */

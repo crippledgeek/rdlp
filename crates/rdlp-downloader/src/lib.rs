@@ -46,7 +46,8 @@
 //! ### Fine-Grained Parallelism
 //!
 //! - Automatic activation for files > 10 MB with Range support
-//! - Configurable concurrent connections (default: 4)
+//! - Configurable concurrent connections (default: `concurrent_fragments` on
+//!   [`rdlp_types::EffectiveNetwork::DEFAULT`])
 //! - Batch processing prevents overwhelming the runtime
 //! - Smart resume: switches to parallel if < 20% downloaded
 //!

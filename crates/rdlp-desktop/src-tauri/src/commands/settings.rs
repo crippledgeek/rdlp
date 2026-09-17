@@ -347,17 +347,11 @@ mod tests {
 
         let inherited = resolve_effective_normalize(&base, None);
         assert_eq!(inherited.preset, LoudnormPreset::Broadcast);
-        assert_eq!(
-            inherited.target_lra,
-            LoudnormPreset::Broadcast.targets().range_lu
-        );
+        assert_eq!(inherited.targets, LoudnormPreset::Broadcast.targets());
 
         let overlaid = resolve_effective_normalize(&base, Some(LoudnormPreset::Loud));
         assert_eq!(overlaid.preset, LoudnormPreset::Loud);
-        assert_eq!(
-            overlaid.target_i,
-            LoudnormPreset::Loud.targets().integrated_lufs
-        );
+        assert_eq!(overlaid.targets, LoudnormPreset::Loud.targets());
 
         // An unset base falls to the type's default, like the engine does.
         let unset = resolve_effective_normalize(&PostProcess::default(), None);

@@ -2,12 +2,10 @@
 //!
 //! Provides `AudioNormMode`, `NormalizeOptions`, `PeakAnalysis`, and
 //! `LoudnormMeasurements` used by the normalization pipeline.
-//! [`LoudnormPreset`] lives in `rdlp-types` (the single owner of the
-//! per-preset targets, #611) and is re-exported here so callers' paths
-//! did not move.
+//! [`LoudnormPreset`] lives in `rdlp-types`, the single owner of the
+//! per-preset targets (#611).
 
-pub use rdlp_types::LoudnormPreset;
-use rdlp_types::{EffectiveNormalize, LoudnormTargets};
+use rdlp_types::{EffectiveNormalize, LoudnormPreset, LoudnormTargets};
 
 /// Audio normalization mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

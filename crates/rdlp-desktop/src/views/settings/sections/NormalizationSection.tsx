@@ -31,6 +31,9 @@ interface Props {
      * What an empty (inherit) field resolves to, for the DRAFT'S preset —
      * fetched over IPC (`effective_normalize`). Every numeric placeholder
      * here derives from it; the section holds no copy of a default (#611).
+     * The inputs carry no client-side `min`/`max` either: the ranges have one
+     * owner (`rdlp_types::EffectiveNormalize::*_RANGE`), enforced behind
+     * `update_settings`, whose `OutOfRange` verdict is the chosen UX.
      */
     effective: EffectiveNormalize;
     /**
@@ -106,8 +109,6 @@ export function NormalizationSection({ draft, effective, presets, onChange }: Pr
                                     id="audio-gain-target"
                                     type="number"
                                     step="0.1"
-                                    min="-30"
-                                    max="0"
                                     placeholder={String(effective.peak_target_db)}
                                     value={draft.audio_gain_target ?? ""}
                                     onChange={(e) =>
@@ -149,9 +150,9 @@ export function NormalizationSection({ draft, effective, presets, onChange }: Pr
                                 </div>
                                 <div className="grid grid-cols-3 gap-2">
                                     {[
-                                        { id: "loudnorm-target-i", label: "Loudness (LUFS)", field: "loudnorm_target_i" as const, placeholder: String(effective.target_i) },
-                                        { id: "loudnorm-target-tp", label: "True Peak (dBTP)", field: "loudnorm_target_tp" as const, placeholder: String(effective.target_tp) },
-                                        { id: "loudnorm-target-lra", label: "Range (LU)", field: "loudnorm_target_lra" as const, placeholder: String(effective.target_lra) },
+                                        { id: "loudnorm-target-i", label: "Loudness (LUFS)", field: "loudnorm_target_i" as const, placeholder: String(effective.targets.integrated_lufs) },
+                                        { id: "loudnorm-target-tp", label: "True Peak (dBTP)", field: "loudnorm_target_tp" as const, placeholder: String(effective.targets.true_peak_dbtp) },
+                                        { id: "loudnorm-target-lra", label: "Range (LU)", field: "loudnorm_target_lra" as const, placeholder: String(effective.targets.range_lu) },
                                     ].map(({ id, label, field, placeholder }) => (
                                         <div key={id}>
                                             <Label htmlFor={id} className="text-[11px] text-muted-foreground mb-1 block">{label}</Label>
@@ -211,8 +212,6 @@ export function NormalizationSection({ draft, effective, presets, onChange }: Pr
                                     id="normalize-boost-db"
                                     type="number"
                                     step="0.5"
-                                    min="0"
-                                    max="30"
                                     placeholder={String(effective.boost_gain_db)}
                                     value={draft.normalize_boost_db ?? ""}
                                     onChange={(e) =>

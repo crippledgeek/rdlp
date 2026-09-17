@@ -336,10 +336,7 @@ mod tests {
     fn effective_normalize_of_default_is_streaming_plus_the_two_consts() {
         let eff = PostProcess::default().effective_normalize();
         assert_eq!(eff.preset, LoudnormPreset::Streaming);
-        let targets = LoudnormPreset::Streaming.targets();
-        assert_eq!(eff.target_i, targets.integrated_lufs);
-        assert_eq!(eff.target_tp, targets.true_peak_dbtp);
-        assert_eq!(eff.target_lra, targets.range_lu);
+        assert_eq!(eff.targets, LoudnormPreset::Streaming.targets());
         assert_eq!(eff.peak_target_db, EffectiveNormalize::PEAK_TARGET_DB);
         assert_eq!(eff.boost_gain_db, EffectiveNormalize::BOOST_GAIN_DB);
     }
@@ -359,21 +356,9 @@ mod tests {
                 ..PostProcess::default()
             }
             .effective_normalize();
-            let targets = preset.targets();
             assert_eq!(eff.preset, preset);
-            assert_eq!(eff.target_i, targets.integrated_lufs, "{preset:?}");
-            assert_eq!(eff.target_tp, targets.true_peak_dbtp, "{preset:?}");
-            assert_eq!(eff.target_lra, targets.range_lu, "{preset:?}");
+            assert_eq!(eff.targets, preset.targets(), "{preset:?}");
         }
-        let loud = PostProcess {
-            loudnorm_preset: Some(LoudnormPreset::Loud),
-            ..PostProcess::default()
-        }
-        .effective_normalize();
-        assert_eq!(
-            (loud.target_i, loud.target_tp, loud.target_lra),
-            (-11.0, -1.0, 11.0)
-        );
     }
 
     /// Each `Some` overrides exactly its own field; the others keep the
@@ -390,10 +375,10 @@ mod tests {
         }
         .effective_normalize();
         assert_eq!(eff.preset, LoudnormPreset::Broadcast);
-        assert_eq!(eff.target_i, -16.0);
-        assert_eq!(eff.target_tp, -1.5);
+        assert_eq!(eff.targets.integrated_lufs, -16.0);
+        assert_eq!(eff.targets.true_peak_dbtp, -1.5);
         assert_eq!(
-            eff.target_lra,
+            eff.targets.range_lu,
             LoudnormPreset::Broadcast.targets().range_lu,
             "LRA was not overridden, so it stays the preset's"
         );

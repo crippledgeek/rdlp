@@ -10,9 +10,7 @@ import type { EffectiveNormalize, LoudnormPresetInfo } from "@/types";
 
 export const effectiveNormalizeStub: EffectiveNormalize = {
     preset: "broadcast",
-    target_i: -22.5,
-    target_tp: -2.5,
-    target_lra: 7.5,
+    targets: { integrated_lufs: -22.5, true_peak_dbtp: -2.5, range_lu: 7.5 },
     peak_target_db: -1.5,
     boost_gain_db: 12.5,
 };
@@ -20,9 +18,7 @@ export const effectiveNormalizeStub: EffectiveNormalize = {
 /** A second payload, as the engine would return it for a different preset. */
 export const effectiveNormalizeLoudStub: EffectiveNormalize = {
     preset: "loud",
-    target_i: -10.5,
-    target_tp: -0.5,
-    target_lra: 10.5,
+    targets: { integrated_lufs: -10.5, true_peak_dbtp: -0.5, range_lu: 10.5 },
     peak_target_db: -1.5,
     boost_gain_db: 12.5,
 };

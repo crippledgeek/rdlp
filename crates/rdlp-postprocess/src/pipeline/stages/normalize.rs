@@ -44,9 +44,9 @@ impl NormalizeStage {
         NormalizeOptions {
             mode,
             target_peak_db: effective.peak_target_db,
-            target_i: effective.target_i,
-            target_tp: effective.target_tp,
-            target_lra: effective.target_lra,
+            target_i: effective.targets.integrated_lufs,
+            target_tp: effective.targets.true_peak_dbtp,
+            target_lra: effective.targets.range_lu,
             salvage: true,
             force_dynamic: config.loudnorm_dynamic,
             precompress: config.loudnorm_precompress,
@@ -317,9 +317,9 @@ mod tests {
         let opts = NormalizeStage::build_options(&config);
         let eff = config.effective_normalize();
         assert_eq!(opts.target_peak_db, eff.peak_target_db);
-        assert_eq!(opts.target_i, eff.target_i);
-        assert_eq!(opts.target_tp, eff.target_tp);
-        assert_eq!(opts.target_lra, eff.target_lra);
+        assert_eq!(opts.target_i, eff.targets.integrated_lufs);
+        assert_eq!(opts.target_tp, eff.targets.true_peak_dbtp);
+        assert_eq!(opts.target_lra, eff.targets.range_lu);
         assert_eq!(opts.boost_gain_db, eff.boost_gain_db);
     }
 }
