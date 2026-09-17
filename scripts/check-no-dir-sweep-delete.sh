@@ -69,7 +69,7 @@ SELF_TEST=0
 # Allowlist: each entry must state why scanning-then-deleting is sound there.
 #
 # - rdlp-postprocess/src/pipeline/registry.rs: TempRegistry::cleanup_stale. Not
-#   a pattern sweep -- requires the `.rdlp-tmp-` marker AND an exclusive advisory
+#   a pattern sweep -- requires the `.rdlp-tmp-` marker AND an exclusive
 #   advisory lock AND an age floor before unlinking, so it provably never
 #   removes a live peer's file. This is the sanctioned discovery mechanism.
 # - rdlp-cli/src/plugin_cmd.rs and plugin_cmd/build_from_ytdlp.rs: `rdlp plugin
