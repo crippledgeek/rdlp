@@ -219,15 +219,21 @@ pub(super) fn parse_loudnorm_json(lines: &[String]) -> Result<LoudnormMeasuremen
 /// registry (#618) to cover every lossless encoder now reachable through
 /// `select_audio_encoder_for_container` (`.aiff`/`.caf` → `pcm_s16be`, `.wv`
 /// → `wavpack`), not just the two that were reachable before.
+///
+/// `None` means "rdlp has no opinion — leave the encoder's own default": the
+/// context is allocated with the codec, so e.g. `dca` keeps its
+/// `1411200` (`dcaenc.c` `ff_dca_encoder.defaults`). The old `_ => 128_000`
+/// catch-all clobbered that and put `dca` below its minimum viable rate
+/// (`frame_bits < min_frame_bits` → EINVAL at open, #639).
 pub(super) fn default_bitrate_for_encoder(
     encoder: &rdlp_types::media_name::AudioEncoderName,
-) -> usize {
+) -> Option<usize> {
     match encoder.as_str() {
-        "aac" | "libfdk_aac" => 128_000,
-        "libmp3lame" => 192_000,
-        "libopus" => 128_000,
-        "flac" | "pcm_s16le" | "pcm_s16be" | "alac" | "wavpack" | "tta" => 0,
-        _ => 128_000,
+        "aac" | "libfdk_aac" => Some(128_000),
+        "libmp3lame" => Some(192_000),
+        "libopus" => Some(128_000),
+        "flac" | "pcm_s16le" | "pcm_s16be" | "alac" | "wavpack" | "tta" => Some(0),
+        _ => None,
     }
 }
 

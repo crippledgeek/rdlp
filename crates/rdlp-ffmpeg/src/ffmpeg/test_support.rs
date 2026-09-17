@@ -81,13 +81,9 @@ pub fn write_sine_audio(output: &Path, spec: &SineAudio) -> Result<()> {
         .flags()
         .contains(ffmpeg_the_third::format::Flags::GLOBAL_HEADER);
 
-    let (ost_index, enc_context) = {
-        let ost = octx.add_stream(enc_codec)?;
-        (
-            ost.index(),
-            ffmpeg_the_third::codec::context::Context::from_parameters(ost.parameters())?,
-        )
-    };
+    let ost_index = octx.add_stream(enc_codec)?.index();
+    // With the codec, so its own defaults apply (see audio_extract.rs, #639).
+    let enc_context = ffmpeg_the_third::codec::context::Context::new_with_codec(enc_codec);
 
     let mut encoder = enc_context.encoder().audio()?;
     let format = FFmpegRunner::pick_audio_sample_format(
@@ -108,6 +104,7 @@ pub fn write_sine_audio(output: &Path, spec: &SineAudio) -> Result<()> {
         // SAFETY: a valid, not-yet-opened encoder context.
         FFmpegRunner::set_global_header_flag(unsafe { encoder.as_mut_ptr() });
     }
+    crate::ffmpeg::codec_registry::enable_experimental_if_flagged(&mut encoder, enc_codec);
     let mut encoder = encoder.open_as(enc_codec)?;
     // Re-read after open, as the production path does: avcodec_open2 may
     // replace an encoder's time_base (libavcodec/encode.c fills it only when

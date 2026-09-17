@@ -631,25 +631,21 @@ pub fn select_audio_encoder_for_container(container: ContainerFormat) -> Option<
 /// testable with an arbitrary/bogus codec name, independent of what any
 /// particular linked `FFmpeg` build actually declares.
 ///
-/// Caveat: `is_audio_encoder_available` is a bare `find_by_name(..).is_some()`
-/// — it does not check `AV_CODEC_CAP_EXPERIMENTAL`. `FFmpeg`'s native
-/// `vorbis`/`opus` encoders both carry that flag and fail to open without
-/// `strict_std_compliance = experimental`, so on a build lacking
-/// `libvorbis`/`libopus` tier 2 can resolve a codec-ID name (`vorbis`)
-/// that "is available" by this check yet won't actually open. Not filtered
-/// here: none of rdlp's transcode call sites set `strict_std_compliance`, so
-/// this is a real gap. It is deferred, not because filtering would require
-/// major plumbing — `ffmpeg-the-third` already exposes
-/// `Codec::capabilities()` / `Capabilities::EXPERIMENTAL`, so a self-filter
-/// here would be a few lines with no new plumbing — but because the failure
-/// mode this leaves in place is a loud encoder-open error at transcode time,
-/// not a silent wrong-codec substitution (the #618 bug class). Tracked as
-/// #625.
+/// Tiers 1 and 2 additionally skip an encoder `FFmpeg` marks experimental
+/// (#625): this is an *automatic* choice, and such an encoder would fail at
+/// `avcodec_open2` on the default compliance level. An explicit request for
+/// the same codec (`resolve_audio_encoder`) still resolves it — the gate is
+/// lifted at open time for explicit requests only (#639,
+/// `codec_registry::enable_experimental_if_flagged`).
 fn resolve_declared_codec(
     codec: &CodecName,
     container: ContainerFormat,
 ) -> Option<AudioEncoderName> {
+    let selectable = |enc: AudioEncoderName| {
+        (!codec_registry::is_experimental_encoder(enc.as_str())).then_some(enc)
+    };
     preferred_audio_encoder(codec.as_str())
+        .and_then(selectable)
         .or_else(|| {
             // `codec` is being asked about as an ENCODER name here — a
             // deliberate vocabulary crossing (native single-encoder codecs
@@ -659,7 +655,9 @@ fn resolve_declared_codec(
             // `retag` reinterprets the same validated bytes, preserving
             // whichever `Cow` variant `codec` already held.
             let as_encoder: AudioEncoderName = codec.clone().retag();
-            is_audio_encoder_available(&as_encoder).then_some(as_encoder)
+            is_audio_encoder_available(&as_encoder)
+                .then_some(as_encoder)
+                .and_then(selectable)
         })
         .or_else(|| {
             // Neither the preference table nor a direct name match resolved
@@ -1037,6 +1035,41 @@ mod tests {
 
     /// Tier 3 (the AAC-with-warning fallback the whole design hinges on
     /// being VISIBLE) had no test — tiers 1-2 were covered, tier 3 wasn't.
+    /// #625: an automatic default must never resolve to an encoder `FFmpeg`
+    /// marks `AV_CODEC_CAP_EXPERIMENTAL` — `avcodec_open2` refuses it at the
+    /// default compliance level (`libavcodec/avcodec.c`, "The encoder '%s'
+    /// is experimental"). `dts`'s only encoder is the native `dca`, which
+    /// carries the flag (`dcaenc.c`), so the declared codec must fall past
+    /// tiers 1 and 2 to the AAC fallback (Mkv carries AAC).
+    #[test]
+    fn automatic_default_skips_an_experimental_only_encoder() {
+        ensure_init_for_test();
+        let dts = CodecName::from_static("dts");
+        assert!(
+            codec_registry::is_experimental_encoder("dca"),
+            "precondition: this build's dca is the experimental native encoder"
+        );
+        let enc = resolve_declared_codec(&dts, ContainerFormat::Mkv);
+        let enc = enc.as_ref().map(rdlp_types::media_name::MediaName::as_str);
+        assert!(
+            enc == Some("aac") || enc == Some("libfdk_aac"),
+            "expected the experimental dca to be skipped in favour of the AAC \
+             fallback, got {enc:?}"
+        );
+    }
+
+    /// An explicit request for the codec still resolves its encoder; the
+    /// experimental gate is lifted at open time instead (#639).
+    #[test]
+    fn explicit_resolution_still_returns_the_experimental_encoder() {
+        ensure_init_for_test();
+        let enc = resolve_audio_encoder("dts");
+        assert_eq!(
+            enc.as_ref().map(rdlp_types::media_name::MediaName::as_str),
+            Some("dca")
+        );
+    }
+
     /// A bogus codec name skips the preference table (tier 1) and the
     /// direct-name check (tier 2) unconditionally, landing on tier 3
     /// regardless of what any particular linked `FFmpeg` build declares.

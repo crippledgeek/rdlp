@@ -27,14 +27,6 @@ use rdlp_postprocess::pipeline::PipelineStage as _;
 use rdlp_postprocess::pipeline::stages::AudioExtractStage;
 use rdlp_types::AudioFormat;
 
-/// Formats whose encoder FFmpeg marks experimental, so `avcodec_open2`
-/// refuses it at the default compliance level regardless of frame adaptation.
-///
-/// This is a different root cause from #638 — the open fails before a single
-/// frame is sent — and is tracked separately as #639. Re-enable here when that
-/// lands; the assertion below still guarantees the rest of the matrix passes.
-const EXPERIMENTAL_ENCODER_GATED: &[AudioFormat] = &[AudioFormat::Dts];
-
 /// The format whose codec ffprobe must report for `format`, where it is
 /// pinnable.
 ///
@@ -128,10 +120,6 @@ async fn every_supported_audio_format_extracts_to_a_decodable_file() {
     let mut failures = Vec::new();
 
     for format in AudioFormat::iter() {
-        if EXPERIMENTAL_ENCODER_GATED.contains(&format) {
-            skipped.push(format!("{format} (#639)"));
-            continue;
-        }
         if !encoder_present(format) {
             skipped.push(format.to_string());
             continue;

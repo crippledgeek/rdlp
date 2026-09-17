@@ -141,36 +141,18 @@ fn recognized_extension_with_no_encoder_reports_truthful_cause() {
 fn test_default_bitrate_for_encoder() {
     use rdlp_types::media_name::AudioEncoderName as Enc;
 
-    assert_eq!(
-        default_bitrate_for_encoder(&Enc::from_static("aac")),
-        128_000
-    );
-    assert_eq!(
-        default_bitrate_for_encoder(&Enc::from_static("libfdk_aac")),
-        128_000
-    );
-    assert_eq!(
-        default_bitrate_for_encoder(&Enc::from_static("libmp3lame")),
-        192_000
-    );
-    assert_eq!(
-        default_bitrate_for_encoder(&Enc::from_static("libopus")),
-        128_000
-    );
-    assert_eq!(default_bitrate_for_encoder(&Enc::from_static("flac")), 0);
-    assert_eq!(
-        default_bitrate_for_encoder(&Enc::from_static("pcm_s16le")),
-        0
-    );
-    // Lossless siblings newly reachable via the widened audio-default
-    // registry (#618): `.aiff`/`.caf` -> pcm_s16be, `.wv` -> wavpack.
-    assert_eq!(
-        default_bitrate_for_encoder(&Enc::from_static("pcm_s16be")),
-        0
-    );
-    assert_eq!(default_bitrate_for_encoder(&Enc::from_static("alac")), 0);
-    assert_eq!(default_bitrate_for_encoder(&Enc::from_static("wavpack")), 0);
-    assert_eq!(default_bitrate_for_encoder(&Enc::from_static("tta")), 0);
+    let bitrate = |name: &'static str| default_bitrate_for_encoder(&Enc::from_static(name));
+    assert_eq!(bitrate("aac"), Some(128_000));
+    assert_eq!(bitrate("libfdk_aac"), Some(128_000));
+    assert_eq!(bitrate("libmp3lame"), Some(192_000));
+    assert_eq!(bitrate("libopus"), Some(128_000));
+    for lossless in ["flac", "pcm_s16le", "pcm_s16be", "alac", "wavpack", "tta"] {
+        assert_eq!(bitrate(lossless), Some(0), "{lossless}");
+    }
+    // No opinion for an encoder outside the table: its own FFmpeg default
+    // stands (dca's 1411200 would be below its minimum at 128k, #639).
+    assert_eq!(bitrate("dca"), None);
+    assert_eq!(bitrate("ac3"), None);
 }
 
 #[test]

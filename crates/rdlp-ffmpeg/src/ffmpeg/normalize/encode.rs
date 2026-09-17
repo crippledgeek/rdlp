@@ -149,15 +149,16 @@ impl FFmpegRunner {
             .contains(ffmpeg_the_third::format::Flags::GLOBAL_HEADER);
 
         let audio_ost_index;
-        let audio_enc_context;
         {
             let ost = octx
                 .add_stream(enc_codec)
                 .ff_context("failed to add audio output stream for encode")?;
             audio_ost_index = ost.index();
-            audio_enc_context =
-                ffmpeg_the_third::codec::context::Context::from_parameters(ost.parameters())?;
         }
+        // See audio_extract.rs: allocated with the codec so its own defaults
+        // apply rather than the fresh stream's zeroed parameters (#639).
+        let audio_enc_context =
+            ffmpeg_the_third::codec::context::Context::new_with_codec(enc_codec);
 
         let mut audio_encoder = audio_enc_context.encoder().audio()?;
         let target_format = Self::pick_audio_sample_format(&enc_codec, audio_decoder.format());
@@ -178,11 +179,13 @@ impl FFmpegRunner {
         Self::set_default_channel_layout(unsafe { audio_encoder.as_mut_ptr() }, channels as i32);
 
         let target_bitrate = if input_audio_bitrate > 0 {
-            input_audio_bitrate
+            Some(input_audio_bitrate)
         } else {
             default_bitrate_for_encoder(&enc_name)
         };
-        audio_encoder.set_bit_rate(target_bitrate);
+        if let Some(bit_rate) = target_bitrate {
+            audio_encoder.set_bit_rate(bit_rate);
+        }
 
         if needs_global_header {
             Self::set_global_header_flag(unsafe { audio_encoder.as_mut_ptr() });
@@ -205,6 +208,10 @@ impl FFmpegRunner {
             debug!("[{label}] libfdk_aac: afterburner enabled");
         }
 
+        crate::ffmpeg::codec_registry::enable_experimental_if_flagged(
+            &mut audio_encoder,
+            enc_codec,
+        );
         let mut audio_encoder = audio_encoder
             .open_as(enc_codec)
             .ff_context("failed to open audio encoder")?;

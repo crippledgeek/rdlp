@@ -304,17 +304,21 @@ impl FFmpegRunner {
 
         // Add output stream and create encoder context (scoped to release octx borrow)
         let ost_index;
-        let enc_context;
         {
             let ost = octx
                 .add_stream(enc_codec)
                 .map_err(PostProcessError::from)
                 .context("failed to add output stream for audio transcode")?;
             ost_index = ost.index();
-            enc_context =
-                ffmpeg_the_third::codec::context::Context::from_parameters(ost.parameters())?;
         }
         // ost dropped -- octx no longer mutably borrowed
+        // Allocated WITH the codec (`avcodec_alloc_context3(codec)`) so the
+        // encoder's own `FFCodecDefault`s apply (libavcodec/options.c
+        // init_context_defaults). Building it from the fresh output stream's
+        // parameters instead copies that stream's zeroed fields over the generic
+        // defaults (codec_par.c avcodec_parameters_to_context), which is how `dca`
+        // used to reach avcodec_open2 with bit_rate 0 and refuse (#639).
+        let enc_context = ffmpeg_the_third::codec::context::Context::new_with_codec(enc_codec);
 
         // Configure encoder
         let mut audio_encoder = enc_context.encoder().audio()?;
@@ -355,6 +359,10 @@ impl FFmpegRunner {
             Self::set_global_header_flag(unsafe { audio_encoder.as_mut_ptr() });
         }
 
+        crate::ffmpeg::codec_registry::enable_experimental_if_flagged(
+            &mut audio_encoder,
+            enc_codec,
+        );
         // Open encoder
         let mut audio_encoder = audio_encoder
             .open_as(enc_codec)

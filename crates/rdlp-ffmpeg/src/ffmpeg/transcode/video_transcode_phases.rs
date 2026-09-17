@@ -281,6 +281,10 @@ impl FFmpegRunner {
         ) {
             enc_opts.set(key, &value);
         }
+        crate::ffmpeg::codec_registry::enable_experimental_if_flagged(
+            &mut video_encoder,
+            video_enc_codec,
+        );
         let video_encoder = video_encoder
             .open_as_with(video_enc_codec, enc_opts)
             .map_err(PostProcessError::from)
@@ -428,13 +432,10 @@ impl FFmpegRunner {
                 audio_enc_ost_idx = ost.index();
             }
 
-            // Configure audio encoder from decoder properties
-            let audio_enc_context = ffmpeg_the_third::codec::context::Context::from_parameters(
-                ctx.octx
-                    .stream(audio_enc_ost_idx)
-                    .ok_or_else(|| PostProcessError::ffmpeg_failed("audio encode ost not found"))?
-                    .parameters(),
-            )?;
+            // Configure audio encoder from decoder properties. Allocated with
+            // the codec so its own defaults apply (see audio_extract.rs, #639).
+            let audio_enc_context =
+                ffmpeg_the_third::codec::context::Context::new_with_codec(audio_enc_codec);
             let mut audio_encoder = audio_enc_context.encoder().audio()?;
 
             // Pick sample rate compatible with encoder (prefer decoder rate)
@@ -462,6 +463,10 @@ impl FFmpegRunner {
                 unsafe { Self::set_global_header_flag(audio_encoder.as_mut_ptr()) };
             }
 
+            crate::ffmpeg::codec_registry::enable_experimental_if_flagged(
+                &mut audio_encoder,
+                audio_enc_codec,
+            );
             let audio_encoder = audio_encoder
                 .open_as(audio_enc_codec)
                 .map_err(PostProcessError::from)

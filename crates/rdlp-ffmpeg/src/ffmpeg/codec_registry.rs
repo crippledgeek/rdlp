@@ -198,6 +198,50 @@ pub fn is_encoder_available(encoder: &str) -> bool {
     ffmpeg_the_third::codec::encoder::find_by_name(encoder).is_some()
 }
 
+/// Returns `true` if the named encoder exists in this build and `FFmpeg`
+/// marks it `AV_CODEC_CAP_EXPERIMENTAL`.
+///
+/// `avcodec_open2` refuses such an encoder unless the context's
+/// `strict_std_compliance` is `FF_COMPLIANCE_EXPERIMENTAL`
+/// (`libavcodec/avcodec.c`: "The encoder '%s' is experimental but
+/// experimental codecs are not enabled, add '-strict %d'"). In the linked
+/// 8.0.1 build the native `dca`, `vorbis` and `opus` encoders carry the
+/// flag. Two policies hang off this one predicate: an *automatic* default
+/// never selects such an encoder (#625, `resolve_declared_codec`), and an
+/// *explicit* request lifts the gate at open time (#639,
+/// [`enable_experimental_if_flagged`]).
+#[must_use]
+pub fn is_experimental_encoder(encoder: &str) -> bool {
+    ffmpeg_the_third::codec::encoder::find_by_name(encoder).is_some_and(is_experimental)
+}
+
+/// Whether `codec` carries `AV_CODEC_CAP_EXPERIMENTAL`.
+#[must_use]
+pub fn is_experimental(codec: ffmpeg_the_third::Codec) -> bool {
+    codec
+        .capabilities()
+        .contains(ffmpeg_the_third::codec::Capabilities::EXPERIMENTAL)
+}
+
+/// Lift `FFmpeg`'s experimental-codec gate on `ctx` when — and only when —
+/// `codec` carries `AV_CODEC_CAP_EXPERIMENTAL`. The in-process equivalent
+/// of the CLI's `-strict -2`, scoped to this one encoder context rather than
+/// a blanket compliance downgrade. Call before `open_as`; every encoder-open
+/// site in the crate goes through here so the decision cannot drift.
+pub fn enable_experimental_if_flagged(
+    ctx: &mut ffmpeg_the_third::codec::Context,
+    codec: ffmpeg_the_third::Codec,
+) {
+    if is_experimental(codec) {
+        log::info!(
+            "encoder '{}' is marked experimental by this FFmpeg build; enabling \
+             FF_COMPLIANCE_EXPERIMENTAL for it (the equivalent of -strict -2)",
+            codec.name()
+        );
+        ctx.compliance(ffmpeg_the_third::codec::Compliance::Experimental);
+    }
+}
+
 /// The row's encoders that are present in this build, in preference order.
 pub fn available_encoders<R: CodecRow>(
     row: &'static R,
