@@ -10,6 +10,7 @@ use anyhow::Context as _;
 use tokio_util::sync::CancellationToken;
 
 use crate::error::PostProcessError;
+use crate::ffmpeg::probe::StreamKind;
 
 use super::super::{FFmpegRunner, LoudnormMeasurements, NormalizeOptions, PeakAnalysis};
 use super::encode::EncodeCallCtx;
@@ -165,9 +166,11 @@ impl FFmpegRunner {
                         input.display()
                     )
                 })?;
+            // Not `best(Video)`: `av_find_best_stream` has no
+            // `ATTACHED_PIC` term and would report an audio file's cover art
+            // as its video stream (#643).
             ictx.streams()
-                .best(ffmpeg_the_third::media::Type::Video)
-                .is_some()
+                .any(|ist| StreamKind::of(&ist) == StreamKind::Video)
         };
 
         let ext = output

@@ -225,7 +225,8 @@ impl FFmpegRunner {
             // `add_stream_copy` mattered).
             if let Err(e) = Self::resolve_and_apply_codec_tag(
                 (*ofmt_ctx).oformat,
-                (*out_video_stream).codecpar.cast_const(),
+                out_video_stream,
+                (*in_video_stream).disposition,
             ) {
                 ffi::avformat_close_input(&mut ifmt_video);
                 ffi::avformat_close_input(&mut ifmt_audio);
@@ -296,7 +297,8 @@ impl FFmpegRunner {
             }
             if let Err(e) = Self::resolve_and_apply_codec_tag(
                 (*ofmt_ctx).oformat,
-                (*out_audio_stream).codecpar.cast_const(),
+                out_audio_stream,
+                (*in_audio_stream).disposition,
             ) {
                 ffi::avformat_close_input(&mut ifmt_video);
                 ffi::avformat_close_input(&mut ifmt_audio);

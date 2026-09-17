@@ -568,6 +568,17 @@ impl PipelineStage for RecodeStage {
                      video stream to encode"
                 );
             }
+            // The audio-only route maps the audio stream alone, so embedded
+            // cover art does not travel with it — the same outcome as
+            // `ffmpeg -vn`, which discards every video-medium stream
+            // including attached pictures (#643). Said out loud rather than
+            // silently; `ThumbnailStage` runs later and can embed anew.
+            if media_info.has_attached_picture() {
+                warn!(
+                    "RecodeStage: the source's embedded cover art is not carried into the \
+                     {target} audio-only output"
+                );
+            }
             return recode_audio_only::recode_audio_only(&self.ffmpeg, msg, target, &audio).await;
         }
 

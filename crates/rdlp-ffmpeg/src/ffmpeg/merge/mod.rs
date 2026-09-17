@@ -169,16 +169,15 @@ impl FFmpegRunner {
         // disk via `avio_open` — a codec-tag rejection on either stream
         // below must not leave that empty file behind as if a merge had
         // run and produced nothing.
+        let video_ist = ictx_video.stream(video_ist_index).ok_or_else(|| {
+            PostProcessError::ffmpeg_failed(format!(
+                "video input stream {video_ist_index} not found"
+            ))
+        })?;
         let video_ost_index = Self::add_stream_copy(
             &mut octx,
-            ictx_video
-                .stream(video_ist_index)
-                .ok_or_else(|| {
-                    PostProcessError::ffmpeg_failed(format!(
-                        "video input stream {video_ist_index} not found"
-                    ))
-                })?
-                .parameters(),
+            video_ist.parameters(),
+            video_ist.disposition(),
             "for merge video",
         )
         .inspect_err(|_| cleanup_partial_output(output))?;
@@ -190,16 +189,15 @@ impl FFmpegRunner {
             .map(|s| s.index())
             .ok_or(PostProcessError::NoAudioStream)?;
 
+        let audio_ist = ictx_audio.stream(audio_ist_index).ok_or_else(|| {
+            PostProcessError::ffmpeg_failed(format!(
+                "audio input stream {audio_ist_index} not found"
+            ))
+        })?;
         let audio_ost_index = Self::add_stream_copy(
             &mut octx,
-            ictx_audio
-                .stream(audio_ist_index)
-                .ok_or_else(|| {
-                    PostProcessError::ffmpeg_failed(format!(
-                        "audio input stream {audio_ist_index} not found"
-                    ))
-                })?
-                .parameters(),
+            audio_ist.parameters(),
+            audio_ist.disposition(),
             "for merge audio",
         )
         .inspect_err(|_| cleanup_partial_output(output))?;

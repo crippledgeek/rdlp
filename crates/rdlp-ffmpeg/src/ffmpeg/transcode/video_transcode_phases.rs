@@ -382,6 +382,7 @@ impl FFmpegRunner {
             let audio_ost_idx = Self::add_stream_copy(
                 &mut ctx.octx,
                 audio_ist.parameters(),
+                audio_ist.disposition(),
                 "for video transcode audio copy",
             )
             .inspect_err(|_| cleanup_partial_output(ctx.output_path))?;

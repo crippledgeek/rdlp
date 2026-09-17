@@ -191,6 +191,130 @@ pub fn write_sine_audio(output: &Path, spec: &SineAudio) -> Result<()> {
     Ok(())
 }
 
+/// A solid-colour still image, `width`×`height`, RGB.
+#[derive(Debug, Clone, Copy)]
+pub struct StillImage {
+    /// Width in pixels.
+    pub width: u32,
+    /// Height in pixels.
+    pub height: u32,
+    /// Fill colour as `(r, g, b)`.
+    pub rgb: (u8, u8, u8),
+}
+
+impl Default for StillImage {
+    fn default() -> Self {
+        Self {
+            width: 64,
+            height: 64,
+            rgb: (200, 40, 40),
+        }
+    }
+}
+
+/// Write `spec` as a PNG file at `output`.
+///
+/// One frame through the `png` encoder — a PNG packet *is* a complete PNG
+/// file, so no muxer is involved. Equivalent to
+/// `ffmpeg -f lavfi -i color=… -frames:v 1 output.png`, done in-process.
+///
+/// # Errors
+///
+/// Any `FFmpeg` failure opening the encoder or encoding the frame, or an
+/// I/O failure writing the file.
+pub fn write_still_png(output: &Path, spec: &StillImage) -> Result<()> {
+    crate::ffmpeg::ensure_init()?;
+
+    let codec = ffmpeg_the_third::encoder::find_by_name("png").ok_or_else(|| {
+        PostProcessError::UnsupportedCodec {
+            codec: "png".into(),
+            operation: "fixture synthesis".into(),
+        }
+    })?;
+    let mut encoder = ffmpeg_the_third::codec::context::Context::new_with_codec(codec)
+        .encoder()
+        .video()?;
+    encoder.set_width(spec.width);
+    encoder.set_height(spec.height);
+    encoder.set_format(ffmpeg_the_third::format::Pixel::RGB24);
+    encoder.set_time_base(ffmpeg_the_third::Rational(1, 25));
+    let mut encoder = encoder.open_as(codec)?;
+
+    let mut frame = ffmpeg_the_third::frame::Video::new(
+        ffmpeg_the_third::format::Pixel::RGB24,
+        spec.width,
+        spec.height,
+    );
+    let stride = frame.stride(0);
+    let rgb: [u8; 3] = spec.rgb.into();
+    let row_bytes = spec.width as usize * 3;
+    for row in frame.data_mut(0).chunks_mut(stride) {
+        // Rows are padded to `stride`; only the first `row_bytes` are pixels.
+        for px in row
+            .iter_mut()
+            .take(row_bytes)
+            .collect::<Vec<_>>()
+            .chunks_mut(3)
+        {
+            for (dst, src) in px.iter_mut().zip(rgb) {
+                **dst = src;
+            }
+        }
+    }
+    frame.set_pts(Some(0));
+
+    encoder.send_frame(&frame)?;
+    encoder.send_eof()?;
+    let mut packet = ffmpeg_the_third::Packet::empty();
+    encoder.receive_packet(&mut packet)?;
+    let bytes = packet
+        .data()
+        .ok_or_else(|| PostProcessError::ffmpeg_failed("png encoder produced an empty packet"))?;
+    // Test-support only, and the surrounding callers are synchronous tests.
+    #[allow(clippy::disallowed_methods)]
+    std::fs::write(output, bytes).map_err(|e| {
+        PostProcessError::ffmpeg_failed(format!("writing {}: {e}", output.display()))
+    })?;
+    Ok(())
+}
+
+/// Write a sine-tone audio file at `output` with `cover` embedded as its
+/// attached picture.
+///
+/// Goes through the crate's own embed path — the same PNG → baseline-JPEG
+/// normalisation `ThumbnailStage` applies (#519) and then
+/// `FFmpegRunner::embed_thumbnail` — so the fixture carries exactly the
+/// cover-art stream rdlp itself would write (an `ATTACHED_PIC` video-medium
+/// stream for MP4-family / FLAC targets).
+///
+/// # Errors
+///
+/// Any failure synthesising the tone, the cover, or embedding it.
+pub fn write_sine_audio_with_cover(
+    output: &Path,
+    audio: &SineAudio,
+    cover: &StillImage,
+) -> Result<()> {
+    let ext = output
+        .extension()
+        .and_then(|e| e.to_str())
+        .ok_or_else(|| PostProcessError::ffmpeg_failed("fixture output needs an extension"))?;
+    let plain = output.with_file_name(format!(
+        "plain-{}",
+        output.file_name().unwrap_or_default().to_string_lossy()
+    ));
+    let png = output.with_extension("cover.png");
+    let jpg = output.with_extension("cover.jpg");
+    write_sine_audio(&plain, audio)?;
+    write_still_png(&png, cover)?;
+    FFmpegRunner::transcode_image_sync(&png, &jpg).map_err(|e| {
+        PostProcessError::ffmpeg_failed(format!("normalising fixture cover: {e:#}"))
+    })?;
+    FFmpegRunner::embed_thumbnail_sync(&plain, &jpg, output, ext, None, None)
+        .map_err(|e| PostProcessError::ffmpeg_failed(format!("embedding fixture cover: {e:#}")))?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,5 +337,56 @@ mod tests {
         assert_eq!(info.sample_rate, Some(48_000));
         let duration = info.duration.expect("duration");
         assert!((duration - 1.5).abs() < 0.1, "duration {duration}");
+    }
+
+    #[tokio::test]
+    async fn still_png_fixture_probes_as_a_png_image_of_the_requested_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("cover.png");
+        write_still_png(
+            &path,
+            &StillImage {
+                width: 48,
+                height: 32,
+                ..StillImage::default()
+            },
+        )
+        .unwrap();
+
+        let info = FFmpegRunner::new().unwrap().probe(&path).await.unwrap();
+        assert_eq!(
+            info.video_codec
+                .as_ref()
+                .map(rdlp_types::media_name::MediaName::as_str),
+            Some("png"),
+            "{info:?}"
+        );
+        assert_eq!((info.width, info.height), (Some(48), Some(32)));
+    }
+
+    /// #643: an audio file whose only video-medium stream is its cover art is
+    /// NOT a video source. `ff_add_attached_pic` forces `codec_type = VIDEO`
+    /// on the picture (`libavformat/demux_utils.c`), so the medium alone
+    /// cannot tell; the `ATTACHED_PIC` disposition can, and the probe must
+    /// classify by it.
+    #[tokio::test]
+    async fn audio_with_cover_art_probes_as_audio_only_with_an_attached_picture() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("tone.m4a");
+        write_sine_audio_with_cover(&path, &SineAudio::default(), &StillImage::default()).unwrap();
+
+        let info = FFmpegRunner::new().unwrap().probe(&path).await.unwrap();
+        assert!(info.has_audio, "{info:?}");
+        assert!(
+            !info.has_video,
+            "cover art must not count as video for routing: {info:?}"
+        );
+        assert!(info.video_codec.is_none(), "{info:?}");
+        assert!(
+            info.streams
+                .iter()
+                .any(|s| s.codec_type == crate::ffmpeg::probe::StreamKind::AttachedPicture),
+            "the cover must still be visible as an attached picture: {info:?}"
+        );
     }
 }

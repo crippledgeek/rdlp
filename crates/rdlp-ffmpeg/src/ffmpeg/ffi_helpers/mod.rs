@@ -130,6 +130,66 @@ pub(crate) fn oformat_can_represent(
     }
 }
 
+/// Whether `oformat` can carry an attached picture (cover art) of `codec_id`.
+///
+/// JPEG and PNG are accepted outright as a verified baseline: every container
+/// rdlp embeds covers into stores them, but `avformat_query_codec` does not
+/// say so for all of them — `flac` and the `ipod` (`.m4a`) muxer carry
+/// neither a `query_codec` callback nor a tag-table entry for MJPEG/PNG.
+/// `movenc.c`'s `mov_find_codec_tag` never consults the tag table for a
+/// stream whose disposition is `ATTACHED_PIC`; it uses its own
+/// `codec_cover_image_tags` (mjpeg/png/bmp). The query only ever *widens*
+/// this baseline (mp3's callback answers every `ID3v2` `APIC` image codec).
+///
+/// The single cover-representability rule: the thumbnail pre-check and the
+/// stream-copy enforcement point both ask this, so they cannot disagree.
+pub(crate) fn oformat_can_carry_cover_image(
+    oformat: *const ffmpeg_the_third::ffi::AVOutputFormat,
+    codec_id: ffmpeg_the_third::ffi::AVCodecID,
+) -> bool {
+    matches!(
+        codec_id,
+        ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_MJPEG
+            | ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_PNG
+    ) || oformat_can_represent(oformat, codec_id)
+}
+
+/// What a stream being copied into an output *is* to the muxer, derived from
+/// its disposition — the one distinction the codec-tag decision has to make
+/// beyond the codec itself.
+///
+/// `FFmpeg`'s own CLI copies `disposition` verbatim on every stream copy
+/// (`fftools/ffmpeg_mux_init.c`, `set_dispositions`), and `movenc.c` keys
+/// its cover-art handling on exactly `disposition == ATTACHED_PIC`
+/// (`is_cover_image`). rdlp's copy paths used to drop the disposition and
+/// ask the muxer's *video* tag table about the cover, refusing `.m4a` cover
+/// embeds `FFmpeg` performs (#643).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StreamRole {
+    /// A playable media (or opaque data) stream.
+    Media,
+    /// Cover art: an `ATTACHED_PIC` video-medium stream.
+    CoverImage,
+}
+
+impl StreamRole {
+    /// The role a stream with these raw `AVStream.disposition` bits plays.
+    pub(crate) const fn from_disposition_bits(bits: std::ffi::c_int) -> Self {
+        if bits & ffmpeg_the_third::ffi::AV_DISPOSITION_ATTACHED_PIC != 0 {
+            Self::CoverImage
+        } else {
+            Self::Media
+        }
+    }
+
+    /// The role a stream with this disposition plays.
+    pub(crate) const fn from_disposition(
+        disposition: ffmpeg_the_third::format::stream::Disposition,
+    ) -> Self {
+        Self::from_disposition_bits(disposition.bits())
+    }
+}
+
 /// Which of the two frame-rate fields a write should actually touch.
 ///
 /// Split out of [`set_stream_frame_rates`] so the threshold is testable
@@ -241,6 +301,9 @@ impl FFmpegRunner {
     /// # Arguments
     /// * `octx` - Output format context
     /// * `params` - Input stream parameters to copy
+    /// * `disposition` - The stream's disposition, carried across as `FFmpeg`'s
+    ///   own stream copy does; an `ATTACHED_PIC` stream is a cover image and
+    ///   its codec tag is resolved as one (see [`StreamRole`]).
     /// * `context_msg` - Error context message (e.g., "for remux", "for merge video")
     ///
     /// # Errors
@@ -250,6 +313,7 @@ impl FFmpegRunner {
     pub(crate) fn add_stream_copy(
         octx: &mut ffmpeg_the_third::format::context::Output,
         params: impl ffmpeg_the_third::AsPtr<ffmpeg_the_third::ffi::AVCodecParameters>,
+        disposition: ffmpeg_the_third::format::stream::Disposition,
         context_msg: &str,
     ) -> Result<usize> {
         use crate::error::PostProcessError;
@@ -270,9 +334,18 @@ impl FFmpegRunner {
             .map_err(PostProcessError::from)
             .context(format!("failed to add output stream {context_msg}"))?;
         ost.set_parameters(params);
+        // SAFETY: `ost` is the live stream just added to `octx`; `disposition`
+        // is a plain bitfield write of the same width `FFmpeg` declares.
+        unsafe {
+            (*ost.as_mut_ptr()).disposition = disposition.bits();
+        }
 
         let params_ptr = ost.parameters().as_ptr();
-        match Self::resolve_codec_tag(oformat, params_ptr)? {
+        match Self::resolve_codec_tag(
+            oformat,
+            params_ptr,
+            StreamRole::from_disposition(disposition),
+        )? {
             CodecTagAction::Preserve => {}
             CodecTagAction::Clear => Self::clear_codec_tag(params_ptr),
         }
@@ -377,6 +450,7 @@ impl FFmpegRunner {
     pub(crate) fn resolve_codec_tag(
         oformat: *const ffmpeg_the_third::ffi::AVOutputFormat,
         params_ptr: *const ffmpeg_the_third::ffi::AVCodecParameters,
+        role: StreamRole,
     ) -> Result<CodecTagAction> {
         // SAFETY: `oformat` is the live output context's format descriptor
         // (see the SAFETY note at the `add_stream_copy` call site);
@@ -390,6 +464,20 @@ impl FFmpegRunner {
                 (*oformat).codec_tag,
             )
         };
+
+        // A cover image is never looked up in the muxer's media tag table:
+        // `movenc.c` tags it from its own cover table, `flacenc`/`mp3enc`
+        // re-embed it as a PICTURE block / APIC frame. Ask the one cover
+        // rule instead, and let the muxer pick the tag (`Clear`).
+        if role == StreamRole::CoverImage {
+            return if oformat_can_carry_cover_image(oformat, codec_id) {
+                Ok(CodecTagAction::Clear)
+            } else {
+                Err(Self::unrepresentable_codec_error(
+                    oformat, codec_id, codec_type,
+                ))
+            };
+        }
 
         if tags.is_null() {
             return Ok(CodecTagAction::Clear);
@@ -521,11 +609,31 @@ impl FFmpegRunner {
     /// Returns [`crate::error::PostProcessError::IncompatibleContainerCodec`]
     /// when [`Self::resolve_codec_tag`] rejects the pairing; the caller is
     /// still responsible for its own cleanup before propagating.
-    pub(crate) fn resolve_and_apply_codec_tag(
+    ///
+    /// Also carries the source stream's `disposition` onto `out_stream`, as
+    /// `FFmpeg`'s own stream copy does — the disposition is what makes a
+    /// cover image a cover image to the muxer (see [`StreamRole`]).
+    ///
+    /// # Safety
+    ///
+    /// `out_stream` must be a live output stream of the context `oformat`
+    /// describes, with `codecpar` already populated.
+    pub(crate) unsafe fn resolve_and_apply_codec_tag(
         oformat: *const ffmpeg_the_third::ffi::AVOutputFormat,
-        codecpar: *const ffmpeg_the_third::ffi::AVCodecParameters,
+        out_stream: *mut ffmpeg_the_third::ffi::AVStream,
+        disposition: std::ffi::c_int,
     ) -> Result<()> {
-        match Self::resolve_codec_tag(oformat, codecpar)? {
+        // SAFETY: the caller guarantees `out_stream` is live; both are plain
+        // field accesses on it.
+        let codecpar = unsafe {
+            (*out_stream).disposition = disposition;
+            (*out_stream).codecpar.cast_const()
+        };
+        match Self::resolve_codec_tag(
+            oformat,
+            codecpar,
+            StreamRole::from_disposition_bits(disposition),
+        )? {
             CodecTagAction::Preserve => {}
             CodecTagAction::Clear => Self::clear_codec_tag(codecpar),
         }
@@ -744,21 +852,6 @@ impl FFmpegRunner {
             if !ctx.is_null() {
                 ffmpeg_the_third::ffi::av_buffersink_set_frame_size(ctx, frame_size);
             }
-        }
-    }
-
-    /// Configure a stream with `ATTACHED_PIC` disposition (for cover art).
-    ///
-    /// Sets the stream disposition and clears the codec tag. Used for MP4,
-    /// FLAC, OGG, and other containers that embed cover art as a video stream
-    /// with special disposition.
-    pub(crate) fn set_attached_pic_disposition(stream_ptr: *mut ffmpeg_the_third::ffi::AVStream) {
-        // SAFETY: `stream_ptr` is a valid output stream pointer from a live
-        // output context. Setting disposition and clearing codec_tag configures
-        // the stream as cover art.
-        unsafe {
-            (*stream_ptr).disposition = ffmpeg_the_third::ffi::AV_DISPOSITION_ATTACHED_PIC;
-            (*((*stream_ptr).codecpar)).codec_tag = 0;
         }
     }
 }
@@ -1089,7 +1182,12 @@ mod tests {
                 let params =
                     fake_params(id, ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_VIDEO);
                 assert!(
-                    FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params)).is_ok(),
+                    FFmpegRunner::resolve_codec_tag(
+                        oformat,
+                        std::ptr::from_ref(&params),
+                        StreamRole::Media
+                    )
+                    .is_ok(),
                     "routing would stream-copy {name} into {ext}, but enforcement refuses it — \
                      the two rules have drifted"
                 );
@@ -1129,7 +1227,12 @@ mod tests {
 
             let params = fake_params(codec_id, media_type);
             assert!(
-                FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params)).is_ok(),
+                FFmpegRunner::resolve_codec_tag(
+                    oformat,
+                    std::ptr::from_ref(&params),
+                    StreamRole::Media
+                )
+                .is_ok(),
                 "KNOWN_UNDECLARED_SUPPORT routes a stream copy into {} that enforcement \
                  refuses — the allow-list has outrun resolve_codec_tag",
                 container.as_ext()
@@ -1147,7 +1250,12 @@ mod tests {
             ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_VIDEO,
         );
 
-        let action = FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params)).expect(
+        let action = FFmpegRunner::resolve_codec_tag(
+            oformat,
+            std::ptr::from_ref(&params),
+            StreamRole::Media,
+        )
+        .expect(
             "MKV must represent HEVC: matroskaenc defines mkv_query_codec even though \
              its static codec-tag table has no HEVC entry",
         );
@@ -1172,7 +1280,7 @@ mod tests {
             ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_SUBTITLE,
         );
 
-        FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params))
+        FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params), StreamRole::Media)
             .expect("MKV must represent SubRip subtitles despite no tag-table entry");
     }
 
@@ -1199,8 +1307,12 @@ mod tests {
         // `MKTAG` macro does (`u32::from_le_bytes` of the ASCII bytes).
         params.codec_tag = u32::from_le_bytes(*b"mp4a");
 
-        let action = FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params))
-            .expect("MKV must represent AAC");
+        let action = FFmpegRunner::resolve_codec_tag(
+            oformat,
+            std::ptr::from_ref(&params),
+            StreamRole::Media,
+        )
+        .expect("MKV must represent AAC");
         assert_eq!(
             action,
             CodecTagAction::Clear,
@@ -1228,7 +1340,12 @@ mod tests {
             ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_ATTACHMENT,
         );
 
-        let action = FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params)).expect(
+        let action = FFmpegRunner::resolve_codec_tag(
+            oformat,
+            std::ptr::from_ref(&params),
+            StreamRole::Media,
+        )
+        .expect(
             "attachment streams (e.g. embedded fonts) must never be rejected on \
              codec representability — only Video/Audio/Subtitle streams are \
              eligible for IncompatibleContainerCodec",
@@ -1253,7 +1370,7 @@ mod tests {
             ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_DATA,
         );
 
-        FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params))
+        FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params), StreamRole::Media)
             .expect("AVMEDIA_TYPE_DATA streams must never be rejected on codec representability");
     }
 
@@ -1271,8 +1388,12 @@ mod tests {
             ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_VIDEO,
         );
 
-        let err = FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params))
-            .expect_err("AVI cannot represent HEVC under this FFmpeg build");
+        let err = FFmpegRunner::resolve_codec_tag(
+            oformat,
+            std::ptr::from_ref(&params),
+            StreamRole::Media,
+        )
+        .expect_err("AVI cannot represent HEVC under this FFmpeg build");
         let msg = err.to_string().to_lowercase();
         assert!(msg.contains("avi") && msg.contains("hevc"), "got: {msg}");
     }
@@ -1301,9 +1422,12 @@ mod tests {
             ffmpeg_the_third::ffi::AVMediaType::AVMEDIA_TYPE_SUBTITLE,
         );
 
-        let err = FFmpegRunner::resolve_codec_tag(oformat, std::ptr::from_ref(&params)).expect_err(
-            "subtitle streams must remain rejection-eligible: AVI cannot represent SubRip",
-        );
+        let err = FFmpegRunner::resolve_codec_tag(
+            oformat,
+            std::ptr::from_ref(&params),
+            StreamRole::Media,
+        )
+        .expect_err("subtitle streams must remain rejection-eligible: AVI cannot represent SubRip");
         let msg = err.to_string().to_lowercase();
         assert!(msg.contains("avi") && msg.contains("subrip"), "got: {msg}");
     }

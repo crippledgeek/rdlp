@@ -183,8 +183,9 @@ impl FFmpegRunner {
             // disk via `avio_open` — a codec-tag rejection here must not
             // leave that empty file behind as if a remux had run and produced
             // nothing.
-            let ost_idx = Self::add_stream_copy(&mut octx, ist.parameters(), "for remux")
-                .inspect_err(|_| cleanup_partial_output(output))?;
+            let ost_idx =
+                Self::add_stream_copy(&mut octx, ist.parameters(), ist.disposition(), "for remux")
+                    .inspect_err(|_| cleanup_partial_output(output))?;
             octx.stream_mut(ost_idx)
                 .expect("just-added stream")
                 .set_metadata(ist.metadata().to_owned());
@@ -428,7 +429,7 @@ impl FFmpegRunner {
                 // by `avcodec_parameters_copy` above.
                 let oformat: *const ffi::AVOutputFormat = (*ofmt_ctx).oformat;
                 if let Err(e) =
-                    Self::resolve_and_apply_codec_tag(oformat, (*out_stream).codecpar.cast_const())
+                    Self::resolve_and_apply_codec_tag(oformat, out_stream, (*in_stream).disposition)
                 {
                     ffi::avformat_close_input(&mut ifmt_ctx);
                     ffi::avformat_free_context(ofmt_ctx);

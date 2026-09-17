@@ -46,6 +46,7 @@ use std::path::Path;
 use rdlp_types::ContainerFormat;
 
 use crate::error::PostProcessError;
+use crate::ffmpeg::probe::StreamKind;
 
 /// The video-capable container to point a user at when their remux target is
 /// one rdlp treats as audio-only — `None` for every container rdlp will
@@ -142,28 +143,21 @@ pub const fn video_alternative_for(container: ContainerFormat) -> Option<Contain
     }
 }
 
-/// The codec name of the first stream that is *real* video — a video-medium
-/// stream WITHOUT the `ATTACHED_PIC` disposition — or `None` if `ictx` has
-/// none.
+/// The codec name of the first stream that is *real* video —
+/// [`StreamKind::Video`], never [`StreamKind::AttachedPicture`] — or `None`
+/// if `ictx` has none.
 ///
-/// The disposition check is the whole point. Cover art is carried as a
-/// video-codec stream (mjpeg/png), and rdlp writes one into audio containers
-/// on purpose — `ThumbnailEmbedStrategy`'s `Id3Apic` / `FlacAttachedPic` /
-/// `Mp4FamilyAttachedPic` arms all do. `MediaInfo::has_video` cannot tell the
-/// two apart (it counts an attached picture as video), so a guard built on it
-/// would refuse every thumbnail-bearing audio file.
-/// `AV_DISPOSITION_ATTACHED_PIC` is `FFmpeg`'s own flag for the distinction,
-/// and the same one `ffi_helpers::set_attached_pic_disposition` sets on the
-/// write side. See the module doc on why an input-controlled flag is
-/// sufficient here.
+/// The distinction is the whole point. Cover art is carried as a video-codec
+/// stream (mjpeg/png), and rdlp writes one into audio containers on purpose —
+/// `ThumbnailEmbedStrategy`'s `Id3Apic` / `FlacAttachedPic` /
+/// `Mp4FamilyAttachedPic` arms all do — so a guard that counted it as video
+/// would refuse every thumbnail-bearing audio file. `StreamKind::of` makes
+/// the call from `AV_DISPOSITION_ATTACHED_PIC`, `FFmpeg`'s own flag for it
+/// (the same one `add_stream_copy` carries on the write side). See the module
+/// doc on why an input-controlled flag is sufficient here.
 fn first_real_video_codec(ictx: &ffmpeg_the_third::format::context::Input) -> Option<String> {
     ictx.streams()
-        .find(|ist| {
-            ist.parameters().medium() == ffmpeg_the_third::media::Type::Video
-                && !ist
-                    .disposition()
-                    .contains(ffmpeg_the_third::format::stream::Disposition::ATTACHED_PIC)
-        })
+        .find(|ist| StreamKind::of(ist) == StreamKind::Video)
         .map(|ist| ist.parameters().id().name().to_string())
 }
 

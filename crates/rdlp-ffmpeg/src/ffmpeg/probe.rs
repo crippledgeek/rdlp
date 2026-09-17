@@ -37,8 +37,17 @@ use super::{FFmpegRunner, ensure_init};
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum StreamKind {
-    /// A video elementary stream.
+    /// A video elementary stream — moving pictures, not cover art.
     Video,
+    /// Cover art: a video-medium stream carrying the `ATTACHED_PIC`
+    /// disposition. Demuxers force `codec_type = VIDEO` on it
+    /// (`libavformat/demux_utils.c`, `ff_add_attached_pic`), so the medium
+    /// alone cannot tell it from [`Video`](Self::Video); the disposition is
+    /// `FFmpeg`'s own discriminator (its `V` stream specifier, `-vn`
+    /// excepted). Routing an audio file into the video pipeline on the
+    /// strength of its artwork was #643.
+    #[serde(rename = "attached_pic")]
+    AttachedPicture,
     /// An audio elementary stream.
     Audio,
     /// A subtitle stream.
@@ -51,9 +60,21 @@ pub enum StreamKind {
 }
 
 impl StreamKind {
-    /// Classifies an `FFmpeg` `media::Type`.
-    const fn from_medium(medium: ffmpeg_the_third::media::Type) -> Self {
-        match medium {
+    /// Classifies a demuxed stream: its `media::Type`, with a video-medium
+    /// stream carrying the `ATTACHED_PIC` disposition set apart as
+    /// [`AttachedPicture`](Self::AttachedPicture). The single place that
+    /// distinction is made — every "does this input have video?" question
+    /// in the crate asks this, never `medium() == Video` directly.
+    #[must_use]
+    pub fn of(stream: &ffmpeg_the_third::format::stream::Stream<'_>) -> Self {
+        match stream.parameters().medium() {
+            ffmpeg_the_third::media::Type::Video
+                if stream
+                    .disposition()
+                    .contains(ffmpeg_the_third::format::stream::Disposition::ATTACHED_PIC) =>
+            {
+                Self::AttachedPicture
+            }
             ffmpeg_the_third::media::Type::Video => Self::Video,
             ffmpeg_the_third::media::Type::Audio => Self::Audio,
             ffmpeg_the_third::media::Type::Subtitle => Self::Subtitle,
@@ -73,7 +94,7 @@ impl StreamKind {
         match self {
             Self::Video => Some(MediaKind::Video),
             Self::Audio => Some(MediaKind::Audio),
-            Self::Subtitle | Self::Data | Self::Unknown => None,
+            Self::AttachedPicture | Self::Subtitle | Self::Data | Self::Unknown => None,
         }
     }
 }
@@ -82,6 +103,7 @@ impl std::fmt::Display for StreamKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
             Self::Video => "video",
+            Self::AttachedPicture => "attached_pic",
             Self::Audio => "audio",
             Self::Subtitle => "subtitle",
             Self::Data => "data",
@@ -227,7 +249,6 @@ impl FFmpegRunner {
 
         for stream in ictx.streams() {
             let params = stream.parameters();
-            let medium = params.medium();
 
             // `avcodec_get_name`'s name is documented static, but it is only
             // read once per stream here (not memoised in a static table like
@@ -238,7 +259,7 @@ impl FFmpegRunner {
             // unrepresentable name degrades to `None` rather than aborting
             // the whole probe.
             let codec_name = CodecName::new(params.id().name()).ok();
-            let codec_type = StreamKind::from_medium(medium);
+            let codec_type = StreamKind::of(&stream);
 
             // Stream-level metadata, built directly into the struct below.
             let stream_metadata = stream
@@ -267,8 +288,10 @@ impl FFmpegRunner {
                 stream_info.duration = Some(dur);
             }
 
-            match medium {
-                ffmpeg_the_third::media::Type::Video => {
+            // Routed by the typed kind, not the raw medium: an attached
+            // picture is video-medium but not video (#643).
+            match codec_type {
+                StreamKind::Video => {
                     info.has_video = true;
                     if info.video_codec.is_none() {
                         info.video_codec.clone_from(&stream_info.codec_name);
@@ -318,7 +341,7 @@ impl FFmpegRunner {
                         }
                     }
                 }
-                ffmpeg_the_third::media::Type::Audio => {
+                StreamKind::Audio => {
                     info.has_audio = true;
                     if info.audio_codec.is_none() {
                         info.audio_codec.clone_from(&stream_info.codec_name);
@@ -340,7 +363,10 @@ impl FFmpegRunner {
                         info.audio_bitrate = Some((bps / 1000) as u32);
                     }
                 }
-                _ => {}
+                StreamKind::AttachedPicture
+                | StreamKind::Subtitle
+                | StreamKind::Data
+                | StreamKind::Unknown => {}
             }
 
             info.streams.push(stream_info);
@@ -351,6 +377,15 @@ impl FFmpegRunner {
 }
 
 impl MediaInfo {
+    /// Whether the file carries cover art (an [`StreamKind::AttachedPicture`]
+    /// stream). Derived from `streams`, so it cannot drift from them.
+    #[must_use]
+    pub fn has_attached_picture(&self) -> bool {
+        self.streams
+            .iter()
+            .any(|s| s.codec_type == StreamKind::AttachedPicture)
+    }
+
     /// Get a resolution string (e.g., "1920x1080").
     #[must_use]
     pub fn resolution_string(&self) -> Option<String> {

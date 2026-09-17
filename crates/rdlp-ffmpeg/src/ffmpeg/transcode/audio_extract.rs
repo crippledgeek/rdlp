@@ -151,15 +151,13 @@ impl FFmpegRunner {
         // via `avio_open` — a codec-tag rejection here must not leave that
         // empty file behind as if an audio extract had run and produced
         // nothing.
+        let ist = ictx.stream(ist_index).ok_or_else(|| {
+            PostProcessError::ffmpeg_failed(format!("audio input stream {ist_index} not found"))
+        })?;
         Self::add_stream_copy(
             &mut octx,
-            ictx.stream(ist_index)
-                .ok_or_else(|| {
-                    PostProcessError::ffmpeg_failed(format!(
-                        "audio input stream {ist_index} not found"
-                    ))
-                })?
-                .parameters(),
+            ist.parameters(),
+            ist.disposition(),
             "for audio copy extract",
         )
         .inspect_err(|_| cleanup_partial_output(output))?;
