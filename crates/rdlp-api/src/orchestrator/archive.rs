@@ -21,13 +21,12 @@
 //!
 //! # Concurrency
 //!
-//! Read and write paths take an advisory file lock via [`fs4::fs_std::FileExt`]
-//! so concurrent rdlp processes (multiple terminals, automated pipelines, the
+//! Read and write paths take an advisory file lock (`std::fs::File::lock_shared`
+//! / `lock`) so concurrent rdlp processes (multiple terminals, automated pipelines, the
 //! desktop app and a CLI run side-by-side) cannot interleave their writes and
 //! corrupt entries. The lock is exclusive on writes and shared on reads, and
 //! is released when the file handle drops.
 
-use fs4::fs_std::FileExt;
 use rdlp_redact::text::sanitize_for_line;
 use rdlp_types::InfoDict;
 use std::collections::HashSet;
@@ -96,11 +95,8 @@ pub fn load_archive(path: &Path) -> HashSet<String> {
     // writer (record_in_archive) blocks until we release. If locking
     // fails (rare; e.g. NFS without lock support) fall back to the
     // unlocked read — better than a hard error here, since the archive
-    // is best-effort tracking, not security-critical state. Named through
-    // the fs4 trait because std 1.89 added an inherent `File::lock_shared`
-    // that a bare method call would pick over the trait; naming the trait
-    // makes it unambiguous which implementation runs.
-    let _lock = FileExt::lock_shared(&file).ok();
+    // is best-effort tracking, not security-critical state.
+    let _lock = file.lock_shared().ok();
 
     BufReader::new(&file)
         .lines()
@@ -159,13 +155,13 @@ pub fn record_in_archive(path: &Path, extractor: &str, id: &str) -> std::io::Res
     // we surface it because skipping the lock would silently allow
     // interleaved writes. Filesystems that don't support advisory locks
     // are not a supported deployment target for the download archive.
-    file.lock_exclusive()?;
+    file.lock()?;
 
     let result = writeln!(file, "{}", archive_key(extractor, id));
 
     // Explicit unlock (also released on drop, but this makes the
     // ordering with the write flush obvious).
-    let _ = FileExt::unlock(&file);
+    let _ = file.unlock();
 
     result
 }
