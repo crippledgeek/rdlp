@@ -238,6 +238,7 @@ pub fn write_still_png(output: &Path, spec: &StillImage) -> Result<()> {
     encoder.set_height(spec.height);
     encoder.set_format(ffmpeg_the_third::format::Pixel::RGB24);
     encoder.set_time_base(ffmpeg_the_third::Rational(1, 25));
+    crate::ffmpeg::codec_registry::enable_experimental_if_flagged(&mut encoder, codec);
     let mut encoder = encoder.open_as(codec)?;
 
     let mut frame = ffmpeg_the_third::frame::Video::new(
