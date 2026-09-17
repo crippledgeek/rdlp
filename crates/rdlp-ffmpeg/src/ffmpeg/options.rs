@@ -5,6 +5,7 @@
 
 use std::path::Path;
 
+use rdlp_types::ContainerFormat;
 use rdlp_types::media_name::{AudioEncoderName, VideoEncoderName};
 
 /// Whether output written to `path` should enable faststart.
@@ -86,14 +87,34 @@ mod muxer_options_tests {
 pub struct RemuxOptions {
     /// Enable MP4 faststart (moov atom at beginning of file).
     pub faststart: bool,
-    /// Force output format (e.g., "mp4", "mkv").
-    pub output_format: Option<String>,
     /// Override the `encoding_tool` metadata tag written by this operation.
     ///
     /// When `Some`, this value is used instead of the default stage name
     /// (e.g., "remux", "merge", "thumbnail"). Pass `msg.encoding_tool` from
     /// the pipeline to propagate the tag set by a prior content-creating stage.
     pub encoding_tool_override: Option<String>,
+}
+
+impl RemuxOptions {
+    /// The mux options for writing `target`, with the faststart decision taken
+    /// from the container type.
+    ///
+    /// The single constructor the remux, merge and thumbnail stages use, so
+    /// the faststart decision is observable in one test and cannot drift per
+    /// stage (#539: a stage-local string list once excluded `m4v`/`f4v`).
+    /// The muxer itself is chosen from the output path's extension by the
+    /// remux/merge writers; a "force this format" field that nothing read
+    /// was removed in #546.
+    #[must_use]
+    pub const fn for_container(
+        target: ContainerFormat,
+        encoding_tool_override: Option<String>,
+    ) -> Self {
+        Self {
+            faststart: target.supports_faststart(),
+            encoding_tool_override,
+        }
+    }
 }
 
 /// Options for audio extraction and transcoding.

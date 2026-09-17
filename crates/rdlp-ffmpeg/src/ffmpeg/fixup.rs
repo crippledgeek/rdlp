@@ -207,7 +207,6 @@ impl FFmpegRunner {
 
         let opts = RemuxOptions {
             faststart,
-            output_format: None,
             encoding_tool_override,
         };
 

@@ -57,21 +57,6 @@ impl RemuxStage {
         }
         None
     }
-
-    /// Build the mux options for a resolved target container.
-    ///
-    /// Exists as a named function so the faststart decision is observable in a
-    /// test. Inlined into `process()` it was unreachable without a real `FFmpeg`
-    /// run, which let #539 ship: a test could assert `supports_faststart()` on
-    /// a container it supplied itself and never touch the production
-    /// expression at all.
-    fn remux_opts(target: ContainerFormat, encoding_tool: Option<String>) -> RemuxOptions {
-        RemuxOptions {
-            faststart: target.supports_faststart(),
-            output_format: Some(target.as_ext().to_string()),
-            encoding_tool_override: encoding_tool,
-        }
-    }
 }
 
 #[async_trait]
@@ -113,7 +98,7 @@ impl PipelineStage for RemuxStage {
 
         let output_path = msg.tracker.temp_path(&input_file, target.as_ext());
 
-        let opts = Self::remux_opts(target, msg.encoding_tool.clone());
+        let opts = RemuxOptions::for_container(target, msg.encoding_tool.clone());
 
         let stage_callback = msg.callback_factory.as_ref().map(|f| f(self.name()));
         let _log_bridge = stage_callback
@@ -263,11 +248,11 @@ mod tests {
     /// shipped a file with `moov` at the end.
     #[test]
     fn faststart_follows_the_container_type_for_every_remux_target() {
-        // The third column is the expected extension as a LITERAL. Asserting
-        // against `container.as_ext()` instead would be tautological — both
-        // sides would derive from the same function, so a wrong `as_ext()`
-        // (e.g. #538's `Wmv => "asf"`) would keep this test green while the
-        // stage propagated the wrong extension toward the output filename.
+        // The third column is the expected extension as a LITERAL: the stage
+        // names its temp output from `target.as_ext()` (see `process`), so a
+        // wrong `as_ext()` (e.g. #538's `Wmv => "asf"`) would propagate the
+        // wrong extension toward the output filename. Pinned here, one layer
+        // closer to the user than the `rdlp-types` unit tests reach.
         for (container, want, want_ext) in [
             (ContainerFormat::Mp4, true, "mp4"),
             (ContainerFormat::Mov, true, "mov"),
@@ -290,19 +275,19 @@ mod tests {
             let target = RemuxStage::target_container(&msg, "ts")
                 .expect("a different container must produce a remux target");
             assert_eq!(target, container);
+            assert_eq!(
+                target.as_ext(),
+                want_ext,
+                "the output filename for {container:?} derives from as_ext()"
+            );
             // Assert on the options the stage actually builds — asserting
             // `target.supports_faststart()` here would only re-test the
             // predicate with a value this test supplied, and would stay green
             // if the stage hardcoded `faststart: false`.
-            let opts = RemuxStage::remux_opts(target, None);
+            let opts = RemuxOptions::for_container(target, None);
             assert_eq!(
                 opts.faststart, want,
                 "faststart for {container:?} must follow supports_faststart()"
-            );
-            assert_eq!(
-                opts.output_format.as_deref(),
-                Some(want_ext),
-                "the stage must propagate the literal extension for {container:?}"
             );
         }
     }

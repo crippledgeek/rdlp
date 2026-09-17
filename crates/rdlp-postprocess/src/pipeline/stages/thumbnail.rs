@@ -503,17 +503,14 @@ impl PipelineStage for ThumbnailStage {
         let (media_file, extension) = if supports_thumbnail {
             (media_file, extension)
         } else {
-            let remuxed_path = msg.tracker.temp_path(&media_file, "mp4");
+            let target = ContainerFormat::Mp4;
+            let remuxed_path = msg.tracker.temp_path(&media_file, target.as_ext());
             debug!(
-                "ThumbnailStage: auto-remuxing {} → mp4 for thumbnail embedding",
+                "ThumbnailStage: auto-remuxing {} → {target} for thumbnail embedding",
                 media_file.display()
             );
 
-            let opts = RemuxOptions {
-                faststart: true,
-                encoding_tool_override: msg.encoding_tool.clone(),
-                ..Default::default()
-            };
+            let opts = RemuxOptions::for_container(target, msg.encoding_tool.clone());
             match self
                 .ffmpeg
                 .remux(&media_file, &remuxed_path, &opts, None)
@@ -521,7 +518,7 @@ impl PipelineStage for ThumbnailStage {
             {
                 Ok(()) => {
                     msg.tracker.replace(vec![remuxed_path.clone()]);
-                    (remuxed_path, "mp4".to_string())
+                    (remuxed_path, target.as_ext().to_string())
                 }
                 Err(e) => {
                     warn!("ThumbnailStage: auto-remux to MP4 failed, skipping: {e}");
