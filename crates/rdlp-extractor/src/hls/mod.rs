@@ -189,6 +189,22 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
+    /// The CODECS= slots are filled by the identity's KIND: an `mp4a` whose
+    /// object type is unregistered still lands in the audio slot (it is
+    /// audio, just not a named codec), and `hvc1`/`av01`/`ec-3`/`fLaC`
+    /// classify — none of which the old `starts_with` prefixes covered.
+    #[test]
+    fn split_codecs_fills_slots_by_identity_kind() {
+        let (v, a) = split_codecs(Some("hvc1.1.6.L93.B0,mp4a.a5"));
+        assert_eq!(v.as_ref().map(|c| c.as_str()), Some("hvc1.1.6.L93.B0"));
+        assert_eq!(a.as_ref().map(|c| c.as_str()), Some("mp4a.a5"));
+        let (v, a) = split_codecs(Some("av01.0.08M.08,ec-3"));
+        assert_eq!(v.as_ref().map(|c| c.as_str()), Some("av01.0.08M.08"));
+        assert_eq!(a.as_ref().map(|c| c.as_str()), Some("ec-3"));
+        let (v, a) = split_codecs(Some("theora,speex"));
+        assert!(v.is_none() && a.is_none(), "unknown tokens fill nothing");
+    }
+
     #[test]
     fn test_detector_creation() {
         let client = Arc::new(wreq::Client::new());

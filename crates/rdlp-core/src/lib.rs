@@ -46,8 +46,7 @@ pub use error::{RdlpError, Result, check_http_response};
 
 // Re-export retry utilities (backon-based)
 pub use retry::{
-    ExponentialBuilder, RetryConfig, Retryable, TRANSPORT_FAILURE_IS_RETRYABLE, is_retryable_error,
-    is_retryable_status,
+    ExponentialBuilder, FailureClass, RetryConfig, Retryable, is_retryable, is_retryable_error,
 };
 
 // Re-export traits

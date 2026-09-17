@@ -62,7 +62,7 @@ fn detect_codec_from_id(format_id: &str, wanted: CodecKind) -> Option<String> {
         .split(|c: char| !c.is_ascii_alphanumeric())
         .filter_map(codec_identity)
         .find(|identity| identity.kind == wanted)
-        .map(|identity| identity.name.as_str().to_owned())
+        .and_then(|identity| identity.name.map(|n| n.as_str().to_owned()))
 }
 
 /// Enrich a single HLS format with metadata from `detect_hls_metadata()`.

@@ -171,9 +171,9 @@ pub fn run() {
                     // it keeps the full prefix. This reproduces the shape the
                     // plugin's own default emitted (tauri-plugin-log 2.9.1,
                     // src/lib.rs:429-441) — including its UTC basis
-                    // (`DEFAULT_TIMEZONE_STRATEGY`, lib.rs:53), so clearing the
-                    // root above does not silently change what the file has
-                    // always looked like. `chrono` rather than `time` because
+                    // (`DEFAULT_TIMEZONE_STRATEGY`, lib.rs:53), so the root's
+                    // prefix-free redaction above does not silently change
+                    // what the file has always looked like. `chrono` rather than `time` because
                     // the desktop crate already depends on it.
                     //
                     // The UTC here is now hardcoded, where it used to follow

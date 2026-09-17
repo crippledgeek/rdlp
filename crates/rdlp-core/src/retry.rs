@@ -124,27 +124,37 @@ impl Default for RetryConfig {
 #[must_use]
 pub const fn is_retryable_error(error: &RdlpError) -> bool {
     match error {
-        RdlpError::Http { status, .. } => is_retryable_status(*status),
-        RdlpError::Network { .. } | RdlpError::Io(_) => TRANSPORT_FAILURE_IS_RETRYABLE,
+        RdlpError::Http { status, .. } => is_retryable(FailureClass::Http(*status)),
+        RdlpError::Network { .. } | RdlpError::Io(_) => is_retryable(FailureClass::Transport),
         _ => false,
     }
 }
 
-/// Whether an HTTP status is worth retrying: 5xx and 429, never another 4xx.
+/// How a request failed, in the terms the retry policy decides on.
 ///
-/// A 403/404 will not become a 200. This is the status half of
-/// [`is_retryable_error`], exposed so a caller holding a bare status — the
-/// desktop thumbnail proxy — applies the same rule instead of restating it.
-#[must_use]
-pub const fn is_retryable_status(status: u16) -> bool {
-    status == 429 || status >= 500
+/// The typed input to [`is_retryable`], for a caller that has not (or not
+/// yet) wrapped the failure in an [`RdlpError`] — the desktop thumbnail
+/// proxy classifies a `wreq` failure before building its own error.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailureClass {
+    /// No HTTP status exists: refused, reset, timed out, DNS.
+    Transport,
+    /// The server answered with this status.
+    Http(u16),
 }
 
-/// A transport failure (refused, reset, timeout, DNS) is retried.
+/// The one retry rule.
 ///
-/// Transient by nature. Named so the sites that classify a transport error
-/// before it becomes an [`RdlpError`] cite the rule rather than a literal.
-pub const TRANSPORT_FAILURE_IS_RETRYABLE: bool = true;
+/// A transport failure is transient and retried; an HTTP status is retried
+/// for 5xx and 429, never for another 4xx (a 403/404 will not become a 200).
+/// [`is_retryable_error`] maps an [`RdlpError`] onto it.
+#[must_use]
+pub const fn is_retryable(class: FailureClass) -> bool {
+    match class {
+        FailureClass::Transport => true,
+        FailureClass::Http(status) => status == 429 || status >= 500,
+    }
+}
 
 #[cfg(test)]
 #[allow(
@@ -159,10 +169,10 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
-    /// The status half of the policy: 5xx and 429 retry; other 4xx do not.
-    /// `is_retryable_error` must agree with it (one rule, not two).
+    /// One rule: 5xx and 429 retry, other 4xx do not, transport does;
+    /// `is_retryable_error` must agree with `is_retryable` on every class.
     #[test]
-    fn retryable_status_is_5xx_or_429_and_the_error_predicate_agrees() {
+    fn the_error_predicate_agrees_with_the_failure_class_rule() {
         for (status, expect) in [
             (500, true),
             (503, true),
@@ -171,7 +181,7 @@ mod tests {
             (403, false),
             (200, false),
         ] {
-            assert_eq!(is_retryable_status(status), expect, "{status}");
+            assert_eq!(is_retryable(FailureClass::Http(status)), expect, "{status}");
             let err = RdlpError::Http {
                 status,
                 reason: "x".into(),
@@ -182,9 +192,10 @@ mod tests {
             message: "connection reset".into(),
             url: None,
         };
+        assert!(is_retryable(FailureClass::Transport));
         assert_eq!(
             is_retryable_error(&transport),
-            TRANSPORT_FAILURE_IS_RETRYABLE
+            is_retryable(FailureClass::Transport)
         );
     }
 

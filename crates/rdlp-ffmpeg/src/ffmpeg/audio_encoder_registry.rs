@@ -134,7 +134,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         aliases: &[],
     },
     AudioCodecEntry {
-        codec: CodecName::from_static("mp3"),
+        codec: CodecName::MP3,
         display_name: "MP3",
         encoders: &[(
             AudioEncoderName::from_static("libmp3lame"),
@@ -251,7 +251,7 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         aliases: &[],
     },
     AudioCodecEntry {
-        codec: CodecName::from_static("mp2"),
+        codec: CodecName::MP2,
         display_name: "MP2",
         encoders: &[(AudioEncoderName::from_static("mp2"), "MP2 (built-in)")],
         supported_containers: &[
@@ -1141,7 +1141,7 @@ mod tests {
         ));
         assert!(container_supports_audio_codec(
             ContainerFormat::Mp3,
-            &CodecName::from_static("mp3")
+            &CodecName::MP3
         ));
         assert!(container_supports_audio_codec(
             ContainerFormat::Opus,

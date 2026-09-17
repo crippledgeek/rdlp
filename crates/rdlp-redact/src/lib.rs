@@ -167,8 +167,9 @@ static USERINFO_PATTERN: LazyLock<Regex> =
 /// Redacting here — the egress — covers every `warn!("…: {e}")` whose `e`
 /// happens to carry a URL (a `wreq::Error` keeps the query string; an
 /// `anyhow` chain repeats a context line), including sites written after
-/// this one (#684). Invalid UTF-8 is replaced, never passed through
-/// unexamined. Borrows when nothing needed redacting.
+/// this one (#684). Invalid UTF-8 is examined through a lossy decode and
+/// replaced only when a redaction fires; a clean line is returned
+/// borrowed and byte-for-byte.
 #[must_use]
 pub fn redact_bytes(buf: &[u8]) -> Cow<'_, [u8]> {
     let text = String::from_utf8_lossy(buf);
