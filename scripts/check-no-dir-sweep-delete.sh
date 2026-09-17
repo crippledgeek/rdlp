@@ -18,7 +18,7 @@
 # Sanctioned alternatives, both already in-tree:
 #   - Delete an exact path this run computed and owns (see orchestrator/naming.rs).
 #   - TempRegistry::cleanup_stale (rdlp-postprocess/src/pipeline/registry.rs):
-#     marker-scans `.rdlp-tmp-`, requires an fs4 exclusive lock before removing,
+#     marker-scans `.rdlp-tmp-`, requires an exclusive advisory lock before removing,
 #     and applies an age floor -- so a live peer's file is never touched.
 #
 # ---------------------------------------------------------------------------
@@ -69,7 +69,7 @@ SELF_TEST=0
 # Allowlist: each entry must state why scanning-then-deleting is sound there.
 #
 # - rdlp-postprocess/src/pipeline/registry.rs: TempRegistry::cleanup_stale. Not
-#   a pattern sweep -- requires the `.rdlp-tmp-` marker AND an fs4 exclusive
+#   a pattern sweep -- requires the `.rdlp-tmp-` marker AND an exclusive
 #   advisory lock AND an age floor before unlinking, so it provably never
 #   removes a live peer's file. This is the sanctioned discovery mechanism.
 # - rdlp-cli/src/plugin_cmd.rs and plugin_cmd/build_from_ytdlp.rs: `rdlp plugin

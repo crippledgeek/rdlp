@@ -654,7 +654,7 @@ pub async fn log_legacy_chunks(output_path: &Path) -> Vec<PathBuf> {
 /// here cannot tell "abandoned by a past attempt" apart from "being written
 /// right now by a live peer" (the exact defect class #558 was about, one
 /// crate over). `TempRegistry::cleanup_stale` in `rdlp-postprocess`
-/// (`pipeline::registry`) earns the right to delete by requiring an fs4
+/// (`pipeline::registry`) earns the right to delete by requiring an
 /// exclusive advisory lock on a sidecar that its own writer
 /// (`FileTracker::register`) takes at creation time. The downloader's chunk
 /// writer takes no equivalent lock on chunk files, so reproducing that proof

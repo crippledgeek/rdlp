@@ -4,6 +4,7 @@
 //! - SSRF (Server-Side Request Forgery) protection via URL validation
 //! - Sensitive data sanitization for safe logging
 //! - Private/internal host detection
+//! - URL query percent-encoding (one escape set shared by every crate)
 //!
 //! # Features
 //!
@@ -49,9 +50,13 @@
 #![warn(missing_docs)]
 #![warn(clippy::pedantic, clippy::nursery, clippy::indexing_slicing)]
 
+pub mod percent;
+
 use ipnet::Ipv4Net;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use thiserror::Error;
+
+pub use percent::{percent_decode, percent_encode_query_value};
 
 // ============================================================================
 // Security Constants

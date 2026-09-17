@@ -1769,3 +1769,20 @@ seg-1.ts\n\
         drop(server);
     }
 }
+
+#[test]
+fn build_url_with_query_uses_the_shared_query_escape_set() {
+    // Pins that the host uses rdlp-security's set: RFC 3986 unreserved
+    // (`-._~`) pass through, everything reserved is escaped.
+    let url = build_url_with_query(
+        "https://example.com/api?x=1".to_string(),
+        &[
+            ("a-b_c.d~".to_string(), "v w&e=f#g".to_string()),
+            ("é".to_string(), String::new()),
+        ],
+    );
+    assert_eq!(
+        url,
+        "https://example.com/api?x=1&a-b_c.d~=v%20w%26e%3Df%23g&%C3%A9="
+    );
+}

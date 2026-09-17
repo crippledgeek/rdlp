@@ -74,19 +74,13 @@ const PLUGIN_REGEX_MAX_PATTERN_LEN: usize = 4096;
 const PLUGIN_REGEX_SIZE_LIMIT: usize = 4 << 20;
 
 fn build_url_with_query(base_url: String, query: &[(String, String)]) -> String {
-    use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+    use rdlp_security::percent_encode_query_value as enc;
     if query.is_empty() {
         return base_url;
     }
     let qs: String = query
         .iter()
-        .map(|(k, v)| {
-            format!(
-                "{}={}",
-                utf8_percent_encode(k, NON_ALPHANUMERIC),
-                utf8_percent_encode(v, NON_ALPHANUMERIC)
-            )
-        })
+        .map(|(k, v)| format!("{}={}", enc(k), enc(v)))
         .collect::<Vec<_>>()
         .join("&");
     let sep = if base_url.contains('?') { '&' } else { '?' };

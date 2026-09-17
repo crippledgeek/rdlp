@@ -37,7 +37,7 @@ pub(crate) static TOTAL_PAGES_PATTERN: Lazy<Regex> = lazy_regex!(r#"of\s+(\d+)"#
 /// Page numbers are 0-based: page 0 = first page.
 pub(crate) fn build_search_url(query: &SearchQuery, page: u32) -> String {
     let sort = resolve_sort(query);
-    let encoded = urlencoding::encode(&query.query);
+    let encoded = rdlp_security::percent_encode_query_value(&query.query);
 
     if sort.is_empty() {
         format!("{BASE_URL}/search?keyword={encoded}&page={page}")

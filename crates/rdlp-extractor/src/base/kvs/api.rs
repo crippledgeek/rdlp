@@ -70,7 +70,7 @@ pub(crate) fn videos2_search_endpoint(
     page: u32,
     count: u32,
 ) -> String {
-    let q = urlencoding::encode(query);
+    let q = rdlp_security::percent_encode_query_value(query);
     format!("{base_url}/api/videos2.php?params=0/str/{sort}/{count}/search..{page}.all..&s={q}")
 }
 

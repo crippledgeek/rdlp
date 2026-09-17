@@ -14,10 +14,10 @@
 //! video.rdlp-tmp-<uuid>.mp4.lock   ← exclusive advisory lock held by this process
 //! ```
 //!
-//! `cleanup_stale()` uses `try_lock_exclusive` on the sidecar. If the lock is
-//! already held (`try_lock_exclusive` returns `Ok(false)`), the temp is still
-//! live in another rdlp process and is left alone. If `try_lock_exclusive`
-//! returns `Ok(true)`, the owner has crashed and the temp is safe to delete.
+//! `cleanup_stale()` tries a non-blocking exclusive lock on the sidecar
+//! (`try_lock_exclusive`). If the lock is already held, the temp is still
+//! live in another rdlp process and is left alone. If the lock is acquired,
+//! the owner has crashed and the temp is safe to delete.
 //!
 //! This prevents one rdlp process from deleting another process's in-progress
 //! temp files during startup cleanup.
@@ -61,11 +61,11 @@
 )]
 
 use std::collections::HashMap;
-use std::fs::File;
+use std::fs::{File, TryLockError};
+use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use fs4::fs_std::FileExt;
 use thiserror::Error;
 
 /// Errors raised by [`TempRegistry::register`] and [`TempRegistry::claim`].
@@ -135,6 +135,27 @@ struct TempEntry {
     _lock_file: File,
     /// Whether a sweep may delete the tracked file itself.
     kind: EntryKind,
+}
+
+/// Outcome of a non-blocking exclusive lock attempt, in the three-way
+/// vocabulary the fail-closed logic here needs (#572): acquired, held by a
+/// live process, or could not be attempted at all.
+///
+/// `std::fs::File::try_lock` folds the middle case into its error type as
+/// [`TryLockError::WouldBlock`]; splitting it back out here keeps every
+/// caller from having to remember that "held elsewhere" arrives as an `Err`.
+enum LockAttempt {
+    Acquired,
+    HeldElsewhere,
+    Failed(io::Error),
+}
+
+fn try_lock_exclusive(file: &File) -> LockAttempt {
+    match file.try_lock() {
+        Ok(()) => LockAttempt::Acquired,
+        Err(TryLockError::WouldBlock) => LockAttempt::HeldElsewhere,
+        Err(TryLockError::Error(e)) => LockAttempt::Failed(e),
+    }
 }
 
 /// Global registry of pipeline temp files for crash-safe cleanup.
@@ -275,16 +296,16 @@ impl TempRegistry {
                 );
             }
         };
-        match lock_file.try_lock_exclusive() {
-            Ok(true) => {}
-            Ok(false) => {
+        match try_lock_exclusive(&lock_file) {
+            LockAttempt::Acquired => {}
+            LockAttempt::HeldElsewhere => {
                 // Held by a live process — the whole point of #572: refuse
                 // rather than silently register a second, unlocked claim.
                 return Err(RegistryError::HeldElsewhere {
                     path: path.to_path_buf(),
                 });
             }
-            Err(e) => {
+            LockAttempt::Failed(e) => {
                 // Same fail-closed reasoning as the File::create branch
                 // above: a Claim whose lock couldn't even be ATTEMPTED must
                 // not report success.
@@ -412,10 +433,10 @@ impl TempRegistry {
     ///
     /// A file is considered stale (and safe to delete) when:
     /// 1. It matches the `*.rdlp-tmp-*` naming pattern, AND
-    /// 2. Its `.lock` sidecar is either absent OR `try_lock_exclusive` returns
-    ///    `Ok(true)` (meaning no process holds it).
+    /// 2. Its `.lock` sidecar is either absent OR `try_lock_exclusive`
+    ///    acquires it (meaning no process holds it).
     ///
-    /// If `try_lock_exclusive` returns `Ok(false)`, the temp is in active
+    /// If the lock is held elsewhere, the temp is in active
     /// use by another process and is left alone — this prevents a fresh rdlp
     /// instance from deleting another process's live temp files (audit finding H10).
     ///
@@ -455,20 +476,15 @@ impl TempRegistry {
             let lock_path = lock_path_for(&path);
             let live_process_holds_lock = if lock_path.exists() {
                 match File::open(&lock_path) {
-                    Ok(f) => match f.try_lock_exclusive() {
-                        Ok(true) => {
+                    Ok(f) => match try_lock_exclusive(&f) {
+                        LockAttempt::Acquired => {
                             // We got the lock → orphaned. Unlock before deleting
-                            // so the OS can clean up the lock state. Named
-                            // through the fs4 trait, not `f.unlock()`: std grew
-                            // an inherent `File::unlock` in 1.89 that a bare
-                            // method call would pick over the trait; naming the
-                            // trait makes it unambiguous which implementation
-                            // runs.
-                            let _ = FileExt::unlock(&f);
+                            // so the OS can clean up the lock state.
+                            let _ = f.unlock();
                             false // not held by another process
                         }
-                        Ok(false) => true, // held by another live process
-                        Err(_) => false,   // can't take lock → treat as orphaned
+                        LockAttempt::HeldElsewhere => true, // held by another live process
+                        LockAttempt::Failed(_) => false,    // can't take lock → treat as orphaned
                     },
                     Err(_) => false, // can't open → treat as orphaned
                 }
@@ -600,15 +616,14 @@ mod tests {
         // Simulate another process: hold the lock on a fd this test controls
         // directly, bypassing TempRegistry entirely.
         let other_holder = File::create(&lock_path).unwrap();
-        assert!(
-            other_holder.try_lock_exclusive().unwrap(),
-            "flock-semantics precondition: the first exclusive lock must succeed"
-        );
+        other_holder
+            .try_lock()
+            .expect("flock-semantics precondition: the first exclusive lock must succeed");
         let second_fd = File::open(&lock_path).unwrap();
         assert!(
-            !second_fd.try_lock_exclusive().unwrap(),
+            matches!(second_fd.try_lock(), Err(TryLockError::WouldBlock)),
             "flock-semantics precondition: a second fd on the SAME process must be refused, \
-             confirming try_lock_exclusive is a reliable same-process stand-in for \
+             confirming try_lock is a reliable same-process stand-in for \
              \"held by another process\""
         );
         drop(second_fd);
@@ -714,7 +729,9 @@ mod tests {
         let path = dir.path().join("video.rdlp-tmp-abc123.mp4");
         fs::write(&path, b"test").unwrap();
         let two_hours_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
-        filetime::set_file_mtime(&path, filetime::FileTime::from_system_time(two_hours_ago))
+        File::open(&path)
+            .unwrap()
+            .set_modified(two_hours_ago)
             .unwrap();
         // No sidecar → treated as orphaned.
         TempRegistry::cleanup_stale(dir.path());
@@ -867,7 +884,7 @@ mod tests {
         // Make the file appear very old so the age-based check would normally
         // trigger deletion. The lock check must prevent deletion.
         let very_old = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
-        filetime::set_file_mtime(&path, filetime::FileTime::from_system_time(very_old)).unwrap();
+        File::open(&path).unwrap().set_modified(very_old).unwrap();
 
         // With the lock held, cleanup_stale must NOT delete the temp.
         TempRegistry::cleanup_stale(dir.path());
