@@ -41,9 +41,41 @@ where
     match T::deserialize(raw.clone()) {
         Ok(value) => Ok(Some(value)),
         Err(e) => {
-            warn!("settings.json: ignoring {field} = {raw} ({e}); the field inherits its default");
+            // Both the value and the parse error echo user-typed text (the
+            // enum errors are `unsupported <kind>: <input>`), so both are
+            // redacted and bounded before they reach the log.
+            let shown = bounded_redacted(&raw.to_string());
+            let why = bounded_redacted(&e.to_string());
+            warn!(
+                "settings.json: ignoring {field} = {shown} ({why}); the field inherits its default"
+            );
             Ok(None)
         }
+    }
+}
+
+/// Longest rendering of a rejected settings value in a log line.
+///
+/// 64 characters shows any legitimate enum spelling (the longest is
+/// `google-chrome`) with room to recognise a pasted URL by its host; a
+/// multi-MB string pasted into `settings.json` must not land whole in the log.
+const MAX_LOGGED_VALUE_CHARS: usize = 64;
+
+/// Redact credentials, THEN bound to [`MAX_LOGGED_VALUE_CHARS`] (with `…`).
+///
+/// Order matters: truncating first could cut `user:pw@host` before the `@`,
+/// leaving the redaction pattern nothing to anchor on while a partial
+/// password survives. `RedactedUrl`'s `Display` is the workspace's one
+/// credential redactor; nothing in rdlp-redact bounds length, so that half
+/// lives here.
+fn bounded_redacted(text: &str) -> String {
+    let redacted = rdlp_redact::RedactedUrl::new(text).to_string();
+    let mut chars = redacted.chars();
+    let head: String = chars.by_ref().take(MAX_LOGGED_VALUE_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
     }
 }
 
@@ -236,9 +268,9 @@ pub struct AppSettings {
 /// |---|---|
 /// | `CookiesFileTraversal` | `cookies_file` |
 /// | `InvalidProxy` | `proxy` |
-/// | `OutOfRange` | `socket_timeout`, `read_timeout`, `pool_idle_timeout`, `download_timeout`, `merge_timeout`, `concurrent_fragments`, `buffer_size`, `parallel_threshold`, `hls_head_probe_timeout`, `default_subtitle_langs` |
+/// | `OutOfRange` | `socket_timeout`, `read_timeout`, `pool_idle_timeout`, `download_timeout`, `merge_timeout`, `concurrent_fragments`, `buffer_size`, `parallel_threshold`, `hls_head_probe_timeout`, `default_subtitle_langs`, `audio_gain_target`, `loudnorm_target_i`, `loudnorm_target_tp`, `loudnorm_target_lra`, `normalize_boost_db` |
 ///
-/// 2 + 10 = 12. Deriving it from the `OutOfRange` arm alone is what made the
+/// 2 + 15 = 17. Deriving it from the `OutOfRange` arm alone is what made the
 /// previous value of 9 too low — it omitted the two non-numeric variants, which
 /// `validate_security` reports *first*, so the bound was already short by two
 /// before `default_subtitle_langs` made it short by three.
@@ -258,20 +290,20 @@ pub struct AppSettings {
 /// a newly-added field on its own:
 ///
 /// * The `const` assertion prevents [`MAX_RESET_ITERATIONS`] being *lowered*
-///   below [`RESETTABLE_FIELD_COUNT`] — verified by mutation: setting it to 11
+///   below [`RESETTABLE_FIELD_COUNT`] — verified by mutation: setting it to 16
 ///   fails the build. It does **not** fire when an arm is added to
 ///   `reset_invalid_field`, because `RESETTABLE_FIELD_COUNT` is a literal whose
-///   only use is this assertion, so an eleventh arm leaves `12 >= 12` true and
+///   only use is this assertion, so an eighteenth arm leaves `17 >= 17` true and
 ///   the build green (also verified by mutation, 2026-09-08).
 /// * `parse_and_validate_converges_with_every_resettable_field_invalid` drives
-///   all twelve fields at once, but from a hand-written JSON fixture — a
-///   thirteenth field would leave it passing while exercising only twelve.
+///   all seventeen fields at once, but from a hand-written JSON fixture — an
+///   eighteenth field would leave it passing while exercising only seventeen.
 ///
 /// A `macro_rules!` list generating both the match arms and the count would
 /// close that gap; for a match this size it costs more legibility than it buys,
 /// so the seam is instead a pointer comment at the match itself telling an
 /// author adding an arm to raise the count here.
-const MAX_RESET_ITERATIONS: u32 = 12;
+const MAX_RESET_ITERATIONS: u32 = 17;
 
 /// Number of distinct fields [`AppSettings::reset_invalid_field`] can reset —
 /// the derivation of [`MAX_RESET_ITERATIONS`], tabulated in its docs.
@@ -279,7 +311,7 @@ const MAX_RESET_ITERATIONS: u32 = 12;
 /// Hand-maintained: raise it when you add an arm to `reset_invalid_field`. See
 /// that function's match for the pointer comment, and [`MAX_RESET_ITERATIONS`]
 /// for what the assertion below does and does not catch.
-const RESETTABLE_FIELD_COUNT: u32 = 12;
+const RESETTABLE_FIELD_COUNT: u32 = 17;
 
 const _: () = assert!(
     MAX_RESET_ITERATIONS >= RESETTABLE_FIELD_COUNT,
@@ -440,6 +472,11 @@ impl AppSettings {
                 // Not an `Option`: its default (and "inherit"/unset value) is
                 // the empty list, so that is what "reset to default" means.
                 "default_subtitle_langs" => self.default_subtitle_langs = Vec::new(),
+                "audio_gain_target" => self.audio_gain_target = None,
+                "loudnorm_target_i" => self.loudnorm_target_i = None,
+                "loudnorm_target_tp" => self.loudnorm_target_tp = None,
+                "loudnorm_target_lra" => self.loudnorm_target_lra = None,
+                "normalize_boost_db" => self.normalize_boost_db = None,
                 other => {
                     // Unreachable in practice (every `OutOfRange` field above is listed).
                     // Fail safe rather than looping forever on an unmatched field: fall
@@ -700,6 +737,24 @@ impl AppSettings {
             });
         }
 
+        // Normalization targets: the SAME check `Config::validate` runs, on the
+        // same owner (`rdlp_types::EffectiveNormalize::*_RANGE`), so a
+        // hand-edited settings.json cannot put a value past the alimiter's
+        // floor — or `NaN`/`inf` — into the filter graph (#611 review). The
+        // field names are shared with `PostProcess`, so the projection is
+        // one-to-one.
+        let targets = rdlp_types::PostProcess {
+            audio_gain_target: self.audio_gain_target,
+            loudnorm_target_i: self.loudnorm_target_i,
+            loudnorm_target_tp: self.loudnorm_target_tp,
+            loudnorm_target_lra: self.loudnorm_target_lra,
+            normalize_boost_db: self.normalize_boost_db,
+            ..rdlp_types::PostProcess::default()
+        };
+        if let Some((field, reason)) = targets.first_target_out_of_range() {
+            return Err(SettingsValidationError::OutOfRange { field, reason });
+        }
+
         // `default_subtitle_langs` is the only unbounded collection that
         // reaches a download (#589 wired it into `build_subtitle_options`).
         // Every entry is matched against every subtitle track and each
@@ -942,8 +997,8 @@ mod tests {
 
     /// Every field `reset_invalid_field` can reset, invalid at once.
     ///
-    /// One JSON document carrying all twelve — the two non-numeric variants
-    /// (`cookies_file`, `proxy`) plus the ten `OutOfRange` fields — because the
+    /// One JSON document carrying all seventeen — the two non-numeric variants
+    /// (`cookies_file`, `proxy`) plus the fifteen `OutOfRange` fields — because the
     /// reset loop clears exactly one per iteration and `MAX_RESET_ITERATIONS`
     /// has to cover the whole set, not just the numeric arm. `output_dir` is
     /// the witness: exhausting the bound falls back to `Self::default()`, which
@@ -965,7 +1020,12 @@ mod tests {
         "buffer_size": 0,
         "parallel_threshold": 0,
         "hls_head_probe_timeout": 0,
-        "default_subtitle_langs": ["en\n"]
+        "default_subtitle_langs": ["en\n"],
+        "audio_gain_target": 0.5,
+        "loudnorm_target_i": -70.5,
+        "loudnorm_target_tp": 0.5,
+        "loudnorm_target_lra": 0.5,
+        "normalize_boost_db": 30.5
     }"#;
 
     #[test]
@@ -997,7 +1057,94 @@ mod tests {
         assert!(s.parallel_threshold.is_none());
         assert!(s.hls_head_probe_timeout.is_none());
         assert!(s.default_subtitle_langs.is_empty());
+        assert!(s.audio_gain_target.is_none());
+        assert!(s.loudnorm_target_i.is_none());
+        assert!(s.loudnorm_target_tp.is_none());
+        assert!(s.loudnorm_target_lra.is_none());
+        assert!(s.normalize_boost_db.is_none());
         assert!(s.embed_thumbnail, "a non-offending field must survive");
+    }
+
+    // --- normalization targets: same owner and check as `Config::validate` ---
+
+    /// (field, setter, owning range) for one bounded normalization field.
+    type NormalizeField = (
+        &'static str,
+        fn(&mut AppSettings, Option<f64>),
+        rdlp_types::NormalizeRange,
+    );
+
+    /// The five bounded normalization fields.
+    fn normalize_fields() -> Vec<NormalizeField> {
+        use rdlp_types::EffectiveNormalize as E;
+        vec![
+            (
+                "audio_gain_target",
+                |s, v| s.audio_gain_target = v,
+                E::PEAK_TARGET_DB_RANGE,
+            ),
+            (
+                "loudnorm_target_i",
+                |s, v| s.loudnorm_target_i = v,
+                E::TARGET_I_RANGE,
+            ),
+            (
+                "loudnorm_target_tp",
+                |s, v| s.loudnorm_target_tp = v,
+                E::TARGET_TP_RANGE,
+            ),
+            (
+                "loudnorm_target_lra",
+                |s, v| s.loudnorm_target_lra = v,
+                E::TARGET_LRA_RANGE,
+            ),
+            (
+                "normalize_boost_db",
+                |s, v| s.normalize_boost_db = v,
+                E::BOOST_GAIN_DB_RANGE,
+            ),
+        ]
+    }
+
+    #[test]
+    fn validate_security_accepts_normalization_targets_at_both_bounds() {
+        for (field, set, range) in normalize_fields() {
+            for v in [range.min, range.max] {
+                let mut s = AppSettings::default();
+                set(&mut s, Some(v));
+                assert!(
+                    s.validate_security().is_ok(),
+                    "{field} = {v} must be accepted"
+                );
+            }
+        }
+    }
+
+    /// A hand-edited settings.json (or an IPC caller) must not get a value past
+    /// the boundary or a non-finite one into `volume=…dB` / `alimiter=limit=…`.
+    #[test]
+    fn validate_security_rejects_normalization_targets_outside_and_non_finite() {
+        for (field, set, range) in normalize_fields() {
+            for v in [
+                range.min - 0.001,
+                range.max + 0.001,
+                f64::NAN,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+            ] {
+                let mut s = AppSettings::default();
+                set(&mut s, Some(v));
+                match s.validate_security() {
+                    Err(SettingsValidationError::OutOfRange { field: f, .. }) => {
+                        assert_eq!(f, field, "must name the offending field");
+                    }
+                    other => panic!("{field} = {v} must be OutOfRange, got {other:?}"),
+                }
+                // And the reset loop clears exactly that field.
+                s.reset_invalid_field(&SettingsValidationError::OutOfRange { field, reason: "" });
+                assert!(s.validate_security().is_ok(), "{field} must reset to None");
+            }
+        }
     }
 
     #[test]
@@ -1158,6 +1305,41 @@ mod tests {
                 };
                 assert!(only.contains(field), "names the field {field}: {only}");
             }
+        });
+    }
+
+    /// The rejected value is operator-visible log text. A pasted credentialed
+    /// URL must arrive redacted, and a multi-MB string must not arrive whole:
+    /// redact FIRST, then bound — truncating first could cut `user:pw@` in
+    /// half and leave the redaction pattern nothing to anchor on.
+    #[test]
+    fn lenient_warn_redacts_and_bounds_the_rejected_value() {
+        testing_logger::setup();
+        let tail = "x".repeat(5000);
+        let json = format!(
+            r#"{{ "output_dir": "/tmp/redact-fixture", "cookies_from_browser": "https://user:pw@example.com/{tail}" }}"#
+        );
+        let settings =
+            AppSettings::parse_and_validate(&json, std::path::Path::new("/tmp/settings.json"));
+        assert!(settings.cookies_from_browser.is_none());
+
+        testing_logger::validate(|captured| {
+            let warns: Vec<&str> = captured
+                .iter()
+                .filter(|l| l.level == log::Level::Warn && l.body.contains("cookies_from_browser"))
+                .map(|l| l.body.as_str())
+                .collect();
+            let [line] = warns.as_slice() else {
+                panic!("exactly one warn for cookies_from_browser; got {warns:?}");
+            };
+            assert!(!line.contains("pw@"), "credential leaked: {line}");
+            assert!(
+                line.len() < 80 + "settings.json: ignoring cookies_from_browser = ".len() + 120,
+                "unbounded value in the log ({} bytes): {}…",
+                line.len(),
+                &line[..line.len().min(120)]
+            );
+            assert!(line.contains('…'), "a truncated value must say so: {line}");
         });
     }
 
@@ -1605,11 +1787,11 @@ mod tests {
         assert!(zero.validate_security().is_err());
     }
 
-    /// Isolates the `OutOfRange` path: all **ten** of its fields invalid at once
-    /// MUST resolve via the per-field reset, not the iteration-cap fail-safe.
+    /// Isolates the `OutOfRange` path: all **fifteen** of its fields invalid at
+    /// once MUST resolve via the per-field reset, not the iteration-cap fail-safe.
     ///
-    /// This is no longer the boundary test — ten is comfortably under the bound
-    /// of twelve, so it cannot detect a `MAX_RESET_ITERATIONS` that is too low.
+    /// This is no longer the boundary test — fifteen is under the bound of
+    /// seventeen, so it cannot detect a `MAX_RESET_ITERATIONS` that is too low.
     /// `parse_and_validate_converges_with_every_resettable_field_invalid` is the
     /// boundary test, because it also drives the two non-`OutOfRange` variants
     /// (`CookiesFileTraversal`, `InvalidProxy`), which consume an iteration each
@@ -1632,10 +1814,20 @@ mod tests {
             "concurrent_fragments": 0,
             "buffer_size": 0,
             "parallel_threshold": 0,
-            "hls_head_probe_timeout": 0
+            "hls_head_probe_timeout": 0,
+            "audio_gain_target": 0.5,
+            "loudnorm_target_i": -70.5,
+            "loudnorm_target_tp": 0.5,
+            "loudnorm_target_lra": 0.5,
+            "normalize_boost_db": 30.5
         }"#;
         let settings = AppSettings::parse_and_validate(json, std::path::Path::new("test.json"));
         assert!(settings.validate_security().is_ok());
+        assert_eq!(settings.audio_gain_target, None);
+        assert_eq!(settings.loudnorm_target_i, None);
+        assert_eq!(settings.loudnorm_target_tp, None);
+        assert_eq!(settings.loudnorm_target_lra, None);
+        assert_eq!(settings.normalize_boost_db, None);
         assert_eq!(settings.socket_timeout, None);
         assert_eq!(settings.read_timeout, None);
         assert_eq!(settings.pool_idle_timeout, None);

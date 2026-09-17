@@ -19,35 +19,6 @@ import { NetworkSection } from "./sections/NetworkSection";
 import { SystemSection } from "./sections/SystemSection";
 import type { AppSettings } from "@/types";
 
-/** Validate settings before save. Returns error message or null if valid. */
-function validateSettings(draft: AppSettings): string | null {
-    if (
-        draft.loudnorm_target_i !== null &&
-        (draft.loudnorm_target_i < -70 || draft.loudnorm_target_i > 0)
-    ) {
-        return "Loudness Target must be between -70 and 0 LUFS.";
-    }
-    if (
-        draft.loudnorm_target_tp !== null &&
-        (draft.loudnorm_target_tp < -9 || draft.loudnorm_target_tp > 0)
-    ) {
-        return "True Peak Limit must be between -9 and 0 dBTP.";
-    }
-    if (
-        draft.loudnorm_target_lra !== null &&
-        (draft.loudnorm_target_lra < 1 || draft.loudnorm_target_lra > 30)
-    ) {
-        return "Loudness Range must be between 1 and 30 LU.";
-    }
-    if (
-        draft.normalize_boost_db !== null &&
-        (draft.normalize_boost_db < 0 || draft.normalize_boost_db > 30)
-    ) {
-        return "Boost Gain must be between 0 and 30 dB.";
-    }
-    return null;
-}
-
 export function SettingsView() {
     const { data: settings, error: settingsError } = useQuery(settingsQueryOptions());
     // The values an empty (inherit) field resolves to — the sections derive
@@ -103,13 +74,12 @@ export function SettingsView() {
         setSaved(false);
     };
 
+    // No client-side range table: the ranges have one owner
+    // (`rdlp_types::EffectiveNormalize::*_RANGE` etc.), enforced by
+    // `AppSettings::validate_security` behind `update_settings`, and its
+    // `OutOfRange` verdict surfaces through the Alert below (#611 review).
     const handleSave = async () => {
         if (!draft) return;
-        const err = validateSettings(draft);
-        if (err) {
-            setSaveError(err);
-            return;
-        }
         try {
             setSaveError(null);
             await updateSettings(draft);

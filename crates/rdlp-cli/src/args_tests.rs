@@ -536,6 +536,48 @@ fn loudnorm_preset_parses_typed_at_the_boundary() {
     );
 }
 
+/// The five normalization targets are range-checked at the parse boundary
+/// against the owner (`EffectiveNormalize::*_RANGE`), so an out-of-range or
+/// non-finite value is a clap error naming the flag — not an `FFmpeg` filter
+/// failure after the download completed.
+#[test]
+fn normalization_targets_are_range_checked_at_the_boundary() {
+    use rdlp_types::EffectiveNormalize as E;
+    let cases: &[(&str, rdlp_types::NormalizeRange)] = &[
+        ("--audio-gain-target", E::PEAK_TARGET_DB_RANGE),
+        ("--loudnorm-i", E::TARGET_I_RANGE),
+        ("--loudnorm-tp", E::TARGET_TP_RANGE),
+        ("--loudnorm-lra", E::TARGET_LRA_RANGE),
+        ("--normalize-boost-db", E::BOOST_GAIN_DB_RANGE),
+    ];
+    for (flag, range) in cases {
+        for ok in [range.min, range.max] {
+            let arg = format!("{flag}={ok}");
+            assert!(
+                Args::try_parse_from(["rdlp", &arg, "u"]).is_ok(),
+                "{arg} is inside {range:?} and must parse"
+            );
+        }
+        for bad in [
+            format!("{}", range.min - 0.001),
+            format!("{}", range.max + 0.001),
+            "nan".to_owned(),
+            "inf".to_owned(),
+        ] {
+            let arg = format!("{flag}={bad}");
+            let Err(err) = Args::try_parse_from(["rdlp", &arg, "u"]) else {
+                panic!("{arg} must be rejected");
+            };
+            let rendered = err.to_string();
+            assert!(
+                rendered.contains(&range.min.to_string())
+                    && rendered.contains(&range.max.to_string()),
+                "{arg}: the rejection must state the owner's bounds: {rendered}"
+            );
+        }
+    }
+}
+
 #[test]
 fn short_help_footer_fits_80_columns() {
     // clap wraps after_help at terminal width; keep the -h footer on one line.

@@ -65,7 +65,7 @@ pub use browser_type::BrowserType;
 pub use config::{Config, ConfigValidationError};
 pub use container::ContainerFormat;
 pub use effective_network::EffectiveNetwork;
-pub use effective_normalize::EffectiveNormalize;
+pub use effective_normalize::{EffectiveNormalize, NormalizeRange};
 pub use extractor_name::ExtractorName;
 pub use fixup_policy::FixupPolicy;
 pub use format::{

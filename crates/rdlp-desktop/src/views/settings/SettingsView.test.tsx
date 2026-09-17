@@ -5,6 +5,8 @@ import { SettingsView } from "./SettingsView";
 import { invokeTyped } from "@/api/invokeClient";
 import { builtinNetworkStub, effectiveNetworkStub } from "@/test/effectiveNetworkStub";
 import { effectiveNormalizeStub, loudnormPresetsStub } from "@/test/effectiveNormalizeStub";
+import { appSettingsStub } from "@/test/appSettingsStub";
+import userEvent from "@testing-library/user-event";
 
 // Only `invokeTyped` is faked; `extractErrorMessage` stays real so the
 // assertions exercise the unwrap the app actually ships.
@@ -83,5 +85,47 @@ describe("SettingsView load errors", () => {
         const alert = await screen.findByRole("alert");
         expect(alert).toHaveTextContent("defaults unavailable");
         expect(screen.queryByText(/loading settings/i)).not.toBeInTheDocument();
+    });
+});
+
+// Range validation has ONE owner — `rdlp_types::EffectiveNormalize::*_RANGE`,
+// enforced by `AppSettings::validate_security` behind `update_settings` — so
+// the view must NOT pre-screen values against a copied table. An out-of-range
+// draft goes to the engine, and the engine's `OutOfRange` verdict is what the
+// user sees (#611 review).
+describe("SettingsView save path", () => {
+    beforeEach(() => {
+        invokeMock.mockReset();
+    });
+
+    it("forwards an out-of-range value to update_settings and shows the engine's verdict", async () => {
+        const verdict = "loudnorm_target_lra: must be a finite number in 1..=50 LU";
+        invokeMock.mockImplementation((cmd: string) => {
+            switch (cmd) {
+                case "settings":
+                    // Out of range on purpose: the old client-side table blocked this.
+                    return Promise.resolve({ ...appSettingsStub, normalize_audio: true, loudnorm: true, loudnorm_target_lra: 0 });
+                case "effective_network":
+                    return Promise.resolve(effectiveNetworkStub);
+                case "builtin_network_defaults":
+                    return Promise.resolve(builtinNetworkStub);
+                case "effective_normalize":
+                    return Promise.resolve(effectiveNormalizeStub);
+                case "loudnorm_presets":
+                    return Promise.resolve(loudnormPresetsStub);
+                case "update_settings":
+                    return Promise.reject({ kind: "InvalidInput", data: { field: "loudnorm_target_lra", message: verdict } });
+                default:
+                    return Promise.reject(new Error(`unexpected command ${cmd}`));
+            }
+        });
+        const user = userEvent.setup();
+        render(<SettingsView />);
+        const save = await screen.findByRole("button", { name: /save settings/i });
+        await user.click(save);
+
+        const alert = await screen.findByRole("alert");
+        expect(alert).toHaveTextContent(verdict);
+        expect(invokeMock).toHaveBeenCalledWith("update_settings", expect.anything());
     });
 });

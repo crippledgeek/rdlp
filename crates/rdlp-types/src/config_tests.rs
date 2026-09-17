@@ -1246,3 +1246,99 @@ fn effective_network_some_fields_resolve_to_their_value() {
     assert_eq!(parallel_threshold, 17);
     assert_eq!(hls_head_probe_timeout_secs, 18);
 }
+
+// --- normalization targets reach FFmpeg's filter graph unchecked otherwise ---
+//
+// Each range has ONE owner (`EffectiveNormalize::*_RANGE`); these tests read the
+// bounds from it and probe the boundary on both sides plus the non-finite
+// values `f64` can carry (a JSON/TOML file cannot spell them, but an API
+// caller can). A `>=`-for-`>` slip is only visible at `min` / `min - ε`.
+
+/// (field name, setter, owning range) for one bounded `PostProcess` target.
+type NormalizeField = (
+    &'static str,
+    fn(&mut Config, Option<f64>),
+    crate::effective_normalize::NormalizeRange,
+);
+
+/// The five `PostProcess` targets.
+fn normalize_fields() -> Vec<NormalizeField> {
+    use crate::EffectiveNormalize as E;
+    vec![
+        (
+            "audio_gain_target",
+            |c, v| c.postprocess.audio_gain_target = v,
+            E::PEAK_TARGET_DB_RANGE,
+        ),
+        (
+            "loudnorm_target_i",
+            |c, v| c.postprocess.loudnorm_target_i = v,
+            E::TARGET_I_RANGE,
+        ),
+        (
+            "loudnorm_target_tp",
+            |c, v| c.postprocess.loudnorm_target_tp = v,
+            E::TARGET_TP_RANGE,
+        ),
+        (
+            "loudnorm_target_lra",
+            |c, v| c.postprocess.loudnorm_target_lra = v,
+            E::TARGET_LRA_RANGE,
+        ),
+        (
+            "normalize_boost_db",
+            |c, v| c.postprocess.normalize_boost_db = v,
+            E::BOOST_GAIN_DB_RANGE,
+        ),
+    ]
+}
+
+#[test]
+fn validate_accepts_normalization_targets_at_both_bounds() {
+    for (field, set, range) in normalize_fields() {
+        for v in [range.min, range.max, f64::midpoint(range.min, range.max)] {
+            let mut config = Config::default();
+            set(&mut config, Some(v));
+            assert!(
+                config.validate().is_ok(),
+                "{field} = {v} is inside {range:?} and must be accepted"
+            );
+        }
+    }
+}
+
+#[test]
+fn validate_rejects_normalization_targets_just_outside_and_non_finite() {
+    for (field, set, range) in normalize_fields() {
+        for v in [
+            range.min - 0.001,
+            range.max + 0.001,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            let mut config = Config::default();
+            set(&mut config, Some(v));
+            match config.validate() {
+                Err(ConfigValidationError::OutOfRange { field: f, .. }) => {
+                    assert_eq!(f, field, "the error must name the offending field");
+                }
+                other => panic!("{field} = {v} must be OutOfRange, got {other:?}"),
+            }
+        }
+    }
+}
+
+/// The reason text is rendered from the owning range, not restated.
+#[test]
+fn normalization_out_of_range_reason_states_the_owners_bounds() {
+    let mut config = Config::default();
+    config.postprocess.audio_gain_target = Some(1.0);
+    let Err(err) = config.validate() else {
+        panic!("must be rejected");
+    };
+    let range = crate::EffectiveNormalize::PEAK_TARGET_DB_RANGE;
+    let rendered = err.to_string();
+    assert!(rendered.contains(&range.min.to_string()), "{rendered}");
+    assert!(rendered.contains(&range.max.to_string()), "{rendered}");
+}

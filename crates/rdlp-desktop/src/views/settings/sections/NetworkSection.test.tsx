@@ -4,51 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { render, screen } from "@/test/test-utils";
 import { NetworkSection } from "./NetworkSection";
 import { builtinNetworkStub, effectiveNetworkStub } from "@/test/effectiveNetworkStub";
-import type { AppSettings } from "@/types";
+import { appSettingsStub as baseDraft } from "@/test/appSettingsStub";
 
-const baseDraft: AppSettings = {
-    output_dir: ".",
-    default_remux: null,
-    default_extract_audio: null,
-    default_subtitle_format: null,
-    default_subtitle_langs: [],
-    embed_thumbnail: true,
-    write_thumbnail: false,
-    embed_metadata: false,
-    verbose: false,
-    default_search_provider: null,
-    output_template: null,
-    cookies_from_browser: null,
-    cookies_file: null,
-    proxy: null,
-    rate_limit: null,
-    socket_timeout: null,
-    read_timeout: null,
-    pool_idle_timeout: null,
-    download_timeout: null,
-    merge_timeout: null,
-    normalize_audio: false,
-    audio_gain_target: null,
-    loudnorm: false,
-    loudnorm_preset: null,
-    loudnorm_target_i: null,
-    loudnorm_target_tp: null,
-    loudnorm_target_lra: null,
-    loudnorm_dynamic: false,
-    loudnorm_precompress: false,
-    normalize_boost: false,
-    normalize_boost_db: null,
-    embed_subtitles: false,
-    write_subtitles: false,
-    write_auto_subtitles: false,
-    strict_subs: false,
-    verify_sub_urls: false,
-    retry_subs: false,
-    concurrent_fragments: null,
-    buffer_size: null,
-    parallel_threshold: null,
-    hls_head_probe_timeout: null,
-};
 
 // NOTE on role: NumericField wraps React Aria's NumberField, which
 // deliberately overrides the ARIA APG spinbutton role to `null` on the

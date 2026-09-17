@@ -854,6 +854,13 @@ impl Config {
             });
         }
 
+        // Normalization targets reach FFmpeg's filter graph as numbers; the
+        // bounds live on `EffectiveNormalize` and the check is shared with the
+        // desktop's `AppSettings::validate_security` (#611 review).
+        if let Some((field, reason)) = self.postprocess.first_target_out_of_range() {
+            return Err(ConfigValidationError::OutOfRange { field, reason });
+        }
+
         // HTTP timeout range checks
         if let Some(t) = self.socket_timeout
             && !(1..=300).contains(&t)
