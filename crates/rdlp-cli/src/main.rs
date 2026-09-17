@@ -599,7 +599,11 @@ mod tests {
             has_more: true,
             total_estimate: None,
         };
-        insta::assert_snapshot!(search_text(&response));
+        let text = search_text(&response);
+        // insta normalises the trailing newline; the caller prints with
+        // `eprint!`, so the listing must end its own last line.
+        assert!(text.ends_with('\n'), "{text:?}");
+        insta::assert_snapshot!(text);
     }
 
     /// `default_filter` builds its directive with `Level`'s `Display`, which
