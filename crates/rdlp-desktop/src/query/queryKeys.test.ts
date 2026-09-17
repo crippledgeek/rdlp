@@ -100,3 +100,23 @@ describe("queryKeys.settings", () => {
         expect(queryKeys.settings()).toEqual(["settings"]);
     });
 });
+
+describe("queryKeys.networkDefaults", () => {
+    test("returns ['network-defaults']", () => {
+        expect(queryKeys.networkDefaults()).toEqual(["network-defaults"]);
+    });
+});
+
+describe("queryKeys.effectiveNormalize", () => {
+    test("is keyed by the preset, with null meaning inherit", () => {
+        expect(queryKeys.effectiveNormalize(null)).toEqual(["effective-normalize", null]);
+        expect(queryKeys.effectiveNormalize("loud")).toEqual(["effective-normalize", "loud"]);
+        expect(queryKeys.effectiveNormalize("loud")).not.toEqual(queryKeys.effectiveNormalize("broadcast"));
+    });
+});
+
+describe("queryKeys.loudnormPresets", () => {
+    test("returns ['loudnorm-presets']", () => {
+        expect(queryKeys.loudnormPresets()).toEqual(["loudnorm-presets"]);
+    });
+});

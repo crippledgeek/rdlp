@@ -31,14 +31,14 @@ interface NumericFieldProps {
     id: string;
     label: string;
     helper: string;
-    /** Value in the DISPLAY unit; `null` renders an empty field ("inherit default"). */
+    /** Value in the DISPLAY unit; `null` renders an empty field (inherit the base configuration). */
     value: number | null;
     /** Lower bound; see the clamping note below for how `minValue`/`maxValue` are enforced. */
     minValue: number;
     /** Upper bound; see the clamping note below for how `minValue`/`maxValue` are enforced. */
     maxValue: number;
     onCommit: (next: number | null) => void;
-    /** Shown in the empty input to hint the backend default ("inherit" affordance). */
+    /** Shown in the empty input: the value inherited from the base configuration. */
     placeholder?: string;
     suffix?: string;
     isDisabled?: boolean;

@@ -49,7 +49,7 @@ export function JobCard({ job, compact = false }: JobCardProps) {
         // swallowed silently, so a failed reveal looked identical to a
         // successful one (#693).
         try {
-            await invokeTyped<void>("reveal_in_folder", { path: job.output_path });
+            await invokeTyped("reveal_in_folder", { path: job.output_path });
         } catch (e: unknown) {
             toast.error(extractErrorMessage(e) || "Failed to reveal the file");
         }

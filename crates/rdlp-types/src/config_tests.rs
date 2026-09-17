@@ -11,7 +11,10 @@ fn test_default_config() {
     assert_eq!(config.output_template, "%(title|Unknown)s [%(id)s].%(ext)s");
     assert!(config.format.is_none());
     assert!(config.continue_downloads);
-    assert_eq!(config.concurrent_fragments, 8);
+    assert_eq!(
+        config.concurrent_fragments,
+        crate::EffectiveNetwork::DEFAULT.concurrent_fragments
+    );
 }
 
 #[test]
@@ -538,8 +541,8 @@ fn hls_head_probe_timeout_above_max_rejected() {
 
 #[test]
 fn hls_expansion_timeout_default_is_none() {
-    // Unset keeps rdlp-api's `DEFAULT_HLS_EXPANSION_TIMEOUT_SECS`, the same
-    // "None = consumer default" shape `download_timeout`/`merge_timeout` use.
+    // Unset resolves through `effective_network()` to `EffectiveNetwork::DEFAULT`,
+    // the same "None = inherit" shape `download_timeout`/`merge_timeout` use.
     assert_eq!(Config::default().hls_expansion_timeout, None);
 }
 
@@ -780,9 +783,12 @@ fn test_validate_concurrent_fragments_accepts_64_boundary() {
 }
 
 #[test]
-fn test_default_parallel_threshold_is_10_mib() {
+fn test_default_parallel_threshold_is_the_effective_network_default() {
     let config = Config::default();
-    assert_eq!(config.parallel_threshold, Some(10 * 1024 * 1024));
+    assert_eq!(
+        config.parallel_threshold,
+        Some(crate::EffectiveNetwork::DEFAULT.parallel_threshold)
+    );
 }
 
 #[test]
@@ -1145,4 +1151,316 @@ fn progress_key_deserializes_and_is_absent_by_default() {
     assert_eq!(c.progress, Some(false));
     let c: Config = toml::from_str("").expect("valid toml");
     assert_eq!(c.progress, None);
+}
+
+// =============================================================================
+// EffectiveNetwork resolution (#611)
+// =============================================================================
+
+/// The default `Config` materialises to exactly the single owner of the
+/// nine network defaults.
+#[test]
+fn default_config_resolves_to_effective_network_default() {
+    assert_eq!(
+        Config::default().effective_network(),
+        crate::EffectiveNetwork::DEFAULT
+    );
+}
+
+/// Every `None` (inherit) resolves to its `DEFAULT` field. Destructured
+/// without `..` so adding a field to `EffectiveNetwork` fails this test until
+/// the resolver and the assertion cover it.
+#[test]
+fn effective_network_none_fields_resolve_to_default() {
+    let config = Config {
+        socket_timeout: None,
+        read_timeout: None,
+        pool_idle_timeout: None,
+        download_timeout: None,
+        merge_timeout: None,
+        parallel_threshold: None,
+        hls_head_probe_timeout: None,
+        hls_expansion_timeout: None,
+        ..Config::default()
+    };
+    let d = crate::EffectiveNetwork::DEFAULT;
+    let crate::EffectiveNetwork {
+        socket_timeout_secs,
+        read_timeout_secs,
+        pool_idle_timeout_secs,
+        download_timeout_secs,
+        merge_timeout_secs,
+        concurrent_fragments,
+        buffer_size,
+        parallel_threshold,
+        hls_head_probe_timeout_secs,
+        hls_expansion_timeout_secs,
+    } = config.effective_network();
+    assert_eq!(socket_timeout_secs, d.socket_timeout_secs);
+    assert_eq!(read_timeout_secs, d.read_timeout_secs);
+    assert_eq!(pool_idle_timeout_secs, d.pool_idle_timeout_secs);
+    assert_eq!(download_timeout_secs, d.download_timeout_secs);
+    assert_eq!(merge_timeout_secs, d.merge_timeout_secs);
+    assert_eq!(concurrent_fragments, d.concurrent_fragments);
+    assert_eq!(buffer_size, d.buffer_size);
+    assert_eq!(parallel_threshold, d.parallel_threshold);
+    assert_eq!(hls_head_probe_timeout_secs, d.hls_head_probe_timeout_secs);
+    assert_eq!(hls_expansion_timeout_secs, d.hls_expansion_timeout_secs);
+}
+
+/// Every `Some(x)` (and every concrete field) resolves to `x`, not to the
+/// default. Values are chosen to differ from every `DEFAULT` field so a
+/// resolver that ignored one `Some` would be caught.
+#[test]
+fn effective_network_some_fields_resolve_to_their_value() {
+    let config = Config {
+        socket_timeout: Some(11),
+        read_timeout: Some(12),
+        pool_idle_timeout: Some(0),
+        download_timeout: Some(14),
+        merge_timeout: Some(15),
+        concurrent_fragments: 3,
+        buffer_size: 4096,
+        parallel_threshold: Some(17),
+        hls_head_probe_timeout: Some(18),
+        hls_expansion_timeout: Some(19),
+        ..Config::default()
+    };
+    let crate::EffectiveNetwork {
+        socket_timeout_secs,
+        read_timeout_secs,
+        pool_idle_timeout_secs,
+        download_timeout_secs,
+        merge_timeout_secs,
+        concurrent_fragments,
+        buffer_size,
+        parallel_threshold,
+        hls_head_probe_timeout_secs,
+        hls_expansion_timeout_secs,
+    } = config.effective_network();
+    assert_eq!(socket_timeout_secs, 11);
+    assert_eq!(read_timeout_secs, 12);
+    assert_eq!(
+        pool_idle_timeout_secs, 0,
+        "0 is the disable sentinel and must survive"
+    );
+    assert_eq!(download_timeout_secs, 14);
+    assert_eq!(merge_timeout_secs, 15);
+    assert_eq!(concurrent_fragments, 3);
+    assert_eq!(buffer_size, 4096);
+    assert_eq!(parallel_threshold, 17);
+    assert_eq!(hls_head_probe_timeout_secs, 18);
+    assert_eq!(hls_expansion_timeout_secs, 19);
+}
+
+/// `Config::validate` reads the network bounds from `EffectiveNetwork::RANGES`
+/// — every field is accepted at both ends of its owning range and rejected
+/// one past each, with the reason citing the owner's bounds. A validator
+/// restating a literal could agree with the owner only by coincidence; this
+/// probes each pair the owner declares.
+#[test]
+fn validate_network_bounds_come_from_the_owner() {
+    type Setter = fn(&mut Config, Option<u64>);
+    let r = crate::EffectiveNetwork::RANGES;
+    let fields: [(&str, Setter, crate::effective_network::NetworkRange); 8] = [
+        (
+            "socket_timeout",
+            |c, v| c.socket_timeout = v,
+            r.socket_timeout_secs,
+        ),
+        (
+            "read_timeout",
+            |c, v| c.read_timeout = v,
+            r.read_timeout_secs,
+        ),
+        (
+            "pool_idle_timeout",
+            |c, v| c.pool_idle_timeout = v,
+            r.pool_idle_timeout_secs,
+        ),
+        (
+            "download_timeout",
+            |c, v| c.download_timeout = v,
+            r.download_timeout_secs,
+        ),
+        (
+            "merge_timeout",
+            |c, v| c.merge_timeout = v,
+            r.merge_timeout_secs,
+        ),
+        (
+            "parallel_threshold",
+            |c, v| c.parallel_threshold = v,
+            r.parallel_threshold,
+        ),
+        (
+            "hls_head_probe_timeout",
+            |c, v| c.hls_head_probe_timeout = v,
+            r.hls_head_probe_timeout_secs,
+        ),
+        (
+            "hls_expansion_timeout",
+            |c, v| c.hls_expansion_timeout = v,
+            r.hls_expansion_timeout_secs,
+        ),
+    ];
+    for (field, set, range) in fields {
+        for accepted in [range.min, range.max] {
+            let mut cfg = Config::default();
+            set(&mut cfg, Some(accepted));
+            cfg.validate()
+                .unwrap_or_else(|e| panic!("{field}={accepted} must be accepted: {e}"));
+        }
+        let rejected: Vec<u64> = [range.min.checked_sub(1), Some(range.max + 1)]
+            .into_iter()
+            .flatten()
+            .collect();
+        for value in rejected {
+            let mut cfg = Config::default();
+            set(&mut cfg, Some(value));
+            match cfg.validate() {
+                Err(ConfigValidationError::OutOfRange { field: f, reason }) if f == field => {
+                    assert!(
+                        reason.contains(&format!("{}..={}", range.min, range.max)),
+                        "{field}: the reason must cite the owner's bounds: {reason:?}"
+                    );
+                }
+                other => panic!("{field}={value}: got {other:?}"),
+            }
+        }
+    }
+    // The two concrete fields: upper bound from the owner, zero keeps its
+    // dedicated variant.
+    let max_frag = usize::try_from(r.concurrent_fragments.max).expect("fits");
+    Config {
+        concurrent_fragments: max_frag,
+        ..Config::default()
+    }
+    .validate()
+    .expect("max concurrent_fragments accepted");
+    assert!(matches!(
+        Config {
+            concurrent_fragments: max_frag + 1,
+            ..Config::default()
+        }
+        .validate(),
+        Err(ConfigValidationError::OutOfRange {
+            field: "concurrent_fragments",
+            ..
+        })
+    ));
+    let max_buf = usize::try_from(r.buffer_size.max).expect("fits");
+    Config {
+        buffer_size: max_buf,
+        ..Config::default()
+    }
+    .validate()
+    .expect("max buffer_size accepted");
+    assert!(matches!(
+        Config {
+            buffer_size: max_buf + 1,
+            ..Config::default()
+        }
+        .validate(),
+        Err(ConfigValidationError::OutOfRange {
+            field: "buffer_size",
+            ..
+        })
+    ));
+}
+
+// --- normalization targets reach FFmpeg's filter graph unchecked otherwise ---
+//
+// Each range has ONE owner (`EffectiveNormalize::*_RANGE`); these tests read the
+// bounds from it and probe the boundary on both sides plus the non-finite
+// values `f64` can carry (a JSON/TOML file cannot spell them, but an API
+// caller can). A `>=`-for-`>` slip is only visible at `min` / `min - ε`.
+
+/// (field name, setter, owning range) for one bounded `PostProcess` target.
+type NormalizeField = (
+    &'static str,
+    fn(&mut Config, Option<f64>),
+    crate::effective_normalize::NormalizeRange,
+);
+
+/// The five `PostProcess` targets.
+fn normalize_fields() -> Vec<NormalizeField> {
+    use crate::EffectiveNormalize as E;
+    vec![
+        (
+            "audio_gain_target",
+            |c, v| c.postprocess.audio_gain_target = v,
+            E::PEAK_TARGET_DB_RANGE,
+        ),
+        (
+            "loudnorm_target_i",
+            |c, v| c.postprocess.loudnorm_target_i = v,
+            E::TARGET_I_RANGE,
+        ),
+        (
+            "loudnorm_target_tp",
+            |c, v| c.postprocess.loudnorm_target_tp = v,
+            E::TARGET_TP_RANGE,
+        ),
+        (
+            "loudnorm_target_lra",
+            |c, v| c.postprocess.loudnorm_target_lra = v,
+            E::TARGET_LRA_RANGE,
+        ),
+        (
+            "normalize_boost_db",
+            |c, v| c.postprocess.normalize_boost_db = v,
+            E::BOOST_GAIN_DB_RANGE,
+        ),
+    ]
+}
+
+#[test]
+fn validate_accepts_normalization_targets_at_both_bounds() {
+    for (field, set, range) in normalize_fields() {
+        for v in [range.min, range.max, f64::midpoint(range.min, range.max)] {
+            let mut config = Config::default();
+            set(&mut config, Some(v));
+            assert!(
+                config.validate().is_ok(),
+                "{field} = {v} is inside {range:?} and must be accepted"
+            );
+        }
+    }
+}
+
+#[test]
+fn validate_rejects_normalization_targets_just_outside_and_non_finite() {
+    for (field, set, range) in normalize_fields() {
+        for v in [
+            range.min - 0.001,
+            range.max + 0.001,
+            f64::NAN,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+        ] {
+            let mut config = Config::default();
+            set(&mut config, Some(v));
+            match config.validate() {
+                Err(ConfigValidationError::OutOfRange { field: f, .. }) => {
+                    assert_eq!(f, field, "the error must name the offending field");
+                }
+                other => panic!("{field} = {v} must be OutOfRange, got {other:?}"),
+            }
+        }
+    }
+}
+
+/// The reason text is rendered from the owning range, not restated.
+#[test]
+fn normalization_out_of_range_reason_states_the_owners_bounds() {
+    let mut config = Config::default();
+    config.postprocess.audio_gain_target = Some(1.0);
+    let Err(err) = config.validate() else {
+        panic!("must be rejected");
+    };
+    let range = crate::EffectiveNormalize::PEAK_TARGET_DB_RANGE;
+    let rendered = err.to_string();
+    assert!(rendered.contains(&range.min.to_string()), "{rendered}");
+    assert!(rendered.contains(&range.max.to_string()), "{rendered}");
 }

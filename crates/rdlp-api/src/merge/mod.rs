@@ -111,8 +111,11 @@ impl MergeOverrides for PostProcessOptions {
         if let Some(v) = self.loudnorm {
             config.postprocess.loudnorm = v;
         }
-        if let Some(ref v) = self.loudnorm_preset {
-            config.postprocess.loudnorm_preset = Some(v.clone());
+        if let Some(v) = self.audio_gain_target {
+            config.postprocess.audio_gain_target = Some(v);
+        }
+        if let Some(v) = self.loudnorm_preset {
+            config.postprocess.loudnorm_preset = Some(v);
         }
         if let Some(v) = self.loudnorm_target_i {
             config.postprocess.loudnorm_target_i = Some(v);

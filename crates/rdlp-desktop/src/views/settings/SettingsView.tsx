@@ -5,6 +5,8 @@ import { useState } from "react";
 import { extractErrorMessage } from "@/api/invokeClient";
 import { useQuery } from "@tanstack/react-query";
 import { settingsQueryOptions, updateSettings } from "@/api/settings";
+import { networkDefaultsQueryOptions } from "@/api/effectiveNetwork";
+import { effectiveNormalizeQueryOptions, loudnormPresetsQueryOptions } from "@/api/effectiveNormalize";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { GeneralSection } from "./sections/GeneralSection";
@@ -17,37 +19,13 @@ import { NetworkSection } from "./sections/NetworkSection";
 import { SystemSection } from "./sections/SystemSection";
 import type { AppSettings } from "@/types";
 
-/** Validate settings before save. Returns error message or null if valid. */
-function validateSettings(draft: AppSettings): string | null {
-    if (
-        draft.loudnorm_target_i !== null &&
-        (draft.loudnorm_target_i < -70 || draft.loudnorm_target_i > 0)
-    ) {
-        return "Loudness Target must be between -70 and 0 LUFS.";
-    }
-    if (
-        draft.loudnorm_target_tp !== null &&
-        (draft.loudnorm_target_tp < -9 || draft.loudnorm_target_tp > 0)
-    ) {
-        return "True Peak Limit must be between -9 and 0 dBTP.";
-    }
-    if (
-        draft.loudnorm_target_lra !== null &&
-        (draft.loudnorm_target_lra < 1 || draft.loudnorm_target_lra > 30)
-    ) {
-        return "Loudness Range must be between 1 and 30 LU.";
-    }
-    if (
-        draft.normalize_boost_db !== null &&
-        (draft.normalize_boost_db < 0 || draft.normalize_boost_db > 30)
-    ) {
-        return "Boost Gain must be between 0 and 30 dB.";
-    }
-    return null;
-}
-
 export function SettingsView() {
-    const { data: settings, isLoading } = useQuery(settingsQueryOptions());
+    const { data: settings, error: settingsError } = useQuery(settingsQueryOptions());
+    // The network payload: what an empty (inherit) field resolves to, the
+    // built-in defaults, and the owning ranges — the sections derive every
+    // placeholder and bound from it instead of carrying a copy (#611).
+    // Fetched in parallel with the settings; both gate the form.
+    const { data: network, error: networkError } = useQuery(networkDefaultsQueryOptions());
     // Track edits as a partial overlay on top of server data.
     // null = no edits yet, show server data as-is.
     const [edits, setEdits] = useState<Partial<AppSettings> | null>(null);
@@ -57,7 +35,33 @@ export function SettingsView() {
     // Computed draft: server data merged with local edits
     const draft = settings ? { ...settings, ...edits } : null;
 
-    if (isLoading || !draft) {
+    // The normalization values for the DRAFT'S preset — re-fetched when the
+    // preset changes, because the I/TP/LRA defaults are preset-dependent
+    // (#611). Gated (`skipToken`) until the settings resolve: `undefined` here
+    // is "no draft yet", `null` is the stored "inherit". `keepPreviousData` in
+    // the options holds the last payload while the next loads, so a preset
+    // switch never blanks the placeholders.
+    const { data: normalize, error: normalizeError } = useQuery(
+        effectiveNormalizeQueryOptions(draft?.loudnorm_preset),
+    );
+
+    // The preset catalogue for the picker's per-item labels (#611).
+    const { data: presets, error: presetsError } = useQuery(loudnormPresetsQueryOptions());
+
+    const loadError = settingsError ?? networkError ?? normalizeError ?? presetsError;
+    if (loadError) {
+        return (
+            <div className="max-w-2xl mx-auto px-4 py-6">
+                <Alert variant="destructive">
+                    <AlertDescription>
+                        Failed to load settings: {extractErrorMessage(loadError)}
+                    </AlertDescription>
+                </Alert>
+            </div>
+        );
+    }
+
+    if (!draft || !network || !normalize || !presets) {
         return (
             <div className="flex items-center justify-center h-full">
                 <p className="text-[13px] text-[var(--text-muted)] animate-pulse">Loading settings…</p>
@@ -70,13 +74,12 @@ export function SettingsView() {
         setSaved(false);
     };
 
+    // No client-side range table: the ranges have one owner
+    // (`rdlp_types::EffectiveNormalize::*_RANGE` etc.), enforced by
+    // `AppSettings::validate_security` behind `update_settings`, and its
+    // `OutOfRange` verdict surfaces through the Alert below (#611 review).
     const handleSave = async () => {
         if (!draft) return;
-        const err = validateSettings(draft);
-        if (err) {
-            setSaveError(err);
-            return;
-        }
         try {
             setSaveError(null);
             await updateSettings(draft);
@@ -98,10 +101,10 @@ export function SettingsView() {
                 <GeneralSection draft={draft} onChange={handleChange} />
                 <OutputSection draft={draft} onChange={handleChange} />
                 <PostProcessSection draft={draft} onChange={handleChange} />
-                <DownloadSection draft={draft} onChange={handleChange} />
+                <DownloadSection draft={draft} network={network} onChange={handleChange} />
                 <SubtitlesSection draft={draft} onChange={handleChange} />
-                <NormalizationSection draft={draft} onChange={handleChange} />
-                <NetworkSection draft={draft} onChange={handleChange} />
+                <NormalizationSection draft={draft} effective={normalize} presets={presets} onChange={handleChange} />
+                <NetworkSection draft={draft} network={network} onChange={handleChange} />
                 <SystemSection />
 
                 {/* Save */}

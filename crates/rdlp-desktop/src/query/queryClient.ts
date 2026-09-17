@@ -3,15 +3,20 @@
 // Tauri apps differ from browser SPAs:
 //   - No tab switching -> refetchOnWindowFocus is useless
 //   - Backend state doesn't change externally -> higher staleTime
-//   - User retries manually -> low retry count
+//   - No frontend retry (#700): every command result is the engine's FINAL
+//     verdict — rdlp-core already retries transient network failures
+//     (`Config::retries`, `is_retryable`). A rejected `invoke` means the
+//     engine gave up, so re-invoking re-runs the whole extraction or search
+//     against the target site. Measured: `retry: 1` produced two `formats`
+//     command entries ~600 ms apart on every failing Analyze, in dev and in a
+//     release build alike. The user retries manually via the Retry button.
 
 import { QueryClient } from "@tanstack/react-query";
 
 export const queryClient = new QueryClient({
     defaultOptions: {
         queries: {
-            retry: 1,
-            retryDelay: 500,
+            retry: false,
             staleTime: 30_000,
             gcTime: 5 * 60_000,
             refetchOnWindowFocus: false,

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { formStateToPoolIdleTimeout, poolIdleTimeoutToFormState } from "./networkSchema";
+import { POOL_IDLE_DISABLED, formStateToPoolIdleTimeout, poolIdleNumericMin, poolIdleTimeoutToFormState } from "./networkSchema";
 
 describe("pool-idle form mapping", () => {
     it("checkbox off → 0 (sentinel)", () => {
@@ -20,5 +20,13 @@ describe("pool-idle form mapping", () => {
     });
     it("hydrate: null → checkbox on, numeric stays empty", () => {
         expect(poolIdleTimeoutToFormState(null)).toEqual({ evictIdle: true, secondsInput: "" });
+    });
+
+    // The owner's range starts AT the sentinel; the numeric control starts one
+    // past it, and otherwise follows the owner's min.
+    it("poolIdleNumericMin excludes the 0 sentinel and follows a higher owner min", () => {
+        expect(POOL_IDLE_DISABLED).toBe(0);
+        expect(poolIdleNumericMin({ min: POOL_IDLE_DISABLED, max: 3600 })).toBe(1);
+        expect(poolIdleNumericMin({ min: 5, max: 3600 })).toBe(5);
     });
 });

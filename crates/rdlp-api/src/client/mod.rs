@@ -592,6 +592,17 @@ impl RdlpClient {
         self.downloader_registry.list_downloaders()
     }
 
+    /// The client's base [`Config`] — the layer every per-request
+    /// `NetworkOptions` overlay inherits from.
+    ///
+    /// A frontend reads `config().effective_network()` to show the values a
+    /// download will actually run with when its own overlay leaves a field
+    /// unset (#611), instead of carrying a copy of the defaults.
+    #[must_use]
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
     /// Post-process a local file without downloading.
     ///
     /// Applies the configured post-processing pipeline (normalization, remux,

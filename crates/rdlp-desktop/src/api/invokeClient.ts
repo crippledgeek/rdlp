@@ -1,9 +1,13 @@
 // Typed wrapper around Tauri invoke() with error normalization.
 //
-// All Rust command calls MUST go through invokeTyped<T>() instead of
-// raw invoke() so errors have a consistent shape.
+// All Rust command calls MUST go through invokeTyped() instead of raw
+// invoke() so errors have a consistent shape and the command name, its
+// arguments and its result type are checked against the one command map
+// (`ipc.ts`). `scripts/check-ipc-command-drift.sh` also pins `invoke` imports
+// to this file.
 
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, type InvokeArgs } from "@tauri-apps/api/core";
+import type { IpcArgTuple, IpcCommand, IpcCommands, IpcResult } from "./ipc";
 
 /** Normalized error shape for all invoke failures. */
 export interface InvokeError {
@@ -46,17 +50,23 @@ export function extractErrorMessage(err: unknown): string {
 /**
  * Type-safe invoke wrapper with error normalization.
  *
- * @param command - The Rust `#[tauri::command]` name.
- * @param args - Arguments matching the command's parameters.
+ * `K` is inferred from the command-name literal; the argument object and the
+ * result type follow from `IpcCommands[K]`, so neither is a claim the caller
+ * makes (the old `invokeTyped<T>` "DECLARED `T` but never validated it").
+ *
+ * @param command - A Rust `#[tauri::command]` name from `IpcCommands`.
+ * @param rest - The command's arguments — omitted for a `void`-args command.
  * @returns The deserialized response from Rust.
  * @throws {InvokeError} on any failure.
  */
-export async function invokeTyped<T>(
-    command: string,
-    args?: Record<string, unknown>,
-): Promise<T> {
+export async function invokeTyped<K extends IpcCommand>(
+    command: K,
+    ...rest: IpcArgTuple<K>
+): IpcResult<K> {
     try {
-        return await invoke<T>(command, args);
+        // `rest[0]` is the typed args object or `undefined`; Tauri's `InvokeArgs`
+        // is the wider wire type it is sent as.
+        return await invoke<IpcCommands[K]["result"]>(command, rest[0] as InvokeArgs | undefined);
     } catch (err: unknown) {
         const message = extractErrorMessage(err);
         throw { code: "INVOKE_ERROR", message, details: err } satisfies InvokeError;

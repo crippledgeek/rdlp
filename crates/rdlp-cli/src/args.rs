@@ -6,6 +6,13 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
+use rdlp_types::{EffectiveNormalize, LoudnormPreset, NormalizeRange};
+
+use crate::args_help::{
+    HELP_AUDIO_GAIN_TARGET, HELP_LOUDNORM_I, HELP_LOUDNORM_LRA, HELP_LOUDNORM_PRESET,
+    HELP_LOUDNORM_TP, HELP_NORMALIZE_BOOST, HELP_NORMALIZE_BOOST_DB,
+};
+
 // Task-oriented `--help` section headings. clap buckets arguments by exact
 // heading-string match, so these live as named consts to prevent a typo
 // silently splitting a group.
@@ -88,6 +95,50 @@ fn reject_blank(value: &str) -> Result<&str, String> {
 fn video_encoder_name(value: &str) -> Result<rdlp_types::VideoEncoderName, String> {
     let value = reject_blank(value)?;
     rdlp_types::VideoEncoderName::new(value).map_err(|e| e.to_string())
+}
+
+/// `value_parser` for `--loudnorm-preset`.
+///
+/// Parses at the boundary through [`LoudnormPreset`]'s own `FromStr` — the
+/// vocabulary is the type's to define, not the CLI's — after the same blank
+/// rejection every string-valued flag gets. A rejection renders as
+/// `unsupported loudnorm preset: <value>` under clap's usage line.
+fn loudnorm_preset(value: &str) -> Result<LoudnormPreset, String> {
+    reject_blank(value)?.parse().map_err(|e| format!("{e}"))
+}
+
+/// Parse a normalization target and range-check it against its owner.
+///
+/// The bounds are `EffectiveNormalize::*_RANGE` in rdlp-types — the same
+/// consts `Config::validate` and the desktop check — so a value the filter
+/// graph would reject (past the alimiter's floor, or `nan`/`inf`, which
+/// `f64::from_str` accepts) is a clap error naming the flag and the bounds.
+fn ranged_target(value: &str, range: NormalizeRange) -> Result<f64, String> {
+    let parsed: f64 = value
+        .trim()
+        .parse()
+        .map_err(|e| format!("not a number ({e}); {}", range.describe()))?;
+    if range.contains(parsed) {
+        Ok(parsed)
+    } else {
+        Err(range.describe())
+    }
+}
+
+fn peak_target_db(value: &str) -> Result<f64, String> {
+    ranged_target(value, EffectiveNormalize::PEAK_TARGET_DB_RANGE)
+}
+fn loudnorm_target_i(value: &str) -> Result<f64, String> {
+    ranged_target(value, EffectiveNormalize::TARGET_I_RANGE)
+}
+fn loudnorm_target_tp(value: &str) -> Result<f64, String> {
+    ranged_target(value, EffectiveNormalize::TARGET_TP_RANGE)
+}
+fn loudnorm_target_lra(value: &str) -> Result<f64, String> {
+    ranged_target(value, EffectiveNormalize::TARGET_LRA_RANGE)
+}
+fn boost_gain_db(value: &str) -> Result<f64, String> {
+    ranged_target(value, EffectiveNormalize::BOOST_GAIN_DB_RANGE)
 }
 
 /// `value_parser` for string-valued arguments.
@@ -420,24 +471,22 @@ pub struct Args {
     #[arg(long, help_heading = HELP_HEADING_AUDIO_NORM)]
     pub loudnorm: bool,
 
-    /// Target peak level in dBFS for peak normalization (default: -1.0)
-    #[arg(long, allow_hyphen_values = true, value_name = "DBFS", help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
+    // Help for the seven normalization flags below is rendered from the
+    // owners of their numbers (`crate::args_help`), so these carry no doc
+    // comment — a `///` here would restate a literal.
+    #[arg(long, allow_hyphen_values = true, value_name = "DBFS", value_parser = peak_target_db, help = &*HELP_AUDIO_GAIN_TARGET, help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
     pub audio_gain_target: Option<f64>,
 
-    /// Loudnorm preset: broadcast (-23 LUFS), streaming (-14 LUFS), loud (-11 LUFS)
-    #[arg(long, value_parser = non_blank, value_name = "PRESET", help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
-    pub loudnorm_preset: Option<String>,
+    #[arg(long, value_parser = loudnorm_preset, value_name = "PRESET", help = &*HELP_LOUDNORM_PRESET, help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
+    pub loudnorm_preset: Option<LoudnormPreset>,
 
-    /// Target integrated loudness in LUFS for loudnorm (e.g., -14)
-    #[arg(long, allow_hyphen_values = true, value_name = "LUFS", help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
+    #[arg(long, allow_hyphen_values = true, value_name = "LUFS", value_parser = loudnorm_target_i, help = &*HELP_LOUDNORM_I, help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
     pub loudnorm_i: Option<f64>,
 
-    /// Target true peak in dBTP for loudnorm (e.g., -1)
-    #[arg(long, allow_hyphen_values = true, value_name = "DBTP", help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
+    #[arg(long, allow_hyphen_values = true, value_name = "DBTP", value_parser = loudnorm_target_tp, help = &*HELP_LOUDNORM_TP, help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
     pub loudnorm_tp: Option<f64>,
 
-    /// Target loudness range in LU for loudnorm (e.g., 11)
-    #[arg(long, value_name = "LU", help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
+    #[arg(long, value_name = "LU", value_parser = loudnorm_target_lra, help = &*HELP_LOUDNORM_LRA, help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
     pub loudnorm_lra: Option<f64>,
 
     /// Force dynamic (per-frame compression) mode in loudnorm pass 2
@@ -448,13 +497,10 @@ pub struct Args {
     #[arg(long, help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
     pub loudnorm_precompress: bool,
 
-    /// Enable limiter-boost fallback (+12 dB gain + hard limiter) for
-    /// over-compressed content (implies --loudnorm)
-    #[arg(long, help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
+    #[arg(long, help = &*HELP_NORMALIZE_BOOST, help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
     pub normalize_boost: bool,
 
-    /// Gain in dB for limiter-boost fallback (default: 12.0)
-    #[arg(long, allow_hyphen_values = true, value_name = "DB", help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
+    #[arg(long, allow_hyphen_values = true, value_name = "DB", value_parser = boost_gain_db, help = &*HELP_NORMALIZE_BOOST_DB, help_heading = HELP_HEADING_AUDIO_NORM, hide_short_help = true)]
     pub normalize_boost_db: Option<f64>,
 
     /// Fixup policy: never, warn, `detect_or_warn` [default: `detect_or_warn`]

@@ -12,7 +12,7 @@
 // Filters are serialized to a stable string so TanStack Query can
 // compare keys with === instead of deep-comparing object arrays.
 
-import type { SearchFilter } from "../types";
+import type { LoudnormPreset, SearchFilter } from "../types";
 
 /** Deterministic string key for a filter set (sorted for stability). */
 function serializeFilters(filters: SearchFilter[]): string {
@@ -44,6 +44,10 @@ export const queryKeys = {
     },
     formats: (url: string) => ["formats", url] as const,
     settings: () => ["settings"] as const,
+    networkDefaults: () => ["network-defaults"] as const,
+    /** Keyed by preset: the I/TP/LRA values differ per preset (`null` = inherit). */
+    effectiveNormalize: (preset: LoudnormPreset | null) => ["effective-normalize", preset] as const,
+    loudnormPresets: () => ["loudnorm-presets"] as const,
     thumbnail: {
         proxy: (url: string | null | undefined) => ["proxy-thumbnail", url] as const,
     },

@@ -9,7 +9,6 @@
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use rdlp_core::{DownloadStats, Downloader, ProgressCallback, RdlpError, Result};
@@ -40,32 +39,21 @@ use crate::http::HttpDownloader;
 /// # Ok(())
 /// # }
 /// ```
+///
+/// Every knob — concurrency, buffer size, timeouts, retries — lives on the
+/// inner [`HttpDownloader`], which the pre-resolved fragments path reads
+/// directly; this type carries no settings of its own.
 #[derive(Clone)]
 pub struct HlsDownloader {
     http_downloader: HttpDownloader,
-    /// Kept for builder API compatibility; unused after legacy removal.
-    concurrent_segments: usize,
-    /// Kept for builder API compatibility; unused after legacy removal.
-    buffer_size: usize,
-    /// Total download timeout (entire operation must complete within this)
-    download_timeout: Duration,
-    /// Merge operation timeout; kept for API compatibility.
-    merge_timeout: Duration,
-    /// Kept for builder API compatibility; unused after legacy removal.
-    max_segment_failures: usize,
 }
 
 impl HlsDownloader {
-    /// Create a new HLS downloader with default settings
+    /// Create a new HLS downloader over a default [`HttpDownloader`].
     #[must_use]
     pub fn new() -> Self {
         Self {
             http_downloader: HttpDownloader::new(),
-            concurrent_segments: 8,
-            buffer_size: 2 * 1024 * 1024,
-            download_timeout: Duration::from_secs(3600),
-            merge_timeout: Duration::from_secs(1800),
-            max_segment_failures: 3,
         }
     }
 
@@ -73,53 +61,6 @@ impl HlsDownloader {
     #[must_use = "builder methods consume self and return a new instance"]
     pub fn with_http_downloader(mut self, http: HttpDownloader) -> Self {
         self.http_downloader = http;
-        self
-    }
-
-    /// Set number of concurrent segment downloads
-    #[must_use = "builder methods consume self and return a new instance"]
-    #[deprecated(
-        note = "no-op since #270; legacy parallel path removed; pre-resolved fragments path doesn't use this knob"
-    )]
-    pub fn with_concurrent_segments(mut self, count: usize) -> Self {
-        self.concurrent_segments = count.max(1);
-        self
-    }
-
-    /// Set buffer size for segment merging
-    #[must_use = "builder methods consume self and return a new instance"]
-    #[deprecated(
-        note = "no-op since #270; legacy parallel path removed; pre-resolved fragments path doesn't use this knob"
-    )]
-    pub const fn with_buffer_size(mut self, size: usize) -> Self {
-        self.buffer_size = size;
-        self
-    }
-
-    /// Set total download timeout
-    #[must_use = "builder methods consume self and return a new instance"]
-    pub const fn with_download_timeout(mut self, timeout: Duration) -> Self {
-        self.download_timeout = timeout;
-        self
-    }
-
-    /// Set merge operation timeout
-    #[must_use = "builder methods consume self and return a new instance"]
-    #[deprecated(
-        note = "no-op since #270; legacy parallel path removed; pre-resolved fragments path doesn't use this knob"
-    )]
-    pub const fn with_merge_timeout(mut self, timeout: Duration) -> Self {
-        self.merge_timeout = timeout;
-        self
-    }
-
-    /// Set maximum number of segment failures before aborting
-    #[must_use = "builder methods consume self and return a new instance"]
-    #[deprecated(
-        note = "no-op since #270; legacy parallel path removed; pre-resolved fragments path doesn't use this knob"
-    )]
-    pub const fn with_max_segment_failures(mut self, max: usize) -> Self {
-        self.max_segment_failures = max;
         self
     }
 
@@ -217,18 +158,6 @@ mod tests {
     fn test_hls_downloader_creation() {
         let downloader = HlsDownloader::new();
         assert_eq!(downloader.protocol(), "hls");
-        assert_eq!(downloader.concurrent_segments, 8);
-    }
-
-    #[test]
-    #[allow(deprecated)] // exercising deprecated builder methods to verify they still compile
-    fn test_hls_downloader_builder() {
-        let downloader = HlsDownloader::new()
-            .with_concurrent_segments(16)
-            .with_buffer_size(4 * 1024 * 1024);
-
-        assert_eq!(downloader.concurrent_segments, 16);
-        assert_eq!(downloader.buffer_size, 4 * 1024 * 1024);
     }
 
     #[test]
@@ -239,13 +168,5 @@ mod tests {
         assert!(downloader.supports("https://example.com/playlist.m3u8"));
         assert!(downloader.supports("https://example.com/index.m3u8?token=abc"));
         assert!(!downloader.supports("https://example.com/video.mp4"));
-    }
-
-    #[test]
-    #[allow(deprecated)] // exercising deprecated builder method to verify clamp behavior
-    fn test_concurrent_segments_minimum() {
-        let downloader = HlsDownloader::new().with_concurrent_segments(0);
-        // Should be clamped to minimum of 1
-        assert_eq!(downloader.concurrent_segments, 1);
     }
 }

@@ -98,6 +98,13 @@ scan() {
                 # be empty or whitespace-only"). `video_encoder_name` is that
                 # dedicated wrapper — see its doc comment in args.rs.
                 needs = "video_encoder_name"
+            } else if (type ~ /LoudnormPreset/) {
+                # #611: typed at the boundary through its own `FromStr`, but the
+                # parser must run `reject_blank` FIRST for the shared blank-value
+                # UX (a bare `--loudnorm-preset=` would otherwise report
+                # "unsupported loudnorm preset: " with nothing after the colon).
+                # `loudnorm_preset` is that wrapper — see its doc in args.rs.
+                needs = "loudnorm_preset"
             } else if (type ~ /String/) {
                 # Substring, not equality: this must also catch Vec<String>,
                 # Option<Vec<String>> and fully-qualified std::string::String.
@@ -167,6 +174,11 @@ pub struct Args {
     #[arg(long)]
     pub(crate) restricted: Option<String>,
 
+    /// A boundary-typed enum whose parser must still reject blank first.
+    /// Missing its dedicated wrapper — must be caught.
+    #[arg(long)]
+    pub preset: Option<LoudnormPreset>,
+
     /// Irrelevant types — must be ignored, not flagged.
     #[arg(long)]
     pub flag: bool,
@@ -195,12 +207,12 @@ SYNTH
     found=$(scan "$tmp/synthetic.rs" || true)
     missing=$(printf '%s\n' "$found" | grep '^MISSING:' || true)
     missing_count=$(printf '%s\n' "$missing" | grep -c . || true)
-    if [ "$missing_count" -ne 6 ]; then
-        echo "self-test FAILED: expected 6 flagged fields (bad, bad_path, repeatable, qualified, r#type, restricted), got $missing_count" >&2
+    if [ "$missing_count" -ne 7 ]; then
+        echo "self-test FAILED: expected 7 flagged fields (bad, bad_path, repeatable, qualified, r#type, restricted, preset), got $missing_count" >&2
         printf '%s\n' "$found" >&2
         exit 1
     fi
-    for expected in bad bad_path repeatable qualified "r#type" restricted; do
+    for expected in bad bad_path repeatable qualified "r#type" restricted preset; do
         if ! printf '%s\n' "$missing" | grep -q ":${expected}:"; then
             echo "self-test FAILED: matcher missed '$expected'" >&2
             printf '%s\n' "$found" >&2
@@ -223,7 +235,7 @@ SYNTH
         exit 1
     fi
 
-    echo "SELF-TEST OK: flags unvalidated/mismatched/repeatable/qualified/raw-ident/restricted-visibility args, ignores irrelevant ones, stops on an unclassifiable type or an unparseable declaration"
+    echo "SELF-TEST OK: flags unvalidated/mismatched/repeatable/qualified/raw-ident/restricted-visibility/typed-enum args, ignores irrelevant ones, stops on an unclassifiable type or an unparseable declaration"
     exit 0
 fi
 
@@ -282,5 +294,5 @@ if [ -n "$missing" ]; then
     exit 1
 fi
 
-count=$(grep -cE 'value_parser = (non_blank(_path)?|video_encoder_name)\)?' "$TARGET" || true)
+count=$(grep -cE 'value_parser = (non_blank(_path)?|video_encoder_name|loudnorm_preset)\)?' "$TARGET" || true)
 echo "OK ($count string/path arguments reject blank input)"

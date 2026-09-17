@@ -9,9 +9,7 @@ use anyhow::Context;
 use async_trait::async_trait;
 use log::{debug, info};
 
-use rdlp_ffmpeg::{
-    AudioNormMode, FFmpegRunner, LoudnormPreset, NormalizeOptions, PostProcessError,
-};
+use rdlp_ffmpeg::{AudioNormMode, FFmpegRunner, NormalizeOptions, PostProcessError};
 
 use crate::pipeline::{PipelineMessage, PipelineStage};
 
@@ -30,6 +28,10 @@ impl NormalizeStage {
     }
 
     /// Build normalization options from `PostProcess`.
+    ///
+    /// Every default comes through `PostProcess::effective_normalize()`, the
+    /// single resolution step — this function holds no `unwrap_or(<literal>)`
+    /// of its own (#611).
     pub(crate) fn build_options(config: &rdlp_types::PostProcess) -> NormalizeOptions {
         let mode = if config.loudnorm {
             AudioNormMode::Loudnorm
@@ -37,24 +39,19 @@ impl NormalizeStage {
             AudioNormMode::Peak
         };
 
-        let (default_i, default_tp, default_lra) = config
-            .loudnorm_preset
-            .as_deref()
-            .and_then(|s| s.parse::<LoudnormPreset>().ok())
-            .unwrap_or(LoudnormPreset::Streaming)
-            .targets();
+        let effective = config.effective_normalize();
 
         NormalizeOptions {
             mode,
-            target_peak_db: config.audio_gain_target.unwrap_or(-1.0),
-            target_i: config.loudnorm_target_i.unwrap_or(default_i),
-            target_tp: config.loudnorm_target_tp.unwrap_or(default_tp),
-            target_lra: config.loudnorm_target_lra.unwrap_or(default_lra),
+            target_peak_db: effective.peak_target_db,
+            target_i: effective.targets.integrated_lufs,
+            target_tp: effective.targets.true_peak_dbtp,
+            target_lra: effective.targets.range_lu,
             salvage: true,
             force_dynamic: config.loudnorm_dynamic,
             precompress: config.loudnorm_precompress,
             boost_enabled: config.normalize_boost,
-            boost_gain_db: config.normalize_boost_db.unwrap_or(12.0),
+            boost_gain_db: effective.boost_gain_db,
         }
     }
 }
@@ -141,13 +138,15 @@ impl PipelineStage for NormalizeStage {
 }
 
 #[cfg(test)]
+// float_cmp: the defaults are constants propagated unchanged from their owner,
+// so exact equality is the oracle; an epsilon would accept a drifted value.
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
     use std::path::PathBuf;
     use std::sync::Arc;
 
-    use rdlp_types::InfoDict;
-    use rdlp_types::PostProcess;
+    use rdlp_types::{EffectiveNormalize, InfoDict, LoudnormPreset, PostProcess};
 
     use crate::pipeline::{FileTracker, TempRegistry};
 
@@ -203,6 +202,13 @@ mod tests {
         assert!(stage.is_fatal());
     }
 
+    // --- build_options: every default is read from its owner (#611) ---
+    //
+    // The oracles are `EffectiveNormalize::PEAK_TARGET_DB` / `BOOST_GAIN_DB`
+    // and `LoudnormPreset::targets()`, not literals: a literal here would be
+    // a fourth copy of the number, and it is exactly a copy going stale that
+    // this stage used to carry (`unwrap_or(-1.0)`, `unwrap_or(12.0)`).
+
     #[test]
     fn build_options_peak_defaults() {
         let config = PostProcess {
@@ -211,11 +217,11 @@ mod tests {
         };
         let opts = NormalizeStage::build_options(&config);
         assert_eq!(opts.mode, AudioNormMode::Peak);
-        assert!((opts.target_peak_db - (-1.0)).abs() < f64::EPSILON);
+        assert_eq!(opts.target_peak_db, EffectiveNormalize::PEAK_TARGET_DB);
     }
 
     #[test]
-    fn build_options_loudnorm_streaming_preset() {
+    fn build_options_loudnorm_default_preset() {
         let config = PostProcess {
             normalize_audio: true,
             loudnorm: true,
@@ -223,24 +229,32 @@ mod tests {
         };
         let opts = NormalizeStage::build_options(&config);
         assert_eq!(opts.mode, AudioNormMode::Loudnorm);
-        // Default preset is streaming: I=-14, TP=-1, LRA=11
-        assert!((opts.target_i - (-14.0)).abs() < f64::EPSILON);
-        assert!((opts.target_tp - (-1.0)).abs() < f64::EPSILON);
-        assert!((opts.target_lra - 11.0).abs() < f64::EPSILON);
+        let targets = LoudnormPreset::default().targets();
+        assert_eq!(opts.target_i, targets.integrated_lufs);
+        assert_eq!(opts.target_tp, targets.true_peak_dbtp);
+        assert_eq!(opts.target_lra, targets.range_lu);
     }
 
+    /// The unset targets follow the CHOSEN preset, not a fixed one.
     #[test]
-    fn build_options_loudnorm_broadcast_preset() {
-        let config = PostProcess {
-            normalize_audio: true,
-            loudnorm: true,
-            loudnorm_preset: Some("broadcast".to_string()),
-            ..PostProcess::default()
-        };
-        let opts = NormalizeStage::build_options(&config);
-        assert!((opts.target_i - (-23.0)).abs() < f64::EPSILON);
-        assert!((opts.target_tp - (-2.0)).abs() < f64::EPSILON);
-        assert!((opts.target_lra - 7.0).abs() < f64::EPSILON);
+    fn build_options_loudnorm_targets_follow_the_preset() {
+        for preset in [
+            LoudnormPreset::Broadcast,
+            LoudnormPreset::Streaming,
+            LoudnormPreset::Loud,
+        ] {
+            let config = PostProcess {
+                normalize_audio: true,
+                loudnorm: true,
+                loudnorm_preset: Some(preset),
+                ..PostProcess::default()
+            };
+            let opts = NormalizeStage::build_options(&config);
+            let targets = preset.targets();
+            assert_eq!(opts.target_i, targets.integrated_lufs, "{preset:?}");
+            assert_eq!(opts.target_tp, targets.true_peak_dbtp, "{preset:?}");
+            assert_eq!(opts.target_lra, targets.range_lu, "{preset:?}");
+        }
     }
 
     #[test]
@@ -248,15 +262,19 @@ mod tests {
         let config = PostProcess {
             normalize_audio: true,
             loudnorm: true,
-            loudnorm_preset: Some("broadcast".to_string()),
+            loudnorm_preset: Some(LoudnormPreset::Broadcast),
             loudnorm_target_i: Some(-16.0),
             loudnorm_target_tp: Some(-1.5),
             ..PostProcess::default()
         };
         let opts = NormalizeStage::build_options(&config);
-        assert!((opts.target_i - (-16.0)).abs() < f64::EPSILON);
-        assert!((opts.target_tp - (-1.5)).abs() < f64::EPSILON);
-        assert!((opts.target_lra - 7.0).abs() < f64::EPSILON); // broadcast default
+        assert_eq!(opts.target_i, -16.0);
+        assert_eq!(opts.target_tp, -1.5);
+        assert_eq!(
+            opts.target_lra,
+            LoudnormPreset::Broadcast.targets().range_lu,
+            "LRA not overridden: stays the preset's"
+        );
     }
 
     #[test]
@@ -269,7 +287,7 @@ mod tests {
         };
         let opts = NormalizeStage::build_options(&config);
         assert!(opts.boost_enabled);
-        assert!((opts.boost_gain_db - 8.0).abs() < f64::EPSILON);
+        assert_eq!(opts.boost_gain_db, 8.0);
     }
 
     #[test]
@@ -282,6 +300,26 @@ mod tests {
         };
         let opts = NormalizeStage::build_options(&config);
         assert!(opts.boost_enabled);
-        assert!((opts.boost_gain_db - 12.0).abs() < f64::EPSILON);
+        assert_eq!(opts.boost_gain_db, EffectiveNormalize::BOOST_GAIN_DB);
+    }
+
+    /// The stage's options equal the resolver's output field-for-field, so
+    /// there is exactly one resolution step between config and `FFmpeg`.
+    #[test]
+    fn build_options_equals_effective_normalize() {
+        let config = PostProcess {
+            normalize_audio: true,
+            loudnorm: true,
+            loudnorm_preset: Some(LoudnormPreset::Loud),
+            audio_gain_target: Some(-2.5),
+            ..PostProcess::default()
+        };
+        let opts = NormalizeStage::build_options(&config);
+        let eff = config.effective_normalize();
+        assert_eq!(opts.target_peak_db, eff.peak_target_db);
+        assert_eq!(opts.target_i, eff.targets.integrated_lufs);
+        assert_eq!(opts.target_tp, eff.targets.true_peak_dbtp);
+        assert_eq!(opts.target_lra, eff.targets.range_lu);
+        assert_eq!(opts.boost_gain_db, eff.boost_gain_db);
     }
 }

@@ -100,6 +100,27 @@ export interface SubtitleInfo {
 }
 
 /** Complete response for the formats command. */
+/**
+ * Format metadata for `validate_format_expression`. Mirrors the Rust
+ * `FormatData` struct (src-tauri/src/commands/formats), so format filter
+ * predicates (e.g. `[height<=1080]`) can match.
+ */
+export interface FormatData {
+    format_id: string;
+    ext: string;
+    width: number | null;
+    height: number | null;
+    fps: number | null;
+    tbr: number | null;
+    vcodec: string | null;
+    acodec: string | null;
+    filesize: number | null;
+    vbr: number | null;
+    abr: number | null;
+    asr: number | null;
+    protocol: string;
+}
+
 export interface FormatListResponse {
     title: string;
     formats: FormatInfo[];
@@ -291,6 +312,12 @@ export type AudioFormat =
 export type SubtitleFormat = "srt" | "vtt" | "ass" | "ssa" | "lrc";
 
 /**
+ * Loudnorm presets matching Rust `LoudnormPreset` (#[serde(rename_all = "lowercase")]).
+ * `scripts/check-ts-enum-drift.sh` fails the build if this union and the enum diverge.
+ */
+export type LoudnormPreset = "broadcast" | "streaming" | "loud";
+
+/**
  * Frontend-supplied download options.
  *
  * Uses camelCase because the Rust struct has #[serde(rename_all = "camelCase")].
@@ -310,7 +337,7 @@ export interface DownloadOptions {
     recodeVideo: ContainerFormat | null;
     normalizeAudio: boolean | null;
     loudnorm: boolean | null;
-    loudnormPreset: string | null;
+    loudnormPreset: LoudnormPreset | null;
     loudnormTargetI: number | null;
     loudnormTargetTp: number | null;
     loudnormTargetLra: number | null;
@@ -452,7 +479,7 @@ export interface AppSettings {
     normalize_audio: boolean;
     audio_gain_target: number | null;
     loudnorm: boolean;
-    loudnorm_preset: string | null;
+    loudnorm_preset: LoudnormPreset | null;
     loudnorm_target_i: number | null;
     loudnorm_target_tp: number | null;
     loudnorm_target_lra: number | null;
@@ -472,6 +499,125 @@ export interface AppSettings {
     /** Bytes. Displayed in MiB by the Settings UI; bytes are the stored truth. */
     parallel_threshold: number | null;
     hls_head_probe_timeout: number | null;
+}
+
+/**
+ * The resolved network/download settings the engine actually runs with when
+ * an `AppSettings` field is `null` (inherit). Mirrors
+ * `rdlp_types::EffectiveNetwork` field-for-field (snake_case — default serde);
+ * `scripts/check-effective-config-drift.sh` fails the build if the two key
+ * sets diverge.
+ *
+ * Served inside `NetworkDefaults` by the `network_defaults` command. The
+ * Settings UI derives every numeric placeholder from this payload rather than
+ * carrying a copy of the defaults (#611).
+ */
+export interface EffectiveNetwork {
+    socket_timeout_secs: number;
+    read_timeout_secs: number;
+    /** `0` = idle eviction disabled (the existing sentinel). */
+    pool_idle_timeout_secs: number;
+    download_timeout_secs: number;
+    merge_timeout_secs: number;
+    concurrent_fragments: number;
+    /** Bytes. */
+    buffer_size: number;
+    /** Bytes. */
+    parallel_threshold: number;
+    hls_head_probe_timeout_secs: number;
+    /** No Settings control yet (#602); carried so the mirror stays complete. */
+    hls_expansion_timeout_secs: number;
+}
+
+/**
+ * An inclusive `{min, max}` bound on one network/download field, in the
+ * field's own unit. Mirrors `rdlp_types::NetworkRange` (drift-gated).
+ */
+export interface NetworkRange {
+    min: number;
+    max: number;
+}
+
+/**
+ * The allowed range of every `EffectiveNetwork` field, under the same name.
+ * Mirrors `rdlp_types::NetworkRanges` (drift-gated). The Settings UI's
+ * numeric controls take `minValue`/`maxValue` from here — the same table
+ * `Config::validate` and `AppSettings::validate_security` enforce — so no
+ * bound is a literal in a section (#611).
+ */
+export interface NetworkRanges {
+    socket_timeout_secs: NetworkRange;
+    read_timeout_secs: NetworkRange;
+    /** `min` is the `0` "eviction disabled" sentinel, owned by the checkbox. */
+    pool_idle_timeout_secs: NetworkRange;
+    download_timeout_secs: NetworkRange;
+    merge_timeout_secs: NetworkRange;
+    concurrent_fragments: NetworkRange;
+    /** Bytes. */
+    buffer_size: NetworkRange;
+    /** Bytes. */
+    parallel_threshold: NetworkRange;
+    hls_head_probe_timeout_secs: NetworkRange;
+    hls_expansion_timeout_secs: NetworkRange;
+}
+
+/**
+ * The one network payload the Settings view fetches (`network_defaults`).
+ * Mirrors `rdlp_types::NetworkDefaults` (drift-gated).
+ */
+export interface NetworkDefaults {
+    /** What an empty (inherit) field resolves to. */
+    effective: EffectiveNetwork;
+    /** `EffectiveNetwork::DEFAULT`: what the GUI seeds when the inherited value cannot express the user's intent. */
+    builtin: EffectiveNetwork;
+    /** `EffectiveNetwork::RANGES`: the bounds the numeric controls clamp to. */
+    ranges: NetworkRanges;
+}
+
+/**
+ * The resolved normalization settings for a given preset, as the engine
+ * runs them when an `AppSettings` target field is `null` (inherit). Mirrors
+ * `rdlp_types::EffectiveNormalize` field-for-field (snake_case — default
+ * serde); `scripts/check-effective-config-drift.sh` fails the build if the
+ * two key sets diverge.
+ *
+ * Served by the `effective_normalize` command, keyed by the draft's preset:
+ * the I/TP/LRA values are preset-dependent, which is why the Settings UI
+ * cannot hold one copy of them (#611).
+ */
+export interface EffectiveNormalize {
+    /** The preset in force — the draft's, or the one the base config resolved to. */
+    preset: LoudnormPreset;
+    /** The `loudnorm` I/TP/LRA targets in force: the preset's, with explicit overrides applied. */
+    targets: LoudnormTargets;
+    /** dBFS, peak mode. */
+    peak_target_db: number;
+    /** dB, limiter-boost fallback. */
+    boost_gain_db: number;
+}
+
+/**
+ * The three `loudnorm` targets of one preset. Mirrors
+ * `rdlp_types::LoudnormTargets` field-for-field (drift-gated by
+ * `scripts/check-effective-config-drift.sh`).
+ */
+export interface LoudnormTargets {
+    /** LUFS. */
+    integrated_lufs: number;
+    /** dBTP. */
+    true_peak_dbtp: number;
+    /** LU. */
+    range_lu: number;
+}
+
+/**
+ * One row of the preset catalogue served by `loudnorm_presets`. Mirrors
+ * `rdlp_types::LoudnormPresetInfo` (drift-gated). The preset picker renders
+ * its per-item `"(−N LUFS)"` labels from this, not from a typed copy (#611).
+ */
+export interface LoudnormPresetInfo {
+    preset: LoudnormPreset;
+    targets: LoudnormTargets;
 }
 
 // ========== Error Types ==========

@@ -14,16 +14,37 @@ import {
 } from "@/components/ui/select";
 import { ToggleButton } from "react-aria-components";
 import { cn } from "@/lib/utils";
-import type { AppSettings } from "@/types";
+import type { AppSettings, EffectiveNormalize, LoudnormPreset, LoudnormPresetInfo } from "@/types";
 
 const NONE_KEY = "none";
 
+/** Display name per wire preset — UI text, not a default value. */
+const PRESET_NAMES: Record<LoudnormPreset, string> = {
+    streaming: "Streaming",
+    broadcast: "Broadcast",
+    loud: "Loud",
+};
+
 interface Props {
     draft: AppSettings;
+    /**
+     * What an empty (inherit) field resolves to, for the DRAFT'S preset —
+     * fetched over IPC (`effective_normalize`). Every numeric placeholder
+     * here derives from it; the section holds no copy of a default (#611).
+     * The inputs carry no client-side `min`/`max` either: the ranges have one
+     * owner (`rdlp_types::EffectiveNormalize::*_RANGE`), enforced behind
+     * `update_settings`, whose `OutOfRange` verdict is the chosen UX.
+     */
+    effective: EffectiveNormalize;
+    /**
+     * Every preset with its targets (`loudnorm_presets`), in the engine's
+     * order. The picker's items and their `(−N LUFS)` labels derive from it.
+     */
+    presets: LoudnormPresetInfo[];
     onChange: (update: Partial<AppSettings>) => void;
 }
 
-export function NormalizationSection({ draft, onChange }: Props) {
+export function NormalizationSection({ draft, effective, presets, onChange }: Props) {
     return (
         <section id="settings-normalization" aria-labelledby="settings-normalization-heading" className="settings-panel">
             <h3 id="settings-normalization-heading" className="settings-panel-title">
@@ -88,9 +109,7 @@ export function NormalizationSection({ draft, onChange }: Props) {
                                     id="audio-gain-target"
                                     type="number"
                                     step="0.1"
-                                    min="-30"
-                                    max="0"
-                                    placeholder="-1.0"
+                                    placeholder={String(effective.peak_target_db)}
                                     value={draft.audio_gain_target ?? ""}
                                     onChange={(e) =>
                                         onChange({ audio_gain_target: e.target.value ? Number(e.target.value) : null })
@@ -108,7 +127,9 @@ export function NormalizationSection({ draft, onChange }: Props) {
                                     <Select
                                         selectedKey={draft.loudnorm_preset ?? NONE_KEY}
                                         onSelectionChange={(key) =>
-                                            onChange({ loudnorm_preset: key === NONE_KEY ? null : String(key) })
+                                            onChange({
+                                                loudnorm_preset: key === NONE_KEY ? null : (String(key) as LoudnormPreset),
+                                            })
                                         }
                                     >
                                         <SelectTrigger className="w-full text-sm">
@@ -116,19 +137,22 @@ export function NormalizationSection({ draft, onChange }: Props) {
                                         </SelectTrigger>
                                         <SelectPopover>
                                             <SelectListBox>
-                                                <SelectItem id={NONE_KEY}>Default (Streaming)</SelectItem>
-                                                <SelectItem id="streaming">Streaming (-14 LUFS)</SelectItem>
-                                                <SelectItem id="broadcast">Broadcast (-23 LUFS)</SelectItem>
-                                                <SelectItem id="loud">Loud (-11 LUFS)</SelectItem>
+                                                {/* The inherit entry names the preset the engine resolved to, not a typed default. */}
+                                                <SelectItem id={NONE_KEY}>{`Default (${PRESET_NAMES[effective.preset]})`}</SelectItem>
+                                                {presets.map(({ preset, targets }) => (
+                                                    <SelectItem key={preset} id={preset}>
+                                                        {`${PRESET_NAMES[preset]} (${targets.integrated_lufs} LUFS)`}
+                                                    </SelectItem>
+                                                ))}
                                             </SelectListBox>
                                         </SelectPopover>
                                     </Select>
                                 </div>
                                 <div className="grid grid-cols-3 gap-2">
                                     {[
-                                        { id: "loudnorm-target-i", label: "Loudness (LUFS)", field: "loudnorm_target_i" as const, placeholder: "-14.0" },
-                                        { id: "loudnorm-target-tp", label: "True Peak (dBTP)", field: "loudnorm_target_tp" as const, placeholder: "-1.0" },
-                                        { id: "loudnorm-target-lra", label: "Range (LU)", field: "loudnorm_target_lra" as const, placeholder: "11.0" },
+                                        { id: "loudnorm-target-i", label: "Loudness (LUFS)", field: "loudnorm_target_i" as const, placeholder: String(effective.targets.integrated_lufs) },
+                                        { id: "loudnorm-target-tp", label: "True Peak (dBTP)", field: "loudnorm_target_tp" as const, placeholder: String(effective.targets.true_peak_dbtp) },
+                                        { id: "loudnorm-target-lra", label: "Range (LU)", field: "loudnorm_target_lra" as const, placeholder: String(effective.targets.range_lu) },
                                     ].map(({ id, label, field, placeholder }) => (
                                         <div key={id}>
                                             <Label htmlFor={id} className="text-[11px] text-muted-foreground mb-1 block">{label}</Label>
@@ -188,9 +212,7 @@ export function NormalizationSection({ draft, onChange }: Props) {
                                     id="normalize-boost-db"
                                     type="number"
                                     step="0.5"
-                                    min="0"
-                                    max="30"
-                                    placeholder="12.0"
+                                    placeholder={String(effective.boost_gain_db)}
                                     value={draft.normalize_boost_db ?? ""}
                                     onChange={(e) =>
                                         onChange({ normalize_boost_db: e.target.value ? Number(e.target.value) : null })

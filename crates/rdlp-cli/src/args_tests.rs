@@ -448,6 +448,136 @@ fn every_option_is_tiered_common_or_expert() {
     }
 }
 
+/// The `--help` line for one flag: the text between `--<flag>` and the next
+/// `--` option (clap wraps long help onto continuation lines).
+fn help_block_for(long_help: &str, flag: &str) -> String {
+    let start = long_help
+        .find(flag)
+        .unwrap_or_else(|| panic!("{flag} missing from --help"));
+    let rest = &long_help[start + flag.len()..];
+    let end = rest.find("\n      --").unwrap_or(rest.len());
+    rest[..end].to_owned()
+}
+
+/// Drift gate for the normalization help text (#611): every number a
+/// normalization flag's help shows is rendered from its owner
+/// (`EffectiveNormalize::PEAK_TARGET_DB` / `BOOST_GAIN_DB`,
+/// `LoudnormPreset::targets()`), never restated. Fails when a help string
+/// carries a literal copy and the owner moves — the failure mode this
+/// replaces (`(default: -1.0)` typed into a doc comment).
+#[test]
+fn normalization_help_numbers_come_from_the_owner() {
+    use rdlp_types::{EffectiveNormalize, LoudnormPreset};
+
+    let long = Args::command().render_long_help().to_string();
+
+    let peak = format!("default: {:.1}", EffectiveNormalize::PEAK_TARGET_DB);
+    let boost = format!("default: {:.1}", EffectiveNormalize::BOOST_GAIN_DB);
+    let boost_gain = format!("+{:.1} dB", EffectiveNormalize::BOOST_GAIN_DB);
+    let streaming = LoudnormPreset::default().targets();
+
+    let checks: &[(&str, String)] = &[
+        ("--audio-gain-target", peak),
+        ("--normalize-boost-db", boost),
+        ("--normalize-boost\n", boost_gain),
+        ("--loudnorm-i", format!("{:.1}", streaming.integrated_lufs)),
+        ("--loudnorm-tp", format!("{:.1}", streaming.true_peak_dbtp)),
+        ("--loudnorm-lra", format!("{:.1}", streaming.range_lu)),
+    ];
+    for (flag, fragment) in checks {
+        let block = help_block_for(&long, flag);
+        assert!(
+            block.contains(fragment.as_str()),
+            "{flag} help must show the owner's value {fragment:?}; got:\n{block}"
+        );
+    }
+
+    // The preset flag lists EVERY preset with its integrated-loudness target.
+    let block = help_block_for(&long, "--loudnorm-preset");
+    for preset in LoudnormPreset::ALL {
+        let fragment = format!("{preset} ({:.0} LUFS)", preset.targets().integrated_lufs);
+        assert!(
+            block.contains(&fragment),
+            "--loudnorm-preset help must list {fragment:?}; got:\n{block}"
+        );
+    }
+    assert!(
+        block.contains(&format!("default: {}", LoudnormPreset::default())),
+        "--loudnorm-preset help must name the default preset; got:\n{block}"
+    );
+}
+
+/// `--loudnorm-preset` is parsed at the boundary into the typed vocabulary:
+/// case-insensitive on the way in, and a rejection names the value.
+#[test]
+fn loudnorm_preset_parses_typed_at_the_boundary() {
+    use rdlp_types::LoudnormPreset;
+
+    let args = Args::try_parse_from(["rdlp", "--loudnorm-preset", "Broadcast", "u"]).unwrap();
+    assert_eq!(args.loudnorm_preset, Some(LoudnormPreset::Broadcast));
+
+    let Err(err) = Args::try_parse_from(["rdlp", "--loudnorm-preset", "quiet", "u"]) else {
+        panic!("an unknown preset must be rejected by clap");
+    };
+    let rendered = err.to_string();
+    assert!(
+        rendered.contains("unsupported loudnorm preset: quiet"),
+        "the rejection must name the value: {rendered}"
+    );
+
+    // Blank input gets the shared blank-value diagnostic, not a bare
+    // "unsupported loudnorm preset: " with nothing after the colon.
+    let Err(err) = Args::try_parse_from(["rdlp", "--loudnorm-preset", "  ", "u"]) else {
+        panic!("a blank preset must be rejected by clap");
+    };
+    assert!(
+        !err.to_string().contains("unsupported loudnorm preset"),
+        "blank input must be caught by reject_blank first: {err}"
+    );
+}
+
+/// The five normalization targets are range-checked at the parse boundary
+/// against the owner (`EffectiveNormalize::*_RANGE`), so an out-of-range or
+/// non-finite value is a clap error naming the flag — not an `FFmpeg` filter
+/// failure after the download completed.
+#[test]
+fn normalization_targets_are_range_checked_at_the_boundary() {
+    use rdlp_types::EffectiveNormalize as E;
+    let cases: &[(&str, rdlp_types::NormalizeRange)] = &[
+        ("--audio-gain-target", E::PEAK_TARGET_DB_RANGE),
+        ("--loudnorm-i", E::TARGET_I_RANGE),
+        ("--loudnorm-tp", E::TARGET_TP_RANGE),
+        ("--loudnorm-lra", E::TARGET_LRA_RANGE),
+        ("--normalize-boost-db", E::BOOST_GAIN_DB_RANGE),
+    ];
+    for (flag, range) in cases {
+        for ok in [range.min, range.max] {
+            let arg = format!("{flag}={ok}");
+            assert!(
+                Args::try_parse_from(["rdlp", &arg, "u"]).is_ok(),
+                "{arg} is inside {range:?} and must parse"
+            );
+        }
+        for bad in [
+            format!("{}", range.min - 0.001),
+            format!("{}", range.max + 0.001),
+            "nan".to_owned(),
+            "inf".to_owned(),
+        ] {
+            let arg = format!("{flag}={bad}");
+            let Err(err) = Args::try_parse_from(["rdlp", &arg, "u"]) else {
+                panic!("{arg} must be rejected");
+            };
+            let rendered = err.to_string();
+            assert!(
+                rendered.contains(&range.min.to_string())
+                    && rendered.contains(&range.max.to_string()),
+                "{arg}: the rejection must state the owner's bounds: {rendered}"
+            );
+        }
+    }
+}
+
 #[test]
 fn short_help_footer_fits_80_columns() {
     // clap wraps after_help at terminal width; keep the -h footer on one line.

@@ -3,7 +3,7 @@
 import { queryOptions, skipToken } from "@tanstack/react-query";
 import { invokeTyped } from "./invokeClient";
 import { queryKeys } from "../query/queryKeys";
-import type { AudioCodecInfo } from "../types";
+import type { ContainerFormat } from "../types";
 
 /**
  * Fetch available audio codecs, optionally filtered by container.
@@ -14,14 +14,11 @@ import type { AudioCodecInfo } from "../types";
  * so the queryFn identity changes and React 19 / TanStack v5 reliably
  * fires on the first true -> false -> true transition.
  */
-export function audioCodecsQueryOptions(container: string | null, ready: boolean) {
+export function audioCodecsQueryOptions(container: ContainerFormat | null, ready: boolean) {
     return queryOptions({
         queryKey: queryKeys.audioCodecs.byContainer(container),
         queryFn: ready
-            ? () =>
-                  invokeTyped<AudioCodecInfo[]>("available_audio_codecs", {
-                      container,
-                  })
+            ? () => invokeTyped("available_audio_codecs", { container })
             : skipToken,
         staleTime: Infinity,
     });

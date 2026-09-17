@@ -52,7 +52,7 @@ export function JobDetails() {
         // A reveal failure must be visible: the OS call can fail for reasons
         // the user can act on (file moved or deleted since the download), and
         // `console.error` is invisible in a packaged build (#693).
-        invokeTyped<void>("reveal_in_folder", { path: job.output_path }).catch((e: unknown) =>
+        invokeTyped("reveal_in_folder", { path: job.output_path }).catch((e: unknown) =>
             toast.error(extractErrorMessage(e) || "Failed to reveal the file"),
         );
     };

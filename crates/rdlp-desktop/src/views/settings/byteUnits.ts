@@ -7,6 +7,8 @@
 //
 // IEC 80000-13 binary prefix: 1 MiB = 1024² bytes.
 
+import type { NetworkRange } from "@/types";
+
 export const BYTES_PER_MIB = 1_048_576;
 
 /** Bytes → whole MiB for display. Lossy: do not use to reconstruct a stored value. */
@@ -17,4 +19,17 @@ export function bytesToMibDisplay(bytes: number): number {
 /** Whole MiB (user input) → exact bytes for storage. */
 export function mibDisplayToBytes(mib: number): number {
     return Math.round(mib * BYTES_PER_MIB);
+}
+
+/**
+ * A byte-valued range → the whole-MiB bounds a MiB-granular control can offer:
+ * the smallest whole MiB at or above `min`, the largest at or below `max`.
+ * The owner's `min` is 1 byte, which a MiB control cannot express — sub-MiB
+ * values stay settable in the settings file (see `DownloadSection`).
+ */
+export function byteRangeToMib(range: NetworkRange): { min: number; max: number } {
+    return {
+        min: Math.ceil(range.min / BYTES_PER_MIB),
+        max: Math.floor(range.max / BYTES_PER_MIB),
+    };
 }

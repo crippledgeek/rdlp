@@ -8,27 +8,57 @@ import { Select, SelectTrigger, SelectValue, SelectItem, SelectPopover, SelectLi
 import { NumericField } from "@/views/settings/NumericField";
 import { FormDescription } from "@/components/ui/field";
 import {
+    POOL_IDLE_DISABLED,
     formStateToPoolIdleTimeout,
+    poolIdleNumericMin,
     poolIdleTimeoutToFormState,
     type PoolIdleFormState,
 } from "@/views/settings/networkSchema";
-import type { AppSettings } from "@/types";
+import { withInheritHint } from "@/views/settings/inheritHint";
+import type { AppSettings, NetworkDefaults } from "@/types";
 
 const NONE_KEY = "none";
 
 interface Props {
     draft: AppSettings;
+    /**
+     * The engine's network payload, served over IPC: `effective` is what a
+     * field left empty (inherit) runs with, `builtin` the value seeded when the
+     * inherited one is the 0-sentinel, `ranges` the bounds the engine enforces.
+     * Every placeholder and every `minValue`/`maxValue` below derives from it —
+     * none is a literal (#611; enforced by
+     * `scripts/check-effective-config-drift.sh`).
+     */
+    network: NetworkDefaults;
     onChange: (update: Partial<AppSettings>) => void;
 }
 
-export function NetworkSection({ draft, onChange }: Props) {
-    const poolIdleForm: PoolIdleFormState = poolIdleTimeoutToFormState(draft.pool_idle_timeout);
+export function NetworkSection({ draft, network, onChange }: Props) {
+    const { effective: defaults, builtin, ranges } = network;
+    // A null draft INHERITS the base configuration, which may itself be the
+    // 0-sentinel ("eviction disabled"): then the checkbox must show OFF and the
+    // numeric input must not advertise a "0" placeholder below its own minValue.
+    const inheritsEvictionOff =
+        draft.pool_idle_timeout === null && defaults.pool_idle_timeout_secs === POOL_IDLE_DISABLED;
+    const poolIdleForm: PoolIdleFormState = inheritsEvictionOff
+        ? { evictIdle: false, secondsInput: "" }
+        : poolIdleTimeoutToFormState(draft.pool_idle_timeout);
     // NumericField already owns the in-progress-text vs committed-number split
     // and clamps to [minValue, maxValue] before `onCommit` fires (see
     // NumericField.tsx). The 0-sentinel ("disable eviction") stays owned by
-    // the checkbox — NumericField's own minValue=1 means the numeric control
-    // itself can never produce 0.
+    // the checkbox — `poolIdleNumericMin` starts the numeric control one past
+    // the sentinel, so it can never produce 0.
     const handleEvictToggle = (next: boolean) => {
+        // Turning eviction ON while inheriting the 0-sentinel cannot be
+        // expressed as "inherit" (that IS off), so it needs an explicit
+        // positive value: seed the BUILT-IN default for the user to edit. Not
+        // the control's lower bound (1 s is effectively no connection reuse),
+        // and not a literal (#611). Every other transition keeps the existing
+        // form-state mapping.
+        if (next && inheritsEvictionOff) {
+            onChange({ pool_idle_timeout: builtin.pool_idle_timeout_secs });
+            return;
+        }
         onChange({
             pool_idle_timeout: formStateToPoolIdleTimeout({
                 evictIdle: next,
@@ -80,45 +110,45 @@ export function NetworkSection({ draft, onChange }: Props) {
                     <NumericField
                         id="socket-timeout"
                         label="Connection Timeout"
-                        helper="Time to establish a connection to the server."
+                        helper={withInheritHint("Time to establish a connection to the server.")}
                         value={draft.socket_timeout}
-                        minValue={1}
-                        maxValue={300}
+                        minValue={ranges.socket_timeout_secs.min}
+                        maxValue={ranges.socket_timeout_secs.max}
                         onCommit={(v) => onChange({ socket_timeout: v })}
-                        placeholder="30"
+                        placeholder={String(defaults.socket_timeout_secs)}
                         suffix="s"
                     />
                     <NumericField
                         id="read-timeout"
                         label="Read Timeout"
-                        helper="Maximum gap between bytes during a download."
+                        helper={withInheritHint("Maximum gap between bytes during a download.")}
                         value={draft.read_timeout}
-                        minValue={1}
-                        maxValue={600}
+                        minValue={ranges.read_timeout_secs.min}
+                        maxValue={ranges.read_timeout_secs.max}
                         onCommit={(v) => onChange({ read_timeout: v })}
-                        placeholder="60"
+                        placeholder={String(defaults.read_timeout_secs)}
                         suffix="s"
                     />
                     <NumericField
                         id="download-timeout"
                         label="Download Timeout"
-                        helper="Maximum time for the entire file download."
+                        helper={withInheritHint("Maximum time for the entire file download.")}
                         value={draft.download_timeout}
-                        minValue={1}
-                        maxValue={86400}
+                        minValue={ranges.download_timeout_secs.min}
+                        maxValue={ranges.download_timeout_secs.max}
                         onCommit={(v) => onChange({ download_timeout: v })}
-                        placeholder="3600"
+                        placeholder={String(defaults.download_timeout_secs)}
                         suffix="s"
                     />
                     <NumericField
                         id="merge-timeout"
                         label="Merge Timeout"
-                        helper="Maximum time to mux/merge the downloaded parts."
+                        helper={withInheritHint("Maximum time to mux/merge the downloaded parts.")}
                         value={draft.merge_timeout}
-                        minValue={1}
-                        maxValue={86400}
+                        minValue={ranges.merge_timeout_secs.min}
+                        maxValue={ranges.merge_timeout_secs.max}
                         onCommit={(v) => onChange({ merge_timeout: v })}
-                        placeholder="1800"
+                        placeholder={String(defaults.merge_timeout_secs)}
                         suffix="s"
                     />
                     <div className="col-span-2">
@@ -143,17 +173,23 @@ export function NetworkSection({ draft, onChange }: Props) {
                                     aria-describedby="pool-idle-timeout-description"
                                     hideLabel
                                     value={poolIdleForm.evictIdle && poolIdleForm.secondsInput !== "" ? Number(poolIdleForm.secondsInput) : null}
-                                    minValue={1}
-                                    maxValue={3600}
+                                    minValue={poolIdleNumericMin(ranges.pool_idle_timeout_secs)}
+                                    maxValue={ranges.pool_idle_timeout_secs.max}
                                     onCommit={handlePoolIdleChange}
                                     isDisabled={!poolIdleForm.evictIdle}
-                                    placeholder="60"
+                                    // No placeholder when the inherited value is the 0-sentinel: "0" would
+                                    // sit below minValue and claim a timeout that does not exist.
+                                    {...(defaults.pool_idle_timeout_secs !== POOL_IDLE_DISABLED
+                                        ? { placeholder: String(defaults.pool_idle_timeout_secs) }
+                                        : {})}
                                     suffix="s"
                                 />
                             </div>
                         </div>
                         <FormDescription id="pool-idle-timeout-description" className="mt-1">
-                            When off, idle keep-alive connections are kept until the OS closes them.
+                            {withInheritHint(
+                                "When off, idle keep-alive connections are kept until the OS closes them.",
+                            )}
                         </FormDescription>
                     </div>
                 </div>

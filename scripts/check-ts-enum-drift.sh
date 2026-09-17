@@ -46,6 +46,7 @@ PAIRS=(
     "crates/rdlp-types/src/container.rs:ContainerFormat:ContainerFormat"
     "crates/rdlp-types/src/audio_format.rs:AudioFormat:AudioFormat"
     "crates/rdlp-types/src/subtitle_format.rs:SubtitleFormat:SubtitleFormat"
+    "crates/rdlp-types/src/loudnorm_preset.rs:LoudnormPreset:LoudnormPreset"
     "crates/rdlp-desktop/src-tauri/src/state/download_queue.rs:JobStatus:JobStatus"
 )
 

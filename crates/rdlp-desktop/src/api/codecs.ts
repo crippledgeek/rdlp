@@ -3,7 +3,6 @@
 import { queryOptions, skipToken } from "@tanstack/react-query";
 import { invokeTyped } from "./invokeClient";
 import { queryKeys } from "../query/queryKeys";
-import type { VideoCodecInfo } from "../types";
 
 /**
  * Fetch available video codecs and their encoders.
@@ -15,7 +14,7 @@ export function codecsQueryOptions(ready: boolean) {
     return queryOptions({
         queryKey: queryKeys.codecs(),
         queryFn: ready
-            ? () => invokeTyped<VideoCodecInfo[]>("available_codecs")
+            ? () => invokeTyped("available_codecs")
             : skipToken,
         staleTime: Infinity, // Encoder availability doesn't change at runtime
     });

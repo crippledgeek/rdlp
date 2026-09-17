@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { bytesToMibDisplay, mibDisplayToBytes, BYTES_PER_MIB } from "./byteUnits";
+import { byteRangeToMib, bytesToMibDisplay, mibDisplayToBytes, BYTES_PER_MIB } from "./byteUnits";
 
 describe("byteUnits", () => {
     it("converts whole MiB to bytes exactly", () => {
@@ -29,5 +29,14 @@ describe("byteUnits", () => {
 
     it("rounds sub-MiB values to zero in display", () => {
         expect(bytesToMibDisplay(500_000)).toBe(0);
+    });
+
+    // The owner's byte range (1 byte ..= 1 GiB) → the whole-MiB bounds a
+    // MiB control offers: the floor rounds UP (a MiB control cannot express
+    // 1 byte), the ceiling rounds DOWN (never past the owner's max).
+    it("projects a byte range to whole-MiB bounds, ceiling the min and flooring the max", () => {
+        expect(byteRangeToMib({ min: 1, max: 1024 * BYTES_PER_MIB })).toEqual({ min: 1, max: 1024 });
+        expect(byteRangeToMib({ min: BYTES_PER_MIB, max: 2 * BYTES_PER_MIB - 1 })).toEqual({ min: 1, max: 1 });
+        expect(byteRangeToMib({ min: BYTES_PER_MIB + 1, max: 3 * BYTES_PER_MIB })).toEqual({ min: 2, max: 3 });
     });
 });

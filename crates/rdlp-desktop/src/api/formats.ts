@@ -3,7 +3,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { invokeTyped } from "./invokeClient";
 import { queryKeys } from "../query/queryKeys";
-import type { FormatListResponse } from "../types";
 
 /** Fetch available formats for a URL. Used by FormatDialog. */
 export function formatsQueryOptions(url: string | null) {
@@ -11,7 +10,7 @@ export function formatsQueryOptions(url: string | null) {
         queryKey: queryKeys.formats(url ?? ""),
         queryFn: () => {
             if (!url) throw new Error("URL is required for format query");
-            return invokeTyped<FormatListResponse>("formats", { url });
+            return invokeTyped("formats", { url });
         },
         enabled: url !== null && url !== "",
     });

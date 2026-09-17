@@ -7,8 +7,111 @@
 use std::path::{Component, PathBuf};
 
 use log::{info, warn};
-use rdlp_types::{AudioFormat, BrowserType, ContainerFormat, SubtitleFormat};
-use serde::{Deserialize, Serialize};
+use rdlp_types::{AudioFormat, BrowserType, ContainerFormat, LoudnormPreset, SubtitleFormat};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Deserialize a typed `Option<enum>` field of `settings.json` leniently: an
+/// unrecognised spelling costs THAT field only (it becomes `None` = inherit)
+/// and is logged with the field name and the rejected value, instead of
+/// failing the whole document.
+///
+/// Why: serde's derive rejects the entire file on one bad variant, and
+/// `parse_and_validate` then falls back to `Self::default()` — discarding
+/// `output_dir`, cookies, proxy and every other setting the user had made. A
+/// hand-edited `"default_remux": "avi3"` or a preset spelling from a newer
+/// build must not do that. `None` is the exact remedy the rest of this design
+/// already gives an invalid field (see `reset_invalid_field`).
+///
+/// One generic helper for every such field (`ContainerFormat`, `AudioFormat`,
+/// `SubtitleFormat`, `LoudnormPreset`, `BrowserType`) rather than a per-type
+/// copy: the per-field shims below only supply the field name, which serde
+/// does not pass to a `deserialize_with` function.
+///
+/// The rejected value is rendered as JSON (`serde_json::Value`'s `Display`),
+/// so control characters arrive escaped, then redacted and bounded by
+/// [`bounded_redacted`].
+///
+/// This runs on every `AppSettings` deserialization, so ALSO on the
+/// `update_settings` IPC path: an unknown enum spelling sent by the frontend
+/// is warned-and-dropped (the field saves as `None` = inherit), not rejected
+/// with an error. The frontend's typed unions make that unreachable from the
+/// shipped UI; it matters for a hand-crafted IPC call.
+fn lenient_option<'de, D, T>(deserializer: D, field: &'static str) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let Some(raw) = Option::<serde_json::Value>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    // `&serde_json::Value` is itself a `Deserializer`, so no clone is needed
+    // to keep `raw` for the log line.
+    match T::deserialize(&raw) {
+        Ok(value) => Ok(Some(value)),
+        Err(e) => {
+            // Both the value and the parse error echo user-typed text (the
+            // enum errors are `unsupported <kind>: <input>`), so both are
+            // redacted and bounded before they reach the log.
+            let shown = bounded_redacted(&raw.to_string());
+            let why = bounded_redacted(&e.to_string());
+            warn!(
+                "settings.json: ignoring {field} = {shown} ({why}); the field inherits its default"
+            );
+            Ok(None)
+        }
+    }
+}
+
+/// Longest rendering of a rejected settings value in a log line.
+///
+/// 64 characters shows any legitimate enum spelling (the longest is
+/// `google-chrome`) with room to recognise a pasted URL by its host; a
+/// multi-MB string pasted into `settings.json` must not land whole in the log.
+const MAX_LOGGED_VALUE_CHARS: usize = 64;
+
+/// Redact credentials, THEN bound to [`MAX_LOGGED_VALUE_CHARS`] (with `…`).
+///
+/// Order matters: truncating first could cut `user:pw@host` before the `@`,
+/// leaving the redaction pattern nothing to anchor on while a partial
+/// password survives. `RedactedUrl`'s `Display` is the workspace's one
+/// credential redactor; nothing in rdlp-redact bounds length, so that half
+/// lives here.
+fn bounded_redacted(text: &str) -> String {
+    let redacted = rdlp_redact::RedactedUrl::new(text).to_string();
+    let mut chars = redacted.chars();
+    let head: String = chars.by_ref().take(MAX_LOGGED_VALUE_CHARS).collect();
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
+}
+
+/// Per-field shims naming the field for [`lenient_option`]'s log line.
+macro_rules! lenient_field {
+    ($fn_name:ident, $field:literal, $ty:ty) => {
+        fn $fn_name<'de, D: Deserializer<'de>>(d: D) -> Result<Option<$ty>, D::Error> {
+            lenient_option::<D, $ty>(d, $field)
+        }
+    };
+}
+lenient_field!(lenient_default_remux, "default_remux", ContainerFormat);
+lenient_field!(
+    lenient_default_extract_audio,
+    "default_extract_audio",
+    AudioFormat
+);
+lenient_field!(
+    lenient_default_subtitle_format,
+    "default_subtitle_format",
+    SubtitleFormat
+);
+lenient_field!(lenient_loudnorm_preset, "loudnorm_preset", LoudnormPreset);
+lenient_field!(
+    lenient_cookies_from_browser,
+    "cookies_from_browser",
+    BrowserType
+);
 
 /// Application settings that persist between sessions.
 ///
@@ -24,10 +127,13 @@ pub struct AppSettings {
     /// Directory where downloaded files are saved.
     pub output_dir: PathBuf,
     /// Default container format for remuxing (e.g. Mp4, Mkv).
+    #[serde(default, deserialize_with = "lenient_default_remux")]
     pub default_remux: Option<ContainerFormat>,
     /// Default audio extraction format (e.g. Mp3, Opus).
+    #[serde(default, deserialize_with = "lenient_default_extract_audio")]
     pub default_extract_audio: Option<AudioFormat>,
     /// Default subtitle format (e.g. Srt, Vtt).
+    #[serde(default, deserialize_with = "lenient_default_subtitle_format")]
     pub default_subtitle_format: Option<SubtitleFormat>,
     /// Default subtitle language codes (e.g. `["en", "sv"]`).
     pub default_subtitle_langs: Vec<String>,
@@ -45,9 +151,10 @@ pub struct AppSettings {
     /// Use EBU R128 loudnorm normalization (implies `normalize_audio`).
     #[serde(default)]
     pub loudnorm: bool,
-    /// Loudnorm preset name ("streaming", "broadcast", "loud").
-    #[serde(default)]
-    pub loudnorm_preset: Option<String>,
+    /// Loudnorm preset. `None` = inherit the engine's resolved preset
+    /// (`PostProcess::effective_normalize`); wire form is the lowercase name.
+    #[serde(default, deserialize_with = "lenient_loudnorm_preset")]
+    pub loudnorm_preset: Option<LoudnormPreset>,
     /// Custom target integrated loudness in LUFS (overrides preset).
     #[serde(default)]
     pub loudnorm_target_i: Option<f64>,
@@ -72,11 +179,13 @@ pub struct AppSettings {
     /// Write (keep) downloaded thumbnail as a separate file alongside the output.
     #[serde(default)]
     pub write_thumbnail: bool,
-    /// Gain in dB applied on top of normalization (peak or loudnorm).
+    /// Peak-mode target level in dBFS; `None` = inherit
+    /// `EffectiveNormalize::PEAK_TARGET_DB`. Bounded by
+    /// `EffectiveNormalize::PEAK_TARGET_DB_RANGE` (the alimiter's floor).
     #[serde(default)]
     pub audio_gain_target: Option<f64>,
     /// Browser to extract cookies from for age-gated content.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_cookies_from_browser")]
     pub cookies_from_browser: Option<BrowserType>,
     /// Path to a Netscape-format cookies file.
     ///
@@ -97,28 +206,26 @@ pub struct AppSettings {
     /// Embed subtitles into the output container.
     #[serde(default)]
     pub embed_subtitles: bool,
-    /// Connect/handshake timeout in seconds. `None` uses default (30).
-    /// Validated post-load by `Config::validate()`: must be 1..=300.
+    /// Connect/handshake timeout in seconds. `None` = inherit.
+    /// Bounded by `EffectiveNetwork::RANGES` via [`AppSettings::validate_security`].
     #[serde(default)]
     pub socket_timeout: Option<u64>,
-    /// Per-read idle timeout in seconds. `None` uses default.
-    /// Validated post-load by `Config::validate()`: must be 1..=600.
+    /// Per-read idle timeout in seconds. `None` = inherit.
+    /// Bounded by `EffectiveNetwork::RANGES` via [`AppSettings::validate_security`].
     #[serde(default)]
     pub read_timeout: Option<u64>,
     /// Idle keep-alive socket eviction timeout in seconds. `None` uses default;
     /// `Some(0)` disables eviction (sentinel translated downstream by
     /// `HttpClientConfig::from_rdlp_config`).
-    /// Validated post-load by `Config::validate()`: must be 0..=3600.
+    /// Bounded by `EffectiveNetwork::RANGES` via [`AppSettings::validate_security`].
     #[serde(default)]
     pub pool_idle_timeout: Option<u64>,
-    /// Total download timeout in seconds. `None` uses default (3600).
-    /// Validated by `AppSettings::validate()` (range mirrors `rdlp_types`
-    /// `Config::validate()`): must be 1..=86400.
+    /// Total download timeout in seconds. `None` = inherit.
+    /// Bounded by `EffectiveNetwork::RANGES` via [`AppSettings::validate_security`].
     #[serde(default)]
     pub download_timeout: Option<u64>,
-    /// Merge (mux/concat) timeout in seconds. `None` uses default (1800).
-    /// Validated by `AppSettings::validate()` (range mirrors `rdlp_types`
-    /// `Config::validate()`): must be 1..=86400.
+    /// Merge (mux/concat) timeout in seconds. `None` = inherit.
+    /// Bounded by `EffectiveNetwork::RANGES` via [`AppSettings::validate_security`].
     #[serde(default)]
     pub merge_timeout: Option<u64>,
     /// Download subtitles by default.
@@ -136,23 +243,23 @@ pub struct AppSettings {
     /// Retry failed subtitle downloads.
     #[serde(default)]
     pub retry_subs: bool,
-    /// Number of concurrent fragment/chunk downloads. `None` uses default (8).
-    /// Validated by [`AppSettings::validate_security`]: must be 1..=64.
+    /// Number of concurrent fragment/chunk downloads. `None` = inherit.
+    /// Bounded by `EffectiveNetwork::RANGES` via [`AppSettings::validate_security`].
     #[serde(default)]
     pub concurrent_fragments: Option<u32>,
-    /// Download buffer size in **bytes**. `None` uses default (2 MiB).
-    /// Validated by [`AppSettings::validate_security`]: must be 1..=1 GiB.
+    /// Download buffer size in **bytes**. `None` = inherit.
+    /// Bounded by `EffectiveNetwork::RANGES` via [`AppSettings::validate_security`].
     ///
     /// The Settings UI presents this in MiB; bytes remain the stored truth.
     #[serde(default)]
     pub buffer_size: Option<u64>,
     /// Minimum file size in **bytes** before parallel chunked download is used.
-    /// `None` uses default (10 MiB). Validated: must be 1..=1 GiB (mirrors
-    /// `rdlp_types::Config::validate()`).
+    /// `None` = inherit. Bounded by `EffectiveNetwork::RANGES` via
+    /// [`AppSettings::validate_security`].
     #[serde(default)]
     pub parallel_threshold: Option<u64>,
-    /// HLS HEAD-probe timeout in seconds. `None` uses default (5).
-    /// Validated by [`AppSettings::validate_security`]: must be 1..=300.
+    /// HLS HEAD-probe timeout in seconds. `None` = inherit.
+    /// Bounded by `EffectiveNetwork::RANGES` via [`AppSettings::validate_security`].
     #[serde(default)]
     pub hls_head_probe_timeout: Option<u64>,
 }
@@ -169,9 +276,9 @@ pub struct AppSettings {
 /// |---|---|
 /// | `CookiesFileTraversal` | `cookies_file` |
 /// | `InvalidProxy` | `proxy` |
-/// | `OutOfRange` | `socket_timeout`, `read_timeout`, `pool_idle_timeout`, `download_timeout`, `merge_timeout`, `concurrent_fragments`, `buffer_size`, `parallel_threshold`, `hls_head_probe_timeout`, `default_subtitle_langs` |
+/// | `OutOfRange` | `socket_timeout`, `read_timeout`, `pool_idle_timeout`, `download_timeout`, `merge_timeout`, `concurrent_fragments`, `buffer_size`, `parallel_threshold`, `hls_head_probe_timeout`, `default_subtitle_langs`, `audio_gain_target`, `loudnorm_target_i`, `loudnorm_target_tp`, `loudnorm_target_lra`, `normalize_boost_db` |
 ///
-/// 2 + 10 = 12. Deriving it from the `OutOfRange` arm alone is what made the
+/// 2 + 15 = 17. Deriving it from the `OutOfRange` arm alone is what made the
 /// previous value of 9 too low — it omitted the two non-numeric variants, which
 /// `validate_security` reports *first*, so the bound was already short by two
 /// before `default_subtitle_langs` made it short by three.
@@ -191,20 +298,20 @@ pub struct AppSettings {
 /// a newly-added field on its own:
 ///
 /// * The `const` assertion prevents [`MAX_RESET_ITERATIONS`] being *lowered*
-///   below [`RESETTABLE_FIELD_COUNT`] — verified by mutation: setting it to 11
+///   below [`RESETTABLE_FIELD_COUNT`] — verified by mutation: setting it to 16
 ///   fails the build. It does **not** fire when an arm is added to
 ///   `reset_invalid_field`, because `RESETTABLE_FIELD_COUNT` is a literal whose
-///   only use is this assertion, so an eleventh arm leaves `12 >= 12` true and
+///   only use is this assertion, so an eighteenth arm leaves `17 >= 17` true and
 ///   the build green (also verified by mutation, 2026-09-08).
 /// * `parse_and_validate_converges_with_every_resettable_field_invalid` drives
-///   all twelve fields at once, but from a hand-written JSON fixture — a
-///   thirteenth field would leave it passing while exercising only twelve.
+///   all seventeen fields at once, but from a hand-written JSON fixture — an
+///   eighteenth field would leave it passing while exercising only seventeen.
 ///
 /// A `macro_rules!` list generating both the match arms and the count would
 /// close that gap; for a match this size it costs more legibility than it buys,
 /// so the seam is instead a pointer comment at the match itself telling an
 /// author adding an arm to raise the count here.
-const MAX_RESET_ITERATIONS: u32 = 12;
+const MAX_RESET_ITERATIONS: u32 = 17;
 
 /// Number of distinct fields [`AppSettings::reset_invalid_field`] can reset —
 /// the derivation of [`MAX_RESET_ITERATIONS`], tabulated in its docs.
@@ -212,7 +319,7 @@ const MAX_RESET_ITERATIONS: u32 = 12;
 /// Hand-maintained: raise it when you add an arm to `reset_invalid_field`. See
 /// that function's match for the pointer comment, and [`MAX_RESET_ITERATIONS`]
 /// for what the assertion below does and does not catch.
-const RESETTABLE_FIELD_COUNT: u32 = 12;
+const RESETTABLE_FIELD_COUNT: u32 = 17;
 
 const _: () = assert!(
     MAX_RESET_ITERATIONS >= RESETTABLE_FIELD_COUNT,
@@ -373,6 +480,11 @@ impl AppSettings {
                 // Not an `Option`: its default (and "inherit"/unset value) is
                 // the empty list, so that is what "reset to default" means.
                 "default_subtitle_langs" => self.default_subtitle_langs = Vec::new(),
+                "audio_gain_target" => self.audio_gain_target = None,
+                "loudnorm_target_i" => self.loudnorm_target_i = None,
+                "loudnorm_target_tp" => self.loudnorm_target_tp = None,
+                "loudnorm_target_lra" => self.loudnorm_target_lra = None,
+                "normalize_boost_db" => self.normalize_boost_db = None,
                 other => {
                     // Unreachable in practice (every `OutOfRange` field above is listed).
                     // Fail safe rather than looping forever on an unmatched field: fall
@@ -494,18 +606,6 @@ impl std::fmt::Display for SettingsValidationError {
 
 impl std::error::Error for SettingsValidationError {}
 
-/// Upper bound for byte-valued settings, in bytes (1 GiB).
-///
-/// Mirrors `rdlp_types::Config::validate()`'s `parallel_threshold` and `buffer_size`
-/// ceilings rather than introducing a second magic number. `Config::validate()` is not
-/// called on the desktop path (see `commands::download`), so `validate_security` is this
-/// field's enforcement point on that path — run on both `AppSettings::load()` and the
-/// `update_settings` save command, so neither a hand-edited `settings.json` nor a save
-/// from the UI can carry an out-of-range value. No cross-crate test enforces the two
-/// literals staying in sync, so a future change to either ceiling must be mirrored
-/// manually in the other crate.
-const MAX_BYTE_SETTING: u64 = 1024 * 1024 * 1024;
-
 /// Maximum number of entries in `default_subtitle_langs`.
 ///
 /// The list is compared against every subtitle track of every download
@@ -558,79 +658,45 @@ impl AppSettings {
                 .map_err(|e| SettingsValidationError::InvalidProxy(e.to_string()))?;
         }
 
-        // HTTP timeout ranges — mirror `rdlp_types::Config::validate()` so a
-        // hand-edited settings.json can't bypass the frontend's zod parsing.
-        if let Some(t) = self.socket_timeout
-            && !(1..=300).contains(&t)
-        {
-            return Err(SettingsValidationError::OutOfRange {
-                field: "socket_timeout",
-                reason: "must be 1..=300 seconds",
-            });
+        // Network/download bounds: the SAME check `Config::validate` runs, on
+        // the same owner (`rdlp_types::EffectiveNetwork::RANGES`), so a
+        // hand-edited settings.json cannot bypass a bound the engine enforces
+        // and neither validator can hold a bound the other lacks (#611
+        // review). `Config::validate()` is not called on the desktop path
+        // (see `commands::download`), so this is the enforcement point here —
+        // run on both `AppSettings::load()` and the `update_settings` command.
+        let network = rdlp_types::NetworkFields {
+            socket_timeout: self.socket_timeout,
+            read_timeout: self.read_timeout,
+            pool_idle_timeout: self.pool_idle_timeout,
+            download_timeout: self.download_timeout,
+            merge_timeout: self.merge_timeout,
+            concurrent_fragments: self.concurrent_fragments.map(u64::from),
+            buffer_size: self.buffer_size,
+            parallel_threshold: self.parallel_threshold,
+            hls_head_probe_timeout: self.hls_head_probe_timeout,
+            hls_expansion_timeout: None,
+        };
+        if let Some((field, reason)) = network.first_out_of_range() {
+            return Err(SettingsValidationError::OutOfRange { field, reason });
         }
-        if let Some(t) = self.read_timeout
-            && !(1..=600).contains(&t)
-        {
-            return Err(SettingsValidationError::OutOfRange {
-                field: "read_timeout",
-                reason: "must be 1..=600 seconds",
-            });
-        }
-        if let Some(t) = self.pool_idle_timeout
-            && t > 3600
-        {
-            return Err(SettingsValidationError::OutOfRange {
-                field: "pool_idle_timeout",
-                reason: "must be 0..=3600 seconds (0 = disabled)",
-            });
-        }
-        if let Some(t) = self.download_timeout
-            && !(1..=86400).contains(&t)
-        {
-            return Err(SettingsValidationError::OutOfRange {
-                field: "download_timeout",
-                reason: "must be 1..=86400 seconds",
-            });
-        }
-        if let Some(t) = self.merge_timeout
-            && !(1..=86400).contains(&t)
-        {
-            return Err(SettingsValidationError::OutOfRange {
-                field: "merge_timeout",
-                reason: "must be 1..=86400 seconds",
-            });
-        }
-        if let Some(n) = self.concurrent_fragments
-            && !(1..=64).contains(&n)
-        {
-            return Err(SettingsValidationError::OutOfRange {
-                field: "concurrent_fragments",
-                reason: "must be 1..=64 (caps peak transient memory under parallel fetch)",
-            });
-        }
-        if let Some(n) = self.buffer_size
-            && !(1..=MAX_BYTE_SETTING).contains(&n)
-        {
-            return Err(SettingsValidationError::OutOfRange {
-                field: "buffer_size",
-                reason: "must be 1..=1_073_741_824 bytes (1 GiB)",
-            });
-        }
-        if let Some(n) = self.parallel_threshold
-            && !(1..=MAX_BYTE_SETTING).contains(&n)
-        {
-            return Err(SettingsValidationError::OutOfRange {
-                field: "parallel_threshold",
-                reason: "must be 1..=1_073_741_824 bytes (1 GiB)",
-            });
-        }
-        if let Some(t) = self.hls_head_probe_timeout
-            && !(1..=300).contains(&t)
-        {
-            return Err(SettingsValidationError::OutOfRange {
-                field: "hls_head_probe_timeout",
-                reason: "must be 1..=300 seconds",
-            });
+
+        // Normalization targets: the SAME check `Config::validate` runs, on the
+        // same owner (`rdlp_types::EffectiveNormalize::*_RANGE`), so a
+        // hand-edited settings.json cannot put a value past the alimiter's
+        // floor — or `NaN`/`inf` — into the filter graph (#611 review). The
+        // field names are shared with `PostProcess`, so the projection is
+        // one-to-one.
+        let targets = rdlp_types::PostProcess {
+            audio_gain_target: self.audio_gain_target,
+            loudnorm_target_i: self.loudnorm_target_i,
+            loudnorm_target_tp: self.loudnorm_target_tp,
+            loudnorm_target_lra: self.loudnorm_target_lra,
+            normalize_boost_db: self.normalize_boost_db,
+            ..rdlp_types::PostProcess::default()
+        };
+        if let Some((field, reason)) = targets.first_target_out_of_range() {
+            return Err(SettingsValidationError::OutOfRange { field, reason });
         }
 
         // `default_subtitle_langs` is the only unbounded collection that
@@ -692,6 +758,86 @@ mod tests {
             ..AppSettings::default()
         };
         assert!(settings.validate_security().is_ok());
+    }
+
+    /// `validate_security` reads the network bounds from
+    /// `EffectiveNetwork::RANGES`: each field is accepted at both ends of its
+    /// owning range and rejected one past each, with the reason citing the
+    /// owner's bounds. Mutating the owner moves this test's expectations with
+    /// it; a copied literal in the validator would then fail here.
+    #[test]
+    fn validate_security_network_bounds_come_from_the_owner() {
+        type Setter = fn(&mut AppSettings, Option<u64>);
+        let r = rdlp_types::EffectiveNetwork::RANGES;
+        let fields: [(&str, Setter, rdlp_types::NetworkRange); 9] = [
+            (
+                "socket_timeout",
+                |s, v| s.socket_timeout = v,
+                r.socket_timeout_secs,
+            ),
+            (
+                "read_timeout",
+                |s, v| s.read_timeout = v,
+                r.read_timeout_secs,
+            ),
+            (
+                "pool_idle_timeout",
+                |s, v| s.pool_idle_timeout = v,
+                r.pool_idle_timeout_secs,
+            ),
+            (
+                "download_timeout",
+                |s, v| s.download_timeout = v,
+                r.download_timeout_secs,
+            ),
+            (
+                "merge_timeout",
+                |s, v| s.merge_timeout = v,
+                r.merge_timeout_secs,
+            ),
+            (
+                "concurrent_fragments",
+                |s, v| s.concurrent_fragments = v.map(|n| u32::try_from(n).expect("fits")),
+                r.concurrent_fragments,
+            ),
+            ("buffer_size", |s, v| s.buffer_size = v, r.buffer_size),
+            (
+                "parallel_threshold",
+                |s, v| s.parallel_threshold = v,
+                r.parallel_threshold,
+            ),
+            (
+                "hls_head_probe_timeout",
+                |s, v| s.hls_head_probe_timeout = v,
+                r.hls_head_probe_timeout_secs,
+            ),
+        ];
+        for (field, set, range) in fields {
+            for accepted in [range.min, range.max] {
+                let mut settings = AppSettings::default();
+                set(&mut settings, Some(accepted));
+                settings
+                    .validate_security()
+                    .unwrap_or_else(|e| panic!("{field}={accepted} must be accepted: {e}"));
+            }
+            let rejected: Vec<u64> = [range.min.checked_sub(1), Some(range.max + 1)]
+                .into_iter()
+                .flatten()
+                .collect();
+            for value in rejected {
+                let mut settings = AppSettings::default();
+                set(&mut settings, Some(value));
+                match settings.validate_security() {
+                    Err(SettingsValidationError::OutOfRange { field: f, reason }) if f == field => {
+                        assert!(
+                            reason.contains(&format!("{}..={}", range.min, range.max)),
+                            "{field}: the reason must cite the owner's bounds: {reason:?}"
+                        );
+                    }
+                    other => panic!("{field}={value}: got {other:?}"),
+                }
+            }
+        }
     }
 
     #[test]
@@ -875,8 +1021,8 @@ mod tests {
 
     /// Every field `reset_invalid_field` can reset, invalid at once.
     ///
-    /// One JSON document carrying all twelve — the two non-numeric variants
-    /// (`cookies_file`, `proxy`) plus the ten `OutOfRange` fields — because the
+    /// One JSON document carrying all seventeen — the two non-numeric variants
+    /// (`cookies_file`, `proxy`) plus the fifteen `OutOfRange` fields — because the
     /// reset loop clears exactly one per iteration and `MAX_RESET_ITERATIONS`
     /// has to cover the whole set, not just the numeric arm. `output_dir` is
     /// the witness: exhausting the bound falls back to `Self::default()`, which
@@ -898,7 +1044,12 @@ mod tests {
         "buffer_size": 0,
         "parallel_threshold": 0,
         "hls_head_probe_timeout": 0,
-        "default_subtitle_langs": ["en\n"]
+        "default_subtitle_langs": ["en\n"],
+        "audio_gain_target": 0.5,
+        "loudnorm_target_i": -70.5,
+        "loudnorm_target_tp": 0.5,
+        "loudnorm_target_lra": 0.5,
+        "normalize_boost_db": 30.5
     }"#;
 
     #[test]
@@ -930,7 +1081,94 @@ mod tests {
         assert!(s.parallel_threshold.is_none());
         assert!(s.hls_head_probe_timeout.is_none());
         assert!(s.default_subtitle_langs.is_empty());
+        assert!(s.audio_gain_target.is_none());
+        assert!(s.loudnorm_target_i.is_none());
+        assert!(s.loudnorm_target_tp.is_none());
+        assert!(s.loudnorm_target_lra.is_none());
+        assert!(s.normalize_boost_db.is_none());
         assert!(s.embed_thumbnail, "a non-offending field must survive");
+    }
+
+    // --- normalization targets: same owner and check as `Config::validate` ---
+
+    /// (field, setter, owning range) for one bounded normalization field.
+    type NormalizeField = (
+        &'static str,
+        fn(&mut AppSettings, Option<f64>),
+        rdlp_types::NormalizeRange,
+    );
+
+    /// The five bounded normalization fields.
+    fn normalize_fields() -> Vec<NormalizeField> {
+        use rdlp_types::EffectiveNormalize as E;
+        vec![
+            (
+                "audio_gain_target",
+                |s, v| s.audio_gain_target = v,
+                E::PEAK_TARGET_DB_RANGE,
+            ),
+            (
+                "loudnorm_target_i",
+                |s, v| s.loudnorm_target_i = v,
+                E::TARGET_I_RANGE,
+            ),
+            (
+                "loudnorm_target_tp",
+                |s, v| s.loudnorm_target_tp = v,
+                E::TARGET_TP_RANGE,
+            ),
+            (
+                "loudnorm_target_lra",
+                |s, v| s.loudnorm_target_lra = v,
+                E::TARGET_LRA_RANGE,
+            ),
+            (
+                "normalize_boost_db",
+                |s, v| s.normalize_boost_db = v,
+                E::BOOST_GAIN_DB_RANGE,
+            ),
+        ]
+    }
+
+    #[test]
+    fn validate_security_accepts_normalization_targets_at_both_bounds() {
+        for (field, set, range) in normalize_fields() {
+            for v in [range.min, range.max] {
+                let mut s = AppSettings::default();
+                set(&mut s, Some(v));
+                assert!(
+                    s.validate_security().is_ok(),
+                    "{field} = {v} must be accepted"
+                );
+            }
+        }
+    }
+
+    /// A hand-edited settings.json (or an IPC caller) must not get a value past
+    /// the boundary or a non-finite one into `volume=…dB` / `alimiter=limit=…`.
+    #[test]
+    fn validate_security_rejects_normalization_targets_outside_and_non_finite() {
+        for (field, set, range) in normalize_fields() {
+            for v in [
+                range.min - 0.001,
+                range.max + 0.001,
+                f64::NAN,
+                f64::INFINITY,
+                f64::NEG_INFINITY,
+            ] {
+                let mut s = AppSettings::default();
+                set(&mut s, Some(v));
+                match s.validate_security() {
+                    Err(SettingsValidationError::OutOfRange { field: f, .. }) => {
+                        assert_eq!(f, field, "must name the offending field");
+                    }
+                    other => panic!("{field} = {v} must be OutOfRange, got {other:?}"),
+                }
+                // And the reset loop clears exactly that field.
+                s.reset_invalid_field(&SettingsValidationError::OutOfRange { field, reason: "" });
+                assert!(s.validate_security().is_ok(), "{field} must reset to None");
+            }
+        }
     }
 
     #[test]
@@ -1034,6 +1272,99 @@ mod tests {
         );
     }
 
+    /// An unrecognised spelling in ONE typed `Option<enum>` field must cost that
+    /// field only — never the whole file. Before the lenient deserializer, serde
+    /// rejected the entire document and `parse_and_validate` fell back to
+    /// `Self::default()`, silently discarding `output_dir`, cookies, proxy and
+    /// every other setting the user had made (#611 review).
+    #[test]
+    fn unknown_enum_spellings_cost_only_their_own_field() {
+        testing_logger::setup();
+        let json = r#"{
+            "output_dir": "/tmp/lenient-enum-fixture",
+            "default_remux": "avi3",
+            "default_extract_audio": "mp3",
+            "default_subtitle_format": null,
+            "default_subtitle_langs": ["sv"],
+            "embed_thumbnail": false,
+            "embed_metadata": true,
+            "verbose": false,
+            "default_search_provider": null,
+            "loudnorm_preset": "quiet"
+        }"#;
+
+        let settings =
+            AppSettings::parse_and_validate(json, std::path::Path::new("/tmp/settings.json"));
+
+        assert_eq!(
+            settings.output_dir,
+            PathBuf::from("/tmp/lenient-enum-fixture"),
+            "every OTHER field must survive"
+        );
+        assert_eq!(settings.default_subtitle_langs, vec!["sv"]);
+        assert!(settings.embed_metadata);
+        assert_eq!(settings.default_extract_audio, Some(AudioFormat::Mp3));
+        assert!(settings.default_remux.is_none(), "the bad value inherits");
+        assert!(settings.loudnorm_preset.is_none(), "the bad value inherits");
+
+        // One WARN per rejected field, naming the field AND the rejected value,
+        // so the user can find the typo. Filtered on this test's own values:
+        // the capture buffer is process-global (sibling tests log into it too).
+        testing_logger::validate(|captured| {
+            let warns: Vec<&str> = captured
+                .iter()
+                .filter(|l| l.level == log::Level::Warn)
+                .map(|l| l.body.as_str())
+                .collect();
+            // (rejected value, field the warn must name)
+            for (value, field) in [
+                ("\"avi3\"", "default_remux"),
+                ("\"quiet\"", "loudnorm_preset"),
+            ] {
+                let hits: Vec<&&str> = warns.iter().filter(|b| b.contains(value)).collect();
+                let [only] = hits.as_slice() else {
+                    panic!("exactly one warn for {field} ({value}); got {hits:?} in {warns:?}");
+                };
+                assert!(only.contains(field), "names the field {field}: {only}");
+            }
+        });
+    }
+
+    /// The rejected value is operator-visible log text. A pasted credentialed
+    /// URL must arrive redacted, and a multi-MB string must not arrive whole:
+    /// redact FIRST, then bound — truncating first could cut `user:pw@` in
+    /// half and leave the redaction pattern nothing to anchor on.
+    #[test]
+    fn lenient_warn_redacts_and_bounds_the_rejected_value() {
+        testing_logger::setup();
+        let tail = "x".repeat(5000);
+        let json = format!(
+            r#"{{ "output_dir": "/tmp/redact-fixture", "cookies_from_browser": "https://user:pw@example.com/{tail}" }}"#
+        );
+        let settings =
+            AppSettings::parse_and_validate(&json, std::path::Path::new("/tmp/settings.json"));
+        assert!(settings.cookies_from_browser.is_none());
+
+        testing_logger::validate(|captured| {
+            let warns: Vec<&str> = captured
+                .iter()
+                .filter(|l| l.level == log::Level::Warn && l.body.contains("cookies_from_browser"))
+                .map(|l| l.body.as_str())
+                .collect();
+            let [line] = warns.as_slice() else {
+                panic!("exactly one warn for cookies_from_browser; got {warns:?}");
+            };
+            assert!(!line.contains("pw@"), "credential leaked: {line}");
+            assert!(
+                line.len() < 80 + "settings.json: ignoring cookies_from_browser = ".len() + 120,
+                "unbounded value in the log ({} bytes): {}…",
+                line.len(),
+                &line[..line.len().min(120)]
+            );
+            assert!(line.contains('…'), "a truncated value must say so: {line}");
+        });
+    }
+
     /// Settings JSON that predates the normalization fields (i.e. produced
     /// by an older version of the application) MUST deserialize without
     /// error, with all normalization fields falling back to their defaults.
@@ -1101,7 +1432,7 @@ mod tests {
             default_search_provider: Some("pornhub".to_owned()),
             normalize_audio: true,
             loudnorm: true,
-            loudnorm_preset: Some("streaming".to_owned()),
+            loudnorm_preset: Some(LoudnormPreset::Streaming),
             loudnorm_target_i: Some(-14.0),
             loudnorm_target_tp: Some(-1.0),
             loudnorm_target_lra: Some(11.0),
@@ -1110,7 +1441,7 @@ mod tests {
             normalize_boost: true,
             normalize_boost_db: Some(8.0),
             write_thumbnail: true,
-            audio_gain_target: Some(3.0),
+            audio_gain_target: Some(-3.0),
             cookies_from_browser: Some(BrowserType::Firefox),
             cookies_file: Some(PathBuf::from("/tmp/cookies.txt")),
             proxy: Some("http://proxy.example.com:3128".to_owned()),
@@ -1148,7 +1479,7 @@ mod tests {
         assert_eq!(restored.default_search_provider.as_deref(), Some("pornhub"));
         assert!(restored.normalize_audio);
         assert!(restored.loudnorm);
-        assert_eq!(restored.loudnorm_preset.as_deref(), Some("streaming"));
+        assert_eq!(restored.loudnorm_preset, Some(LoudnormPreset::Streaming));
         assert_eq!(restored.loudnorm_target_i, Some(-14.0));
         assert_eq!(restored.loudnorm_target_tp, Some(-1.0));
         assert_eq!(restored.loudnorm_target_lra, Some(11.0));
@@ -1157,7 +1488,7 @@ mod tests {
         assert!(restored.normalize_boost);
         assert_eq!(restored.normalize_boost_db, Some(8.0));
         assert!(restored.write_thumbnail);
-        assert_eq!(restored.audio_gain_target, Some(3.0));
+        assert_eq!(restored.audio_gain_target, Some(-3.0));
         assert_eq!(restored.cookies_from_browser, Some(BrowserType::Firefox));
         assert_eq!(
             restored.cookies_file.as_deref(),
@@ -1480,11 +1811,11 @@ mod tests {
         assert!(zero.validate_security().is_err());
     }
 
-    /// Isolates the `OutOfRange` path: all **ten** of its fields invalid at once
-    /// MUST resolve via the per-field reset, not the iteration-cap fail-safe.
+    /// Isolates the `OutOfRange` path: all **fifteen** of its fields invalid at
+    /// once MUST resolve via the per-field reset, not the iteration-cap fail-safe.
     ///
-    /// This is no longer the boundary test — ten is comfortably under the bound
-    /// of twelve, so it cannot detect a `MAX_RESET_ITERATIONS` that is too low.
+    /// This is no longer the boundary test — fifteen is under the bound of
+    /// seventeen, so it cannot detect a `MAX_RESET_ITERATIONS` that is too low.
     /// `parse_and_validate_converges_with_every_resettable_field_invalid` is the
     /// boundary test, because it also drives the two non-`OutOfRange` variants
     /// (`CookiesFileTraversal`, `InvalidProxy`), which consume an iteration each
@@ -1507,10 +1838,20 @@ mod tests {
             "concurrent_fragments": 0,
             "buffer_size": 0,
             "parallel_threshold": 0,
-            "hls_head_probe_timeout": 0
+            "hls_head_probe_timeout": 0,
+            "audio_gain_target": 0.5,
+            "loudnorm_target_i": -70.5,
+            "loudnorm_target_tp": 0.5,
+            "loudnorm_target_lra": 0.5,
+            "normalize_boost_db": 30.5
         }"#;
         let settings = AppSettings::parse_and_validate(json, std::path::Path::new("test.json"));
         assert!(settings.validate_security().is_ok());
+        assert_eq!(settings.audio_gain_target, None);
+        assert_eq!(settings.loudnorm_target_i, None);
+        assert_eq!(settings.loudnorm_target_tp, None);
+        assert_eq!(settings.loudnorm_target_lra, None);
+        assert_eq!(settings.normalize_boost_db, None);
         assert_eq!(settings.socket_timeout, None);
         assert_eq!(settings.read_timeout, None);
         assert_eq!(settings.pool_idle_timeout, None);

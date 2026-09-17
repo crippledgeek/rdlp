@@ -11,19 +11,12 @@ use rdlp_types::Codec;
 use rdlp_types::media_name::{CodecKind, codec_identity};
 use std::sync::Arc;
 
-/// Default cap on the single-HEAD probe for non-HLS file size detection
-/// when `Config::hls_head_probe_timeout` is unset. Matches the legacy
-/// hard-coded value before #277.
-const DEFAULT_HLS_HEAD_PROBE_TIMEOUT_SECS: u64 = 5;
-
-/// Resolve the wall-clock cap for the non-HLS HEAD-probe from `Config`,
-/// falling back to `DEFAULT_HLS_HEAD_PROBE_TIMEOUT_SECS` when unset.
+/// The wall-clock cap for the non-HLS HEAD-probe, as a `Duration`.
+///
+/// `Config::effective_network` owns the `None` → default collapse; this is
+/// only the unit conversion at the probe's call site.
 pub(crate) fn resolve_hls_head_probe_timeout(config: &rdlp_types::Config) -> std::time::Duration {
-    std::time::Duration::from_secs(
-        config
-            .hls_head_probe_timeout
-            .unwrap_or(DEFAULT_HLS_HEAD_PROBE_TIMEOUT_SECS),
-    )
+    std::time::Duration::from_secs(config.effective_network().hls_head_probe_timeout_secs)
 }
 
 /// Slugify a rendition tag (`LANGUAGE` / `GROUP-ID` / `NAME`) into a
@@ -701,7 +694,10 @@ mod resolve_timeout_tests {
             hls_head_probe_timeout: None,
             ..Config::default()
         };
-        assert_eq!(resolve_hls_head_probe_timeout(&c), Duration::from_secs(5));
+        assert_eq!(
+            resolve_hls_head_probe_timeout(&c),
+            Duration::from_secs(rdlp_types::EffectiveNetwork::DEFAULT.hls_head_probe_timeout_secs)
+        );
     }
 
     #[test]

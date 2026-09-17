@@ -11,18 +11,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tracing::instrument;
 
-/// Wall-clock budget for `Orchestrator::finish_extracted_formats`'s HLS
-/// expansion pass when `Config::hls_expansion_timeout` is unset.
-///
-/// 60 s equals the largest per-call budget a plugin itself gets
-/// (`rdlp_plugin::adapter::SEARCH_TIMEOUT`, the `plugin_timeout_search_s`
-/// default): this pass is host work a plugin's rows trigger after its own
-/// call has returned, so it is held to the same ceiling rather than left
-/// open-ended. Comfortably above a healthy ladder — each row is one
-/// playlist round trip, and the rows are capped at the WIT boundary
-/// (`rdlp_plugin::convert::MAX_PLUGIN_FORMATS`).
-const DEFAULT_HLS_EXPANSION_TIMEOUT_SECS: u64 = 60;
-
 /// Apply the decode boundary to a page of search previews.
 ///
 /// Search previews are the second surface of the boundary described on
@@ -87,14 +75,15 @@ impl Orchestrator {
         .await;
     }
 
-    /// `Config::hls_expansion_timeout`, or [`DEFAULT_HLS_EXPANSION_TIMEOUT_SECS`]
-    /// when unset.
-    fn hls_expansion_budget(&self) -> Duration {
+    /// `Config::hls_expansion_timeout` resolved through the one owner:
+    /// `Config::effective_network` collapses an unset value to
+    /// `EffectiveNetwork::DEFAULT.hls_expansion_timeout_secs` (#611).
+    pub(super) fn hls_expansion_budget(&self) -> Duration {
         Duration::from_secs(
             self.extraction_context
                 .config
-                .hls_expansion_timeout
-                .unwrap_or(DEFAULT_HLS_EXPANSION_TIMEOUT_SECS),
+                .effective_network()
+                .hls_expansion_timeout_secs,
         )
     }
 

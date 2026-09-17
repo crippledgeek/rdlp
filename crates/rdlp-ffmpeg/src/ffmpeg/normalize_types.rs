@@ -1,8 +1,11 @@
-//! Audio normalization types and presets.
+//! Audio normalization types.
 //!
-//! Provides `AudioNormMode`, `LoudnormPreset`, `NormalizeOptions`,
-//! `PeakAnalysis`, and `LoudnormMeasurements` used by the normalization
-//! pipeline.
+//! Provides `AudioNormMode`, `NormalizeOptions`, `PeakAnalysis`, and
+//! `LoudnormMeasurements` used by the normalization pipeline.
+//! [`LoudnormPreset`] lives in `rdlp-types`, the single owner of the
+//! per-preset targets (#611).
+
+use rdlp_types::{EffectiveNormalize, LoudnormPreset, LoudnormTargets};
 
 /// Audio normalization mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -11,57 +14,6 @@ pub enum AudioNormMode {
     Peak,
     /// EBU R128 two-pass loudness normalization via loudnorm filter.
     Loudnorm,
-}
-
-/// Loudnorm target presets for common use cases.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum LoudnormPreset {
-    /// Broadcast standard: I=-23 LUFS, TP=-2 dBTP, LRA=7 LU
-    Broadcast,
-    /// Streaming standard: I=-14 LUFS, TP=-1 dBTP, LRA=11 LU
-    Streaming,
-    /// Loud master: I=-11 LUFS, TP=-1 dBTP, LRA=11 LU
-    Loud,
-}
-
-impl LoudnormPreset {
-    /// Returns `(target_i, target_tp, target_lra)` for this preset.
-    #[must_use]
-    pub const fn targets(self) -> (f64, f64, f64) {
-        match self {
-            Self::Broadcast => (-23.0, -2.0, 7.0),
-            Self::Streaming => (-14.0, -1.0, 11.0),
-            Self::Loud => (-11.0, -1.0, 11.0),
-        }
-    }
-}
-
-impl std::str::FromStr for LoudnormPreset {
-    type Err = String;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        if s.eq_ignore_ascii_case("broadcast") {
-            Ok(Self::Broadcast)
-        } else if s.eq_ignore_ascii_case("streaming") {
-            Ok(Self::Streaming)
-        } else if s.eq_ignore_ascii_case("loud") {
-            Ok(Self::Loud)
-        } else {
-            Err(format!(
-                "unknown loudnorm preset '{s}': expected broadcast, streaming, or loud"
-            ))
-        }
-    }
-}
-
-impl std::fmt::Display for LoudnormPreset {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Broadcast => write!(f, "broadcast"),
-            Self::Streaming => write!(f, "streaming"),
-            Self::Loud => write!(f, "loud"),
-        }
-    }
 }
 
 /// Options for audio normalization.
@@ -77,13 +29,17 @@ impl std::fmt::Display for LoudnormPreset {
 pub struct NormalizeOptions {
     /// Normalization mode (peak or loudnorm).
     pub mode: AudioNormMode,
-    /// Target peak level in dBFS (Mode A, default -1.0).
+    /// Target peak level in dBFS (Mode A). Defaults to
+    /// [`EffectiveNormalize::PEAK_TARGET_DB`].
     pub target_peak_db: f64,
-    /// Target integrated loudness in LUFS (Mode B, default -16.0).
+    /// Target integrated loudness in LUFS (Mode B). Defaults to the
+    /// [`LoudnormPreset::default()`] target.
     pub target_i: f64,
-    /// Target true peak in dBTP (Mode B, default -1.5).
+    /// Target true peak in dBTP (Mode B). Defaults to the
+    /// [`LoudnormPreset::default()`] target.
     pub target_tp: f64,
-    /// Target loudness range in LU (Mode B, default 11.0).
+    /// Target loudness range in LU (Mode B). Defaults to the
+    /// [`LoudnormPreset::default()`] target.
     pub target_lra: f64,
     /// Automatically salvage corrupt Matroska/WebM containers before processing.
     ///
@@ -110,7 +66,8 @@ pub struct NormalizeOptions {
     /// loudnorm pass 2 and applies a fixed gain with hard limiter instead.
     /// Corresponds to `--normalize-boost`.
     pub boost_enabled: bool,
-    /// Gain in dB for limiter-boost fallback (default 12.0).
+    /// Gain in dB for limiter-boost fallback. Defaults to
+    /// [`EffectiveNormalize::BOOST_GAIN_DB`].
     ///
     /// Only used when `boost_enabled` is true and shortfall exceeds threshold.
     /// Corresponds to `--normalize-boost-db`.
@@ -118,19 +75,26 @@ pub struct NormalizeOptions {
 }
 
 impl Default for NormalizeOptions {
+    /// Every number comes from its owner in `rdlp-types` (#611): the preset
+    /// targets from [`LoudnormPreset::default()`], the peak target and boost
+    /// gain from [`EffectiveNormalize`]. No literal is restated here.
     fn default() -> Self {
-        let (i, tp, lra) = LoudnormPreset::Streaming.targets();
+        let LoudnormTargets {
+            integrated_lufs,
+            true_peak_dbtp,
+            range_lu,
+        } = LoudnormPreset::default().targets();
         Self {
             mode: AudioNormMode::Peak,
-            target_peak_db: -1.0,
-            target_i: i,
-            target_tp: tp,
-            target_lra: lra,
+            target_peak_db: EffectiveNormalize::PEAK_TARGET_DB,
+            target_i: integrated_lufs,
+            target_tp: true_peak_dbtp,
+            target_lra: range_lu,
             salvage: true,
             force_dynamic: false,
             precompress: false,
             boost_enabled: false,
-            boost_gain_db: 12.0,
+            boost_gain_db: EffectiveNormalize::BOOST_GAIN_DB,
         }
     }
 }

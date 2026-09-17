@@ -46,7 +46,8 @@
 //! ### Fine-Grained Parallelism
 //!
 //! - Automatic activation for files > 10 MB with Range support
-//! - Configurable concurrent connections (default: 4)
+//! - Configurable concurrent connections (default: `concurrent_fragments` on
+//!   [`rdlp_types::EffectiveNetwork::DEFAULT`])
 //! - Batch processing prevents overwhelming the runtime
 //! - Smart resume: switches to parallel if < 20% downloaded
 //!
@@ -235,11 +236,13 @@
 //!
 //! ## Configuration
 //!
-//! Key configuration options (via [`rdlp_types::Config`]):
+//! Key configuration options (via [`rdlp_types::Config`]); the defaults for
+//! the network/download knobs live on [`rdlp_types::EffectiveNetwork::DEFAULT`]
+//! and are resolved once by [`rdlp_types::Config::effective_network`]:
 //!
-//! - `concurrent_fragments`: Number of parallel connections (default: 4)
-//! - `buffer_size`: I/O buffer size in bytes (default: 2 MB)
-//! - `socket_timeout`: Connection timeout in seconds (default: 30)
+//! - `concurrent_fragments`: Number of parallel connections
+//! - `buffer_size`: I/O buffer size in bytes
+//! - `socket_timeout`: Connection timeout in seconds
 //! - `user_agent`: Custom User-Agent header
 //! - `proxy`: HTTP/HTTPS proxy URL
 
@@ -426,48 +429,37 @@ impl DownloaderRegistry {
         let retry_config = retry_config_from(config, config.retries);
         let fragment_retry_config = retry_config_from(config, config.fragment_retries);
 
-        // Create HTTP downloader with optimized settings
+        // The nine network/download knobs are resolved ONCE here and wired
+        // unconditionally; `Config::effective_network` owns the `None` →
+        // default collapse, so no per-field fallback lives in this crate
+        // (#611). All values are validated by Config::validate(). read_timeout
+        // also bounds DASH MPD + segment fetches (dash/download.rs).
+        let net = config.effective_network();
         let mut http_downloader = HttpDownloader::with_client(client)
-            .with_buffer_size(config.buffer_size)
-            .with_concurrent_fragments(config.concurrent_fragments)
+            .with_buffer_size(net.buffer_size)
+            .with_concurrent_fragments(net.concurrent_fragments)
             .with_rate_limiter(rate_limiter)
             .with_retry_config(retry_config)
             .with_fragment_retry_config(fragment_retry_config.clone())
-            .with_adaptive(config.adaptive_downloads);
-        if let Some(threshold) = config.parallel_threshold {
-            http_downloader = http_downloader.with_parallel_threshold(threshold);
-        }
+            .with_adaptive(config.adaptive_downloads)
+            .with_parallel_threshold(net.parallel_threshold)
+            .with_read_timeout(std::time::Duration::from_secs(net.read_timeout_secs))
+            .with_download_timeout(std::time::Duration::from_secs(net.download_timeout_secs))
+            .with_merge_timeout(std::time::Duration::from_secs(net.merge_timeout_secs));
         if let Some(cap) = config.max_fragment_bytes {
             http_downloader = http_downloader.with_max_fragment_bytes(cap);
         }
-        // Item 8/9: wire the operator's download-path timeouts. All validated by
-        // Config::validate(); unset (None) keeps the DownloaderConfig default.
-        // Without this they were silently ignored. read_timeout also bounds DASH
-        // MPD + segment fetches (dash/download.rs).
-        if let Some(read_timeout_secs) = config.read_timeout {
-            http_downloader = http_downloader
-                .with_read_timeout(std::time::Duration::from_secs(read_timeout_secs));
-        }
-        if let Some(download_timeout_secs) = config.download_timeout {
-            http_downloader = http_downloader
-                .with_download_timeout(std::time::Duration::from_secs(download_timeout_secs));
-        }
-        if let Some(merge_timeout_secs) = config.merge_timeout {
-            http_downloader = http_downloader
-                .with_merge_timeout(std::time::Duration::from_secs(merge_timeout_secs));
-        }
 
-        // Create HLS downloader. concurrent_segments/buffer_size were no-ops on the
-        // legacy parallel path (deleted in #270); the pre-resolved fragments path
-        // doesn't use them. See issue #271.
+        // The HLS downloader has no knobs of its own: the pre-resolved
+        // fragments path reads everything from the shared HttpDownloader.
         let hls_downloader = HlsDownloader::new().with_http_downloader(http_downloader.clone());
 
         // Create DASH downloader
         let dash_downloader = DashDownloader::new()
             .with_http_downloader(http_downloader.clone())
-            .with_concurrent_segments(config.concurrent_fragments)
+            .with_concurrent_segments(net.concurrent_fragments)
             .with_retry_config(fragment_retry_config)
-            .with_buffer_size(config.buffer_size);
+            .with_buffer_size(net.buffer_size);
 
         let mut registry = Self {
             downloaders: Vec::new(),
@@ -722,22 +714,20 @@ mod tests {
     }
 
     #[test]
-    fn registry_uses_http_default_read_timeout_when_none() {
-        // Unset read_timeout must not clobber the DownloaderConfig default.
-        let none_registry = DownloaderRegistry::with_config(&Config {
+    fn registry_uses_effective_network_default_read_timeout_when_none() {
+        let registry = DownloaderRegistry::with_config(&Config {
             read_timeout: None,
             ..Default::default()
         });
-        let default_registry = DownloaderRegistry::new();
         assert_eq!(
-            none_registry.http_base.config.read_timeout,
-            default_registry.http_base.config.read_timeout,
-            "unset read_timeout must keep the DownloaderConfig default"
+            registry.http_base.config.read_timeout,
+            std::time::Duration::from_secs(rdlp_types::EffectiveNetwork::DEFAULT.read_timeout_secs),
+            "unset read_timeout must resolve to EffectiveNetwork::DEFAULT"
         );
     }
 
     #[test]
-    fn registry_uses_http_default_when_parallel_threshold_is_none() {
+    fn registry_uses_effective_network_default_when_parallel_threshold_is_none() {
         let config = Config {
             parallel_threshold: None,
             ..Default::default()
@@ -745,8 +735,29 @@ mod tests {
         let registry = DownloaderRegistry::with_config(&config);
         assert_eq!(
             registry.http_base.config.parallel_threshold,
-            10 * 1024 * 1024,
-            "None must fall back to HttpDownloader's DEFAULT_PARALLEL_THRESHOLD_BYTES"
+            rdlp_types::EffectiveNetwork::DEFAULT.parallel_threshold,
+            "None must resolve to EffectiveNetwork::DEFAULT.parallel_threshold"
+        );
+    }
+
+    /// Unset download/merge timeouts resolve to the single owner too — the
+    /// previous `if let Some` wiring is gone, so this pins that the
+    /// unconditional path lands the defaults rather than zero.
+    #[test]
+    fn registry_uses_effective_network_defaults_for_unset_download_and_merge_timeouts() {
+        let registry = DownloaderRegistry::with_config(&Config {
+            download_timeout: None,
+            merge_timeout: None,
+            ..Default::default()
+        });
+        let d = rdlp_types::EffectiveNetwork::DEFAULT;
+        assert_eq!(
+            registry.http_base.config.download_timeout,
+            std::time::Duration::from_secs(d.download_timeout_secs)
+        );
+        assert_eq!(
+            registry.http_base.config.merge_timeout,
+            std::time::Duration::from_secs(d.merge_timeout_secs)
         );
     }
 
