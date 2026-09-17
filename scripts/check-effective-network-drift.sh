@@ -10,6 +10,8 @@
 #      (serde default naming: the Rust identifier IS the wire key). Adding a
 #      Rust field does not break the TS build — it just ships a key the TS type
 #      says does not exist, and a placeholder that can never be derived from it.
+#      Every Rust field must also be CONCRETE (no `Option<_>`/generics): this is
+#      the materialised layer, and the GUI treats its values as final.
 #
 #  (b) NO LITERAL PLACEHOLDERS — DownloadSection.tsx / NetworkSection.tsx must
 #      not carry a numeric placeholder literal (`placeholder="8"`, or a
@@ -67,10 +69,20 @@ rust_fields() {
             }
             next
         }
-        inside && /^    pub [a-z_][a-z0-9_]*: [A-Za-z0-9_<>]+,$/ {
+        inside && /^    pub [a-z_][a-z0-9_]*: [A-Za-z0-9_]+,$/ {  # concrete type only
             sub(/^    pub /, ""); sub(/:.*$/, "")
             print
             next
+        }
+        inside && /^    pub [a-z_][a-z0-9_]*: .*[<>].*,$/ {
+            # A generic (`Option<u64>`, `Vec<_>`) is a CONTRACT violation, not a
+            # parser gap: EffectiveNetwork is the materialised layer, every
+            # field concrete. Exit 1 (gate failed) naming the field.
+            field = $0; sub(/^    pub /, "", field); sub(/:.*$/, "", field)
+            printf "\nERROR: EffectiveNetwork.%s in %s has a generic type:\n  %s\n", field, file, $0 > "/dev/stderr"
+            print  "EffectiveNetwork is the resolved layer -- every field is a concrete value." > "/dev/stderr"
+            print  "An Option here would put \"inherit\" back into the payload the GUI treats as final." > "/dev/stderr"
+            exit 1
         }
         inside {
             printf "error: unparseable line in EffectiveNetwork (%s):\n  %s\n", file, $0 > "/dev/stderr"
@@ -103,9 +115,11 @@ ts_fields() {
 
 # (a) Compare the two field sets. 0 = match, 1 = drift, 2 = cannot parse.
 check_field_set() {
-    local rust_file=$1 ts_file=$2 rust_set ts_set diff_out
-    # awk's exit 2 must abort, not be swallowed by the assignment (pipefail).
-    if ! rust_set=$(rust_fields "$rust_file"); then return 2; fi
+    local rust_file=$1 ts_file=$2 rust_set ts_set diff_out rc
+    # awk's non-zero exit must propagate, not be swallowed by the assignment
+    # (pipefail): 1 = a generic field (gate failed), 2 = unparseable (cannot run).
+    rc=0; rust_set=$(rust_fields "$rust_file") || rc=$?
+    [ "$rc" -ne 0 ] && return "$rc"
     if ! ts_set=$(ts_fields "$ts_file"); then return 2; fi
     if [ -z "$rust_set" ]; then
         echo "error: parsed zero fields from EffectiveNetwork in $rust_file" >&2
@@ -170,6 +184,15 @@ export interface EffectiveNetwork {
     beta: number;
 }
 FIXTURE
+    # Contract violation — a Rust field that is not concrete. Every
+    # EffectiveNetwork field is a resolved value by contract; an `Option`
+    # would put "inherit" back into the payload the GUI treats as final.
+    cat > "$tmp/optional.rs" <<'FIXTURE'
+pub struct EffectiveNetwork {
+    pub alpha_secs: Option<u64>,
+    pub beta: usize,
+}
+FIXTURE
     # Drifted pair — TS renamed one field.
     cat > "$tmp/bad.ts" <<'FIXTURE'
 export interface EffectiveNetwork {
@@ -185,6 +208,8 @@ FIXTURE
     ok=1
     check_field_set "$tmp/good.rs" "$tmp/good.ts" >/dev/null 2>&1 || ok=0
     rc=0; check_field_set "$tmp/good.rs" "$tmp/bad.ts" >/dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 1 ] || ok=0
+    rc=0; check_field_set "$tmp/optional.rs" "$tmp/good.ts" >/dev/null 2>&1 || rc=$?
     [ "$rc" -eq 1 ] || ok=0
     check_no_literal_placeholders "$tmp/clean.tsx" >/dev/null 2>&1 || ok=0
     rc=0; check_no_literal_placeholders "$tmp/literal.tsx" >/dev/null 2>&1 || rc=$?

@@ -8,14 +8,19 @@
 // ban exposure for nothing.
 
 import { describe, expect, it } from "vitest";
+import { QueryClient } from "@tanstack/react-query";
 import { queryClient } from "./queryClient";
 
 describe("queryClient retry policy", () => {
     it("invokes a failing queryFn exactly once", async () => {
+        // A private client built from the app client's REAL default options:
+        // the policy under test is exercised, but nothing is written into the
+        // shared singleton's cache for other tests to trip over.
+        const client = new QueryClient({ defaultOptions: queryClient.getDefaultOptions() });
         let calls = 0;
         const boom = new Error("extraction failed");
         await expect(
-            queryClient.fetchQuery({
+            client.fetchQuery({
                 queryKey: ["retry-policy-probe"],
                 queryFn: () => {
                     calls += 1;

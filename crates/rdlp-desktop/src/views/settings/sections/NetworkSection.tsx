@@ -17,6 +17,10 @@ import type { AppSettings, EffectiveNetwork } from "@/types";
 
 const NONE_KEY = "none";
 
+/** Bounds of the idle-timeout control; `0` is never typeable here — it is the checkbox's sentinel. */
+const POOL_IDLE_MIN_SECS = 1;
+const POOL_IDLE_MAX_SECS = 3600;
+
 interface Props {
     draft: AppSettings;
     /**
@@ -29,13 +33,27 @@ interface Props {
 }
 
 export function NetworkSection({ draft, defaults, onChange }: Props) {
-    const poolIdleForm: PoolIdleFormState = poolIdleTimeoutToFormState(draft.pool_idle_timeout);
+    // A null draft INHERITS the base configuration, which may itself be the
+    // 0-sentinel ("eviction disabled"): then the checkbox must show OFF and the
+    // numeric input must not advertise a "0" placeholder below its own minValue.
+    const inheritsEvictionOff = draft.pool_idle_timeout === null && defaults.pool_idle_timeout_secs === 0;
+    const poolIdleForm: PoolIdleFormState = inheritsEvictionOff
+        ? { evictIdle: false, secondsInput: "" }
+        : poolIdleTimeoutToFormState(draft.pool_idle_timeout);
     // NumericField already owns the in-progress-text vs committed-number split
     // and clamps to [minValue, maxValue] before `onCommit` fires (see
     // NumericField.tsx). The 0-sentinel ("disable eviction") stays owned by
     // the checkbox — NumericField's own minValue=1 means the numeric control
     // itself can never produce 0.
     const handleEvictToggle = (next: boolean) => {
+        // Turning eviction ON while inheriting the 0-sentinel cannot be
+        // expressed as "inherit" (that IS off), so it needs an explicit
+        // positive value: seed the control's own lower bound for the user to
+        // edit. Every other transition keeps the existing form-state mapping.
+        if (next && inheritsEvictionOff) {
+            onChange({ pool_idle_timeout: POOL_IDLE_MIN_SECS });
+            return;
+        }
         onChange({
             pool_idle_timeout: formStateToPoolIdleTimeout({
                 evictIdle: next,
@@ -150,11 +168,15 @@ export function NetworkSection({ draft, defaults, onChange }: Props) {
                                     aria-describedby="pool-idle-timeout-description"
                                     hideLabel
                                     value={poolIdleForm.evictIdle && poolIdleForm.secondsInput !== "" ? Number(poolIdleForm.secondsInput) : null}
-                                    minValue={1}
-                                    maxValue={3600}
+                                    minValue={POOL_IDLE_MIN_SECS}
+                                    maxValue={POOL_IDLE_MAX_SECS}
                                     onCommit={handlePoolIdleChange}
                                     isDisabled={!poolIdleForm.evictIdle}
-                                    placeholder={String(defaults.pool_idle_timeout_secs)}
+                                    // No placeholder when the inherited value is the 0-sentinel: "0" would
+                                    // sit below minValue and claim a timeout that does not exist.
+                                    {...(defaults.pool_idle_timeout_secs !== 0
+                                        ? { placeholder: String(defaults.pool_idle_timeout_secs) }
+                                        : {})}
                                     suffix="s"
                                 />
                             </div>

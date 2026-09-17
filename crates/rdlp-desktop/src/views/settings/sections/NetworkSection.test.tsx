@@ -210,4 +210,37 @@ describe("NetworkSection — timeout controls", () => {
         await user.tab();
         expect(onChange).toHaveBeenCalledWith({ pool_idle_timeout: 3600 });
     });
+
+    // Inherited 0-sentinel: `pool_idle_timeout = 0` in config.toml with the
+    // AppSettings field null (inherit) means eviction is OFF. The checkbox must
+    // reflect the effective state, and the numeric input must not advertise a
+    // "0" placeholder below its own minValue=1.
+    describe("inheriting pool_idle_timeout_secs = 0 (eviction disabled by the base configuration)", () => {
+        const inheritedOff = { ...effectiveNetworkStub, pool_idle_timeout_secs: 0 };
+
+        it("renders the checkbox unchecked and the numeric input disabled with no placeholder", () => {
+            render(<NetworkSection draft={baseDraft} defaults={inheritedOff} onChange={vi.fn()} />);
+            expect(screen.getByRole("checkbox", { name: /evict idle/i })).not.toBeChecked();
+            const numeric = screen.getByRole("textbox", { name: /idle timeout/i });
+            expect(numeric).toBeDisabled();
+            expect(numeric).not.toHaveAttribute("placeholder");
+        });
+
+        it("checking the box commits an explicit positive timeout (inherit cannot re-enable eviction)", () => {
+            const onChange = vi.fn();
+            render(<NetworkSection draft={baseDraft} defaults={inheritedOff} onChange={onChange} />);
+            fireEvent.click(screen.getByRole("checkbox", { name: /evict idle/i }));
+            expect(onChange).toHaveBeenCalledTimes(1);
+            const committed = onChange.mock.calls[0]?.[0] as { pool_idle_timeout: number | null };
+            expect(committed.pool_idle_timeout).toBeGreaterThanOrEqual(1);
+        });
+
+        it("an explicit draft value still wins over the inherited sentinel", () => {
+            render(
+                <NetworkSection draft={{ ...baseDraft, pool_idle_timeout: 90 }} defaults={inheritedOff} onChange={vi.fn()} />,
+            );
+            expect(screen.getByRole("checkbox", { name: /evict idle/i })).toBeChecked();
+            expect(screen.getByRole("textbox", { name: /idle timeout/i })).toHaveValue("90");
+        });
+    });
 });
