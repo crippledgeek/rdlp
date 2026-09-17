@@ -1,0 +1,16 @@
+---
+source: crates/rdlp-cli/src/plugin_cmd.rs
+expression: bare.block()
+---
+Plugin: foo
+Version: 0.1.0
+WIT version: 0.5.2
+Priority: 150
+Match patterns:
+  - *://*.foo.test/*
+Capabilities:
+  - fetch
+  - log
+Identity: ed25519:838282c38f97f6b28c8a8d9a272a415f9f7c2db422d6435d8e8dd7865df8e523
+Trust state: UNTRUSTED — not loaded until trusted: run rdlp with `--trust-publisher ed25519:838282c38f97f6b28c8a8d9a272a415f9f7c2db422d6435d8e8dd7865df8e523` (recorded on the first successful load)
+Origin: /p/foo

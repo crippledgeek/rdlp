@@ -14,7 +14,6 @@ mod commands;
 // `pub mod config` in lib.rs is a one-line change that would hand any dependent
 // crate an unvalidated `merge_config`.
 mod config;
-mod plugin_cmd;
 mod selection;
 
 use anyhow::{Context, Result};
@@ -24,6 +23,7 @@ use rdlp_api::TempRegistry;
 use rdlp_api::{RdlpApiError, RdlpClient};
 use rdlp_cli::event_handler::CliEventHandler;
 use rdlp_cli::interactive::DialoguerCallback;
+use rdlp_cli::plugin_cmd;
 use rdlp_cli::sanitize::sanitize_for_terminal;
 use rdlp_types::boundary::Action;
 use std::sync::Arc;

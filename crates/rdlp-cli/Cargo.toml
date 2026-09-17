@@ -56,6 +56,9 @@ rdlp-plugin-manifest = { path = "../rdlp-plugin-manifest" }
 # `test_support::write_signed_plugin_fresh_key` — a signed plugin on disk
 # for the `plugin info --json` / `plugin list --json` contract tests.
 rdlp-plugin = { path = "../rdlp-plugin", features = ["test-support"] }
+# Snapshots of the `plugin info` JSON and text shapes — reviewed with
+# `cargo insta review`; a shape change is a deliberate, visible diff.
+insta = { version = "1.48", features = ["json"] }
 testing_logger = "0.1.1"
 
 # `indexing_slicing`, `pedantic`, and `nursery` are applied binary-only

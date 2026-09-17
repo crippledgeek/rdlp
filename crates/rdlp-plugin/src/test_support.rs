@@ -178,11 +178,6 @@ pub fn sign_manifest(manifest: &mut Manifest, key: &SigningKey, wasm: &[u8]) {
     }
 }
 
-/// Write a signed `plugin.toml` + `plugin.wasm` into `dir` so
-/// `Loader::discover` accepts it. Builds the [`Manifest`] directly from
-/// `spec`, signs it with [`sign_manifest`], serialises it with `toml`
-/// (so any `url_regex` is escaped correctly), and re-parses the written
-/// text so the fixture is validated exactly as the loader will validate it.
 #[doc(hidden)]
 /// [`write_signed_plugin`] under a key generated here; returns the
 /// publisher identity the host computes for it
@@ -197,6 +192,12 @@ pub fn write_signed_plugin_fresh_key(dir: &Path, spec: &SignedPluginSpec<'_>) ->
     .identity_string()
 }
 
+/// Write a signed `plugin.toml` + `plugin.wasm` into `dir` so
+/// `Loader::discover` accepts it. Builds the [`Manifest`] directly from
+/// `spec`, signs it with [`sign_manifest`], serialises it with `toml`
+/// (so any `url_regex` is escaped correctly), and re-parses the written
+/// text so the fixture is validated exactly as the loader will validate it.
+#[doc(hidden)]
 pub fn write_signed_plugin(dir: &Path, key: &SigningKey, spec: &SignedPluginSpec<'_>) {
     write_fixture_file(dir, "plugin.wasm", spec.wasm);
 

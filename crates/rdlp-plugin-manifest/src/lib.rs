@@ -374,6 +374,9 @@ fn validate(m: &Manifest) -> Result<(), ManifestError> {
         return invalid("empty name");
     }
     validate_plugin_name(&m.name)?;
+    // Text sanity before any semantic check, so a poisoned value is
+    // reported as such and never reasoned about.
+    validate_text_fields(m)?;
     if !(100..=199).contains(&m.priority) {
         return invalid(&format!(
             "priority {} outside allowed range 100..=199",
@@ -476,16 +479,50 @@ fn validate_display_name(m: &Manifest) -> Result<(), ManifestError> {
             "display_name longer than {DISPLAY_NAME_MAX_BYTES} bytes"
         ));
     }
-    if d.chars().any(char::is_control) {
-        return invalid("display_name contains a control character");
-    }
-    if d.chars()
-        .any(|c| BIDI_CONTROLS.iter().any(|block| block.contains(&c)))
-    {
-        return invalid("display_name contains a bidi control character");
-    }
+    validate_plain_text("display_name", d)?;
     if d.contains(['/', '\\']) {
         return invalid("display_name contains a path separator");
+    }
+    Ok(())
+}
+
+/// `field` holds text an operator will see (`plugin info`, a log line, a
+/// prompt): no control character (a terminal escape, CWE-150) and no bidi
+/// control ([`BIDI_CONTROLS`]). Enforced here, at the parse boundary, so
+/// no renderer has to sanitise manifest text.
+fn validate_plain_text(field: &str, text: &str) -> Result<(), ManifestError> {
+    if text.chars().any(char::is_control) {
+        return invalid(&format!("{field} contains a control character"));
+    }
+    if text
+        .chars()
+        .any(|c| BIDI_CONTROLS.iter().any(|block| block.contains(&c)))
+    {
+        return invalid(&format!("{field} contains a bidi control character"));
+    }
+    Ok(())
+}
+
+/// [`validate_plain_text`] over every free-text field but `display_name`
+/// (checked with its own length and separator rules) and `name` /
+/// `search_site` (kebab-case, stricter still).
+fn validate_text_fields(m: &Manifest) -> Result<(), ManifestError> {
+    validate_plain_text("version", &m.version)?;
+    validate_plain_text("wit_version", &m.wit_version)?;
+    for p in &m.matches {
+        validate_plain_text("matches", p)?;
+    }
+    if let Some(r) = &m.url_regex {
+        validate_plain_text("url_regex", r)?;
+    }
+    for h in &m.claims_override {
+        validate_plain_text("claims_override", h)?;
+    }
+    for c in &m.capabilities {
+        validate_plain_text("capabilities", c)?;
+    }
+    for c in &m.search_claims_override {
+        validate_plain_text("search_claims_override", c)?;
     }
     Ok(())
 }
@@ -738,6 +775,34 @@ signature = "ZA"
     /// CVE-2021-42574). All nine hostile code points are refused; the
     /// neighbours just outside each block, and ordinary non-ASCII text, are
     /// still accepted.
+    /// Every free-text field an operator will see — in `plugin info`, a
+    /// log line, a prompt — is held to the same no-control, no-bidi rule
+    /// as `display_name`, at the parse boundary, so no renderer has to
+    /// sanitise (CWE-150 terminal escapes ride in on any of them).
+    #[test]
+    fn a_control_or_bidi_character_in_any_text_field_is_rejected() {
+        // Keys the fixture already has are replaced; the rest are added.
+        for (present, poisoned) in [
+            (r#"version = "1.0.0""#, r#"version = "1.0.0\u001b[31m""#),
+            (
+                r#"matches = ["https://x.com/*"]"#,
+                r#"matches = ["https://x.com/*\u0007"]"#,
+            ),
+        ] {
+            assert_invalid_reason_contains(
+                &manifest_with("").replace(present, poisoned),
+                "control",
+            );
+        }
+        for added in [
+            r#"claims_override = ["x.com\u202e"]"#,
+            r#"url_regex = "x\u0000""#,
+            "search_site = \"x\"\nsupports_search = true\nsearch_claims_override = [\"x\\u001b\"]",
+        ] {
+            assert_invalid_reason_contains(&manifest_with(added), "control");
+        }
+    }
+
     #[test]
     fn display_name_with_a_bidi_control_rejected() {
         for c in ('\u{202A}'..='\u{202E}').chain('\u{2066}'..='\u{2069}') {

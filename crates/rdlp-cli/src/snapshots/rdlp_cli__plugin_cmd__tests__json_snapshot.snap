@@ -1,0 +1,24 @@
+---
+source: crates/rdlp-cli/src/plugin_cmd.rs
+expression: report()
+---
+{
+  "name": "foo",
+  "version": "0.1.0",
+  "wit_version": "0.5.2",
+  "priority": 150,
+  "matches": [
+    "*://*.foo.test/*"
+  ],
+  "claims_override": [],
+  "capabilities": [
+    "fetch",
+    "log"
+  ],
+  "identity": "ed25519:838282c38f97f6b28c8a8d9a272a415f9f7c2db422d6435d8e8dd7865df8e523",
+  "trust": {
+    "state": "untrusted"
+  },
+  "approved_capabilities": [],
+  "origin": "/p/foo"
+}

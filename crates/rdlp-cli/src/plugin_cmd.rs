@@ -13,7 +13,7 @@ use rdlp_plugin::trust_store::{IdentityCheck, TrustStore};
 use rdlp_types::Config;
 use serde::Serialize;
 use std::fmt::Write as _;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Reject path-traversing or otherwise unsafe plugin names BEFORE any
 /// `dir.join(name)` / `remove_dir_all` operation. Gives the user a clear
@@ -148,10 +148,17 @@ struct PluginReport {
     /// `Signature::identity_string()` — the `--trust-publisher` value.
     identity: String,
     trust: TrustVerdict,
-    /// From the trust entry, when there is one.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    /// From the trust entry; `null` when there is none (the key is
+    /// always present).
     approved_capabilities: Option<Vec<String>>,
+    /// Serialised through `Path::display`, so a non-UTF-8 path renders
+    /// lossily instead of failing the whole report.
+    #[serde(serialize_with = "path_display")]
     origin: PathBuf,
+}
+
+fn path_display<S: serde::Serializer>(path: &Path, s: S) -> Result<S::Ok, S::Error> {
+    s.collect_str(&path.display())
 }
 
 impl PluginReport {
@@ -195,13 +202,16 @@ impl PluginReport {
     /// labelled line (or bullet list) per field in [`LABELS`] order.
     fn block(&self) -> String {
         let mut out = String::new();
+        // Every field is a string, a list of strings, an integer, a tagged
+        // enum or null (`origin` goes through `path_display`), so this
+        // cannot fail and always yields an object.
         let Ok(serde_json::Value::Object(fields)) = serde_json::to_value(self) else {
             unreachable!("PluginReport serialises to an object")
         };
         for (key, label) in LABELS {
             // Writing to a String cannot fail; the results are discarded as such.
             match fields.get(*key) {
-                None => {}
+                None | Some(serde_json::Value::Null) => {}
                 Some(serde_json::Value::Array(items)) => {
                     if items.is_empty() {
                         continue;
@@ -211,7 +221,7 @@ impl PluginReport {
                         let _ = writeln!(out, "  - {}", scalar(item));
                     }
                 }
-                Some(serde_json::Value::Object(_)) => {
+                Some(serde_json::Value::Object(_)) if *key == "trust" => {
                     let _ = writeln!(
                         out,
                         "{label}: {}",
@@ -252,8 +262,11 @@ fn scalar(value: &serde_json::Value) -> String {
         .map_or_else(|| value.to_string(), str::to_owned)
 }
 
-/// `rdlp plugin list` — list all installed plugins with their trust state;
+/// `rdlp plugin list` — list all installed plugins with their trust state.
+///
 /// `--json` prints one array of the objects `plugin info --json` prints.
+/// A directory whose manifest does not parse is reported on stderr and
+/// left out, in both modes.
 ///
 /// # Errors
 ///
@@ -518,7 +531,7 @@ mod tests {
             capabilities: vec!["fetch".into(), "log".into()],
             identity: ID.into(),
             trust: TrustVerdict::Untrusted,
-            approved_capabilities: None,
+            approved_capabilities: Some(vec![]),
             origin: "/p/foo".into(),
         }
     }
@@ -538,49 +551,27 @@ mod tests {
         assert!(unlabelled.is_empty(), "add these to LABELS: {unlabelled:?}");
     }
 
+    /// The `plugin info` text shape, reviewed as a snapshot
+    /// (`cargo insta review`); empty lists are omitted, `null` fields too.
     #[test]
-    fn block_renders_the_labelled_fields_in_table_order() {
-        let block = report().block();
-        let lines: Vec<&str> = block.lines().collect();
-        assert_eq!(lines.first(), Some(&"Plugin: foo"));
-        assert!(lines.contains(&"Match patterns:"), "{block}");
-        assert!(lines.contains(&"  - *://*.foo.test/*"), "{block}");
-        assert!(
-            !block.contains("Claims override"),
-            "empty lists are omitted: {block}"
-        );
-        assert!(block.contains(&format!("Identity: {ID}")), "{block}");
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.starts_with("Trust state: UNTRUSTED")),
-            "{block}"
-        );
-        assert_eq!(lines.last(), Some(&"Origin: /p/foo"));
+    fn block_snapshot() {
+        insta::assert_snapshot!(report().block());
+        let mut bare = report();
+        bare.approved_capabilities = None;
+        insta::assert_snapshot!("block_without_trust_entry", bare.block());
     }
 
-    /// The report a script depends on carries the identity verbatim and
-    /// the trust verdict as an object; it never carries the human hint.
+    /// The `--json` shape a script depends on, reviewed as a snapshot:
+    /// the identity verbatim, the trust verdict as a `state`-tagged object,
+    /// every key always present, and never the human hint.
     #[test]
-    fn plugin_report_json_carries_identity_and_structured_trust() {
-        let report = PluginReport {
-            name: "foo".into(),
-            version: "0.1.0".into(),
-            wit_version: "0.5.2".into(),
-            priority: 150,
-            matches: vec!["*://*.foo.test/*".into()],
-            claims_override: vec![],
-            capabilities: vec!["fetch".into(), "log".into()],
-            identity: ID.into(),
-            trust: TrustVerdict::Untrusted,
-            approved_capabilities: None,
-            origin: "/p/foo".into(),
-        };
-        let v = serde_json::to_value(&report).unwrap();
-        assert_eq!(v.get("identity"), Some(&json!(ID)));
-        assert_eq!(v.pointer("/trust/state"), Some(&json!("untrusted")));
-        assert_eq!(v.get("capabilities"), Some(&json!(["fetch", "log"])));
-        assert!(!v.to_string().contains("--trust-publisher"));
+    fn json_snapshot() {
+        insta::assert_json_snapshot!(report());
+        assert!(
+            !serde_json::to_string(&report())
+                .unwrap()
+                .contains("--trust-publisher")
+        );
     }
 
     const ID: &str = "ed25519:838282c38f97f6b28c8a8d9a272a415f9f7c2db422d6435d8e8dd7865df8e523";
