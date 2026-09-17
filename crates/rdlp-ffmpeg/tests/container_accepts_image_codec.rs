@@ -173,7 +173,13 @@ async fn jpeg_and_png_are_accepted_by_every_supported_container() {
     // list with ogg/opus: the gate would still (correctly) answer `true` for
     // jpeg/png here via the baseline, which says nothing about whether the
     // embed works — asserting on it would test the wrong mechanism.
-    let containers = ["mp4", "m4a", "m4v", "mov", "mkv", "mka", "mp3", "flac"];
+    // `mka` is deliberately absent too: it declares no video codec
+    // (`matroskaenc.c`, the audio muxer's `video_codec = NONE`), so it
+    // cannot carry a cover as a *stream*; rdlp embeds into it — and into
+    // `mkv` — as a Matroska attachment (`uses_native_attachment`), a path
+    // this predicate does not model. See
+    // `containers_without_a_video_codec_refuse_every_cover_stream` below.
+    let containers = ["mp4", "m4a", "m4v", "mov", "mkv", "mp3", "flac"];
 
     for format in ["jpg", "png"] {
         let img = make_image(dir.path(), format);
@@ -242,6 +248,38 @@ async fn webp_is_still_refused_by_mp4_family() {
                 .await
                 .expect("query must succeed"),
             "{container} must still refuse webp — this is the #525 mux failure"
+        );
+    }
+}
+
+/// A muxer that declares no video codec cannot carry a cover *stream* of any
+/// codec — `mux.c`'s `init_muxer` refuses any stream of a type whose default
+/// codec is `NONE` for `wav` (`wavenc.c`) and the raw audio muxers
+/// (`rawenc.c`), and `ffmpeg`'s own default stream selection drops an
+/// attached picture there. The jpeg/png baseline must not override that:
+/// before this pin, a cover-bearing `.m4a` remuxed to `.wav` was waved
+/// through to `avformat_write_header`, which then failed with a raw
+/// "wav muxer does not support any stream of type video".
+///
+/// Built in-process — no `ffmpeg` binary involved.
+#[tokio::test]
+async fn containers_without_a_video_codec_refuse_every_cover_stream() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let png = dir.path().join("cover.png");
+    rdlp_ffmpeg::test_support::write_still_png(
+        &png,
+        &rdlp_ffmpeg::test_support::StillImage::default(),
+    )
+    .expect("png fixture");
+    let runner = FFmpegRunner::new().expect("FFmpeg");
+
+    for container in ["wav", "aac", "ac3", "mka"] {
+        assert!(
+            !runner
+                .container_accepts_image_codec(container, &png)
+                .await
+                .expect("query must succeed"),
+            "{container} declares no video codec and must refuse a cover stream"
         );
     }
 }

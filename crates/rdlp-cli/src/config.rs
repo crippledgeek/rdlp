@@ -457,7 +457,7 @@ pub fn merge_config(
         rdlp_ffmpeg::ffmpeg::audio_encoder_registry::validate_recode_audio(
             config.postprocess.recode_audio.as_ref(),
         )
-        .map_err(|e| anyhow::anyhow!("invalid --recode-audio: {e}"))?;
+        .map_err(|e| anyhow::anyhow!("invalid recode audio mode: {e}"))?;
     }
 
     // Validate final config

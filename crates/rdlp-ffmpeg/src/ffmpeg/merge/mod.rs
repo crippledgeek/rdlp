@@ -158,10 +158,8 @@ impl FFmpegRunner {
             .map_err(PostProcessError::from)
             .with_context(|| format!("failed to open output for merge {}", output.display()))?;
 
-        // Find best video stream from video input
-        let video_ist_index = ictx_video
-            .streams()
-            .best(ffmpeg_the_third::media::Type::Video)
+        // The first real video stream — never cover art (#643).
+        let video_ist_index = crate::ffmpeg::probe::first_real_video_stream(&ictx_video)
             .map(|s| s.index())
             .ok_or(PostProcessError::NoVideoStream)?;
 

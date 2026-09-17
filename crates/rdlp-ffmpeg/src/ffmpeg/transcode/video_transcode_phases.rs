@@ -46,10 +46,9 @@ impl FFmpegRunner {
 
         let input_duration_us: i64 = unsafe { (*ictx.as_mut_ptr()).duration };
 
-        // Find video and audio stream indices
-        let video_ist_index = ictx
-            .streams()
-            .best(ffmpeg_the_third::media::Type::Video)
+        // The first real video stream — never cover art (#643) — and the
+        // best audio stream.
+        let video_ist_index = crate::ffmpeg::probe::first_real_video_stream(&ictx)
             .map(|s| s.index())
             .ok_or(PostProcessError::NoVideoStream)?;
 

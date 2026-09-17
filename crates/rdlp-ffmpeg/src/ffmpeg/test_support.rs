@@ -251,15 +251,8 @@ pub fn write_still_png(output: &Path, spec: &StillImage) -> Result<()> {
     let row_bytes = spec.width as usize * 3;
     for row in frame.data_mut(0).chunks_mut(stride) {
         // Rows are padded to `stride`; only the first `row_bytes` are pixels.
-        for px in row
-            .iter_mut()
-            .take(row_bytes)
-            .collect::<Vec<_>>()
-            .chunks_mut(3)
-        {
-            for (dst, src) in px.iter_mut().zip(rgb) {
-                **dst = src;
-            }
+        for (byte, value) in row.iter_mut().take(row_bytes).zip(rgb.iter().cycle()) {
+            *byte = *value;
         }
     }
     frame.set_pts(Some(0));

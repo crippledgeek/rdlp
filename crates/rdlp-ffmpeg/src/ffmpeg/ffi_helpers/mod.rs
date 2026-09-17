@@ -141,17 +141,33 @@ pub(crate) fn oformat_can_represent(
 /// `codec_cover_image_tags` (mjpeg/png/bmp). The query only ever *widens*
 /// this baseline (mp3's callback answers every `ID3v2` `APIC` image codec).
 ///
+/// A muxer that declares no video codec at all cannot carry a cover
+/// *stream* whatever its codec: `mux.c` (`init_muxer`) refuses any stream of
+/// a type whose default codec is `NONE` for the raw and RIFF muxers
+/// (`wavenc.c`: `video_codec = NONE` + `MAX_ONE_OF_EACH`), and the `ffmpeg`
+/// CLI's own default stream selection drops an attached picture there
+/// (`map_auto_video`: `av_guess_codec(…, VIDEO) == NONE` → no video output).
+/// The cover-capable audio muxers all declare one (`flacenc.c`/`mp3enc.c`/
+/// `aiffenc.c`: PNG; `ipod`: H.264). Matroska *attachments* are a different
+/// mechanism (`AVMEDIA_TYPE_ATTACHMENT`, see `uses_native_attachment`) and
+/// are not asked here.
+///
 /// The single cover-representability rule: the thumbnail pre-check and the
 /// stream-copy enforcement point both ask this, so they cannot disagree.
 pub(crate) fn oformat_can_carry_cover_image(
     oformat: *const ffmpeg_the_third::ffi::AVOutputFormat,
     codec_id: ffmpeg_the_third::ffi::AVCodecID,
 ) -> bool {
-    matches!(
-        codec_id,
-        ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_MJPEG
-            | ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_PNG
-    ) || oformat_can_represent(oformat, codec_id)
+    // SAFETY: `oformat` is a non-null descriptor from FFmpeg's static muxer
+    // registry; this is a plain field read.
+    let declares_video =
+        unsafe { (*oformat).video_codec } != ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_NONE;
+    declares_video
+        && (matches!(
+            codec_id,
+            ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_MJPEG
+                | ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_PNG
+        ) || oformat_can_represent(oformat, codec_id))
 }
 
 /// What a stream being copied into an output *is* to the muxer, derived from

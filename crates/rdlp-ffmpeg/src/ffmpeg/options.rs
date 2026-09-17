@@ -99,9 +99,11 @@ impl RemuxOptions {
     /// The mux options for writing `target`, with the faststart decision taken
     /// from the container type.
     ///
-    /// The single constructor the remux, merge and thumbnail stages use, so
-    /// the faststart decision is observable in one test and cannot drift per
-    /// stage (#539: a stage-local string list once excluded `m4v`/`f4v`).
+    /// The single constructor for the pipeline stages that hold a
+    /// `ContainerFormat` (remux, merge, thumbnail), so the faststart decision
+    /// is observable in one test and cannot drift per stage (#539: a
+    /// stage-local string list once excluded `m4v`/`f4v`). Callers that hold
+    /// only an output path go through `faststart_for_output`.
     /// The muxer itself is chosen from the output path's extension by the
     /// remux/merge writers; a "force this format" field that nothing read
     /// was removed in #546.

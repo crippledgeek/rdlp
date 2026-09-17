@@ -26,7 +26,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Context as _;
-use log::debug;
+use log::{debug, warn};
 
 use crate::error::{PostProcessError, Result};
 
@@ -159,12 +159,35 @@ impl FFmpegRunner {
             .reduce(f64::min)
             .unwrap_or(0.0);
 
+        // SAFETY: `oformat` is set at context-alloc time and never changes;
+        // read once here for the cover decision below.
+        let oformat: *const ffmpeg_the_third::ffi::AVOutputFormat =
+            unsafe { (*octx.as_mut_ptr()).oformat };
+
         for (ist_index, ist) in ictx.streams().enumerate() {
-            let medium = ist.parameters().medium();
+            let kind = super::probe::StreamKind::of(&ist);
             if !matches!(
-                medium,
-                ffmpeg_the_third::media::Type::Video | ffmpeg_the_third::media::Type::Audio
+                kind,
+                super::probe::StreamKind::Video
+                    | super::probe::StreamKind::AttachedPicture
+                    | super::probe::StreamKind::Audio
             ) {
+                continue;
+            }
+            // A target that declares no video codec cannot carry the cover as
+            // a stream (wav, raw aac/ac3, …). Drop it — the outcome of
+            // `ffmpeg`'s default stream selection — rather than refusing the
+            // whole remux over artwork; `ThumbnailStage` can embed anew.
+            if kind == super::probe::StreamKind::AttachedPicture
+                && !super::ffi_helpers::oformat_can_carry_cover_image(
+                    oformat,
+                    ist.parameters().id().into(),
+                )
+            {
+                warn!(
+                    "remux: {} cannot carry the embedded cover art as a stream; dropping it",
+                    output.display()
+                );
                 continue;
             }
 

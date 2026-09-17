@@ -99,6 +99,20 @@ impl StreamKind {
     }
 }
 
+/// The first *real* video stream of an open input — [`StreamKind::Video`],
+/// never cover art — or `None`.
+///
+/// The replacement for `streams().best(Video)` wherever the question is
+/// "which stream do I decode/copy as the video": `av_find_best_stream` has no
+/// `ATTACHED_PIC` term (`libavformat/avformat.c`), so on an audio file with
+/// artwork it answers with the cover (#643).
+pub fn first_real_video_stream(
+    ictx: &ffmpeg_the_third::format::context::Input,
+) -> Option<ffmpeg_the_third::format::stream::Stream<'_>> {
+    ictx.streams()
+        .find(|ist| StreamKind::of(ist) == StreamKind::Video)
+}
+
 impl std::fmt::Display for StreamKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {

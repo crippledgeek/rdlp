@@ -145,6 +145,18 @@ fn rule_for(input_ext: &str, output: ContainerFormat) -> VideoRule {
     }
 }
 
+/// What [`RecodeStage::plan_route`] decided for a source with video.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RoutePlan {
+    /// Stream-copy every stream (`true`) or transcode the video (`false`).
+    can_remux: bool,
+    /// Copy the audio stream unchanged. `false` for a video-only source.
+    audio_copy: bool,
+    /// The audio encoder to run when not copying; `None` when copying or
+    /// when there is no audio.
+    audio_codec: Option<AudioEncoderName>,
+}
+
 /// An encoder whose output only one container can carry.
 ///
 /// Expressed as data rather than as a hardcoded condition so that the matching
@@ -210,6 +222,44 @@ impl RecodeStage {
     /// for how each rule is built.
     fn can_remux_video(input_ext: &str, output: ContainerFormat, video: &SourceVideo) -> bool {
         rule_for(input_ext, output).eval(video)
+    }
+
+    /// Decide the route for a source with video: remux (stream copy of
+    /// every stream) or transcode, and what happens to the audio either way.
+    ///
+    /// A remux copies the audio too, so it is only a remux when the audio
+    /// decision is *also* a copy: the video rule ([`Self::can_remux_video`])
+    /// and the audio rule ([`Self::resolve_audio_params`]) both have to say
+    /// so. Before this seam existed the remux path bypassed the audio rule —
+    /// VP9+AAC into `WebM` remuxed on the strength of the video alone and the
+    /// muxer then refused the AAC at header time, and an explicit
+    /// `--recode-audio` was silently ignored on that path. When the audio
+    /// needs re-encoding the whole conversion takes the transcode route
+    /// (`convert_video` has no copy-video/encode-audio shape), which is what
+    /// yt-dlp's recode does for every stream anyway.
+    ///
+    /// An explicitly requested video encoder always transcodes.
+    fn plan_route(
+        video_encoder: Option<&VideoEncoderName>,
+        input_ext: &str,
+        target: ContainerFormat,
+        video: &SourceVideo,
+        audio: &SourceAudio,
+        recode_audio: Option<&RecodeAudioMode>,
+    ) -> Result<RoutePlan, PostProcessError> {
+        let (audio_copy, audio_codec) = Self::resolve_audio_params(recode_audio, target, audio)?;
+        // A video-only source has no audio to copy, so `audio_copy` is
+        // `false` there — the same "+ none" truthfulness `encoding_tool`
+        // relies on — and that must not veto the remux.
+        let audio_allows_remux = !audio.is_present() || (audio_copy && audio_codec.is_none());
+        let can_remux = video_encoder.is_none()
+            && Self::can_remux_video(input_ext, target, video)
+            && audio_allows_remux;
+        Ok(RoutePlan {
+            can_remux,
+            audio_copy,
+            audio_codec,
+        })
     }
 
     /// The audio mode this run should use. `None` is "not specified": copy
@@ -633,36 +683,31 @@ impl PipelineStage for RecodeStage {
             return recode_audio_only::recode_audio_only(&self.ffmpeg, msg, target, &audio).await;
         }
 
-        // When a video encoder is explicitly requested, always transcode — never remux
-        let can_remux = video_encoder.is_none() && Self::can_remux_video(input_ext, target, &video);
+        let recode_audio = Self::resolve_recode_audio_mode(&msg);
+        let RoutePlan {
+            can_remux,
+            audio_copy,
+            audio_codec,
+        } = match Self::plan_route(
+            video_encoder,
+            input_ext,
+            target,
+            &video,
+            &audio,
+            recode_audio.as_ref(),
+        ) {
+            Ok(plan) => plan,
+            Err(e) => {
+                keep_download_on_policy_refusal(&e, &mut msg, "RecodeStage");
+                return Err(anyhow::Error::new(e).context("recode stage failed"));
+            }
+        };
 
         if can_remux {
             debug!("RecodeStage: remuxing (stream copy)");
         } else {
             debug!("RecodeStage: transcoding video");
         }
-
-        let recode_audio = Self::resolve_recode_audio_mode(&msg);
-
-        // Derive audio_copy / audio_codec from the resolved mode. Remux
-        // stream-copies unconditionally when there IS an audio stream to
-        // copy (no re-encoding needed); a video-only source has no audio
-        // stream to copy, so `audio_copy` must be `false`, not a true claim
-        // with nothing behind it — the same "+ none" truthfulness fix
-        // `resolve_audio_params` already applies to the transcode path
-        // (`23c344a7`), extended to remux so `encoding_tool` never stamps a
-        // false "+ copy" for a video-only remux.
-        let (audio_copy, audio_codec) = if can_remux {
-            (media_info.has_audio, None)
-        } else {
-            match Self::resolve_audio_params(recode_audio.as_ref(), target, &audio) {
-                Ok(params) => params,
-                Err(e) => {
-                    keep_download_on_policy_refusal(&e, &mut msg, "RecodeStage");
-                    return Err(anyhow::Error::new(e).context("recode stage failed"));
-                }
-            }
-        };
 
         let output_path = msg.tracker.temp_path(&input_file, target_ext);
 
@@ -1105,6 +1150,75 @@ mod tests {
         );
         assert_eq!(resolve(true, Some(RecodeAudioMode::Auto)), None);
         assert_eq!(resolve(true, Some(audio_request("libopus"))), None);
+    }
+
+    /// The remux fast path must not bypass the audio rule. VP9+AAC in MP4
+    /// (what `bv+ba` pairing commonly yields) into `WebM`: the video rule says
+    /// remux, but `WebM` cannot carry AAC — so unspecified audio re-encodes
+    /// and the route is a transcode, and an explicit copy is refused as a
+    /// policy refusal (not the muxer's raw header error). H.264+AAC into MP4
+    /// carries both and stays a remux.
+    #[test]
+    fn remux_is_only_a_remux_when_the_audio_rule_also_copies() {
+        rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
+        let vp9 = video_codec("vp9");
+        let aac: SourceAudio = Source::from_probe(true, Some(CodecName::from_static("aac")));
+
+        let plan = RecodeStage::plan_route(None, "mp4", ContainerFormat::WebM, &vp9, &aac, None)
+            .expect("unspecified audio re-encodes rather than failing");
+        assert!(
+            !plan.can_remux,
+            "webm cannot carry aac, so this is not a remux: {plan:?}"
+        );
+        assert!(!plan.audio_copy && plan.audio_codec.is_some(), "{plan:?}");
+
+        let err = RecodeStage::plan_route(
+            None,
+            "mp4",
+            ContainerFormat::WebM,
+            &vp9,
+            &aac,
+            Some(&RecodeAudioMode::Copy),
+        )
+        .expect_err("an explicit copy of aac into webm is refused before any mux");
+        assert!(err.is_policy_refusal(), "{err:?}");
+
+        let plan = RecodeStage::plan_route(
+            None,
+            "mkv",
+            ContainerFormat::Mp4,
+            &video_codec("h264"),
+            &aac,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            plan,
+            RoutePlan {
+                can_remux: true,
+                audio_copy: true,
+                audio_codec: None
+            }
+        );
+
+        // A video-only source: no audio to veto the remux.
+        let plan = RecodeStage::plan_route(
+            None,
+            "mkv",
+            ContainerFormat::Mp4,
+            &video_codec("h264"),
+            &audio_absent(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            plan,
+            RoutePlan {
+                can_remux: true,
+                audio_copy: false,
+                audio_codec: None
+            }
+        );
     }
 
     /// #645: `None` and `Some(Copy)` are different requests once the copy is

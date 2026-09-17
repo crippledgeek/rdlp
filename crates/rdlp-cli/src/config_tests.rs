@@ -1043,7 +1043,7 @@ fn test_merge_config_recode_audio_unknown_name_is_refused_at_the_boundary() {
         .expect_err("an unknown name must not merge");
     let msg = format!("{err:#}");
     assert!(
-        msg.contains("--recode-audio") && msg.contains("definitely_not_an_encoder_xyz"),
+        msg.contains("recode audio") && msg.contains("definitely_not_an_encoder_xyz"),
         "{msg}"
     );
 }

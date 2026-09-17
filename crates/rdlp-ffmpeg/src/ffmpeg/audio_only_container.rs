@@ -46,7 +46,6 @@ use std::path::Path;
 use rdlp_types::ContainerFormat;
 
 use crate::error::PostProcessError;
-use crate::ffmpeg::probe::StreamKind;
 
 /// The video-capable container to point a user at when their remux target is
 /// one rdlp treats as audio-only — `None` for every container rdlp will
@@ -156,8 +155,7 @@ pub const fn video_alternative_for(container: ContainerFormat) -> Option<Contain
 /// (the same one `add_stream_copy` carries on the write side). See the module
 /// doc on why an input-controlled flag is sufficient here.
 fn first_real_video_codec(ictx: &ffmpeg_the_third::format::context::Input) -> Option<String> {
-    ictx.streams()
-        .find(|ist| StreamKind::of(ist) == StreamKind::Video)
+    crate::ffmpeg::probe::first_real_video_stream(ictx)
         .map(|ist| ist.parameters().id().name().to_string())
 }
 
