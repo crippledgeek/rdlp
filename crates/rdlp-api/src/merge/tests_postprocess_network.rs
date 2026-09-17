@@ -1,6 +1,7 @@
 //! Tests for `PostProcessOptions` and `NetworkOptions` merge overrides
 
 use super::*;
+use rdlp_types::LoudnormPreset;
 use std::path::PathBuf;
 
 // --- PostProcessOptions ---
@@ -196,27 +197,55 @@ fn test_postprocess_some_overrides_loudnorm() {
 #[test]
 fn test_postprocess_none_preserves_loudnorm_preset() {
     let mut config = Config::default();
-    config.postprocess.loudnorm_preset = Some("broadcast".into());
+    config.postprocess.loudnorm_preset = Some(LoudnormPreset::Broadcast);
     let opts = PostProcessOptions::default();
     opts.merge_into(&mut config);
     assert_eq!(
-        config.postprocess.loudnorm_preset.as_deref(),
-        Some("broadcast")
+        config.postprocess.loudnorm_preset,
+        Some(LoudnormPreset::Broadcast)
     );
 }
 
 #[test]
 fn test_postprocess_some_overrides_loudnorm_preset() {
     let mut config = Config::default();
-    config.postprocess.loudnorm_preset = Some("broadcast".into());
+    config.postprocess.loudnorm_preset = Some(LoudnormPreset::Broadcast);
     let opts = PostProcessOptions {
-        loudnorm_preset: Some("streaming".into()),
+        loudnorm_preset: Some(LoudnormPreset::Streaming),
         ..PostProcessOptions::default()
     };
     opts.merge_into(&mut config);
     assert_eq!(
-        config.postprocess.loudnorm_preset.as_deref(),
-        Some("streaming")
+        config.postprocess.loudnorm_preset,
+        Some(LoudnormPreset::Streaming)
+    );
+}
+
+#[test]
+fn test_postprocess_none_preserves_audio_gain_target() {
+    let mut config = Config::default();
+    config.postprocess.audio_gain_target = Some(-3.0);
+    let opts = PostProcessOptions::default();
+    opts.merge_into(&mut config);
+    assert_eq!(config.postprocess.audio_gain_target, Some(-3.0));
+}
+
+/// The desktop's "Peak Target (dBFS)" control reaches the engine through this
+/// field. It used to have no path at all — the only place it was read was a
+/// fallback that reused it as the limiter-boost GAIN, a unit confusion (#611).
+#[test]
+fn test_postprocess_some_overrides_audio_gain_target() {
+    let mut config = Config::default();
+    config.postprocess.audio_gain_target = Some(-3.0);
+    let opts = PostProcessOptions {
+        audio_gain_target: Some(-0.5),
+        ..PostProcessOptions::default()
+    };
+    opts.merge_into(&mut config);
+    assert_eq!(config.postprocess.audio_gain_target, Some(-0.5));
+    assert!(
+        config.postprocess.normalize_boost_db.is_none(),
+        "a peak target must never leak into the boost gain"
     );
 }
 

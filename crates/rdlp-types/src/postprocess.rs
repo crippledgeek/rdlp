@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::audio_format::AudioFormat;
 use crate::container::ContainerFormat;
 use crate::fixup_policy::FixupPolicy;
+use crate::loudnorm_preset::LoudnormPreset;
 use crate::media_name::VideoEncoderName;
 use crate::recode_audio_mode::RecodeAudioMode;
 use crate::vpx_deadline::VpxDeadline;
@@ -157,15 +158,22 @@ pub struct PostProcess {
     pub normalize_audio: bool,
     /// Apply EBU R128 loudness normalisation (loudnorm filter).
     pub loudnorm: bool,
-    /// Peak level target in dBFS (e.g. `-1.0`).
+    /// Peak level target in dBFS. `None` = inherit
+    /// [`EffectiveNormalize::PEAK_TARGET_DB`](crate::EffectiveNormalize::PEAK_TARGET_DB);
+    /// resolved by [`Self::effective_normalize`].
     pub audio_gain_target: Option<f64>,
-    /// Named loudnorm preset (e.g. `"streaming"`, `"broadcast"`).
-    pub loudnorm_preset: Option<String>,
-    /// Loudnorm integrated loudness target (LUFS, e.g. `-14.0`).
+    /// Loudnorm preset. `None` = inherit [`LoudnormPreset::default()`];
+    /// resolved by [`Self::effective_normalize`]. Wire form is the lowercase
+    /// name (`"streaming"`), case-insensitive on the way in.
+    pub loudnorm_preset: Option<LoudnormPreset>,
+    /// Loudnorm integrated loudness target (LUFS). `None` = inherit the
+    /// resolved preset's [`targets`](LoudnormPreset::targets).
     pub loudnorm_target_i: Option<f64>,
-    /// Loudnorm true peak target (dBTP, e.g. `-1.0`).
+    /// Loudnorm true peak target (dBTP). `None` = inherit the resolved
+    /// preset's [`targets`](LoudnormPreset::targets).
     pub loudnorm_target_tp: Option<f64>,
-    /// Loudnorm loudness range target (LU, e.g. `7.0`).
+    /// Loudnorm loudness range target (LU). `None` = inherit the resolved
+    /// preset's [`targets`](LoudnormPreset::targets).
     pub loudnorm_target_lra: Option<f64>,
     /// Use dynamic (two-pass) loudnorm mode.
     pub loudnorm_dynamic: bool,
@@ -173,7 +181,9 @@ pub struct PostProcess {
     pub loudnorm_precompress: bool,
     /// Apply a limiter-boost normalisation fallback.
     pub normalize_boost: bool,
-    /// Gain applied by the limiter-boost stage (dB).
+    /// Gain applied by the limiter-boost stage (dB). `None` = inherit
+    /// [`EffectiveNormalize::BOOST_GAIN_DB`](crate::EffectiveNormalize::BOOST_GAIN_DB);
+    /// resolved by [`Self::effective_normalize`].
     pub normalize_boost_db: Option<f64>,
     /// `FFmpeg` encoder name for the video stream (e.g. `"libx265"`).
     ///
@@ -308,9 +318,105 @@ impl Default for PostProcess {
 }
 
 #[cfg(test)]
-#[allow(clippy::field_reassign_with_default)]
+// float_cmp: `effective_normalize` propagates constants unchanged, so exact
+// equality is the oracle; an epsilon would accept a drifted value.
+#[allow(clippy::field_reassign_with_default, clippy::float_cmp)]
 mod tests {
     use super::*;
+    use crate::effective_normalize::EffectiveNormalize;
+    use crate::loudnorm_preset::LoudnormPreset;
+
+    // --- effective_normalize: the single resolution step (#611) ---
+    //
+    // Every literal here is a TEST ORACLE for the owner's value; production
+    // code compares against `EffectiveNormalize::PEAK_TARGET_DB` /
+    // `BOOST_GAIN_DB` / `LoudnormPreset::targets()`, never a copy.
+
+    #[test]
+    fn effective_normalize_of_default_is_streaming_plus_the_two_consts() {
+        let eff = PostProcess::default().effective_normalize();
+        assert_eq!(eff.preset, LoudnormPreset::Streaming);
+        let targets = LoudnormPreset::Streaming.targets();
+        assert_eq!(eff.target_i, targets.integrated_lufs);
+        assert_eq!(eff.target_tp, targets.true_peak_dbtp);
+        assert_eq!(eff.target_lra, targets.range_lu);
+        assert_eq!(eff.peak_target_db, EffectiveNormalize::PEAK_TARGET_DB);
+        assert_eq!(eff.boost_gain_db, EffectiveNormalize::BOOST_GAIN_DB);
+    }
+
+    /// An unset preset resolves to `Loud`'s own targets when the preset is
+    /// `Loud` — the I/TP/LRA defaults are preset-dependent, which is the bug
+    /// the desktop's Streaming-only placeholders had.
+    #[test]
+    fn effective_normalize_unset_targets_follow_the_chosen_preset() {
+        for preset in [
+            LoudnormPreset::Broadcast,
+            LoudnormPreset::Streaming,
+            LoudnormPreset::Loud,
+        ] {
+            let eff = PostProcess {
+                loudnorm_preset: Some(preset),
+                ..PostProcess::default()
+            }
+            .effective_normalize();
+            let targets = preset.targets();
+            assert_eq!(eff.preset, preset);
+            assert_eq!(eff.target_i, targets.integrated_lufs, "{preset:?}");
+            assert_eq!(eff.target_tp, targets.true_peak_dbtp, "{preset:?}");
+            assert_eq!(eff.target_lra, targets.range_lu, "{preset:?}");
+        }
+        let loud = PostProcess {
+            loudnorm_preset: Some(LoudnormPreset::Loud),
+            ..PostProcess::default()
+        }
+        .effective_normalize();
+        assert_eq!(
+            (loud.target_i, loud.target_tp, loud.target_lra),
+            (-11.0, -1.0, 11.0)
+        );
+    }
+
+    /// Each `Some` overrides exactly its own field; the others keep the
+    /// preset's / the owner's value.
+    #[test]
+    fn effective_normalize_some_overrides_only_its_own_field() {
+        let eff = PostProcess {
+            loudnorm_preset: Some(LoudnormPreset::Broadcast),
+            loudnorm_target_i: Some(-16.0),
+            loudnorm_target_tp: Some(-1.5),
+            audio_gain_target: Some(-3.0),
+            normalize_boost_db: Some(8.0),
+            ..PostProcess::default()
+        }
+        .effective_normalize();
+        assert_eq!(eff.preset, LoudnormPreset::Broadcast);
+        assert_eq!(eff.target_i, -16.0);
+        assert_eq!(eff.target_tp, -1.5);
+        assert_eq!(
+            eff.target_lra,
+            LoudnormPreset::Broadcast.targets().range_lu,
+            "LRA was not overridden, so it stays the preset's"
+        );
+        assert_eq!(eff.peak_target_db, -3.0);
+        assert_eq!(eff.boost_gain_db, 8.0);
+    }
+
+    /// The preset field keeps its historical lowercase wire form in
+    /// `config.toml`; typing it must not move the spelling.
+    #[test]
+    fn loudnorm_preset_toml_wire_form_is_unchanged() {
+        let parsed: PostProcess = toml::from_str("loudnorm_preset = \"broadcast\"").unwrap();
+        assert_eq!(parsed.loudnorm_preset, Some(LoudnormPreset::Broadcast));
+        let written = toml::to_string(&parsed).unwrap();
+        assert!(
+            written.contains("loudnorm_preset = \"broadcast\""),
+            "wire form moved: {written}"
+        );
+        // Case-insensitive on the way in, like the CLI (#540 parity).
+        let upper: PostProcess = toml::from_str("loudnorm_preset = \"LOUD\"").unwrap();
+        assert_eq!(upper.loudnorm_preset, Some(LoudnormPreset::Loud));
+        assert!(toml::from_str::<PostProcess>("loudnorm_preset = \"quiet\"").is_err());
+    }
 
     #[test]
     fn default_embed_thumbnail_is_true() {

@@ -7,7 +7,7 @@
 use std::path::{Component, PathBuf};
 
 use log::{info, warn};
-use rdlp_types::{AudioFormat, BrowserType, ContainerFormat, SubtitleFormat};
+use rdlp_types::{AudioFormat, BrowserType, ContainerFormat, LoudnormPreset, SubtitleFormat};
 use serde::{Deserialize, Serialize};
 
 /// Application settings that persist between sessions.
@@ -45,9 +45,10 @@ pub struct AppSettings {
     /// Use EBU R128 loudnorm normalization (implies `normalize_audio`).
     #[serde(default)]
     pub loudnorm: bool,
-    /// Loudnorm preset name ("streaming", "broadcast", "loud").
+    /// Loudnorm preset. `None` = inherit the engine's resolved preset
+    /// (`PostProcess::effective_normalize`); wire form is the lowercase name.
     #[serde(default)]
-    pub loudnorm_preset: Option<String>,
+    pub loudnorm_preset: Option<LoudnormPreset>,
     /// Custom target integrated loudness in LUFS (overrides preset).
     #[serde(default)]
     pub loudnorm_target_i: Option<f64>,
@@ -1101,7 +1102,7 @@ mod tests {
             default_search_provider: Some("pornhub".to_owned()),
             normalize_audio: true,
             loudnorm: true,
-            loudnorm_preset: Some("streaming".to_owned()),
+            loudnorm_preset: Some(LoudnormPreset::Streaming),
             loudnorm_target_i: Some(-14.0),
             loudnorm_target_tp: Some(-1.0),
             loudnorm_target_lra: Some(11.0),
@@ -1148,7 +1149,7 @@ mod tests {
         assert_eq!(restored.default_search_provider.as_deref(), Some("pornhub"));
         assert!(restored.normalize_audio);
         assert!(restored.loudnorm);
-        assert_eq!(restored.loudnorm_preset.as_deref(), Some("streaming"));
+        assert_eq!(restored.loudnorm_preset, Some(LoudnormPreset::Streaming));
         assert_eq!(restored.loudnorm_target_i, Some(-14.0));
         assert_eq!(restored.loudnorm_target_tp, Some(-1.0));
         assert_eq!(restored.loudnorm_target_lra, Some(11.0));

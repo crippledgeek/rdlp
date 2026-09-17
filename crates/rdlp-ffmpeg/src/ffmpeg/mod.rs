@@ -295,6 +295,9 @@ impl FFmpegRunner {
 }
 
 #[cfg(test)]
+// float_cmp: the defaults are constants propagated unchanged from their owner,
+// so exact equality is the oracle; an epsilon would accept a drifted value.
+#[allow(clippy::float_cmp)]
 mod tests {
     use super::*;
 
@@ -318,61 +321,25 @@ mod tests {
         assert!(flac.bitrate_range.is_none()); // Lossless
     }
 
+    /// The defaults are read from their owner, not restated (#611): the
+    /// preset targets from `LoudnormPreset::default()`, the peak target and
+    /// boost gain from `EffectiveNormalize`.
     #[test]
-    fn test_loudnorm_preset_from_str() {
-        assert_eq!(
-            "broadcast".parse::<LoudnormPreset>().unwrap(),
-            LoudnormPreset::Broadcast
-        );
-        assert_eq!(
-            "Streaming".parse::<LoudnormPreset>().unwrap(),
-            LoudnormPreset::Streaming
-        );
-        assert_eq!(
-            "LOUD".parse::<LoudnormPreset>().unwrap(),
-            LoudnormPreset::Loud
-        );
-        assert!("unknown".parse::<LoudnormPreset>().is_err());
-    }
-
-    #[test]
-    fn test_loudnorm_preset_display() {
-        assert_eq!(LoudnormPreset::Broadcast.to_string(), "broadcast");
-        assert_eq!(LoudnormPreset::Streaming.to_string(), "streaming");
-        assert_eq!(LoudnormPreset::Loud.to_string(), "loud");
-    }
-
-    #[test]
-    fn test_loudnorm_preset_targets() {
-        let (i, tp, lra) = LoudnormPreset::Broadcast.targets();
-        assert!((i - (-23.0)).abs() < f64::EPSILON);
-        assert!((tp - (-2.0)).abs() < f64::EPSILON);
-        assert!((lra - 7.0).abs() < f64::EPSILON);
-
-        let (i, tp, lra) = LoudnormPreset::Streaming.targets();
-        assert!((i - (-14.0)).abs() < f64::EPSILON);
-        assert!((tp - (-1.0)).abs() < f64::EPSILON);
-        assert!((lra - 11.0).abs() < f64::EPSILON);
-
-        let (i, tp, lra) = LoudnormPreset::Loud.targets();
-        assert!((i - (-11.0)).abs() < f64::EPSILON);
-        assert!((tp - (-1.0)).abs() < f64::EPSILON);
-        assert!((lra - 11.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn test_normalize_options_default_uses_streaming() {
+    fn test_normalize_options_default_reads_the_owner() {
         let opts = NormalizeOptions::default();
-        assert!((opts.target_i - (-14.0)).abs() < f64::EPSILON);
-        assert!((opts.target_tp - (-1.0)).abs() < f64::EPSILON);
-        assert!((opts.target_lra - 11.0).abs() < f64::EPSILON);
-    }
-
-    #[test]
-    fn test_normalize_options_default_boost_disabled() {
-        let opts = NormalizeOptions::default();
+        let targets = LoudnormPreset::default().targets();
+        assert_eq!(opts.target_i, targets.integrated_lufs);
+        assert_eq!(opts.target_tp, targets.true_peak_dbtp);
+        assert_eq!(opts.target_lra, targets.range_lu);
+        assert_eq!(
+            opts.target_peak_db,
+            rdlp_types::EffectiveNormalize::PEAK_TARGET_DB
+        );
         assert!(!opts.boost_enabled);
-        assert!((opts.boost_gain_db - 12.0).abs() < f64::EPSILON);
+        assert_eq!(
+            opts.boost_gain_db,
+            rdlp_types::EffectiveNormalize::BOOST_GAIN_DB
+        );
     }
 
     #[test]

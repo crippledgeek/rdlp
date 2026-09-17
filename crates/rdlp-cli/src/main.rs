@@ -7,6 +7,7 @@
 //! Command-line interface for rdlp (Rust Download Program).
 
 mod args;
+mod args_help;
 mod commands;
 // Must stay private and absent from `lib.rs`. `merge_config` trusts that its
 // `Args` came from clap, which is where blank-value rejection now lives (#540);

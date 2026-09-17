@@ -21,7 +21,9 @@ use rdlp_api::request::{
     SubtitleOptions,
 };
 use rdlp_types::boundary::{Action, Subject};
-use rdlp_types::{AudioFormat, BrowserType, ContainerFormat, RecodeAudioMode, VideoEncoderName};
+use rdlp_types::{
+    AudioFormat, BrowserType, ContainerFormat, LoudnormPreset, RecodeAudioMode, VideoEncoderName,
+};
 
 /// Frontend-supplied download options.
 ///
@@ -62,7 +64,7 @@ pub struct DownloadOptions {
     /// Use EBU R128 loudnorm mode. `None` = use settings default.
     pub loudnorm: Option<bool>,
     /// Loudnorm preset override. `None` = use settings default.
-    pub loudnorm_preset: Option<String>,
+    pub loudnorm_preset: Option<LoudnormPreset>,
     /// Custom LUFS target. `None` = use settings default.
     pub loudnorm_target_i: Option<f64>,
     /// Custom dBTP target. `None` = use settings default.
@@ -79,7 +81,7 @@ pub struct DownloadOptions {
     pub normalize_boost_db: Option<f64>,
     /// Write (keep) thumbnail as a separate file. `None` = use settings default.
     pub write_thumbnail: Option<bool>,
-    /// Additional gain in dB applied on top of normalization. `None` = use settings default.
+    /// Peak-mode target level in dBFS. `None` = use settings default.
     pub audio_gain_target: Option<f64>,
     /// Browser to extract cookies from. `None` = use settings default.
     pub cookies_from_browser: Option<BrowserType>,
@@ -217,6 +219,47 @@ fn build_subtitle_options(
         strict_subs: Some(settings.strict_subs),
         verify_sub_urls: Some(settings.verify_sub_urls),
         retry_subs: Some(settings.retry_subs),
+    }
+}
+
+/// Merge the per-download normalization options over the app-settings defaults.
+///
+/// The ONE place this overlay is spelled (#611): `start_download` builds its
+/// `PostProcessOptions` from this, and the tests drive this same function, so
+/// the two cannot diverge — which they had: an inline copy in `start_download`
+/// additionally fell `normalize_boost_db` back to `audio_gain_target`, reusing
+/// a dBFS *peak target* as a dB *boost gain*. That coupling is gone; the peak
+/// target now travels as `audio_gain_target`, the field that means it.
+///
+/// `bool` fields collapse with `unwrap_or` (the settings value is a concrete
+/// bool); `Option` fields stay `Option` via `or`, so a value unset in both
+/// layers stays *unset* and the engine's `PostProcess::effective_normalize`
+/// supplies the default — the desktop holds no copy of it.
+fn merge_normalize_options(
+    options: &DownloadOptions,
+    settings: &crate::state::AppSettings,
+) -> PostProcessOptions {
+    PostProcessOptions {
+        normalize_audio: Some(options.normalize_audio.unwrap_or(settings.normalize_audio)),
+        loudnorm: Some(options.loudnorm.unwrap_or(settings.loudnorm)),
+        audio_gain_target: options.audio_gain_target.or(settings.audio_gain_target),
+        loudnorm_preset: options.loudnorm_preset.or(settings.loudnorm_preset),
+        loudnorm_target_i: options.loudnorm_target_i.or(settings.loudnorm_target_i),
+        loudnorm_target_tp: options.loudnorm_target_tp.or(settings.loudnorm_target_tp),
+        loudnorm_target_lra: options.loudnorm_target_lra.or(settings.loudnorm_target_lra),
+        loudnorm_dynamic: Some(
+            options
+                .loudnorm_dynamic
+                .unwrap_or(settings.loudnorm_dynamic),
+        ),
+        loudnorm_precompress: Some(
+            options
+                .loudnorm_precompress
+                .unwrap_or(settings.loudnorm_precompress),
+        ),
+        normalize_boost: Some(options.normalize_boost.unwrap_or(settings.normalize_boost)),
+        normalize_boost_db: options.normalize_boost_db.or(settings.normalize_boost_db),
+        ..PostProcessOptions::default()
     }
 }
 
@@ -364,6 +407,9 @@ pub async fn start_download(
     // field with a non-`Copy` type is moved out below).
     let network_options = build_network_options(&options, &settings)?;
 
+    // Normalization overlay — the single resolver; see its doc.
+    let normalize_options = merge_normalize_options(&options, &settings);
+
     // Build the download request from options + settings
     let output_dir = options
         .output_dir
@@ -424,30 +470,7 @@ pub async fn start_download(
             embed_thumbnail: Some(options.embed_thumbnail),
             embed_metadata: Some(settings.embed_metadata),
             write_thumbnail: write_thumbnail_resolved.then_some(true),
-            normalize_audio: Some(options.normalize_audio.unwrap_or(settings.normalize_audio)),
-            loudnorm: Some(options.loudnorm.unwrap_or(settings.loudnorm)),
-            loudnorm_preset: options
-                .loudnorm_preset
-                .or_else(|| settings.loudnorm_preset.clone()),
-            loudnorm_target_i: options.loudnorm_target_i.or(settings.loudnorm_target_i),
-            loudnorm_target_tp: options.loudnorm_target_tp.or(settings.loudnorm_target_tp),
-            loudnorm_target_lra: options.loudnorm_target_lra.or(settings.loudnorm_target_lra),
-            loudnorm_dynamic: Some(
-                options
-                    .loudnorm_dynamic
-                    .unwrap_or(settings.loudnorm_dynamic),
-            ),
-            loudnorm_precompress: Some(
-                options
-                    .loudnorm_precompress
-                    .unwrap_or(settings.loudnorm_precompress),
-            ),
-            normalize_boost: Some(options.normalize_boost.unwrap_or(settings.normalize_boost)),
-            normalize_boost_db: options
-                .normalize_boost_db
-                .or(settings.normalize_boost_db)
-                .or_else(|| options.audio_gain_target.or(settings.audio_gain_target)),
-            ..PostProcessOptions::default()
+            ..normalize_options
         },
         network: network_options,
         verbose: if options.verbose.unwrap_or(settings.verbose) {
@@ -556,57 +579,13 @@ pub async fn start_download(
 
 #[cfg(test)]
 mod tests {
-    //! Tests for the normalization option merge logic in [`start_download`].
-    //!
-    //! Because `start_download` is an async Tauri command that requires
-    //! managed `State` and `AppHandle`, it cannot be called directly in
-    //! unit tests.  Instead, the merge pattern is replicated here in
-    //! [`merge_normalize_options`] so the semantics can be verified in
-    //! isolation.
+    //! `start_download` is an async Tauri command needing managed `State`
+    //! and an `AppHandle`, so it is not called here; the option builders it
+    //! composes (`merge_normalize_options`, `build_network_options`, ...)
+    //! are driven directly instead.
 
     use super::*;
     use crate::state::AppSettings;
-
-    /// Replicates the normalization-field merge from `start_download`
-    /// (the `postprocess` block) for isolated testing.
-    ///
-    /// # Arguments
-    ///
-    /// * `options` - Frontend-supplied download options.
-    /// * `settings` - Persisted application settings used as defaults.
-    ///
-    /// # Returns
-    ///
-    /// A [`PostProcessOptions`] with every normalization field resolved.
-    fn merge_normalize_options(
-        options: &DownloadOptions,
-        settings: &AppSettings,
-    ) -> PostProcessOptions {
-        PostProcessOptions {
-            normalize_audio: Some(options.normalize_audio.unwrap_or(settings.normalize_audio)),
-            loudnorm: Some(options.loudnorm.unwrap_or(settings.loudnorm)),
-            loudnorm_preset: options
-                .loudnorm_preset
-                .clone()
-                .or_else(|| settings.loudnorm_preset.clone()),
-            loudnorm_target_i: options.loudnorm_target_i.or(settings.loudnorm_target_i),
-            loudnorm_target_tp: options.loudnorm_target_tp.or(settings.loudnorm_target_tp),
-            loudnorm_target_lra: options.loudnorm_target_lra.or(settings.loudnorm_target_lra),
-            loudnorm_dynamic: Some(
-                options
-                    .loudnorm_dynamic
-                    .unwrap_or(settings.loudnorm_dynamic),
-            ),
-            loudnorm_precompress: Some(
-                options
-                    .loudnorm_precompress
-                    .unwrap_or(settings.loudnorm_precompress),
-            ),
-            normalize_boost: Some(options.normalize_boost.unwrap_or(settings.normalize_boost)),
-            normalize_boost_db: options.normalize_boost_db.or(settings.normalize_boost_db),
-            ..PostProcessOptions::default()
-        }
-    }
 
     /// Build a [`DownloadOptions`] with all normalization fields set to `None`.
     fn default_download_options() -> DownloadOptions {
@@ -734,7 +713,7 @@ mod tests {
         let settings = AppSettings {
             normalize_audio: true,
             loudnorm: true,
-            loudnorm_preset: Some("broadcast".to_owned()),
+            loudnorm_preset: Some(LoudnormPreset::Broadcast),
             loudnorm_target_i: Some(-23.0),
             loudnorm_target_tp: Some(-2.0),
             loudnorm_target_lra: Some(7.0),
@@ -749,7 +728,7 @@ mod tests {
 
         assert_eq!(result.normalize_audio, Some(true));
         assert_eq!(result.loudnorm, Some(true));
-        assert_eq!(result.loudnorm_preset.as_deref(), Some("broadcast"));
+        assert_eq!(result.loudnorm_preset, Some(LoudnormPreset::Broadcast));
         assert_eq!(result.loudnorm_target_i, Some(-23.0));
         assert_eq!(result.loudnorm_target_tp, Some(-2.0));
         assert_eq!(result.loudnorm_target_lra, Some(7.0));
@@ -769,7 +748,7 @@ mod tests {
         let settings = AppSettings {
             normalize_audio: true,
             loudnorm: true,
-            loudnorm_preset: Some("broadcast".to_owned()),
+            loudnorm_preset: Some(LoudnormPreset::Broadcast),
             loudnorm_target_i: Some(-23.0),
             loudnorm_target_tp: Some(-2.0),
             loudnorm_target_lra: Some(7.0),
@@ -782,7 +761,7 @@ mod tests {
         let options = DownloadOptions {
             normalize_audio: Some(false),
             loudnorm: Some(false),
-            loudnorm_preset: Some("streaming".to_owned()),
+            loudnorm_preset: Some(LoudnormPreset::Streaming),
             loudnorm_target_i: Some(-14.0),
             loudnorm_target_tp: Some(-1.0),
             loudnorm_target_lra: Some(11.0),
@@ -796,7 +775,7 @@ mod tests {
 
         assert_eq!(result.normalize_audio, Some(false));
         assert_eq!(result.loudnorm, Some(false));
-        assert_eq!(result.loudnorm_preset.as_deref(), Some("streaming"));
+        assert_eq!(result.loudnorm_preset, Some(LoudnormPreset::Streaming));
         assert_eq!(result.loudnorm_target_i, Some(-14.0));
         assert_eq!(result.loudnorm_target_tp, Some(-1.0));
         assert_eq!(result.loudnorm_target_lra, Some(11.0));
@@ -817,7 +796,7 @@ mod tests {
         let settings = AppSettings {
             normalize_audio: false,
             loudnorm: true,
-            loudnorm_preset: Some("broadcast".to_owned()),
+            loudnorm_preset: Some(LoudnormPreset::Broadcast),
             loudnorm_target_i: Some(-23.0),
             loudnorm_dynamic: false,
             ..AppSettings::default()
@@ -837,7 +816,7 @@ mod tests {
 
         // Fields that fall through to settings
         assert_eq!(result.loudnorm, Some(true));
-        assert_eq!(result.loudnorm_preset.as_deref(), Some("broadcast"));
+        assert_eq!(result.loudnorm_preset, Some(LoudnormPreset::Broadcast));
         assert_eq!(result.loudnorm_dynamic, Some(false));
     }
 
@@ -892,6 +871,40 @@ mod tests {
         assert!(result.loudnorm_target_i.is_none());
         assert!(result.loudnorm_target_tp.is_none());
         assert!(result.loudnorm_target_lra.is_none());
+        assert!(result.normalize_boost_db.is_none());
+    }
+
+    // ------------------------------------------------------------------ //
+    // E2. The peak target is its own field; it is NOT a boost gain (#611)
+    // ------------------------------------------------------------------ //
+
+    /// `audio_gain_target` (dBFS peak target) must reach the engine as
+    /// `audio_gain_target`, and must NEVER be reused as `normalize_boost_db`
+    /// (a dB gain) — which is what `start_download`'s deleted inline overlay
+    /// did as a fallback. Fails against that overlay: it yielded
+    /// `normalize_boost_db = Some(-1.5)` here.
+    #[test]
+    fn test_merge_peak_target_is_forwarded_and_never_becomes_boost_gain() {
+        let settings = AppSettings {
+            audio_gain_target: Some(-1.5),
+            normalize_boost_db: None,
+            ..AppSettings::default()
+        };
+        let options = default_download_options();
+        let result = merge_normalize_options(&options, &settings);
+        assert_eq!(result.audio_gain_target, Some(-1.5));
+        assert!(
+            result.normalize_boost_db.is_none(),
+            "boost gain must stay unset so the engine's own default applies"
+        );
+
+        // Per-download peak target wins over the settings one.
+        let options = DownloadOptions {
+            audio_gain_target: Some(-0.5),
+            ..default_download_options()
+        };
+        let result = merge_normalize_options(&options, &settings);
+        assert_eq!(result.audio_gain_target, Some(-0.5));
         assert!(result.normalize_boost_db.is_none());
     }
 

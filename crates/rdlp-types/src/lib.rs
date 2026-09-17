@@ -31,6 +31,7 @@ pub mod browser_type;
 pub mod config;
 pub mod container;
 pub mod effective_network;
+pub mod effective_normalize;
 #[cfg(test)]
 mod enum_test_support;
 pub mod extractor_name;
@@ -38,6 +39,7 @@ pub mod fixup_policy;
 pub mod format;
 pub mod info_dict;
 pub mod log_targets;
+pub mod loudnorm_preset;
 pub mod match_filter;
 pub mod media_name;
 pub mod parse_error;
@@ -63,12 +65,14 @@ pub use browser_type::BrowserType;
 pub use config::{Config, ConfigValidationError};
 pub use container::ContainerFormat;
 pub use effective_network::EffectiveNetwork;
+pub use effective_normalize::EffectiveNormalize;
 pub use extractor_name::ExtractorName;
 pub use fixup_policy::FixupPolicy;
 pub use format::{
     Codec, Format, FormatSelectError, FormatSelector, FormatSorter, Fragment, format_select,
 };
 pub use info_dict::{Chapter, InfoDict, Subtitle, Thumbnail};
+pub use loudnorm_preset::{LoudnormPreset, LoudnormTargets};
 pub use media_name::{
     AudioCodecOrEncoderName, AudioEncoderName, CodecName, InvalidMediaName, Rfc6381Codec,
     VideoEncoderName,

@@ -4,7 +4,9 @@
 //! initiating a download. All types use typed enums from `rdlp-types`
 //! (re-exported through `rdlp-core`) instead of raw strings.
 
-use rdlp_types::{AudioFormat, BrowserType, ContainerFormat, SubtitleFormat, VideoEncoderName};
+use rdlp_types::{
+    AudioFormat, BrowserType, ContainerFormat, LoudnormPreset, SubtitleFormat, VideoEncoderName,
+};
 use std::path::PathBuf;
 
 /// Top-level request for initiating a download.
@@ -191,8 +193,10 @@ pub struct PostProcessOptions {
     pub normalize_audio: Option<bool>,
     /// Apply EBU R128 loudness normalization (two-pass). `None` preserves base config.
     pub loudnorm: Option<bool>,
-    /// Loudness normalization preset name (e.g. `"streaming"`).
-    pub loudnorm_preset: Option<String>,
+    /// Peak-mode target level in dBFS. `None` preserves base config.
+    pub audio_gain_target: Option<f64>,
+    /// Loudness normalization preset. `None` preserves base config.
+    pub loudnorm_preset: Option<LoudnormPreset>,
     /// Target integrated loudness in LUFS. `None` preserves base config.
     pub loudnorm_target_i: Option<f64>,
     /// Target true peak in dBTP. `None` preserves base config.
@@ -333,6 +337,7 @@ mod tests {
         assert!(req.postprocess.write_thumbnail.is_none());
         assert!(req.postprocess.normalize_audio.is_none());
         assert!(req.postprocess.loudnorm.is_none());
+        assert!(req.postprocess.audio_gain_target.is_none());
         assert!(req.postprocess.loudnorm_preset.is_none());
         assert!(req.postprocess.loudnorm_target_i.is_none());
         assert!(req.postprocess.loudnorm_target_tp.is_none());
@@ -380,7 +385,7 @@ mod tests {
                 remux: Some(ContainerFormat::Mp4),
                 embed_metadata: Some(true),
                 loudnorm: Some(true),
-                loudnorm_preset: Some("streaming".into()),
+                loudnorm_preset: Some(LoudnormPreset::Streaming),
                 ..PostProcessOptions::default()
             },
             network: NetworkOptions {
@@ -428,8 +433,8 @@ mod tests {
         assert!(req.postprocess.normalize_audio.is_none());
         assert_eq!(req.postprocess.loudnorm, Some(true));
         assert_eq!(
-            req.postprocess.loudnorm_preset.as_deref(),
-            Some("streaming")
+            req.postprocess.loudnorm_preset,
+            Some(LoudnormPreset::Streaming)
         );
 
         // Network overrides
