@@ -523,11 +523,14 @@ const fn audio_default_for(container: ContainerFormat) -> ContainerDefault<Audio
         // declaration — better quality per bit, and Matroska carries Opus
         // without caveat.
         //
-        // Ogg: preserved as-is pending #623. `.ogg` conventionally means Ogg
-        // Vorbis (Xiph; RFC 7845 §9 recommends `.opus` for Opus), so this
-        // override is probably wrong for Ogg specifically — but changing it
-        // is a separate user-visible change.
-        ContainerFormat::Mkv | ContainerFormat::Mka | ContainerFormat::Ogg => {
+        // Ogg is deliberately NOT here (#623): `.ogg` "applies now for
+        // Vorbis I files only" (Xiph, MIME Types and File Extensions — kept
+        // for hardware players that treat `.ogg` as Vorbis), and RFC 7845 §9
+        // recommends `.opus` for Ogg Opus, which rdlp offers as
+        // `ContainerFormat::Opus`. So `.ogg` defers to the muxer's declared
+        // default, vorbis, like the #538 rule: the extension the user asked
+        // for wins over an internal preference.
+        ContainerFormat::Mkv | ContainerFormat::Mka => {
             ContainerDefault::new(Policy::Override(CodecName::OPUS))
         }
 
@@ -560,6 +563,7 @@ const fn audio_default_for(container: ContainerFormat) -> ContainerDefault<Audio
         | ContainerFormat::Mp3
         | ContainerFormat::Wav
         | ContainerFormat::Flac
+        | ContainerFormat::Ogg
         | ContainerFormat::Opus
         | ContainerFormat::Aac
         | ContainerFormat::Aiff
@@ -686,8 +690,28 @@ fn resolve_declared_codec(
         })
 }
 
+/// Test-only sugar shared by this crate's test modules: the selected
+/// encoder's name, or `None`. `MediaName` deliberately has no `Deref<str>`
+/// (see its module doc), so this explicit accessor replaces the
+/// `.as_ref().map(MediaName::as_str)` chain that every assertion repeated.
+#[cfg(test)]
+pub(crate) mod test_ext {
+    use rdlp_types::media_name::AudioEncoderName;
+
+    pub trait EncoderNameExt {
+        fn name(&self) -> Option<&str>;
+    }
+
+    impl EncoderNameExt for Option<AudioEncoderName> {
+        fn name(&self) -> Option<&str> {
+            self.as_ref().map(AudioEncoderName::as_str)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use super::test_ext::EncoderNameExt;
     use super::*;
 
     #[test]
@@ -728,18 +752,8 @@ mod tests {
     #[test]
     fn resolve_encoder_by_alias_pcm() {
         ensure_init_for_test();
-        assert_eq!(
-            resolve_audio_encoder("pcm")
-                .as_ref()
-                .map(rdlp_types::media_name::MediaName::as_str),
-            Some("pcm_s16le")
-        );
-        assert_eq!(
-            preferred_audio_encoder("pcm")
-                .as_ref()
-                .map(rdlp_types::media_name::MediaName::as_str),
-            Some("pcm_s16le")
-        );
+        assert_eq!(resolve_audio_encoder("pcm").name(), Some("pcm_s16le"));
+        assert_eq!(preferred_audio_encoder("pcm").name(), Some("pcm_s16le"));
     }
 
     #[test]
@@ -755,9 +769,7 @@ mod tests {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         if is_audio_encoder_available(&AudioEncoderName::from_static("libmp3lame")) {
             assert_eq!(
-                resolve_audio_encoder("libmp3lame")
-                    .as_ref()
-                    .map(rdlp_types::media_name::MediaName::as_str),
+                resolve_audio_encoder("libmp3lame").name(),
                 Some("libmp3lame")
             );
         } else {
@@ -817,7 +829,7 @@ mod tests {
     fn select_encoder_for_mp4_returns_aac() {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         let enc = select_audio_encoder_for_container(ContainerFormat::Mp4);
-        let enc = enc.as_ref().map(rdlp_types::media_name::MediaName::as_str);
+        let enc = enc.name();
         assert!(
             enc == Some("aac") || enc == Some("libfdk_aac"),
             "expected aac encoder for mp4, got {enc:?}"
@@ -854,9 +866,7 @@ mod tests {
         // unavailable branch of the iterator chain.
         if is_audio_encoder_available(&AudioEncoderName::from_static("libfdk_aac")) {
             assert_eq!(
-                resolve_audio_encoder("libfdk_aac")
-                    .as_ref()
-                    .map(rdlp_types::media_name::MediaName::as_str),
+                resolve_audio_encoder("libfdk_aac").name(),
                 Some("libfdk_aac")
             );
         } else {
@@ -874,22 +884,18 @@ mod tests {
     fn audio_only_containers_get_their_own_codec_not_aac() {
         ensure_init_for_test();
         let mp3 = select_audio_encoder_for_container(ContainerFormat::Mp3);
-        let mp3 = mp3.as_ref().map(rdlp_types::media_name::MediaName::as_str);
+        let mp3 = mp3.name();
         assert!(
             mp3 == Some("libmp3lame")
                 || !is_audio_encoder_available(&AudioEncoderName::from_static("libmp3lame")),
             "expected libmp3lame for .mp3 when available, got {mp3:?}"
         );
         assert_eq!(
-            select_audio_encoder_for_container(ContainerFormat::Flac)
-                .as_ref()
-                .map(rdlp_types::media_name::MediaName::as_str),
+            select_audio_encoder_for_container(ContainerFormat::Flac).name(),
             Some("flac")
         );
         assert_eq!(
-            select_audio_encoder_for_container(ContainerFormat::Wav)
-                .as_ref()
-                .map(rdlp_types::media_name::MediaName::as_str),
+            select_audio_encoder_for_container(ContainerFormat::Wav).name(),
             Some("pcm_s16le")
         );
     }
@@ -903,7 +909,7 @@ mod tests {
             ContainerFormat::Asf,
         ] {
             let enc = select_audio_encoder_for_container(c);
-            let enc = enc.as_ref().map(rdlp_types::media_name::MediaName::as_str);
+            let enc = enc.name();
             assert!(
                 enc == Some("wmav2")
                     || !is_audio_encoder_available(&AudioEncoderName::from_static("wmav2")),
@@ -928,17 +934,13 @@ mod tests {
     /// actually available, since tier 3's AAC fallback is correct by design
     /// otherwise.
     #[test]
-    fn overrides_are_exactly_these_four() {
+    fn overrides_are_exactly_these_three() {
         use strum::IntoEnumIterator;
 
         ensure_init_for_test();
-        for c in [
-            ContainerFormat::Mkv,
-            ContainerFormat::Mka,
-            ContainerFormat::Ogg,
-        ] {
+        for c in [ContainerFormat::Mkv, ContainerFormat::Mka] {
             let enc = select_audio_encoder_for_container(c);
-            let enc = enc.as_ref().map(rdlp_types::media_name::MediaName::as_str);
+            let enc = enc.name();
             assert!(
                 enc == Some("libopus")
                     || !is_audio_encoder_available(&AudioEncoderName::from_static("libopus")),
@@ -947,9 +949,8 @@ mod tests {
         }
 
         let threegp = select_audio_encoder_for_container(ContainerFormat::ThreeGp);
-        let threegp = threegp
-            .as_ref()
-            .map(rdlp_types::media_name::MediaName::as_str);
+
+        let threegp = threegp.name();
         assert!(
             threegp == Some("aac") || threegp == Some("libfdk_aac"),
             "expected an aac-family encoder for 3gp, got {threegp:?}"
@@ -962,7 +963,6 @@ mod tests {
         let known_overrides = [
             ContainerFormat::Mkv,
             ContainerFormat::Mka,
-            ContainerFormat::Ogg,
             ContainerFormat::ThreeGp,
         ];
         for container in ContainerFormat::iter() {
@@ -971,8 +971,25 @@ mod tests {
                 is_override,
                 known_overrides.contains(&container),
                 "{container:?}: Policy::Override classification does not \
-                 match the known set of four overrides"
+                 match the known set of three overrides"
             );
+        }
+    }
+
+    /// #623: `.ogg` means Ogg Vorbis (Xiph; RFC 7845 §9 gives Opus its own
+    /// `.opus`), so its automatic default is the muxer's declared vorbis —
+    /// `libvorbis` when linked; the native `vorbis` encoder is experimental
+    /// (#625) and Ogg cannot carry the AAC fallback, so a build without
+    /// libvorbis refuses honestly rather than writing Opus into `.ogg`.
+    #[test]
+    fn ogg_defaults_to_vorbis_not_opus() {
+        ensure_init_for_test();
+        let enc = select_audio_encoder_for_container(ContainerFormat::Ogg);
+        let enc = enc.name();
+        if is_audio_encoder_available(&AudioEncoderName::from_static("libvorbis")) {
+            assert_eq!(enc, Some("libvorbis"));
+        } else {
+            assert_eq!(enc, None, "no libvorbis: refuse, never substitute opus/aac");
         }
     }
 
@@ -986,14 +1003,16 @@ mod tests {
         ensure_init_for_test();
 
         let ts = select_audio_encoder_for_container(ContainerFormat::Ts);
-        let ts = ts.as_ref().map(rdlp_types::media_name::MediaName::as_str);
+
+        let ts = ts.name();
         assert!(
             ts == Some("mp2") || !is_audio_encoder_available(&AudioEncoderName::from_static("mp2")),
             "expected mp2 for .ts when available, got {ts:?}"
         );
 
         let nut = select_audio_encoder_for_container(ContainerFormat::Nut);
-        let nut = nut.as_ref().map(rdlp_types::media_name::MediaName::as_str);
+
+        let nut = nut.name();
         assert!(
             nut == Some("libvorbis")
                 || !is_audio_encoder_available(&AudioEncoderName::from_static("libvorbis")),
@@ -1001,15 +1020,11 @@ mod tests {
         );
 
         assert_eq!(
-            select_audio_encoder_for_container(ContainerFormat::Ac3)
-                .as_ref()
-                .map(rdlp_types::media_name::MediaName::as_str),
+            select_audio_encoder_for_container(ContainerFormat::Ac3).name(),
             Some("ac3")
         );
         assert_eq!(
-            select_audio_encoder_for_container(ContainerFormat::Aiff)
-                .as_ref()
-                .map(rdlp_types::media_name::MediaName::as_str),
+            select_audio_encoder_for_container(ContainerFormat::Aiff).name(),
             Some("pcm_s16be")
         );
     }
@@ -1025,7 +1040,7 @@ mod tests {
             ContainerFormat::F4v,
         ] {
             let enc = select_audio_encoder_for_container(c);
-            let enc = enc.as_ref().map(rdlp_types::media_name::MediaName::as_str);
+            let enc = enc.name();
             assert!(
                 enc == Some("aac") || enc == Some("libfdk_aac"),
                 "expected an aac-family encoder for {c:?}, got {enc:?}"
@@ -1050,7 +1065,7 @@ mod tests {
             "precondition: this build's dca is the experimental native encoder"
         );
         let enc = resolve_declared_codec(&dts, ContainerFormat::Mkv);
-        let enc = enc.as_ref().map(rdlp_types::media_name::MediaName::as_str);
+        let enc = enc.name();
         assert!(
             enc == Some("aac") || enc == Some("libfdk_aac"),
             "expected the experimental dca to be skipped in favour of the AAC \
@@ -1064,10 +1079,7 @@ mod tests {
     fn explicit_resolution_still_returns_the_experimental_encoder() {
         ensure_init_for_test();
         let enc = resolve_audio_encoder("dts");
-        assert_eq!(
-            enc.as_ref().map(rdlp_types::media_name::MediaName::as_str),
-            Some("dca")
-        );
+        assert_eq!(enc.name(), Some("dca"));
     }
 
     /// A bogus codec name skips the preference table (tier 1) and the
@@ -1078,7 +1090,7 @@ mod tests {
         ensure_init_for_test();
         let bogus = CodecName::new("definitely_not_a_real_codec_xyz").expect("valid name");
         let enc = resolve_declared_codec(&bogus, ContainerFormat::Mp4);
-        let enc = enc.as_ref().map(rdlp_types::media_name::MediaName::as_str);
+        let enc = enc.name();
         assert!(
             enc == Some("aac") || enc == Some("libfdk_aac"),
             "expected tier 3 to fall back to an aac-family encoder, got {enc:?}"

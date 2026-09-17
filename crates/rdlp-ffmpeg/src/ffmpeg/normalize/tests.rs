@@ -2,6 +2,7 @@
 
 use super::super::{AudioNormMode, LoudnormMeasurements, NormalizeOptions};
 use super::helpers::*;
+use crate::ffmpeg::audio_encoder_registry::test_ext::EncoderNameExt;
 
 #[test]
 fn test_select_audio_encoder_for_container() {
@@ -20,7 +21,7 @@ fn test_select_audio_encoder_for_container() {
     // (verified against the linked build's `av_guess_codec`, not assumed).
     for c in [C::Mp4, C::M4a, C::Mov] {
         let enc = sel(c);
-        let enc = enc.as_ref().map(rdlp_types::media_name::MediaName::as_str);
+        let enc = enc.name();
         assert!(
             enc == Some("aac") || enc == Some("libfdk_aac"),
             "expected an aac-family encoder for {c:?}, got {enc:?}"
@@ -30,70 +31,26 @@ fn test_select_audio_encoder_for_container() {
     if is_audio_encoder_available(&rdlp_types::media_name::AudioEncoderName::from_static(
         "libopus",
     )) {
-        assert_eq!(
-            sel(C::WebM)
-                .as_ref()
-                .map(rdlp_types::media_name::MediaName::as_str),
-            Some("libopus")
-        );
-        assert_eq!(
-            sel(C::Mkv)
-                .as_ref()
-                .map(rdlp_types::media_name::MediaName::as_str),
-            Some("libopus")
-        );
-        assert_eq!(
-            sel(C::Ogg)
-                .as_ref()
-                .map(rdlp_types::media_name::MediaName::as_str),
-            Some("libopus")
-        );
+        assert_eq!(sel(C::WebM).name(), Some("libopus"));
+        assert_eq!(sel(C::Mkv).name(), Some("libopus"));
+        // #623: `.ogg` is Ogg Vorbis; the Opus override applies to Mkv/Mka only.
+        assert_eq!(sel(C::Ogg).name(), Some("libvorbis"));
     }
     if is_audio_encoder_available(&rdlp_types::media_name::AudioEncoderName::from_static(
         "libmp3lame",
     )) {
         // avi/flv/mp3 all declare (or, for .mp3, override to) the mp3 codec.
-        assert_eq!(
-            sel(C::Avi)
-                .as_ref()
-                .map(rdlp_types::media_name::MediaName::as_str),
-            Some("libmp3lame")
-        );
-        assert_eq!(
-            sel(C::Flv)
-                .as_ref()
-                .map(rdlp_types::media_name::MediaName::as_str),
-            Some("libmp3lame")
-        );
-        assert_eq!(
-            sel(C::Mp3)
-                .as_ref()
-                .map(rdlp_types::media_name::MediaName::as_str),
-            Some("libmp3lame")
-        );
+        assert_eq!(sel(C::Avi).name(), Some("libmp3lame"));
+        assert_eq!(sel(C::Flv).name(), Some("libmp3lame"));
+        assert_eq!(sel(C::Mp3).name(), Some("libmp3lame"));
     }
     if is_audio_encoder_available(&rdlp_types::media_name::AudioEncoderName::from_static(
         "mp2",
     )) {
-        assert_eq!(
-            sel(C::Ts)
-                .as_ref()
-                .map(rdlp_types::media_name::MediaName::as_str),
-            Some("mp2")
-        );
+        assert_eq!(sel(C::Ts).name(), Some("mp2"));
     }
-    assert_eq!(
-        sel(C::Flac)
-            .as_ref()
-            .map(rdlp_types::media_name::MediaName::as_str),
-        Some("flac")
-    );
-    assert_eq!(
-        sel(C::Wav)
-            .as_ref()
-            .map(rdlp_types::media_name::MediaName::as_str),
-        Some("pcm_s16le")
-    );
+    assert_eq!(sel(C::Flac).name(), Some("flac"));
+    assert_eq!(sel(C::Wav).name(), Some("pcm_s16le"));
 
     // Behaviour CHANGES from the old `&str` shim, deliberately: IVF carries
     // no audio stream at all, so it must be refused rather than defaulted.
@@ -440,7 +397,7 @@ fn test_audio_only_extension_for() {
     // Other formats
     assert_eq!(audio_only_extension_for(C::Avi), "mp3");
     assert_eq!(audio_only_extension_for(C::Mp3), "mp3");
-    assert_eq!(audio_only_extension_for(C::Ogg), "opus");
+    assert_eq!(audio_only_extension_for(C::Ogg), "ogg");
     assert_eq!(audio_only_extension_for(C::Opus), "opus");
     assert_eq!(audio_only_extension_for(C::Flac), "flac");
     assert_eq!(audio_only_extension_for(C::Wav), "wav");
@@ -486,7 +443,10 @@ fn audio_only_extension_matches_previous_string_behaviour() {
             "mka"
         } else if ext.eq_ignore_ascii_case("avi") || ext.eq_ignore_ascii_case("mp3") {
             "mp3"
-        } else if ext.eq_ignore_ascii_case("ogg") || ext.eq_ignore_ascii_case("opus") {
+        } else if ext.eq_ignore_ascii_case("ogg") {
+            // #623: an Ogg target's temp is Ogg, not the Opus-only profile.
+            "ogg"
+        } else if ext.eq_ignore_ascii_case("opus") {
             "opus"
         } else if ext.eq_ignore_ascii_case("flac") {
             "flac"

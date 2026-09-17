@@ -292,7 +292,10 @@ pub(super) const fn audio_only_extension_for(container: ContainerFormat) -> &'st
         | ContainerFormat::Caf
         | ContainerFormat::Ac3 => DEFAULT_AUDIO_ONLY.as_ext(),
         ContainerFormat::Avi | ContainerFormat::Mp3 => ContainerFormat::Mp3.as_ext(),
-        ContainerFormat::Ogg | ContainerFormat::Opus => ContainerFormat::Opus.as_ext(),
+        // Ogg's default audio codec is vorbis (#623); its temp must not be a
+        // `.opus` file, which names an Opus-only profile (RFC 7845 §9).
+        ContainerFormat::Ogg => ContainerFormat::Ogg.as_ext(),
+        ContainerFormat::Opus => ContainerFormat::Opus.as_ext(),
         ContainerFormat::Flac => ContainerFormat::Flac.as_ext(),
         ContainerFormat::Wav => ContainerFormat::Wav.as_ext(),
     }
