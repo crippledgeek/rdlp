@@ -6301,6 +6301,7 @@ dependencies = [
  "inquire",
  "insta",
  "log",
+ "log-panics",
  "mockito",
  "proptest",
  "rdlp-api",

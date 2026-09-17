@@ -4,6 +4,7 @@
 //! into human-readable video and audio codec names.
 
 use rdlp_types::CodecName;
+use rdlp_types::media_name::{CodecKind, codec_identity};
 
 /// Parse an HLS `CODECS` attribute string into video and audio codec names.
 ///
@@ -34,35 +35,20 @@ use rdlp_types::CodecName;
 /// assert_eq!(audio, None);
 /// ```
 pub fn parse_hls_codecs(codecs: &str) -> (Option<CodecName>, Option<CodecName>) {
+    // Identity lives in one place (`rdlp_types::media_name::codec_identity`,
+    // #648); this function only splits the list and fills the two slots,
+    // first recognised token per kind wins.
     let mut video = None;
     let mut audio = None;
-
-    for codec in codecs.split(',').map(str::trim) {
-        if codec.is_empty() {
-            continue;
-        }
-
-        // Extract the codec family prefix (before the first dot)
-        let prefix = codec.split('.').next().unwrap_or(codec);
-
-        match prefix {
-            // Video codecs
-            "avc1" | "avc3" => video = Some(CodecName::H264),
-            "hvc1" | "hev1" => video = Some(CodecName::HEVC),
-            "vp09" => video = Some(CodecName::VP9),
-            "vp8" | "vp08" => video = Some(CodecName::VP8),
-            "av01" => video = Some(CodecName::AV1),
-            // Audio codecs
-            "mp4a" => audio = Some(CodecName::AAC),
-            "ac-3" => audio = Some(CodecName::AC3),
-            "ec-3" => audio = Some(CodecName::EAC3),
-            "opus" => audio = Some(CodecName::OPUS),
-            "flac" => audio = Some(CodecName::FLAC),
-            "vorbis" => audio = Some(CodecName::VORBIS),
-            _ => {} // Unknown codec prefix, skip
+    for identity in codecs.split(',').filter_map(codec_identity) {
+        let slot = match identity.kind {
+            CodecKind::Video => &mut video,
+            CodecKind::Audio => &mut audio,
+        };
+        if slot.is_none() {
+            *slot = identity.name;
         }
     }
-
     (video, audio)
 }
 

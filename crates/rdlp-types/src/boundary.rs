@@ -119,20 +119,58 @@ impl fmt::Display for Action<'_> {
 /// "Boundary Logging" rule 5.
 #[must_use]
 pub fn failure_record(action: &Action<'_>, reason: &impl fmt::Display) -> String {
+    outcome_record(action, Outcome::Failed, reason)
+}
+
+/// How a boundary action ended, when it did not succeed.
+///
+/// `Failed` is the ordinary case every sink renders. `Panicked` and
+/// `Cancelled` exist for the one place a task's `JoinError` is observed
+/// (`rdlp-api`'s download handle): a panicking task is an internal bug and a
+/// cancelled one is what an app quit looks like, and the record must say
+/// which. Rendered lowercase as the `outcome=` value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// The action ran and reported an error.
+    Failed,
+    /// The task running the action panicked.
+    Panicked,
+    /// The task running the action was aborted or the runtime shut down.
+    Cancelled,
+}
+
+impl fmt::Display for Outcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Failed => "failed",
+            Self::Panicked => "panicked",
+            Self::Cancelled => "cancelled",
+        })
+    }
+}
+
+/// The record body for any non-success [`Outcome`].
+///
+/// [`failure_record`] is the `Failed` case. Same shape, same sanitisation,
+/// no prose prefix — the sink already prints the module target, so a
+/// `download: ` in front would only restate `action=download`
+/// (`CODING_RULES.md` § Boundary Logging).
+#[must_use]
+pub fn outcome_record(action: &Action<'_>, outcome: Outcome, reason: &impl fmt::Display) -> String {
     // `reason` carries free text from remote sources (an extractor message
     // quoting page content, a filename built from a title) and from IPC. Its
     // `Display` redacts credentials; it does not strip control characters, so
     // a newline in it would forge a second record line. `action`'s own fields
     // are stripped by its `Display`.
     format!(
-        "{action} outcome=failed reason={}",
+        "{action} outcome={outcome} reason={}",
         sanitize_for_terminal(&reason.to_string())
     )
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Action, Subject, failure_record};
+    use super::{Action, Outcome, Subject, failure_record, outcome_record};
     use rdlp_redact::RedactedUrl;
 
     #[test]
@@ -167,6 +205,26 @@ mod tests {
         assert_eq!(
             failure_record(&a, &"disk full"),
             "action=download job_id=job-7 outcome=failed reason=disk full"
+        );
+    }
+
+    /// The two non-`failed` outcomes render the same shape with their own
+    /// verb and no prose prefix (#702).
+    #[test]
+    fn panicked_and_cancelled_records_share_the_shape_and_carry_no_prefix() {
+        let a = Action::new("download");
+        assert_eq!(
+            outcome_record(&a, Outcome::Panicked, &"boom"),
+            "action=download outcome=panicked reason=boom"
+        );
+        assert_eq!(
+            outcome_record(&a, Outcome::Cancelled, &"runtime shutdown"),
+            "action=download outcome=cancelled reason=runtime shutdown"
+        );
+        assert_eq!(
+            outcome_record(&a, Outcome::Failed, &"x"),
+            failure_record(&a, &"x"),
+            "failure_record is the Failed case of outcome_record"
         );
     }
 

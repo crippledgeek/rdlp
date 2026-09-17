@@ -149,12 +149,16 @@ pub fn run() {
                 // record with `.args(formatted_message)` before passing it
                 // down (fern 0.7.1, src/log_impl.rs:531-547).
                 //
-                // So a per-target formatter WRAPS the default prefix rather
-                // than replacing it. Clearing the root is what makes each
-                // target's own format authoritative; without this the pane
-                // would render the timestamp and level twice and the target
-                // three times.
-                .clear_format()
+                // So a per-target formatter WRAPS the root's output rather
+                // than replacing it. The root therefore carries the one
+                // thing every target must share and nothing else: the
+                // redaction of the rendered message (#684). It adds no
+                // prefix — that is what keeps each target's own format
+                // authoritative; a root prefix would render the timestamp
+                // and level twice and the target three times.
+                .format(|out, message, _record| {
+                    out.finish(format_args!("{}", redacted_message(message)));
+                })
                 .targets([
                     // The pane renders its own timestamp and level badge, so
                     // the one thing it cannot recover is which crate spoke.
@@ -167,9 +171,9 @@ pub fn run() {
                     // it keeps the full prefix. This reproduces the shape the
                     // plugin's own default emitted (tauri-plugin-log 2.9.1,
                     // src/lib.rs:429-441) — including its UTC basis
-                    // (`DEFAULT_TIMEZONE_STRATEGY`, lib.rs:53), so clearing the
-                    // root above does not silently change what the file has
-                    // always looked like. `chrono` rather than `time` because
+                    // (`DEFAULT_TIMEZONE_STRATEGY`, lib.rs:53), so the root's
+                    // prefix-free redaction above does not silently change
+                    // what the file has always looked like. `chrono` rather than `time` because
                     // the desktop crate already depends on it.
                     //
                     // The UTC here is now hardcoded, where it used to follow
@@ -443,5 +447,31 @@ mod tests {
                 "exactly the failing window is recorded, by name: {errors:?}"
             );
         });
+    }
+}
+
+/// The desktop log egress: every record's rendered message passes through
+/// `rdlp_redact::redact_str` once, at the root formatter both file and
+/// webview targets wrap (#684). The sink cannot know which error type a
+/// `warn!("…: {e}")` interpolated, so it redacts the text itself — which
+/// covers a `wreq::Error` carrying its query string and any site written
+/// after this one.
+fn redacted_message(message: &std::fmt::Arguments<'_>) -> String {
+    rdlp_redact::redact_str(&message.to_string())
+}
+
+#[cfg(test)]
+mod log_egress_tests {
+    use super::redacted_message;
+
+    /// `?token=`, not `user:pass@`: wreq strips userinfo before an error is
+    /// built, so a userinfo vector passes with the redaction removed (#684).
+    #[test]
+    fn the_desktop_log_root_redacts_query_tokens() {
+        let out = redacted_message(&format_args!(
+            "fetch failed: error sending request for uri (https://h/x?token=abc123)"
+        ));
+        assert!(!out.contains("abc123"), "{out}");
+        assert!(out.contains("token=***"), "{out}");
     }
 }

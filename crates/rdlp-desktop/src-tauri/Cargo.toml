@@ -39,7 +39,7 @@ rdlp-redact = { workspace = true, features = ["serde"] }
 log = { workspace = true }
 # Panic -> `log::error!` bridge, so panics reach the same targets as everything
 # else. The standard companion to a `log` backend; not worth hand-writing.
-log-panics = { version = "2.1", features = ["with-backtrace"] }
+log-panics = { workspace = true }
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 dirs = { workspace = true }

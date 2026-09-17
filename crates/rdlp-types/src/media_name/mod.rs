@@ -132,8 +132,10 @@ use std::fmt;
 use std::hash::Hash;
 use std::marker::PhantomData;
 
+mod identity;
 mod kind;
 
+pub use identity::{CodecIdentity, CodecKind, codec_identity};
 pub use kind::{AudioEncoder, Codec, Rfc6381, VideoEncoder};
 
 /// An `FFmpeg` codec descriptor name (`h264`, `pcm_s16le`). See [`Codec`].
@@ -435,6 +437,10 @@ impl MediaName<Codec> {
     pub const FLAC: Self = Self::from_static("flac");
     /// Vorbis.
     pub const VORBIS: Self = Self::from_static("vorbis");
+    /// MP3 (MPEG-1/2 Layer 3).
+    pub const MP3: Self = Self::from_static("mp3");
+    /// MP2 (MPEG-1/2 Layer 2).
+    pub const MP2: Self = Self::from_static("mp2");
 }
 
 /// Borrows the underlying name as a plain `&str`, so a `MediaName` can be

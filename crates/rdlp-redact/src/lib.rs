@@ -161,6 +161,26 @@ static SANITIZE_PATTERNS: LazyLock<[(Regex, &str); 21]> = LazyLock::new(|| {
 static USERINFO_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"//[^@\s/]+@").expect("valid regex"));
 
+/// [`redact_str`] over a rendered log line as bytes, for `io::Write` sinks.
+///
+/// A log sink sees only text; it cannot know which error type produced it.
+/// Redacting here — the egress — covers every `warn!("…: {e}")` whose `e`
+/// happens to carry a URL (a `wreq::Error` keeps the query string; an
+/// `anyhow` chain repeats a context line), including sites written after
+/// this one (#684). Invalid UTF-8 is examined through a lossy decode and
+/// replaced only when a redaction fires; a clean line is returned
+/// borrowed and byte-for-byte.
+#[must_use]
+pub fn redact_bytes(buf: &[u8]) -> Cow<'_, [u8]> {
+    let text = String::from_utf8_lossy(buf);
+    let redacted = redact_str(&text);
+    if redacted == text {
+        Cow::Borrowed(buf)
+    } else {
+        Cow::Owned(redacted.into_bytes())
+    }
+}
+
 /// Redact credential-bearing query parameters and userinfo from a URL string.
 ///
 /// Applies all patterns in `SANITIZE_PATTERNS` in order. Non-sensitive
@@ -349,4 +369,41 @@ where
     S: serde::Serializer,
 {
     serializer.serialize_str(&redact_str(value))
+}
+
+#[cfg(test)]
+mod redact_bytes_tests {
+    use super::*;
+
+    /// The `?token=` vector, not `user:pass@`: wreq strips userinfo before
+    /// an error is built, so a test on userinfo passes with the redaction
+    /// removed (#684).
+    #[test]
+    fn a_rendered_line_with_a_query_token_is_redacted() {
+        let line =
+            b"WARN fetch failed: error sending request for uri (https://h/p?token=s3cr3t&q=1)\n";
+        let out = redact_bytes(line);
+        let out = std::str::from_utf8(&out).unwrap();
+        assert!(!out.contains("s3cr3t"), "{out}");
+        assert!(out.contains("token=***"), "{out}");
+        assert!(out.contains("q=1"), "non-sensitive parameter kept: {out}");
+    }
+
+    #[test]
+    fn a_clean_line_is_borrowed_unchanged() {
+        let line = b"INFO downloaded 3 files\n";
+        assert!(matches!(redact_bytes(line), Cow::Borrowed(b) if b == line));
+    }
+
+    #[test]
+    fn invalid_utf8_is_still_examined() {
+        let mut line = b"x \xff https://h/?api_key=k".to_vec();
+        line.push(b'\n');
+        let out = redact_bytes(&line);
+        assert!(
+            !out.windows(9).any(|w| w == b"api_key=k"),
+            "{:?}",
+            String::from_utf8_lossy(&out)
+        );
+    }
 }

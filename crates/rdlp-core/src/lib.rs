@@ -45,7 +45,9 @@ pub use codecs::parse_hls_codecs;
 pub use error::{RdlpError, Result, check_http_response};
 
 // Re-export retry utilities (backon-based)
-pub use retry::{ExponentialBuilder, RetryConfig, Retryable, is_retryable_error};
+pub use retry::{
+    ExponentialBuilder, FailureClass, RetryConfig, Retryable, is_retryable, is_retryable_error,
+};
 
 // Re-export traits
 pub use traits::{

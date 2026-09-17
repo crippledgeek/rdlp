@@ -58,6 +58,7 @@ pub use format_detection::{
 pub use types::{HlsInfo, HlsStreamFlags, HlsVariantInfo};
 
 use rdlp_types::Rfc6381Codec;
+use rdlp_types::media_name::{CodecKind, codec_identity};
 
 /// Parsed entry from an HLS master playlist — schema mirrors yt-dlp's
 /// `_extract_m3u8_formats_and_subtitles` per-format dict, lossless.
@@ -167,16 +168,17 @@ fn split_codecs(codecs: Option<&str>) -> (Option<Rfc6381Codec>, Option<Rfc6381Co
     let Some(s) = codecs else {
         return (None, None);
     };
+    // Which slot a token fills is decided by the one identity table
+    // (`codec_identity`), not by a prefix test here (#648): `hvc1`, `av01`,
+    // `ec-3`, `fLaC` all classify, and an unrecognised token is skipped.
     let mut v = None;
     let mut a = None;
     for tok in s.split(',') {
         let t = tok.trim();
-        if v.is_none() && (t.starts_with("avc") || t.starts_with("hev") || t.starts_with("vp")) {
-            v = Rfc6381Codec::new(t).ok();
-        } else if a.is_none()
-            && (t.starts_with("mp4a") || t.starts_with("opus") || t.starts_with("aac"))
-        {
-            a = Rfc6381Codec::new(t).ok();
+        match codec_identity(t).map(|id| id.kind) {
+            Some(CodecKind::Video) if v.is_none() => v = Rfc6381Codec::new(t).ok(),
+            Some(CodecKind::Audio) if a.is_none() => a = Rfc6381Codec::new(t).ok(),
+            _ => {}
         }
     }
     (v, a)
@@ -186,6 +188,22 @@ fn split_codecs(codecs: Option<&str>) -> (Option<Rfc6381Codec>, Option<Rfc6381Co
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    /// The CODECS= slots are filled by the identity's KIND: an `mp4a` whose
+    /// object type is unregistered still lands in the audio slot (it is
+    /// audio, just not a named codec), and `hvc1`/`av01`/`ec-3`/`fLaC`
+    /// classify — none of which the old `starts_with` prefixes covered.
+    #[test]
+    fn split_codecs_fills_slots_by_identity_kind() {
+        let (v, a) = split_codecs(Some("hvc1.1.6.L93.B0,mp4a.a5"));
+        assert_eq!(v.as_ref().map(|c| c.as_str()), Some("hvc1.1.6.L93.B0"));
+        assert_eq!(a.as_ref().map(|c| c.as_str()), Some("mp4a.a5"));
+        let (v, a) = split_codecs(Some("av01.0.08M.08,ec-3"));
+        assert_eq!(v.as_ref().map(|c| c.as_str()), Some("av01.0.08M.08"));
+        assert_eq!(a.as_ref().map(|c| c.as_str()), Some("ec-3"));
+        let (v, a) = split_codecs(Some("theora,speex"));
+        assert!(v.is_none() && a.is_none(), "unknown tokens fill nothing");
+    }
 
     #[test]
     fn test_detector_creation() {

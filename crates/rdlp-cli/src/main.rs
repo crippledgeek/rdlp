@@ -70,15 +70,28 @@ fn optimal_worker_threads() -> usize {
     (cpu_count * 2).min(32) // Cap at 32 threads
 }
 
-/// Writer that suspends progress bars while writing to prevent visual duplication
+/// Writer that suspends progress bars while writing to prevent visual
+/// duplication, and redacts every rendered line on its way out (#684).
 #[derive(Clone)]
 struct SuspendingWriter {
     multi_progress: Arc<MultiProgress>,
 }
 
+/// Write `buf` to `sink` with credentials redacted. The log egress is the
+/// one place every record — from every crate, whatever error type it
+/// interpolated — passes as text, so this is where the policy
+/// (`rdlp_redact::redact_str`) is applied once instead of at each of the
+/// ~100 `warn!("…: {e}")` sites. Reports `buf.len()` consumed: the caller
+/// handed over a whole formatted record and must not retry a suffix.
+fn write_redacted(sink: &mut impl std::io::Write, buf: &[u8]) -> std::io::Result<usize> {
+    sink.write_all(&rdlp_redact::redact_bytes(buf))?;
+    Ok(buf.len())
+}
+
 impl std::io::Write for SuspendingWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.multi_progress.suspend(|| std::io::stderr().write(buf))
+        self.multi_progress
+            .suspend(|| write_redacted(&mut std::io::stderr(), buf))
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
@@ -196,6 +209,16 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
             .with(tracing_subscriber::fmt::layer().with_writer(writer))
             .init();
     }
+
+    // Route panics through `log` — and so through the `tracing-log` bridge
+    // and the redacting `SuspendingWriter` above — instead of Rust's default
+    // hook, which prints the raw payload to stderr past every redaction
+    // (#684). Unconditional: under `--quiet` no subscriber is installed and
+    // the panic record is dropped, which is what quiet means; the raw hook
+    // would be the one unredacted egress left. Replaces the default hook
+    // outright — unlike the desktop, there is no plugin chain that could
+    // panic before this line.
+    log_panics::init();
 
     // Remove stale temp files left by a prior crash in the output directory.
     // cleanup_stale performs a blocking directory walk with per-entry metadata
@@ -547,6 +570,24 @@ fn search_text(response: &rdlp_api::SearchPageResponse) -> String {
         let _ = writeln!(out);
     }
     out
+}
+
+#[cfg(test)]
+mod log_egress_tests {
+    use super::write_redacted;
+
+    /// The CLI's log egress redacts a `?token=` in a rendered record (the
+    /// vector wreq does not strip itself, #684).
+    #[test]
+    fn the_cli_log_sink_redacts_query_tokens() {
+        let mut sink = Vec::new();
+        let line = b"WARN error sending request for uri (https://h/x?token=abc123)\n";
+        let n = write_redacted(&mut sink, line).unwrap();
+        assert_eq!(n, line.len(), "whole record reported consumed");
+        let out = String::from_utf8(sink).unwrap();
+        assert!(!out.contains("abc123"), "{out}");
+        assert!(out.contains("token=***"), "{out}");
+    }
 }
 
 #[cfg(test)]

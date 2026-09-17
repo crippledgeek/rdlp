@@ -7,6 +7,7 @@
 
 use tauri::ipc::Response;
 
+use rdlp_core::FailureClass;
 use rdlp_redact::RedactedUrl;
 
 use crate::error::AppError;
@@ -17,6 +18,18 @@ const MAX_BODY_SIZE: usize = 5 * 1024 * 1024;
 
 /// Timeout for the thumbnail fetch request.
 const TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// A failure before any HTTP status exists (refused, reset, timed out): the
+/// frontend's retry offer follows the core retry policy
+/// (`rdlp_core::is_retryable`), the same rule an [`rdlp_core::RdlpError`]
+/// is judged by.
+fn transport_failure(action: Action<'_>, reason: impl std::fmt::Display) -> AppError {
+    AppError::network(
+        action,
+        reason,
+        rdlp_core::is_retryable(FailureClass::Transport),
+    )
+}
 
 /// Derive the site origin from a URL string for use as Referer.
 ///
@@ -128,15 +141,14 @@ pub async fn proxy_thumbnail(url: String) -> Result<Response, AppError> {
         .await
         // A CDN that refuses, times out, or resets IS a network failure —
         // `network` records it at WARN and tells the frontend it may retry.
-        .map_err(|e| AppError::network(action(), e, true))?;
+        .map_err(|e| transport_failure(action(), e))?;
 
     let status = resp.status();
     if !status.is_success() {
         return Err(AppError::network(
             action(),
             format!("thumbnail fetch returned HTTP {}", status.as_u16()),
-            // Retryable for a 5xx; a 403/404 will not become a 200.
-            status.is_server_error(),
+            rdlp_core::is_retryable(FailureClass::Http(status.as_u16())),
         ));
     }
 
@@ -155,7 +167,7 @@ pub async fn proxy_thumbnail(url: String) -> Result<Response, AppError> {
     let bytes = resp
         .bytes()
         .await
-        .map_err(|e| AppError::network(action(), e, true))?;
+        .map_err(|e| transport_failure(action(), e))?;
 
     if bytes.len() > MAX_BODY_SIZE {
         return Err(AppError::environment(
