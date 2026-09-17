@@ -11,7 +11,7 @@ import type { DownloadJob, DownloadOptions, PlaylistContext } from "../types";
 export function downloadsQueryOptions() {
     return queryOptions({
         queryKey: queryKeys.downloads.list(),
-        queryFn: () => invokeTyped<DownloadJob[]>("queue"),
+        queryFn: () => invokeTyped("queue"),
     });
 }
 
@@ -22,7 +22,7 @@ export async function startDownload(
     title?: string,
     playlistContext?: PlaylistContext,
 ): Promise<string> {
-    const jobId = await invokeTyped<string>("start_download", {
+    const jobId = await invokeTyped("start_download", {
         url,
         options,
         title: title ?? null,
@@ -42,7 +42,7 @@ export async function cancelDownload(jobId: string): Promise<void> {
         old?.map((job) => (job.id === jobId ? { ...job, ...cancelledJobPatch() } : job)),
     );
     try {
-        await invokeTyped<void>("cancel_download", { jobId });
+        await invokeTyped("cancel_download", { jobId });
     } catch (e) {
         if (previous) queryClient.setQueryData(key, previous); // rollback
         throw e;
@@ -51,12 +51,13 @@ export async function cancelDownload(jobId: string): Promise<void> {
 
 /** Remove a completed/failed/cancelled job from the queue. */
 export async function removeJob(jobId: string): Promise<void> {
-    await invokeTyped<void>("remove_job", { jobId });
+    await invokeTyped("remove_job", { jobId });
     await queryClient.invalidateQueries({ queryKey: queryKeys.downloads.list() });
 }
 
-/** Remove all completed/failed/cancelled jobs from the queue. */
-export async function clearCompletedJobs(): Promise<void> {
-    await invokeTyped<void>("clear_completed_jobs");
+/** Remove all completed/failed/cancelled jobs from the queue. Returns how many were removed. */
+export async function clearCompletedJobs(): Promise<number> {
+    const removed = await invokeTyped("clear_completed_jobs");
     await queryClient.invalidateQueries({ queryKey: queryKeys.downloads.list() });
+    return removed;
 }

@@ -5,7 +5,6 @@
 import { queryOptions } from "@tanstack/react-query";
 import { invokeTyped } from "./invokeClient";
 import { queryKeys } from "../query/queryKeys";
-import type { NetworkDefaults } from "../types";
 
 /**
  * Fetch `NetworkDefaults` from the `network_defaults` command.
@@ -17,7 +16,7 @@ import type { NetworkDefaults } from "../types";
 export function networkDefaultsQueryOptions() {
     return queryOptions({
         queryKey: queryKeys.networkDefaults(),
-        queryFn: () => invokeTyped<NetworkDefaults>("network_defaults"),
+        queryFn: () => invokeTyped("network_defaults"),
         staleTime: Infinity,
     });
 }

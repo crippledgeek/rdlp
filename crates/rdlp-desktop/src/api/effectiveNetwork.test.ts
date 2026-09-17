@@ -7,6 +7,7 @@ import { QueryClient } from "@tanstack/react-query";
 import { networkDefaultsQueryOptions } from "./effectiveNetwork";
 import { queryKeys } from "../query/queryKeys";
 import { invokeTyped } from "./invokeClient";
+import { networkDefaultsStub } from "../test/effectiveNetworkStub";
 
 vi.mock("./invokeClient", async (importOriginal) => ({
     ...(await importOriginal<typeof import("./invokeClient")>()),
@@ -24,7 +25,7 @@ describe("networkDefaultsQueryOptions", () => {
 
     it("invokes the one network_defaults command", async () => {
         const invokeMock = vi.mocked(invokeTyped);
-        invokeMock.mockResolvedValueOnce({});
+        invokeMock.mockResolvedValueOnce(networkDefaultsStub);
         await new QueryClient().fetchQuery(networkDefaultsQueryOptions());
         expect(invokeMock).toHaveBeenCalledTimes(1);
         expect(invokeMock).toHaveBeenCalledWith("network_defaults");

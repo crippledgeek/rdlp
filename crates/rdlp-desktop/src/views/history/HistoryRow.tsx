@@ -34,7 +34,7 @@ export function HistoryRow({ job }: HistoryRowProps) {
     const handleReveal = (e: React.MouseEvent) => {
         e.stopPropagation();
         if (!job.output_path) return;
-        invokeTyped<void>("reveal_in_folder", { path: job.output_path }).catch(console.error);
+        invokeTyped("reveal_in_folder", { path: job.output_path }).catch(console.error);
     };
 
     const handleRedownload = (e: React.MouseEvent) => {

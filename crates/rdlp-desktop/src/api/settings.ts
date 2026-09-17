@@ -10,18 +10,18 @@ import type { AppSettings } from "../types";
 export function settingsQueryOptions() {
     return queryOptions({
         queryKey: queryKeys.settings(),
-        queryFn: () => invokeTyped<AppSettings>("settings"),
+        queryFn: () => invokeTyped("settings"),
         staleTime: 5 * 60_000,
     });
 }
 
 /** Update settings on the backend and optimistically update the cache. */
 export async function updateSettings(settings: AppSettings): Promise<void> {
-    await invokeTyped<void>("update_settings", { settings });
+    await invokeTyped("update_settings", { settings });
     queryClient.setQueryData(queryKeys.settings(), settings);
 }
 
 /** Open a native directory picker dialog. */
 export async function pickDirectory(): Promise<string | null> {
-    return invokeTyped<string | null>("pick_directory");
+    return invokeTyped("pick_directory");
 }

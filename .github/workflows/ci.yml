@@ -68,17 +68,29 @@ jobs:
         # stale mirror.
         run: bash scripts/check-ts-enum-drift.sh
 
-      - name: Check EffectiveNetwork / EffectiveNormalize Rust / TypeScript drift and literal placeholders
-        # #611: the network/download and normalization defaults each have one
-        # owner in rdlp_types (EffectiveNetwork::DEFAULT; EffectiveNormalize +
-        # LoudnormPreset::targets) and reach the desktop over IPC. (a) Each TS
-        # interface must carry exactly its Rust struct's fields; (b) the
-        # settings sections must derive every numeric placeholder from that
-        # payload, never a literal copy.
+      - name: Check EffectiveNetwork / EffectiveNormalize Rust / TypeScript drift and literal placeholders or bounds
+        # #611: the network/download and normalization defaults and ranges
+        # each have one owner in rdlp_types (EffectiveNetwork::DEFAULT/RANGES;
+        # EffectiveNormalize + LoudnormPreset::targets) and reach the desktop
+        # over IPC. (a) Each TS interface must carry exactly its Rust struct's
+        # fields; (b) the settings sections must derive every numeric
+        # placeholder and every min/max bound from that payload, never a
+        # literal copy.
         run: bash scripts/check-effective-config-drift.sh
 
       - name: Verify the effective-config drift gate still fires
         run: bash scripts/check-effective-config-drift.sh --self-test
+
+      - name: Check Tauri command registry / typed IPC command map drift
+        # #611: crates/rdlp-desktop/src/api/ipc.ts `IpcCommands` is the one
+        # owner of command names and payload types; invokeTyped is keyed by
+        # it. Its keys must equal the commands registered in
+        # generate_handler![], and raw `invoke` is imported only in
+        # invokeClient.ts.
+        run: bash scripts/check-ipc-command-drift.sh
+
+      - name: Verify the IPC command drift gate still fires
+        run: bash scripts/check-ipc-command-drift.sh --self-test
 
       - name: Check no directory-sweep deletion
         # #558: deleting files found by scanning a directory cannot tell "a file

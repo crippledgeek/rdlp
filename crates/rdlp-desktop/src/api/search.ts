@@ -3,19 +3,13 @@
 import { queryOptions, infiniteQueryOptions, skipToken } from "@tanstack/react-query";
 import { invokeTyped } from "./invokeClient";
 import { queryKeys } from "../query/queryKeys";
-import type {
-    SearchFilter,
-    SearchFilterDescriptor,
-    SearchPageResponse,
-    SearchResultPreview,
-    SearchSiteInfo,
-} from "../types";
+import type { SearchFilter, SearchResultPreview } from "../types";
 
 /** Fetch all search-capable sites. Runs once on app mount. */
 export function providersQueryOptions() {
     return queryOptions({
         queryKey: queryKeys.providers(),
-        queryFn: () => invokeTyped<SearchSiteInfo[]>("search_providers"),
+        queryFn: () => invokeTyped("search_providers"),
         staleTime: Infinity, // Providers don't change at runtime
     });
 }
@@ -24,8 +18,7 @@ export function providersQueryOptions() {
 export function filtersQueryOptions(site: string) {
     return queryOptions({
         queryKey: queryKeys.filters(site),
-        queryFn: () =>
-            invokeTyped<SearchFilterDescriptor[]>("search_filters", { site }),
+        queryFn: () => invokeTyped("search_filters", { site }),
         enabled: site !== "",
     });
 }
@@ -59,11 +52,7 @@ export function enrichSearchResultQueryOptions(
     return queryOptions({
         queryKey: queryKeys.search.enrichRow(site, preview.video_url),
         queryFn: shouldFetch
-            ? () =>
-                  invokeTyped<SearchResultPreview>("enrich_search_result", {
-                      site,
-                      preview,
-                  })
+            ? () => invokeTyped("enrich_search_result", { site, preview })
             : skipToken,
         staleTime: 60 * 60 * 1000,
         gcTime: 60 * 60 * 1000,
@@ -85,7 +74,7 @@ export function searchInfiniteQueryOptions(
     return infiniteQueryOptions({
         queryKey: queryKeys.search.params(query, site, filters),
         queryFn: ({ pageParam }) =>
-            invokeTyped<SearchPageResponse>("search_content", { query, site, filters, page: pageParam }),
+            invokeTyped("search_content", { query, site, filters, page: pageParam }),
         initialPageParam: 1,
         getNextPageParam: (lastPage) =>
             lastPage.has_more && lastPage.results.length > 0 ? lastPage.page + 1 : undefined,

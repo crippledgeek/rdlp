@@ -12,8 +12,8 @@
 //   - If the proxy itself fails, show a placeholder.
 
 import { useCallback, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { invoke } from "@tauri-apps/api/core";
+import { skipToken, useQuery } from "@tanstack/react-query";
+import { invokeTyped } from "@/api/invokeClient";
 import { cn } from "@/lib/utils";
 import { queryKeys } from "@/query/queryKeys";
 
@@ -39,8 +39,9 @@ function shouldProxy(url: string): boolean {
 /**
  * Fetch a thumbnail via the Rust proxy, returning a Blob URL.
  *
- * Uses raw `invoke` (not `invokeTyped`) because `tauri::ipc::Response`
- * returns binary data as an ArrayBuffer, bypassing JSON serialization.
+ * `tauri::ipc::Response` returns the bytes as an `ArrayBuffer`, bypassing JSON
+ * serialization; the command map types it as such, so this goes through the
+ * one `invokeTyped` seam like every other command.
  * The query is dormant (`enabled: false`) until the direct <img> fails.
  *
  * Blob URLs are NOT revoked — they are cached by TanStack Query and must
@@ -50,10 +51,15 @@ function shouldProxy(url: string): boolean {
 function useProxyThumbnail(url: string | null | undefined, enabled: boolean) {
     return useQuery({
         queryKey: queryKeys.thumbnail.proxy(url),
-        queryFn: async () => {
-            const bytes = await invoke<ArrayBuffer>("proxy_thumbnail", { url });
-            return URL.createObjectURL(new Blob([new Uint8Array(bytes)]));
-        },
+        // `enabled` below already excludes an empty url, but the command map
+        // types `url` as `string`, so the guard is stated where the compiler
+        // can see it rather than assumed from the option next door.
+        queryFn: url
+            ? async () => {
+                  const bytes = await invokeTyped("proxy_thumbnail", { url });
+                  return URL.createObjectURL(new Blob([new Uint8Array(bytes)]));
+              }
+            : skipToken,
         enabled: enabled && !!url,
         staleTime: Infinity,
         gcTime: 5 * 60 * 1000,

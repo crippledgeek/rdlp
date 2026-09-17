@@ -6,6 +6,7 @@ import { QueryClient, keepPreviousData, skipToken } from "@tanstack/react-query"
 import { effectiveNormalizeQueryOptions, loudnormPresetsQueryOptions } from "./effectiveNormalize";
 import { queryKeys } from "../query/queryKeys";
 import { invokeTyped } from "./invokeClient";
+import { effectiveNormalizeStub } from "../test/effectiveNormalizeStub";
 
 vi.mock("./invokeClient", async (importOriginal) => ({
     ...(await importOriginal<typeof import("./invokeClient")>()),
@@ -39,7 +40,7 @@ describe("effectiveNormalizeQueryOptions", () => {
     // pass it would resolve every preset to the base configuration's.
     it("passes the preset to the effective_normalize command", async () => {
         const invokeMock = vi.mocked(invokeTyped);
-        invokeMock.mockResolvedValueOnce({});
+        invokeMock.mockResolvedValueOnce(effectiveNormalizeStub);
         await new QueryClient().fetchQuery(effectiveNormalizeQueryOptions("broadcast"));
         expect(invokeMock).toHaveBeenCalledWith("effective_normalize", { preset: "broadcast" });
     });

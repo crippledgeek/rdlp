@@ -100,6 +100,27 @@ export interface SubtitleInfo {
 }
 
 /** Complete response for the formats command. */
+/**
+ * Format metadata for `validate_format_expression`. Mirrors the Rust
+ * `FormatData` struct (src-tauri/src/commands/formats), so format filter
+ * predicates (e.g. `[height<=1080]`) can match.
+ */
+export interface FormatData {
+    format_id: string;
+    ext: string;
+    width: number | null;
+    height: number | null;
+    fps: number | null;
+    tbr: number | null;
+    vcodec: string | null;
+    acodec: string | null;
+    filesize: number | null;
+    vbr: number | null;
+    abr: number | null;
+    asr: number | null;
+    protocol: string;
+}
+
 export interface FormatListResponse {
     title: string;
     formats: FormatInfo[];

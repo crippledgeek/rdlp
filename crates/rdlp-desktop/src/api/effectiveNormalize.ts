@@ -4,7 +4,7 @@
 import { keepPreviousData, queryOptions, skipToken } from "@tanstack/react-query";
 import { invokeTyped } from "./invokeClient";
 import { queryKeys } from "../query/queryKeys";
-import type { EffectiveNormalize, LoudnormPreset, LoudnormPresetInfo } from "../types";
+import type { LoudnormPreset } from "../types";
 
 /**
  * Fetch the normalization values the engine runs with for `preset`
@@ -32,7 +32,7 @@ export function effectiveNormalizeQueryOptions(preset: LoudnormPreset | null | u
         queryFn:
             preset === undefined
                 ? skipToken
-                : () => invokeTyped<EffectiveNormalize>("effective_normalize", { preset }),
+                : () => invokeTyped("effective_normalize", { preset }),
         staleTime: Infinity,
         placeholderData: keepPreviousData,
     });
@@ -46,7 +46,7 @@ export function effectiveNormalizeQueryOptions(preset: LoudnormPreset | null | u
 export function loudnormPresetsQueryOptions() {
     return queryOptions({
         queryKey: queryKeys.loudnormPresets(),
-        queryFn: () => invokeTyped<LoudnormPresetInfo[]>("loudnorm_presets"),
+        queryFn: () => invokeTyped("loudnorm_presets"),
         staleTime: Infinity,
     });
 }

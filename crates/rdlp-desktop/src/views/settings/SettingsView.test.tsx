@@ -6,6 +6,7 @@ import { invokeTyped } from "@/api/invokeClient";
 import { networkDefaultsStub } from "@/test/effectiveNetworkStub";
 import { effectiveNormalizeStub, loudnormPresetsStub } from "@/test/effectiveNormalizeStub";
 import { appSettingsStub } from "@/test/appSettingsStub";
+import type { IpcCommand, IpcResult, IpcStubTable } from "@/api/ipc";
 import userEvent from "@testing-library/user-event";
 
 // Only `invokeTyped` is faked; `extractErrorMessage` stays real so the
@@ -17,27 +18,29 @@ vi.mock("@/api/invokeClient", async (importOriginal) => ({
 
 const invokeMock = vi.mocked(invokeTyped);
 
-type Command = "settings" | "network_defaults" | "effective_normalize" | "loudnorm_presets";
+// The four gating commands and their stubs, keyed by the ONE command map
+// (`api/ipc.ts`): a stub returning the wrong command's payload is a compile
+// error (`TS2322`), a misspelt key is `TS2561` — no hand-copied command union,
+// no `switch` over a `string`, no `Promise<unknown>` (typed-rocks
+// `mapped_types.ts`: a key→handler map typed by `[K in keyof T]`).
+const stubs = {
+    settings: () => Promise.resolve(appSettingsStub),
+    network_defaults: () => Promise.resolve(networkDefaultsStub),
+    effective_normalize: () => Promise.resolve(effectiveNormalizeStub),
+    loudnorm_presets: () => Promise.resolve(loudnormPresetsStub),
+} satisfies IpcStubTable;
+type StubbedCommand = keyof typeof stubs;
 
-/** Resolve every gating command with its stub (`settings` with `appSettingsStub`). */
-function resolveAll(cmd: string): Promise<unknown> {
-    switch (cmd) {
-        case "settings":
-            return Promise.resolve(appSettingsStub);
-        case "network_defaults":
-            return Promise.resolve(networkDefaultsStub);
-        case "effective_normalize":
-            return Promise.resolve(effectiveNormalizeStub);
-        case "loudnorm_presets":
-            return Promise.resolve(loudnormPresetsStub);
-        default:
-            return Promise.reject(new Error(`unexpected command ${cmd}`));
-    }
+/** Resolve a stubbed command with its payload; any other command rejects loudly. */
+function resolveAll<K extends IpcCommand>(cmd: K): IpcResult<K> {
+    const stub = (stubs as IpcStubTable)[cmd];
+    if (stub === undefined) return Promise.reject(new Error(`unexpected command ${cmd}`));
+    return stub();
 }
 
 /** Reject exactly one command (with an `AppError`-shaped payload); resolve the others. */
-function rejectOnly(failing: Command, message: string) {
-    invokeMock.mockImplementation((cmd: string) => {
+function rejectOnly(failing: StubbedCommand, message: string) {
+    invokeMock.mockImplementation(<K extends IpcCommand>(cmd: K): IpcResult<K> => {
         if (cmd === failing) {
             return Promise.reject({ kind: "Internal", data: { message } });
         }
@@ -102,7 +105,7 @@ describe("SettingsView effective-normalize gating", () => {
     });
 
     it("does not invoke effective_normalize until settings resolve", async () => {
-        invokeMock.mockImplementation((cmd: string) =>
+        invokeMock.mockImplementation(<K extends IpcCommand>(cmd: K): IpcResult<K> =>
             // `settings` never resolves: the sibling queries fire in the same
             // render, so once one of them has been invoked, an ungated
             // normalize query would have been invoked too.
@@ -116,9 +119,9 @@ describe("SettingsView effective-normalize gating", () => {
     });
 
     it("invokes effective_normalize exactly once, with the stored preset", async () => {
-        invokeMock.mockImplementation((cmd: string) =>
+        invokeMock.mockImplementation(<K extends IpcCommand>(cmd: K): IpcResult<K> =>
             cmd === "settings"
-                ? Promise.resolve({ ...appSettingsStub, loudnorm_preset: "loud" })
+                ? (Promise.resolve({ ...appSettingsStub, loudnorm_preset: "loud" }) as IpcResult<K>)
                 : resolveAll(cmd),
         );
         render(<SettingsView />);
@@ -140,16 +143,16 @@ describe("SettingsView save path", () => {
 
     it("forwards an out-of-range value to update_settings and shows the engine's verdict", async () => {
         const verdict = "loudnorm_target_lra: must be a finite number in 1..=50 LU";
-        invokeMock.mockImplementation((cmd: string) => {
-            switch (cmd) {
-                case "settings":
-                    // Out of range on purpose: the old client-side table blocked this.
-                    return Promise.resolve({ ...appSettingsStub, normalize_audio: true, loudnorm: true, loudnorm_target_lra: 0 });
-                case "update_settings":
-                    return Promise.reject({ kind: "InvalidInput", data: { field: "loudnorm_target_lra", message: verdict } });
-                default:
-                    return resolveAll(cmd);
-            }
+        // Out of range on purpose: the old client-side table blocked this.
+        const overrides = {
+            settings: () =>
+                Promise.resolve({ ...appSettingsStub, normalize_audio: true, loudnorm: true, loudnorm_target_lra: 0 }),
+            update_settings: () =>
+                Promise.reject({ kind: "InvalidInput", data: { field: "loudnorm_target_lra", message: verdict } }),
+        } satisfies IpcStubTable;
+        invokeMock.mockImplementation(<K extends IpcCommand>(cmd: K): IpcResult<K> => {
+            const stub = (overrides as IpcStubTable)[cmd];
+            return stub === undefined ? resolveAll(cmd) : stub();
         });
         const user = userEvent.setup();
         render(<SettingsView />);

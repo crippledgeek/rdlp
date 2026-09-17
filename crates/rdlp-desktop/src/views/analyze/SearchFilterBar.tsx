@@ -4,8 +4,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { useStore } from "@tanstack/react-store";
 import { searchStore, setSearchParam } from "@/stores/searchStore";
-import { queryKeys } from "@/query/queryKeys";
-import { getSearchFilters } from "@/lib/tauri";
+import { filtersQueryOptions } from "@/api/search";
 import {
     Select,
     SelectItem,
@@ -23,9 +22,7 @@ export function SearchFilterBar() {
     const filters = useStore(searchStore, (s) => s.filters);
 
     const { data: descriptors = [] } = useQuery({
-        queryKey: queryKeys.filters(site),
-        queryFn: () => getSearchFilters(site),
-        enabled: site.length > 0,
+        ...filtersQueryOptions(site),
         staleTime: Infinity,
     });
 

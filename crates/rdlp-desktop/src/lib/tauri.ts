@@ -1,94 +1,21 @@
-// Typed wrappers around Tauri's invoke() and listen() IPC functions.
+// Typed wrappers around Tauri's listen() event subscriptions.
 //
-// Each function mirrors a #[tauri::command] on the Rust backend.
 // Event listeners mirror the Tauri events emitted from src-tauri/src/events.rs.
+// Commands are NOT wrapped here: every `#[tauri::command]` call goes through
+// `api/invokeClient.ts`'s `invokeTyped`, keyed by the one command map in
+// `api/ipc.ts`.
 
-import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
-    AppSettings,
     DownloadCancelledPayload,
     DownloadCompletePayload,
     DownloadErrorPayload,
-    DownloadJob,
     DownloadLogPayload,
-    DownloadOptions,
     DownloadProgressPayload,
     LogRecordPayload,
     PostProcessProgressPayload,
-    SearchFilter,
-    SearchFilterDescriptor,
-    SearchPageResponse,
-    SearchSiteInfo,
     UnitStartedPayload,
 } from "../types";
-
-// ========== Search ==========
-
-/** Search a supported site by query string. */
-export async function searchContent(
-    query: string,
-    site: string,
-    filters: SearchFilter[] = [],
-    page?: number,
-): Promise<SearchPageResponse> {
-    return invoke<SearchPageResponse>("search_content", { query, site, filters, page });
-}
-
-/** List all sites that support search. */
-export async function getSearchProviders(): Promise<SearchSiteInfo[]> {
-    return invoke<SearchSiteInfo[]>("search_providers");
-}
-
-/** Retrieve available search filters for a given site. */
-export async function getSearchFilters(
-    site: string,
-): Promise<SearchFilterDescriptor[]> {
-    return invoke<SearchFilterDescriptor[]>("search_filters", { site });
-}
-
-// ========== Download ==========
-
-/** Start a new download for the given URL. Returns the job UUID. */
-export async function startDownload(
-    url: string,
-    options: DownloadOptions,
-    title?: string,
-): Promise<string> {
-    return invoke<string>("start_download", { url, options, title: title ?? null });
-}
-
-/** Cancel an in-progress download by its job ID. */
-export async function cancelDownload(jobId: string): Promise<void> {
-    return invoke<void>("cancel_download", { jobId });
-}
-
-/** Retrieve the current download queue. */
-export async function getQueue(): Promise<DownloadJob[]> {
-    return invoke<DownloadJob[]>("queue");
-}
-
-/** Remove a completed, failed, or cancelled download from the queue. */
-export async function removeJob(jobId: string): Promise<void> {
-    return invoke<void>("remove_job", { jobId });
-}
-
-// ========== Settings ==========
-
-/** Retrieve the current application settings. */
-export async function getSettings(): Promise<AppSettings> {
-    return invoke<AppSettings>("settings");
-}
-
-/** Update application settings with new values. */
-export async function updateSettings(settings: AppSettings): Promise<void> {
-    return invoke<void>("update_settings", { settings });
-}
-
-/** Open a native directory picker dialog and return the selected path. */
-export async function pickDirectory(): Promise<string | null> {
-    return invoke<string | null>("pick_directory");
-}
 
 // ========== Event Listeners ==========
 
@@ -165,37 +92,4 @@ export function onUnitStarted(
     handler: (payload: UnitStartedPayload) => void,
 ): Promise<UnlistenFn> {
     return listen<UnitStartedPayload>("unit-started", (e) => handler(e.payload));
-}
-
-/** Validate a format expression and return matching format IDs. */
-export async function validateFormatExpression(
-    expression: string,
-    formats: FormatData[],
-): Promise<string[]> {
-    return invoke<string[]>("validate_format_expression", {
-        expression,
-        formats,
-    });
-}
-
-/**
- * Format metadata for expression validation.
- *
- * Mirrors the Rust `FormatData` struct. Sent to the backend so
- * format filter predicates (e.g. `[height<=1080]`) can match.
- */
-export interface FormatData {
-    format_id: string;
-    ext: string;
-    width: number | null;
-    height: number | null;
-    fps: number | null;
-    tbr: number | null;
-    vcodec: string | null;
-    acodec: string | null;
-    filesize: number | null;
-    vbr: number | null;
-    abr: number | null;
-    asr: number | null;
-    protocol: string;
 }

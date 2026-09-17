@@ -28,7 +28,7 @@ import {
     SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import type { DownloadOptions, KnobField } from "@/types";
+import type { ContainerFormat, DownloadOptions, KnobField } from "@/types";
 import { KnobRow } from "./KnobRow";
 
 // Maps SpeedKnob field names to TanStack Form field names.
@@ -210,7 +210,13 @@ export function DownloadConfig() {
     const { data: videoCodecsData } = useQuery(codecsQueryOptions(expertMode));
     const videoCodecs = videoCodecsData ?? [];
     const { data: audioCodecsData } = useQuery(
-        audioCodecsQueryOptions(resolvedContainer || null, recodeActive && !!resolvedContainer),
+        // The form field is a `z.string()` (an empty string = unset); past this
+        // seam the command map wants the typed container, mirroring the cast the
+        // submit path already makes for `recodeVideo`.
+        audioCodecsQueryOptions(
+            (resolvedContainer || null) as ContainerFormat | null,
+            recodeActive && !!resolvedContainer,
+        ),
     );
     const audioCodecs = audioCodecsData ?? [];
 
