@@ -57,7 +57,6 @@ function useProxyThumbnail(url: string | null | undefined, enabled: boolean) {
         enabled: enabled && !!url,
         staleTime: Infinity,
         gcTime: 5 * 60 * 1000,
-        retry: false,
     });
 }
 

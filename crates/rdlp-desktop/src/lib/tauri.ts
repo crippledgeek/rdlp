@@ -14,7 +14,6 @@ import type {
     DownloadLogPayload,
     DownloadOptions,
     DownloadProgressPayload,
-    FormatListResponse,
     LogRecordPayload,
     PostProcessProgressPayload,
     SearchFilter,
@@ -46,13 +45,6 @@ export async function getSearchFilters(
     site: string,
 ): Promise<SearchFilterDescriptor[]> {
     return invoke<SearchFilterDescriptor[]>("search_filters", { site });
-}
-
-// ========== Formats ==========
-
-/** Retrieve available formats for a URL. */
-export async function getFormats(url: string): Promise<FormatListResponse> {
-    return invoke<FormatListResponse>("formats", { url });
 }
 
 // ========== Download ==========

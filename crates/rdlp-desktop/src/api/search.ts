@@ -67,7 +67,6 @@ export function enrichSearchResultQueryOptions(
             : skipToken,
         staleTime: 60 * 60 * 1000,
         gcTime: 60 * 60 * 1000,
-        retry: 0,
     });
 }
 
