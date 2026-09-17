@@ -460,10 +460,10 @@ impl TempRegistry {
                             // We got the lock → orphaned. Unlock before deleting
                             // so the OS can clean up the lock state. Named
                             // through the fs4 trait, not `f.unlock()`: std grew
-                            // an inherent `File::unlock` in 1.89 that shadows
-                            // the trait method; naming the trait keeps the call
-                            // on fs4 for every toolchain the workspace floor
-                            // admits instead of flipping with the compiler.
+                            // an inherent `File::unlock` in 1.89 that a bare
+                            // method call would pick over the trait; naming the
+                            // trait makes it unambiguous which implementation
+                            // runs.
                             let _ = FileExt::unlock(&f);
                             false // not held by another process
                         }
