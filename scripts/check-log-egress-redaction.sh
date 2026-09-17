@@ -90,6 +90,15 @@ fn run() {
         .build();
 }
 FIXTURE
+    cat > "$tmp/bad_desktop_format.rs" <<'FIXTURE'
+fn run() {
+    tauri_plugin_log::Builder::new()
+        .format(|out, message, _record| {
+            out.finish(format_args!("{message}"));
+        })
+        .build();
+}
+FIXTURE
     mkdir -p "$tmp/sink/src"
     cat > "$tmp/sink/src/main.rs" <<'FIXTURE'
 fn main() {
@@ -98,10 +107,11 @@ fn main() {
 FIXTURE
     if ! cli_sink_redacts "$tmp/bad_cli.rs" \
         && ! desktop_root_redacts "$tmp/bad_desktop.rs" \
+        && ! desktop_root_redacts "$tmp/bad_desktop_format.rs" \
         && [ -n "$(other_sinks "$tmp/sink")" ] \
         && cli_sink_redacts "$CLI" \
         && desktop_root_redacts "$DESKTOP"; then
-        echo "SELF-TEST OK: the gate flags an unredacted CLI writer, a cleared desktop root and a stray sink, and passes the real ones."
+        echo "SELF-TEST OK: the gate flags an unredacted CLI writer, a cleared and a non-redacting desktop root, and a stray sink, and passes the real ones."
         exit 0
     fi
     echo "SELF-TEST FAILED: the gate misjudged a known fixture — it is broken."
@@ -119,7 +129,9 @@ if ! desktop_root_redacts "$DESKTOP"; then
     echo "ERROR: $DESKTOP: the tauri-plugin-log root formatter no longer redacts (or .clear_format() is back) (#684)."
     failed=1
 fi
-strays=$(other_sinks crates/*/src crates/rdlp-desktop/src-tauri/src | grep -v "^$CLI:" || true)
+# The CLI's one sanctioned sink is the `with_writer(writer)` that feeds
+# SuspendingWriter; any other `with_writer(` in main.rs is a stray too.
+strays=$(other_sinks crates/*/src crates/rdlp-desktop/src-tauri/src | grep -v "^$CLI:[0-9]*:.*with_writer(writer)" || true)
 if [ -n "$strays" ]; then
     echo "ERROR: a production log sink other than the two redacting egresses (#684):"
     printf '%s\n' "$strays" | sed 's/^/  /'

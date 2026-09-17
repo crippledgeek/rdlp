@@ -208,15 +208,17 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
             .with(filter)
             .with(tracing_subscriber::fmt::layer().with_writer(writer))
             .init();
-
-        // Route panics through `log` — and so through the `tracing-log`
-        // bridge and the redacting `SuspendingWriter` above — instead of
-        // Rust's default hook, which prints the raw payload to stderr past
-        // every redaction (#684). Installed only now, after the subscriber
-        // exists: unlike the desktop this replaces the default hook outright,
-        // because from here on the facade always has a sink.
-        log_panics::init();
     }
+
+    // Route panics through `log` — and so through the `tracing-log` bridge
+    // and the redacting `SuspendingWriter` above — instead of Rust's default
+    // hook, which prints the raw payload to stderr past every redaction
+    // (#684). Unconditional: under `--quiet` no subscriber is installed and
+    // the panic record is dropped, which is what quiet means; the raw hook
+    // would be the one unredacted egress left. Replaces the default hook
+    // outright — unlike the desktop, there is no plugin chain that could
+    // panic before this line.
+    log_panics::init();
 
     // Remove stale temp files left by a prior crash in the output directory.
     // cleanup_stale performs a blocking directory walk with per-entry metadata

@@ -67,41 +67,180 @@ impl CodecIdentity {
 ///
 /// `token` is an RFC 6381 codec string (`avc1.640028`, `mp4a.40.2`, `Opus`),
 /// the bare sample-entry code (`hev1`), or a plain `FFmpeg` codec-ID name or
-/// common alias (`h264`, `avc`, `h265`, `hevc`, `aac`). Matching is on the
-/// whole first dotted component, case-insensitively — never a substring —
-/// so `pre_input_aac`-style accidents cannot classify. `mp4a` is refined by
-/// its object-type indication and audio object type; an unknown sub-type
-/// keeps `kind: Audio` with `name: None` rather than being assumed AAC.
+/// common alias (`h264`, `avc`, `h265`, `hevc`, `aac`). The first dotted
+/// component is parsed as a [`SampleEntryCode`], else as a [`PlainName`];
+/// each is an enum, so the vocabulary is closed and exact — never a
+/// substring — while the function stays open: an unrecognised token is
+/// `None`, not a default.
 ///
 /// A format id split on non-alphanumerics cannot present the hyphenated
 /// `ac-3` / `ec-3` codes; those only arrive whole from a `CODECS=` list.
 #[must_use]
 pub fn codec_identity(token: &str) -> Option<CodecIdentity> {
-    let token = token.trim();
-    let mut parts = token.split('.');
-    let code = parts.next()?.to_ascii_lowercase();
-    Some(match code.as_str() {
-        // Video — MP4RA sample entries plus the plain names extractors use.
-        "avc1" | "avc2" | "avc3" | "avc4" | "avc" | "h264" | "dva1" | "dvav" => {
-            CodecIdentity::video(CodecName::H264)
-        }
-        "hvc1" | "hev1" | "hevc" | "h265" | "dvh1" | "dvhe" => {
-            CodecIdentity::video(CodecName::HEVC)
-        }
-        "av01" | "av1" => CodecIdentity::video(CodecName::AV1),
-        "vp09" | "vp9" => CodecIdentity::video(CodecName::VP9),
-        "vp08" | "vp8" => CodecIdentity::video(CodecName::VP8),
-        // Audio.
-        "mp4a" => CodecIdentity::audio(mp4a_codec(parts.next(), parts.next())),
-        "aac" => CodecIdentity::audio(Some(CodecName::AAC)),
-        "opus" => CodecIdentity::audio(Some(CodecName::OPUS)),
-        "ac-3" | "ac3" => CodecIdentity::audio(Some(CodecName::AC3)),
-        "ec-3" | "eac3" => CodecIdentity::audio(Some(CodecName::EAC3)),
-        "flac" => CodecIdentity::audio(Some(CodecName::FLAC)),
-        "vorbis" => CodecIdentity::audio(Some(CodecName::VORBIS)),
-        "mp3" => CodecIdentity::audio(Some(CodecName::MP3)),
-        _ => return None,
+    let mut parts = token.trim().split('.');
+    let code = parts.next()?;
+    Some(match CodecToken::parse(code)? {
+        CodecToken::SampleEntry(entry) => entry.identity(parts.next(), parts.next()),
+        CodecToken::Plain(name) => name.identity(),
     })
+}
+
+/// The two vocabularies a token's first component can belong to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CodecToken {
+    /// An MP4RA sample-entry code (`avc1`, `mp4a`, `Opus`).
+    SampleEntry(SampleEntryCode),
+    /// A plain `FFmpeg` name or alias (`h264`, `avc`, `aac`).
+    Plain(PlainName),
+}
+
+impl CodecToken {
+    fn parse(code: &str) -> Option<Self> {
+        match (SampleEntryCode::parse(code), PlainName::parse(code)) {
+            (Some(entry), _) => Some(Self::SampleEntry(entry)),
+            (None, Some(name)) => Some(Self::Plain(name)),
+            (None, None) => None,
+        }
+    }
+}
+
+/// The MP4 sample-entry codes rdlp recognises (MP4RA "Codecs" registry;
+/// RFC 6381 §3.3 puts one first in a `codecs` token). Case-insensitive on
+/// parse — `Opus` and `fLaC` are registered with capitals.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SampleEntryCode {
+    /// `avc1`–`avc4`: Advanced Video Coding.
+    Avc,
+    /// `dva1` / `dvav`: AVC-based Dolby Vision.
+    DolbyVisionAvc,
+    /// `hvc1` / `hev1`: HEVC.
+    Hevc,
+    /// `dvh1` / `dvhe`: HEVC-based Dolby Vision.
+    DolbyVisionHevc,
+    /// `av01`: AOM Video Codec.
+    Av01,
+    /// `vp08`: VP8.
+    Vp08,
+    /// `vp09`: VP9.
+    Vp09,
+    /// `mp4a`: MPEG-4 Audio; the object type says which codec.
+    Mp4a,
+    /// `Opus`.
+    Opus,
+    /// `ac-3`: AC-3.
+    Ac3,
+    /// `ec-3`: Enhanced AC-3.
+    Ec3,
+    /// `fLaC`.
+    Flac,
+}
+
+impl SampleEntryCode {
+    /// Parse a sample-entry code (the part before the first `.`).
+    #[must_use]
+    pub fn parse(code: &str) -> Option<Self> {
+        Some(match code.to_ascii_lowercase().as_str() {
+            "avc1" | "avc2" | "avc3" | "avc4" => Self::Avc,
+            "dva1" | "dvav" => Self::DolbyVisionAvc,
+            "hvc1" | "hev1" => Self::Hevc,
+            "dvh1" | "dvhe" => Self::DolbyVisionHevc,
+            "av01" => Self::Av01,
+            "vp08" => Self::Vp08,
+            "vp09" => Self::Vp09,
+            "mp4a" => Self::Mp4a,
+            "opus" => Self::Opus,
+            "ac-3" => Self::Ac3,
+            "ec-3" => Self::Ec3,
+            "flac" => Self::Flac,
+            _ => return None,
+        })
+    }
+
+    /// The identity, given the rest of the token (`oti`, `aot`) for `mp4a`.
+    fn identity(self, oti: Option<&str>, aot: Option<&str>) -> CodecIdentity {
+        match self {
+            Self::Avc | Self::DolbyVisionAvc => CodecIdentity::video(CodecName::H264),
+            Self::Hevc | Self::DolbyVisionHevc => CodecIdentity::video(CodecName::HEVC),
+            Self::Av01 => CodecIdentity::video(CodecName::AV1),
+            Self::Vp08 => CodecIdentity::video(CodecName::VP8),
+            Self::Vp09 => CodecIdentity::video(CodecName::VP9),
+            Self::Mp4a => CodecIdentity::audio(mp4a_codec(oti, aot)),
+            Self::Opus => CodecIdentity::audio(Some(CodecName::OPUS)),
+            Self::Ac3 => CodecIdentity::audio(Some(CodecName::AC3)),
+            Self::Ec3 => CodecIdentity::audio(Some(CodecName::EAC3)),
+            Self::Flac => CodecIdentity::audio(Some(CodecName::FLAC)),
+        }
+    }
+}
+
+/// The plain codec names and aliases extractors embed in format ids
+/// (`hls-h264-fallback`, `hls-av1-url`) — `FFmpeg` codec-ID names plus the
+/// common spellings `avc` / `h265` / `ac3` / `eac3`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PlainName {
+    /// `h264`, `avc`.
+    H264,
+    /// `hevc`, `h265`.
+    Hevc,
+    /// `av1`.
+    Av1,
+    /// `vp9`.
+    Vp9,
+    /// `vp8`.
+    Vp8,
+    /// `aac`.
+    Aac,
+    /// `opus`.
+    Opus,
+    /// `ac3`.
+    Ac3,
+    /// `eac3`.
+    Eac3,
+    /// `flac`.
+    Flac,
+    /// `vorbis`.
+    Vorbis,
+    /// `mp3`.
+    Mp3,
+}
+
+impl PlainName {
+    /// Parse a plain name or alias, case-insensitively.
+    #[must_use]
+    pub fn parse(name: &str) -> Option<Self> {
+        Some(match name.to_ascii_lowercase().as_str() {
+            "h264" | "avc" => Self::H264,
+            "hevc" | "h265" => Self::Hevc,
+            "av1" => Self::Av1,
+            "vp9" => Self::Vp9,
+            "vp8" => Self::Vp8,
+            "aac" => Self::Aac,
+            "opus" => Self::Opus,
+            "ac3" => Self::Ac3,
+            "eac3" => Self::Eac3,
+            "flac" => Self::Flac,
+            "vorbis" => Self::Vorbis,
+            "mp3" => Self::Mp3,
+            _ => return None,
+        })
+    }
+
+    const fn identity(self) -> CodecIdentity {
+        match self {
+            Self::H264 => CodecIdentity::video(CodecName::H264),
+            Self::Hevc => CodecIdentity::video(CodecName::HEVC),
+            Self::Av1 => CodecIdentity::video(CodecName::AV1),
+            Self::Vp9 => CodecIdentity::video(CodecName::VP9),
+            Self::Vp8 => CodecIdentity::video(CodecName::VP8),
+            Self::Aac => CodecIdentity::audio(Some(CodecName::AAC)),
+            Self::Opus => CodecIdentity::audio(Some(CodecName::OPUS)),
+            Self::Ac3 => CodecIdentity::audio(Some(CodecName::AC3)),
+            Self::Eac3 => CodecIdentity::audio(Some(CodecName::EAC3)),
+            Self::Flac => CodecIdentity::audio(Some(CodecName::FLAC)),
+            Self::Vorbis => CodecIdentity::audio(Some(CodecName::VORBIS)),
+            Self::Mp3 => CodecIdentity::audio(Some(CodecName::MP3)),
+        }
+    }
 }
 
 /// The codec behind an `mp4a` sample entry: its object-type indication
@@ -109,19 +248,18 @@ pub fn codec_identity(token: &str) -> Option<CodecIdentity> {
 /// codec. A bare `mp4a` is AAC — what every HLS packager means by it. A
 /// value outside the registries is a known-audio, unnamed entry.
 fn mp4a_codec(oti: Option<&str>, aot: Option<&str>) -> Option<CodecName> {
-    let Some(oti) = oti else {
-        return Some(CodecName::AAC);
-    };
-    match ObjectTypeIndication::parse(oti)? {
-        ObjectTypeIndication::Mpeg4Audio => match aot {
-            None => Some(CodecName::AAC),
-            Some(aot) => Some(AudioObjectType::parse(aot)?.codec()),
-        },
-        ObjectTypeIndication::Mpeg2AacMain
-        | ObjectTypeIndication::Mpeg2AacLc
-        | ObjectTypeIndication::Mpeg2AacSsr => Some(CodecName::AAC),
-        ObjectTypeIndication::Mpeg2Audio | ObjectTypeIndication::Mpeg1Audio => Some(CodecName::MP3),
-        ObjectTypeIndication::Opus => Some(CodecName::OPUS),
+    use ObjectTypeIndication as Oti;
+    match (oti.and_then(Oti::parse), oti.is_some(), aot) {
+        // A bare `mp4a`, or MPEG-4 Audio with no audio object type: AAC.
+        (None, false, _) | (Some(Oti::Mpeg4Audio), _, None) => Some(CodecName::AAC),
+        // An OTI outside the registry (or withdrawn): audio, unnamed.
+        (None, true, _) => None,
+        (Some(Oti::Mpeg4Audio), _, Some(aot)) => Some(AudioObjectType::parse(aot)?.codec()),
+        (Some(Oti::Mpeg2AacMain | Oti::Mpeg2AacLc | Oti::Mpeg2AacSsr), _, _) => {
+            Some(CodecName::AAC)
+        }
+        (Some(Oti::Mpeg2Audio | Oti::Mpeg1Audio), _, _) => Some(CodecName::MP3),
+        (Some(Oti::Opus), _, _) => Some(CodecName::OPUS),
     }
 }
 
@@ -167,9 +305,10 @@ impl ObjectTypeIndication {
 /// `FFmpeg`, which carries the profile separately.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AudioObjectType {
-    /// 1 AAC Main, 2 AAC LC, 3 AAC SSR, 4 AAC LTP, 5 SBR, 17 ER AAC LC,
-    /// 19 ER AAC LTP, 20 ER AAC Scalable, 21 ER `TwinVQ`, 22 ER BSAC,
-    /// 23 ER AAC LD, 29 PS, 39 ER AAC ELD, 42 USAC.
+    /// 1 AAC Main, 2 AAC LC, 3 AAC SSR, 4 AAC LTP, 5 SBR, 6 AAC Scalable,
+    /// 17 ER AAC LC, 19 ER AAC LTP, 20 ER AAC Scalable, 23 ER AAC LD, 29 PS,
+    /// 39 ER AAC ELD, 42 USAC — all `aac` to `FFmpeg`. (7/21 `TwinVQ` and
+    /// 22 BSAC are MPEG-4 Audio but not AAC; they parse as unknown.)
     AacFamily,
     /// 32 — MPEG-1/2 Layer 1.
     Layer1,
@@ -177,14 +316,14 @@ enum AudioObjectType {
     Layer2,
     /// 34 — MPEG-1/2 Layer 3.
     Layer3,
-    /// 36 — ALS (Audio Lossless Coding).
+    /// 36 — ALS (Audio Lossless Coding); `mp4als` to `FFmpeg`.
     Als,
 }
 
 impl AudioObjectType {
     fn parse(decimal: &str) -> Option<Self> {
         Some(match decimal.parse::<u8>().ok()? {
-            1..=5 | 17 | 19..=23 | 29 | 39 | 42 => Self::AacFamily,
+            1..=6 | 17 | 19 | 20 | 23 | 29 | 39 | 42 => Self::AacFamily,
             32 => Self::Layer1,
             33 => Self::Layer2,
             34 => Self::Layer3,
@@ -199,7 +338,7 @@ impl AudioObjectType {
             Self::Layer1 => CodecName::from_static("mp1"),
             Self::Layer2 => CodecName::MP2,
             Self::Layer3 => CodecName::MP3,
-            Self::Als => CodecName::from_static("als"),
+            Self::Als => CodecName::from_static("mp4als"),
         }
     }
 }
@@ -251,6 +390,22 @@ mod tests {
         assert_eq!(name("mp4a.40.5"), Some("aac/Audio".to_owned()));
         assert_eq!(name("mp4a.40.42"), Some("aac/Audio".to_owned()));
         assert_eq!(name("mp4a.40.34"), Some("mp3/Audio".to_owned()));
+        assert_eq!(
+            name("mp4a.40.6"),
+            Some("aac/Audio".to_owned()),
+            "AAC Scalable"
+        );
+        assert_eq!(name("mp4a.40.36"), Some("mp4als/Audio".to_owned()));
+        assert_eq!(
+            name("mp4a.40.21"),
+            Some("?/Audio".to_owned()),
+            "ER TwinVQ is not AAC"
+        );
+        assert_eq!(
+            name("mp4a.40.22"),
+            Some("?/Audio".to_owned()),
+            "ER BSAC is not AAC"
+        );
         assert_eq!(name("mp4a.40.33"), Some("mp2/Audio".to_owned()));
         assert_eq!(name("mp4a.67.1"), Some("aac/Audio".to_owned()));
         assert_eq!(name("mp4a.69"), Some("mp3/Audio".to_owned()));
