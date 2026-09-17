@@ -27,11 +27,6 @@ pub(crate) const PROBE_WINDOW_BYTES: u64 = 256 * 1024;
 /// Progress callback update interval
 pub(super) const PROGRESS_UPDATE_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Cap on the CPU-derived concurrent-connection count `default()` computes.
-/// A cap, not a default: the default value itself is
-/// `EffectiveNetwork::DEFAULT.concurrent_fragments`.
-const MAX_CONCURRENT_CONNECTIONS: usize = 8;
-
 /// [`rdlp_types::config::DEFAULT_MAX_FRAGMENT_BYTES`] as the validated cap
 /// type `rdlp_http::read_body_capped` takes, used when
 /// `Config::max_fragment_bytes` is `None`. `rdlp-types` is the single source
@@ -91,23 +86,17 @@ pub struct DownloaderConfig {
 }
 
 impl Default for DownloaderConfig {
+    /// Every network/download field is `EffectiveNetwork::DEFAULT`'s. The
+    /// operator's `Config::concurrent_fragments` (validated 1..=64) reaches
+    /// this struct through `build_registry`; a CPU-derived figure here would
+    /// be a second resolver that a bare `HttpDownloader::new()` could observe.
     fn default() -> Self {
-        // Calculate optimal concurrent connections based on CPU threads
-        // For I/O-bound workloads like HTTP downloads:
-        // - Tokio can handle many more tasks than CPU cores
-        // - Research shows: aria2 uses 4-16 connections, yt-dlp defaults to 1
-        // - Formula: min(available_parallelism, MAX_CONCURRENT_CONNECTIONS)
-        //   * Too few: underutilizes bandwidth
-        //   * Too many: connection overhead, server rate limiting
-        let concurrent_fragments = std::thread::available_parallelism()
-            .map_or(4, |n| n.get().min(MAX_CONCURRENT_CONNECTIONS));
-
         let net = EffectiveNetwork::DEFAULT;
         Self {
             buffer_size: net.buffer_size,
             retry_config: RetryConfig::default_config(),
             fragment_retry_config: RetryConfig::default_config(),
-            concurrent_fragments,
+            concurrent_fragments: net.concurrent_fragments,
             chunk_strategy: ChunkSizeStrategy::Auto,
             parallel_threshold: net.parallel_threshold,
             max_fragment_bytes: DEFAULT_MAX_FRAGMENT_BODY_CAP,
@@ -126,6 +115,17 @@ mod tests {
     #[test]
     fn probe_window_is_256_kib() {
         assert_eq!(PROBE_WINDOW_BYTES, 256 * 1024);
+    }
+
+    /// The default concurrency is `EffectiveNetwork::DEFAULT`'s, not a
+    /// CPU-derived figure: a second resolver here made a bare
+    /// `HttpDownloader::new()` disagree with `DashDownloader::new()`.
+    #[test]
+    fn default_concurrent_fragments_is_the_effective_network_default() {
+        assert_eq!(
+            DownloaderConfig::default().concurrent_fragments,
+            EffectiveNetwork::DEFAULT.concurrent_fragments
+        );
     }
 
     #[test]

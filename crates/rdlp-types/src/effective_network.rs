@@ -19,9 +19,12 @@ use serde::Serialize;
 ///    field still unset, and hands consumers concrete values.
 ///
 /// `DEFAULT` is the *only* place the nine default values live: rdlp-http,
-/// rdlp-downloader, rdlp-extractor and the desktop GUI all read them from
-/// here rather than carrying a copy, so a value cannot drift between the
-/// crate that documents it and the one that applies it (#611).
+/// rdlp-downloader and rdlp-extractor read them from here rather than
+/// carrying a copy, so a value cannot drift between the crate that documents
+/// a default and the one that applies it (#611). This struct is also the
+/// payload intended for the desktop GUI's settings placeholders — served
+/// over IPC by an `effective_network` command — so the GUI need not hold a
+/// fifth copy either.
 ///
 /// [`Config::effective_network`]: crate::Config::effective_network
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]

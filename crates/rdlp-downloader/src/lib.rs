@@ -235,11 +235,13 @@
 //!
 //! ## Configuration
 //!
-//! Key configuration options (via [`rdlp_types::Config`]):
+//! Key configuration options (via [`rdlp_types::Config`]); the defaults for
+//! the network/download knobs live on [`rdlp_types::EffectiveNetwork::DEFAULT`]
+//! and are resolved once by [`rdlp_types::Config::effective_network`]:
 //!
-//! - `concurrent_fragments`: Number of parallel connections (default: 4)
-//! - `buffer_size`: I/O buffer size in bytes (default: 2 MB)
-//! - `socket_timeout`: Connection timeout in seconds (default: 30)
+//! - `concurrent_fragments`: Number of parallel connections
+//! - `buffer_size`: I/O buffer size in bytes
+//! - `socket_timeout`: Connection timeout in seconds
 //! - `user_agent`: Custom User-Agent header
 //! - `proxy`: HTTP/HTTPS proxy URL
 
