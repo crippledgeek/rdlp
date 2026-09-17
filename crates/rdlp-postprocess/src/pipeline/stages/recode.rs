@@ -718,20 +718,23 @@ impl PipelineStage for RecodeStage {
             return Err(anyhow::Error::new(e).context("recode stage failed"));
         }
 
-        // Capture the encoding_tool for downstream pass-through stages.
-        {
-            let audio_part = rdlp_ffmpeg::ffmpeg::audio_tag_component(
+        // Capture the encoding_tool for downstream pass-through stages. A
+        // remux copies the video, so its component is `copy` — the tag names
+        // tools, not the codec inside (#626).
+        msg.encoding_tool = Some(rdlp_ffmpeg::ffmpeg::encoding_tool_components(
+            (
+                opts.remux_only,
+                opts.video_codec
+                    .as_ref()
+                    .map(rdlp_types::media_name::MediaName::as_str),
+            ),
+            (
                 opts.audio_copy,
                 opts.audio_codec
                     .as_ref()
                     .map(rdlp_types::media_name::MediaName::as_str),
-            );
-            let video_part = opts
-                .video_codec
-                .as_ref()
-                .map_or("libx264", rdlp_types::media_name::MediaName::as_str);
-            msg.encoding_tool = Some(format!("{video_part} + {audio_part}"));
-        }
+            ),
+        ));
 
         if let Some(ref cb) = stage_callback {
             cb.on_log(&format!(

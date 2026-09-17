@@ -511,10 +511,14 @@ impl FFmpegRunner {
     ) -> anyhow::Result<()> {
         let opts = ctx.opts;
         let output = ctx.output_path;
-        let video_codec_name = opts
-            .video_codec
-            .as_ref()
-            .map_or("libx264", rdlp_types::media_name::MediaName::as_str);
+        // The tag names what ran: the encoder this context actually opened
+        // in phase 1, not whatever `opts.video_codec` did or did not say
+        // (#626). Phase 1 resolved it by name, so it is always present.
+        let video_codec_name = ctx
+            .video_encoder
+            .codec()
+            .map(|codec| codec.name().to_owned())
+            .ok_or_else(|| PostProcessError::ffmpeg_failed("opened video encoder has no codec"))?;
         let audio_encode_codec: Option<&str> = if opts.audio_copy {
             None
         } else {
@@ -528,11 +532,10 @@ impl FFmpegRunner {
 
         // Set format-level encoding_tool metadata
         {
-            let audio_component = crate::ffmpeg::encoding_tag::audio_tag_component(
-                opts.audio_copy,
-                audio_encode_codec,
+            let tool_components = crate::ffmpeg::encoding_tag::encoding_tool_components(
+                (false, Some(&video_codec_name)),
+                (opts.audio_copy, audio_encode_codec),
             );
-            let tool_components = format!("{video_codec_name} + {audio_component}");
             crate::ffmpeg::encoding_tag::set_encoding_tool(&mut ctx.octx, &tool_components);
         }
 
@@ -540,7 +543,7 @@ impl FFmpegRunner {
         crate::ffmpeg::encoding_tag::set_stream_encoder(
             &mut ctx.octx,
             ctx.video_ost_index,
-            video_codec_name,
+            &video_codec_name,
         );
 
         // Set per-stream encoder tag on audio output stream (only if re-encoding)

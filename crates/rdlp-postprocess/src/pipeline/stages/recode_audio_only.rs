@@ -69,7 +69,7 @@ pub(super) async fn recode_audio_only(
     };
     let summary = format!(
         "Recode: audio-only source, container={target_ext}, audio={}",
-        rdlp_ffmpeg::ffmpeg::audio_tag_component(
+        rdlp_ffmpeg::ffmpeg::stream_tag_component(
             opts.copy,
             opts.encoder_name
                 .as_ref()

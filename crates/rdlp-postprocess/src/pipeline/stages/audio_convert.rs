@@ -13,7 +13,7 @@
 //! copies had already drifted: the recode side fell back to the *container
 //! extension* when no encoder name was resolved, putting `"mkv"` in a slot
 //! that names an encoder. This module owns that decision once, via
-//! `audio_tag_component`, which is the same helper the video recode path uses.
+//! `stream_tag_component`, which is the same helper the video recode path uses.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -100,7 +100,7 @@ pub(super) async fn run_audio_extract(
                 .map(rdlp_types::media_name::MediaName::as_str)
         });
     msg.encoding_tool =
-        Some(rdlp_ffmpeg::ffmpeg::audio_tag_component(job.opts.copy, encoder_for_tag).to_string());
+        Some(rdlp_ffmpeg::ffmpeg::stream_tag_component(job.opts.copy, encoder_for_tag).to_string());
 
     info!(
         "{}: audio written to {}",
