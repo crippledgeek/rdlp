@@ -77,7 +77,9 @@ pub mod speed_controls;
 #[doc(hidden)]
 pub mod test_support;
 mod thumbnail;
-pub use thumbnail::{supports_thumbnail_embed, uses_native_attachment};
+pub use thumbnail::{
+    supports_thumbnail_embed, uses_metadata_block_picture, uses_native_attachment,
+};
 mod transcode;
 pub use speed_controls::{
     SpeedControlError, default_codec_for_container, resolve_recode_encoder, validate_speed_controls,

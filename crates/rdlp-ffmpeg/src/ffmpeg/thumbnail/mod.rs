@@ -47,7 +47,9 @@ use rdlp_types::ContainerFormat;
 use crate::error::{PostProcessError, Result};
 
 use self::embed_strategy::ThumbnailEmbedStrategy;
-pub use self::embed_strategy::{supports_thumbnail_embed, uses_native_attachment};
+pub use self::embed_strategy::{
+    supports_thumbnail_embed, uses_metadata_block_picture, uses_native_attachment,
+};
 use super::ffi_helpers::cleanup_partial_output;
 use super::{FFmpegRunner, ensure_init};
 

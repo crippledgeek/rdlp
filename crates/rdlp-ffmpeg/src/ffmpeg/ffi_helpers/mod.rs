@@ -141,16 +141,22 @@ pub(crate) fn oformat_can_represent(
 /// `codec_cover_image_tags` (mjpeg/png/bmp). The query only ever *widens*
 /// this baseline (mp3's callback answers every `ID3v2` `APIC` image codec).
 ///
-/// A muxer that declares no video codec at all cannot carry a cover
-/// *stream* whatever its codec: `mux.c` (`init_muxer`) refuses any stream of
-/// a type whose default codec is `NONE` for the raw and RIFF muxers
-/// (`wavenc.c`: `video_codec = NONE` + `MAX_ONE_OF_EACH`), and the `ffmpeg`
-/// CLI's own default stream selection drops an attached picture there
-/// (`map_auto_video`: `av_guess_codec(…, VIDEO) == NONE` → no video output).
-/// The cover-capable audio muxers all declare one (`flacenc.c`/`mp3enc.c`/
-/// `aiffenc.c`: PNG; `ipod`: H.264). Matroska *attachments* are a different
-/// mechanism (`AVMEDIA_TYPE_ATTACHMENT`, see `uses_native_attachment`) and
-/// are not asked here.
+/// The baseline holds only for muxers that embed cover *streams* natively
+/// and under-report it: the audio muxers whose declared video codec is an
+/// image (`flacenc.c`/`mp3enc.c`/`aiffenc.c`: `video_codec = PNG`) and the
+/// `movenc.c` family, which tags a cover from its own
+/// `codec_cover_image_tags` regardless of the muxer's tag table
+/// (`mov_find_codec_tag`; `ipod`/`.m4a` has no MJPEG tag otherwise).
+/// Everything else is the muxer's own answer: `wav` and the raw muxers
+/// declare `video_codec = NONE` and `mux.c`'s `init_muxer` refuses any video
+/// stream there; `ogg` declares Theora and `ogg_init` refuses every codec
+/// outside Vorbis/Theora/Speex/FLAC/Opus/VP8 (no Ogg or Vorbis spec defines
+/// image support) — rdlp's Ogg covers ride the Xiph-proposed
+/// `METADATA_BLOCK_PICTURE` field instead (`uses_metadata_block_picture`),
+/// and Matroska covers an attachment (`uses_native_attachment`); neither is
+/// a stream and neither is asked here. `ffmpeg`'s own default stream
+/// selection drops an attached picture wherever the target's video codec is
+/// `NONE` (`map_auto_video`), which is the remux behaviour rdlp mirrors.
 ///
 /// The single cover-representability rule: the thumbnail pre-check and the
 /// stream-copy enforcement point both ask this, so they cannot disagree.
@@ -158,17 +164,29 @@ pub(crate) fn oformat_can_carry_cover_image(
     oformat: *const ffmpeg_the_third::ffi::AVOutputFormat,
     codec_id: ffmpeg_the_third::ffi::AVCodecID,
 ) -> bool {
+    use ffmpeg_the_third::ffi::AVCodecID::{AV_CODEC_ID_MJPEG, AV_CODEC_ID_NONE, AV_CODEC_ID_PNG};
+
     // SAFETY: `oformat` is a non-null descriptor from FFmpeg's static muxer
-    // registry; this is a plain field read.
-    let declares_video =
-        unsafe { (*oformat).video_codec } != ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_NONE;
-    declares_video
-        && (matches!(
-            codec_id,
-            ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_MJPEG
-                | ffmpeg_the_third::ffi::AVCodecID::AV_CODEC_ID_PNG
-        ) || oformat_can_represent(oformat, codec_id))
+    // registry with a NUL-terminated `name`; plain field reads.
+    let (declared_video, name) = unsafe {
+        (
+            (*oformat).video_codec,
+            std::ffi::CStr::from_ptr((*oformat).name).to_string_lossy(),
+        )
+    };
+    if declared_video == AV_CODEC_ID_NONE {
+        return false;
+    }
+    let embeds_cover_streams = matches!(declared_video, AV_CODEC_ID_PNG | AV_CODEC_ID_MJPEG)
+        || MOVENC_MUXERS.contains(&name.as_ref());
+    let is_baseline_image = matches!(codec_id, AV_CODEC_ID_MJPEG | AV_CODEC_ID_PNG);
+    (embeds_cover_streams && is_baseline_image) || oformat_can_represent(oformat, codec_id)
 }
+
+/// The muxers `libavformat/movenc.c` implements — every one shares
+/// `mov_find_codec_tag`'s cover-image path. `avif` is deliberately absent:
+/// it is a still-image container, not a cover carrier.
+const MOVENC_MUXERS: &[&str] = &["mov", "3gp", "mp4", "psp", "3g2", "ipod", "ismv", "f4v"];
 
 /// What a stream being copied into an output *is* to the muxer, derived from
 /// its disposition — the one distinction the codec-tag decision has to make

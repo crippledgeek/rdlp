@@ -252,18 +252,19 @@ async fn webp_is_still_refused_by_mp4_family() {
     }
 }
 
-/// A muxer that declares no video codec cannot carry a cover *stream* of any
-/// codec — `mux.c`'s `init_muxer` refuses any stream of a type whose default
-/// codec is `NONE` for `wav` (`wavenc.c`) and the raw audio muxers
-/// (`rawenc.c`), and `ffmpeg`'s own default stream selection drops an
-/// attached picture there. The jpeg/png baseline must not override that:
-/// before this pin, a cover-bearing `.m4a` remuxed to `.wav` was waved
-/// through to `avformat_write_header`, which then failed with a raw
-/// "wav muxer does not support any stream of type video".
+/// Containers that cannot carry a cover *stream* say so, whatever the codec.
+/// `wav`/`aac`/`ac3` declare no video codec and `mux.c`'s `init_muxer`
+/// refuses any video stream there; `mka` embeds covers as attachments;
+/// `ogg`/`opus` declare Theora but `ogg_init` refuses every codec outside
+/// Vorbis/Theora/Speex/FLAC/Opus/VP8 (their covers are a
+/// `METADATA_BLOCK_PICTURE` field). The jpeg/png baseline must not override
+/// any of that: before this pin, a cover-bearing `.m4a` remuxed to `.wav` or
+/// `.opus` was waved through to `avformat_write_header`, which then failed
+/// with the muxer's raw error.
 ///
 /// Built in-process — no `ffmpeg` binary involved.
 #[tokio::test]
-async fn containers_without_a_video_codec_refuse_every_cover_stream() {
+async fn containers_that_cannot_carry_a_cover_stream_refuse_it() {
     let dir = tempfile::TempDir::new().unwrap();
     let png = dir.path().join("cover.png");
     rdlp_ffmpeg::test_support::write_still_png(
@@ -273,13 +274,13 @@ async fn containers_without_a_video_codec_refuse_every_cover_stream() {
     .expect("png fixture");
     let runner = FFmpegRunner::new().expect("FFmpeg");
 
-    for container in ["wav", "aac", "ac3", "mka"] {
+    for container in ["wav", "aac", "ac3", "mka", "ogg", "opus"] {
         assert!(
             !runner
                 .container_accepts_image_codec(container, &png)
                 .await
                 .expect("query must succeed"),
-            "{container} declares no video codec and must refuse a cover stream"
+            "{container} cannot carry a cover stream and must say so"
         );
     }
 }

@@ -109,6 +109,21 @@ pub const fn uses_native_attachment(format: ContainerFormat) -> bool {
     )
 }
 
+/// Whether `format` carries the cover as a `METADATA_BLOCK_PICTURE` field.
+///
+/// Ogg Vorbis / Ogg Opus (#531): neither Ogg (RFC 3533), Vorbis I nor
+/// RFC 7845 defines image support; the cover is base64 image bytes in the
+/// Xiph *proposed* `METADATA_BLOCK_PICTURE` `VorbisComment` field, never a
+/// stream, so the stream-codec capability query does not apply. The public gateway to `ThumbnailEmbedStrategy::VorbisComment`,
+/// for the same reason as [`uses_native_attachment`].
+#[must_use]
+pub const fn uses_metadata_block_picture(format: ContainerFormat) -> bool {
+    matches!(
+        ThumbnailEmbedStrategy::for_container(format),
+        Some(ThumbnailEmbedStrategy::VorbisComment)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::ThumbnailEmbedStrategy;

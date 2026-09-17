@@ -51,6 +51,7 @@ async fn remux_drops_cover_art_where_the_target_declares_no_video_codec() {
     write_sine_audio_with_cover(&src, &SineAudio::default(), &StillImage::default()).unwrap();
     let ffmpeg = FFmpegRunner::new().unwrap();
 
+    // wav declares no video codec: it drops the cover rather than failing.
     let out = dir.path().join("out.wav");
     ffmpeg
         .remux(
@@ -66,5 +67,26 @@ async fn remux_drops_cover_art_where_the_target_declares_no_video_codec() {
     assert!(
         !info.has_attached_picture(),
         "wav cannot carry a cover stream; it is dropped: {info:?}"
+    );
+
+    // ogg declares Theora but `ogg_init` refuses every codec outside its own
+    // list, mjpeg included. A FLAC source, since Ogg carries FLAC audio.
+    let flac = dir.path().join("with_cover.flac");
+    write_sine_audio_with_cover(&flac, &SineAudio::default(), &StillImage::default()).unwrap();
+    let out = dir.path().join("out.ogg");
+    ffmpeg
+        .remux(
+            &flac,
+            &out,
+            &RemuxOptions::for_container(ContainerFormat::Ogg, None),
+            None,
+        )
+        .await
+        .expect("a cover must not make the ogg remux fail");
+    let info = ffmpeg.probe(&out).await.unwrap();
+    assert!(info.has_audio && !info.has_video, "{info:?}");
+    assert!(
+        !info.has_attached_picture(),
+        "ogg cannot carry a cover stream; it is dropped: {info:?}"
     );
 }
