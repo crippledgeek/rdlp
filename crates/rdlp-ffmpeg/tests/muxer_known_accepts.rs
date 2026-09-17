@@ -29,6 +29,7 @@ use std::path::Path;
 use std::process::Command;
 
 use common::{decoded_frames, ffmpeg_available};
+use rdlp_ffmpeg::test_support::{SineAudio, write_sine_audio};
 use rdlp_ffmpeg::{MediaKind, muxer_can_represent};
 use rdlp_types::ContainerFormat;
 use rdlp_types::media_name::CodecName;
@@ -38,10 +39,17 @@ struct KnownAccept {
     container: ContainerFormat,
     codec: &'static str,
     kind: MediaKind,
-    /// `ffmpeg` args producing a one-second source in `codec`.
-    source_args: &'static [&'static str],
+    /// How to synthesise a one-second source in `codec`.
+    source: Source,
     /// Extension for the generated source file.
     source_ext: &'static str,
+}
+
+/// Audio sources are built in-process (`rdlp_ffmpeg::test_support`); the
+/// video case still shells out until #794 extends the builder to video.
+enum Source {
+    Sine { encoder: &'static str },
+    Cli(&'static [&'static str]),
 }
 
 /// Mirrors `KNOWN_UNDECLARED_SUPPORT` in `muxer_defaults`. Kept as a separate
@@ -53,7 +61,7 @@ const CASES: &[KnownAccept] = &[
         container: ContainerFormat::Mxf,
         codec: "h264",
         kind: MediaKind::Video,
-        source_args: &[
+        source: Source::Cli(&[
             "-f",
             "lavfi",
             "-i",
@@ -62,32 +70,87 @@ const CASES: &[KnownAccept] = &[
             "libx264",
             "-pix_fmt",
             "yuv420p",
-        ],
+        ]),
         source_ext: "mp4",
     },
     KnownAccept {
         container: ContainerFormat::Ts,
         codec: "aac",
         kind: MediaKind::Audio,
-        source_args: &[
-            "-f",
-            "lavfi",
-            "-i",
-            "sine=frequency=440:duration=1",
-            "-c:a",
-            "aac",
-        ],
+        source: Source::Sine { encoder: "aac" },
         source_ext: "m4a",
+    },
+    KnownAccept {
+        container: ContainerFormat::Ts,
+        codec: "mp3",
+        kind: MediaKind::Audio,
+        source: Source::Sine {
+            encoder: "libmp3lame",
+        },
+        source_ext: "mp3",
+    },
+    KnownAccept {
+        container: ContainerFormat::Ts,
+        codec: "ac3",
+        kind: MediaKind::Audio,
+        source: Source::Sine { encoder: "ac3" },
+        source_ext: "ac3",
+    },
+    KnownAccept {
+        container: ContainerFormat::Ts,
+        codec: "eac3",
+        kind: MediaKind::Audio,
+        source: Source::Sine { encoder: "eac3" },
+        source_ext: "eac3",
+    },
+    KnownAccept {
+        container: ContainerFormat::Ogg,
+        codec: "flac",
+        kind: MediaKind::Audio,
+        source: Source::Sine { encoder: "flac" },
+        source_ext: "flac",
+    },
+    KnownAccept {
+        container: ContainerFormat::Ogg,
+        codec: "opus",
+        kind: MediaKind::Audio,
+        source: Source::Sine { encoder: "libopus" },
+        source_ext: "opus",
     },
 ];
 
+/// Whether this build can synthesise the case's source at all; an absent
+/// encoder is a `[SKIP]`, not a failed proof (the sibling matrix suites do
+/// the same).
+fn source_encoder_available(case: &KnownAccept) -> bool {
+    match case.source {
+        Source::Sine { encoder } => {
+            rdlp_ffmpeg::ffmpeg::audio_encoder_registry::is_audio_encoder_available(
+                &rdlp_types::media_name::AudioEncoderName::from_static(encoder),
+            )
+        }
+        Source::Cli(_) => ffmpeg_available(),
+    }
+}
+
 fn build_source(case: &KnownAccept, path: &Path) -> bool {
-    Command::new("ffmpeg")
-        .args(["-y", "-loglevel", "error"])
-        .args(case.source_args)
-        .arg(path)
-        .status()
-        .is_ok_and(|s| s.success())
+    match case.source {
+        Source::Sine { encoder } => write_sine_audio(
+            path,
+            &SineAudio {
+                duration_secs: 1.0,
+                encoder: Some(encoder),
+                ..SineAudio::default()
+            },
+        )
+        .is_ok(),
+        Source::Cli(args) => Command::new("ffmpeg")
+            .args(["-y", "-loglevel", "error"])
+            .args(args)
+            .arg(path)
+            .status()
+            .is_ok_and(|s| s.success()),
+    }
 }
 
 /// Ground truth: does `ffmpeg -c copy` actually accept this pairing?
@@ -108,8 +171,8 @@ fn ffmpeg_copies(src: &Path, dst: &Path) -> bool {
 ///
 /// The three table-driven tests below iterate `CASES`, which is deliberately
 /// an independent list — reading the production table would make the predicate
-/// assertion a tautology, and `CASES` additionally carries the `ffmpeg` args
-/// needed to synthesise a source. But independence cuts both ways: without
+/// assertion a tautology, and `CASES` additionally carries how to synthesise
+/// a source (`Source`). But independence cuts both ways: without
 /// this check, adding a row to `KNOWN_UNDECLARED_SUPPORT` and forgetting
 /// `CASES` ships an entirely unproven entry and **no test fails** — the exact
 /// #630 hazard the table's own rules warn about, with the audit silently
@@ -168,6 +231,14 @@ fn every_known_accept_entry_is_confirmed_by_a_real_mux() {
     let dir = tempfile::tempdir().expect("tempdir");
 
     for case in CASES {
+        if !source_encoder_available(case) {
+            eprintln!(
+                "[SKIP] {} + {}: source encoder not in this build",
+                case.container.as_ext(),
+                case.codec
+            );
+            continue;
+        }
         let src = dir
             .path()
             .join(format!("src_{}.{}", case.codec, case.source_ext));
@@ -246,6 +317,14 @@ async fn every_known_accept_entry_survives_rdlps_own_remux() {
     let runner = rdlp_ffmpeg::FFmpegRunner::new().expect("FFmpegRunner");
 
     for case in CASES {
+        if !source_encoder_available(case) {
+            eprintln!(
+                "[SKIP] {} + {}: source encoder not in this build",
+                case.container.as_ext(),
+                case.codec
+            );
+            continue;
+        }
         let src = dir
             .path()
             .join(format!("rdlp_src_{}.{}", case.codec, case.source_ext));

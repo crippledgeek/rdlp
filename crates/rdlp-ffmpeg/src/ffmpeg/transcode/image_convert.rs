@@ -169,6 +169,7 @@ impl FFmpegRunner {
         // SAFETY: encoder is a valid pre-open encoder context.
         Self::set_vbr_quality(unsafe { encoder.as_mut_ptr() }, THUMBNAIL_MJPEG_QSCALE);
 
+        crate::ffmpeg::codec_registry::enable_experimental_if_flagged(&mut encoder, mjpeg_codec);
         let mut encoder = encoder
             .open_as(mjpeg_codec)
             .map_err(PostProcessError::from)
