@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { DownloadSection } from "./DownloadSection";
+import { effectiveNetworkStub } from "@/test/effectiveNetworkStub";
+import { bytesToMibDisplay } from "@/views/settings/byteUnits";
 import type { AppSettings } from "@/types";
 
 const baseDraft = {
@@ -19,7 +21,7 @@ const baseDraft = {
 // `aria-roledescription="Number field"`. The queryable role is therefore `textbox`.
 describe("DownloadSection", () => {
     it("renders all four numeric controls", () => {
-        render(<DownloadSection draft={baseDraft} onChange={vi.fn()} />);
+        render(<DownloadSection draft={baseDraft} defaults={effectiveNetworkStub} onChange={vi.fn()} />);
         expect(screen.getByRole("textbox", { name: /concurrent fragments/i })).toBeInTheDocument();
         expect(screen.getByRole("textbox", { name: /buffer size/i })).toBeInTheDocument();
         expect(screen.getByRole("textbox", { name: /parallel threshold/i })).toBeInTheDocument();
@@ -28,7 +30,7 @@ describe("DownloadSection", () => {
 
     it("displays a byte-valued setting in MiB, not bytes", () => {
         const draft = { ...baseDraft, buffer_size: 2 * 1_048_576 } as AppSettings;
-        render(<DownloadSection draft={draft} onChange={vi.fn()} />);
+        render(<DownloadSection draft={draft} defaults={effectiveNetworkStub} onChange={vi.fn()} />);
         expect(screen.getByRole("textbox", { name: /buffer size/i })).toHaveValue("2");
     });
 
@@ -36,7 +38,7 @@ describe("DownloadSection", () => {
         const user = userEvent.setup();
         const onChange = vi.fn();
         const draft = { ...baseDraft, buffer_size: 2 * 1_048_576 } as AppSettings;
-        render(<DownloadSection draft={draft} onChange={onChange} />);
+        render(<DownloadSection draft={draft} defaults={effectiveNetworkStub} onChange={onChange} />);
         const input = screen.getByRole("textbox", { name: /buffer size/i });
         await user.clear(input);
         await user.type(input, "8");
@@ -48,7 +50,7 @@ describe("DownloadSection", () => {
         const user = userEvent.setup();
         const onChange = vi.fn();
         const draft = { ...baseDraft, buffer_size: 2 * 1_048_576 } as AppSettings;
-        render(<DownloadSection draft={draft} onChange={onChange} />);
+        render(<DownloadSection draft={draft} defaults={effectiveNetworkStub} onChange={onChange} />);
         const input = screen.getByRole("textbox", { name: /buffer size/i });
         await user.clear(input);
         await user.tab();
@@ -69,7 +71,7 @@ describe("DownloadSection", () => {
         const user = userEvent.setup();
         const onChange = vi.fn();
         const draft = { ...baseDraft, buffer_size: 500_000 } as AppSettings;
-        render(<DownloadSection draft={draft} onChange={onChange} />);
+        render(<DownloadSection draft={draft} defaults={effectiveNetworkStub} onChange={onChange} />);
         const input = screen.getByRole("textbox", { name: /buffer size/i });
         await user.click(input);
         await user.tab();
@@ -78,7 +80,7 @@ describe("DownloadSection", () => {
 
     it("renders the true byte count for a sub-MiB value instead of a misleading 0", () => {
         const draft = { ...baseDraft, buffer_size: 500_000 } as AppSettings;
-        render(<DownloadSection draft={draft} onChange={vi.fn()} />);
+        render(<DownloadSection draft={draft} defaults={effectiveNetworkStub} onChange={vi.fn()} />);
         const input = screen.getByRole("textbox", { name: /buffer size/i });
         expect(input).toHaveValue("");
         expect(input).toHaveAttribute("placeholder", "500,000 B");
@@ -96,7 +98,7 @@ describe("DownloadSection", () => {
         const user = userEvent.setup();
         const onChange = vi.fn();
         const draft = { ...baseDraft, buffer_size: 2 * 1_048_576 } as AppSettings;
-        render(<DownloadSection draft={draft} onChange={onChange} />);
+        render(<DownloadSection draft={draft} defaults={effectiveNetworkStub} onChange={onChange} />);
         const input = screen.getByRole("textbox", { name: /buffer size/i });
         await user.clear(input);
         await user.type(input, "3.5");
@@ -108,10 +110,47 @@ describe("DownloadSection", () => {
     it("passes a unitless count straight through without conversion", async () => {
         const user = userEvent.setup();
         const onChange = vi.fn();
-        render(<DownloadSection draft={baseDraft} onChange={onChange} />);
+        render(<DownloadSection draft={baseDraft} defaults={effectiveNetworkStub} onChange={onChange} />);
         const input = screen.getByRole("textbox", { name: /concurrent fragments/i });
         await user.type(input, "16");
         await user.tab();
         expect(onChange).toHaveBeenCalledWith({ concurrent_fragments: 16 });
+    });
+
+    // #611: every placeholder is the "inherit" hint and must be derived from the
+    // IPC-sourced `EffectiveNetwork` payload, never a literal. Byte-valued fields
+    // show the payload's bytes projected to whole MiB, matching the field's unit.
+    it("every numeric placeholder is derived from the effective-network payload", () => {
+        render(<DownloadSection draft={baseDraft} defaults={effectiveNetworkStub} onChange={vi.fn()} />);
+        const stub = effectiveNetworkStub;
+        expect(screen.getByRole("textbox", { name: /concurrent fragments/i })).toHaveAttribute(
+            "placeholder",
+            String(stub.concurrent_fragments),
+        );
+        expect(screen.getByRole("textbox", { name: /probe timeout/i })).toHaveAttribute(
+            "placeholder",
+            String(stub.hls_head_probe_timeout_secs),
+        );
+        expect(screen.getByRole("textbox", { name: /buffer size/i })).toHaveAttribute(
+            "placeholder",
+            String(bytesToMibDisplay(stub.buffer_size)),
+        );
+        expect(screen.getByRole("textbox", { name: /parallel threshold/i })).toHaveAttribute(
+            "placeholder",
+            String(bytesToMibDisplay(stub.parallel_threshold)),
+        );
+    });
+
+    it("describes an empty field as inheriting from the base configuration, not a \"default\"", () => {
+        render(<DownloadSection draft={baseDraft} defaults={effectiveNetworkStub} onChange={vi.fn()} />);
+        const input = screen.getByRole("textbox", { name: /concurrent fragments/i });
+        const describedBy = input.getAttribute("aria-describedby") ?? "";
+        const description = describedBy
+            .split(/\s+/)
+            .map((id) => document.getElementById(id)?.textContent ?? "")
+            .join(" ");
+        expect(description).toMatch(/inherit/i);
+        expect(description).toMatch(/base configuration/i);
+        expect(description).not.toMatch(/default/i);
     });
 });

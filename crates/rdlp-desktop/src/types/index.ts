@@ -474,6 +474,32 @@ export interface AppSettings {
     hls_head_probe_timeout: number | null;
 }
 
+/**
+ * The resolved network/download settings the engine actually runs with when
+ * an `AppSettings` field is `null` (inherit). Mirrors
+ * `rdlp_types::EffectiveNetwork` field-for-field (snake_case — default serde);
+ * `scripts/check-effective-network-drift.sh` fails the build if the two key
+ * sets diverge.
+ *
+ * Served by the `effective_network` command. The Settings UI derives every
+ * numeric placeholder from this payload rather than carrying a copy of the
+ * defaults (#611).
+ */
+export interface EffectiveNetwork {
+    socket_timeout_secs: number;
+    read_timeout_secs: number;
+    /** `0` = idle eviction disabled (the existing sentinel). */
+    pool_idle_timeout_secs: number;
+    download_timeout_secs: number;
+    merge_timeout_secs: number;
+    concurrent_fragments: number;
+    /** Bytes. */
+    buffer_size: number;
+    /** Bytes. */
+    parallel_threshold: number;
+    hls_head_probe_timeout_secs: number;
+}
+
 // ========== Error Types ==========
 
 /**

@@ -12,16 +12,23 @@ import {
     poolIdleTimeoutToFormState,
     type PoolIdleFormState,
 } from "@/views/settings/networkSchema";
-import type { AppSettings } from "@/types";
+import { withInheritHint } from "@/views/settings/inheritHint";
+import type { AppSettings, EffectiveNetwork } from "@/types";
 
 const NONE_KEY = "none";
 
 interface Props {
     draft: AppSettings;
+    /**
+     * The values the engine runs with when a field is left empty (inherit),
+     * served over IPC. Every placeholder below derives from it — none is a
+     * literal (#611; enforced by `scripts/check-effective-network-drift.sh`).
+     */
+    defaults: EffectiveNetwork;
     onChange: (update: Partial<AppSettings>) => void;
 }
 
-export function NetworkSection({ draft, onChange }: Props) {
+export function NetworkSection({ draft, defaults, onChange }: Props) {
     const poolIdleForm: PoolIdleFormState = poolIdleTimeoutToFormState(draft.pool_idle_timeout);
     // NumericField already owns the in-progress-text vs committed-number split
     // and clamps to [minValue, maxValue] before `onCommit` fires (see
@@ -80,45 +87,45 @@ export function NetworkSection({ draft, onChange }: Props) {
                     <NumericField
                         id="socket-timeout"
                         label="Connection Timeout"
-                        helper="Time to establish a connection to the server."
+                        helper={withInheritHint("Time to establish a connection to the server.")}
                         value={draft.socket_timeout}
                         minValue={1}
                         maxValue={300}
                         onCommit={(v) => onChange({ socket_timeout: v })}
-                        placeholder="30"
+                        placeholder={String(defaults.socket_timeout_secs)}
                         suffix="s"
                     />
                     <NumericField
                         id="read-timeout"
                         label="Read Timeout"
-                        helper="Maximum gap between bytes during a download."
+                        helper={withInheritHint("Maximum gap between bytes during a download.")}
                         value={draft.read_timeout}
                         minValue={1}
                         maxValue={600}
                         onCommit={(v) => onChange({ read_timeout: v })}
-                        placeholder="60"
+                        placeholder={String(defaults.read_timeout_secs)}
                         suffix="s"
                     />
                     <NumericField
                         id="download-timeout"
                         label="Download Timeout"
-                        helper="Maximum time for the entire file download."
+                        helper={withInheritHint("Maximum time for the entire file download.")}
                         value={draft.download_timeout}
                         minValue={1}
                         maxValue={86400}
                         onCommit={(v) => onChange({ download_timeout: v })}
-                        placeholder="3600"
+                        placeholder={String(defaults.download_timeout_secs)}
                         suffix="s"
                     />
                     <NumericField
                         id="merge-timeout"
                         label="Merge Timeout"
-                        helper="Maximum time to mux/merge the downloaded parts."
+                        helper={withInheritHint("Maximum time to mux/merge the downloaded parts.")}
                         value={draft.merge_timeout}
                         minValue={1}
                         maxValue={86400}
                         onCommit={(v) => onChange({ merge_timeout: v })}
-                        placeholder="1800"
+                        placeholder={String(defaults.merge_timeout_secs)}
                         suffix="s"
                     />
                     <div className="col-span-2">
@@ -147,13 +154,15 @@ export function NetworkSection({ draft, onChange }: Props) {
                                     maxValue={3600}
                                     onCommit={handlePoolIdleChange}
                                     isDisabled={!poolIdleForm.evictIdle}
-                                    placeholder="60"
+                                    placeholder={String(defaults.pool_idle_timeout_secs)}
                                     suffix="s"
                                 />
                             </div>
                         </div>
                         <FormDescription id="pool-idle-timeout-description" className="mt-1">
-                            When off, idle keep-alive connections are kept until the OS closes them.
+                            {withInheritHint(
+                                "When off, idle keep-alive connections are kept until the OS closes them.",
+                            )}
                         </FormDescription>
                     </div>
                 </div>

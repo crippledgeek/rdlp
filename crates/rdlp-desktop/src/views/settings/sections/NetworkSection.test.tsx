@@ -3,6 +3,7 @@ import { fireEvent } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { render, screen } from "@/test/test-utils";
 import { NetworkSection } from "./NetworkSection";
+import { effectiveNetworkStub } from "@/test/effectiveNetworkStub";
 import type { AppSettings } from "@/types";
 
 const baseDraft: AppSettings = {
@@ -61,7 +62,7 @@ const baseDraft: AppSettings = {
 // via `userEvent` (type + tab) rather than a single `fireEvent.change`.
 describe("NetworkSection — timeout controls", () => {
     it("renders four timeout controls with associated labels", () => {
-        render(<NetworkSection draft={baseDraft} onChange={vi.fn()} />);
+        render(<NetworkSection draft={baseDraft} defaults={effectiveNetworkStub} onChange={vi.fn()} />);
         expect(screen.getByRole("textbox", { name: /connection timeout/i })).toBeInTheDocument();
         expect(screen.getByRole("textbox", { name: /read timeout/i })).toBeInTheDocument();
         expect(screen.getByRole("textbox", { name: /download timeout/i })).toBeInTheDocument();
@@ -74,7 +75,7 @@ describe("NetworkSection — timeout controls", () => {
     it("typing in connection timeout commits a number on blur", async () => {
         const user = userEvent.setup();
         const onChange = vi.fn();
-        render(<NetworkSection draft={baseDraft} onChange={onChange} />);
+        render(<NetworkSection draft={baseDraft} defaults={effectiveNetworkStub} onChange={onChange} />);
         const input = screen.getByRole("textbox", { name: /connection timeout/i });
         await user.clear(input);
         await user.type(input, "45");
@@ -86,7 +87,7 @@ describe("NetworkSection — timeout controls", () => {
         const user = userEvent.setup();
         const draft = { ...baseDraft, socket_timeout: 30 };
         const onChange = vi.fn();
-        render(<NetworkSection draft={draft} onChange={onChange} />);
+        render(<NetworkSection draft={draft} defaults={effectiveNetworkStub} onChange={onChange} />);
         const input = screen.getByRole("textbox", { name: /connection timeout/i });
         await user.clear(input);
         await user.tab();
@@ -100,7 +101,7 @@ describe("NetworkSection — timeout controls", () => {
     it("out-of-range connection timeout clamps to the upper bound", async () => {
         const user = userEvent.setup();
         const onChange = vi.fn();
-        render(<NetworkSection draft={baseDraft} onChange={onChange} />);
+        render(<NetworkSection draft={baseDraft} defaults={effectiveNetworkStub} onChange={onChange} />);
         const input = screen.getByRole("textbox", { name: /connection timeout/i });
         await user.clear(input);
         await user.type(input, "9999");
@@ -111,7 +112,7 @@ describe("NetworkSection — timeout controls", () => {
     it("checkbox unchecked commits pool_idle_timeout=0 (sentinel)", () => {
         const draft = { ...baseDraft, pool_idle_timeout: 90 };
         const onChange = vi.fn();
-        render(<NetworkSection draft={draft} onChange={onChange} />);
+        render(<NetworkSection draft={draft} defaults={effectiveNetworkStub} onChange={onChange} />);
         const checkbox = screen.getByRole("checkbox", { name: /evict idle/i });
         fireEvent.click(checkbox);
         expect(onChange).toHaveBeenCalledWith({ pool_idle_timeout: 0 });
@@ -119,7 +120,7 @@ describe("NetworkSection — timeout controls", () => {
 
     it("checkbox unchecked disables the numeric input", () => {
         const draft = { ...baseDraft, pool_idle_timeout: 0 };
-        render(<NetworkSection draft={draft} onChange={vi.fn()} />);
+        render(<NetworkSection draft={draft} defaults={effectiveNetworkStub} onChange={vi.fn()} />);
         const numeric = screen.getByRole("textbox", { name: /idle timeout/i });
         expect(numeric).toBeDisabled();
     });
@@ -127,11 +128,11 @@ describe("NetworkSection — timeout controls", () => {
     it("updates connection-timeout display when draft prop changes externally", () => {
         const onChange = vi.fn();
         const { rerender } = render(
-            <NetworkSection draft={{ ...baseDraft, socket_timeout: 30 }} onChange={onChange} />,
+            <NetworkSection draft={{ ...baseDraft, socket_timeout: 30 }} defaults={effectiveNetworkStub} onChange={onChange} />,
         );
         let input = screen.getByRole("textbox", { name: /connection timeout/i });
         expect(input).toHaveValue("30");
-        rerender(<NetworkSection draft={{ ...baseDraft, socket_timeout: 60 }} onChange={onChange} />);
+        rerender(<NetworkSection draft={{ ...baseDraft, socket_timeout: 60 }} defaults={effectiveNetworkStub} onChange={onChange} />);
         input = screen.getByRole("textbox", { name: /connection timeout/i });
         expect(input).toHaveValue("60");
     });
@@ -141,7 +142,7 @@ describe("NetworkSection — timeout controls", () => {
     // must stay programmatically associated with that sibling via
     // aria-describedby, rather than losing its accessible description entirely.
     it("associates the idle-timeout field with its sibling helper text via aria-describedby", () => {
-        render(<NetworkSection draft={baseDraft} onChange={vi.fn()} />);
+        render(<NetworkSection draft={baseDraft} defaults={effectiveNetworkStub} onChange={vi.fn()} />);
         const input = screen.getByRole("textbox", { name: /idle timeout/i });
         const describedBy = input.getAttribute("aria-describedby");
         expect(describedBy).toBeTruthy();
@@ -152,22 +153,56 @@ describe("NetworkSection — timeout controls", () => {
         expect(descriptionNode!.textContent).toMatch(/idle keep-alive connections/i);
     });
 
-    // #613 regression guard: the placeholder is the "inherit the backend default"
-    // hint, so it must state the value the app actually uses —
-    // `DEFAULT_POOL_IDLE_TIMEOUT_SECS` in rdlp-http/src/config.rs, which owns the
-    // rationale for that number. Pinning a literal against a literal is weak by
-    // construction; #611 replaces it by sourcing the value over IPC.
-    it("pool-idle placeholder states the real backend default (60, not 90)", () => {
-        render(<NetworkSection draft={baseDraft} onChange={vi.fn()} />);
-        const numeric = screen.getByRole("textbox", { name: /idle timeout/i });
-        expect(numeric).toHaveAttribute("placeholder", "60");
+    // #613 / #611: the placeholder is the "inherit" hint, so it must state the
+    // value the app actually uses. That value arrives over IPC as the
+    // `EffectiveNetwork` payload (one owner: `rdlp_types::EffectiveNetwork::DEFAULT`
+    // resolved through `Config::effective_network()`), so every NumericField
+    // placeholder here must be derived from the `defaults` prop — never a
+    // literal. The stub's values are distinct from the real defaults AND from
+    // each other, so a leftover literal or a field wired to the wrong key fails.
+    it("every numeric placeholder is derived from the effective-network payload", () => {
+        render(<NetworkSection draft={baseDraft} defaults={effectiveNetworkStub} onChange={vi.fn()} />);
+        const stub = effectiveNetworkStub;
+        expect(screen.getByRole("textbox", { name: /connection timeout/i })).toHaveAttribute(
+            "placeholder",
+            String(stub.socket_timeout_secs),
+        );
+        expect(screen.getByRole("textbox", { name: /read timeout/i })).toHaveAttribute(
+            "placeholder",
+            String(stub.read_timeout_secs),
+        );
+        expect(screen.getByRole("textbox", { name: /download timeout/i })).toHaveAttribute(
+            "placeholder",
+            String(stub.download_timeout_secs),
+        );
+        expect(screen.getByRole("textbox", { name: /merge timeout/i })).toHaveAttribute(
+            "placeholder",
+            String(stub.merge_timeout_secs),
+        );
+        expect(screen.getByRole("textbox", { name: /idle timeout/i })).toHaveAttribute(
+            "placeholder",
+            String(stub.pool_idle_timeout_secs),
+        );
+    });
+
+    it("describes an empty field as inheriting from the base configuration, not a \"default\"", () => {
+        render(<NetworkSection draft={baseDraft} defaults={effectiveNetworkStub} onChange={vi.fn()} />);
+        const input = screen.getByRole("textbox", { name: /connection timeout/i });
+        const describedBy = input.getAttribute("aria-describedby") ?? "";
+        const description = describedBy
+            .split(/\s+/)
+            .map((id) => document.getElementById(id)?.textContent ?? "")
+            .join(" ");
+        expect(description).toMatch(/inherit/i);
+        expect(description).toMatch(/base configuration/i);
+        expect(description).not.toMatch(/default/i);
     });
 
     it("out-of-range pool-idle value clamps to the upper bound", async () => {
         const user = userEvent.setup();
         const onChange = vi.fn();
         render(
-            <NetworkSection draft={{ ...baseDraft, pool_idle_timeout: 90 }} onChange={onChange} />,
+            <NetworkSection draft={{ ...baseDraft, pool_idle_timeout: 90 }} defaults={effectiveNetworkStub} onChange={onChange} />,
         );
         const numeric = screen.getByRole("textbox", { name: /idle timeout/i });
         await user.clear(numeric);

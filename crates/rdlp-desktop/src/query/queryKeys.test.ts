@@ -100,3 +100,9 @@ describe("queryKeys.settings", () => {
         expect(queryKeys.settings()).toEqual(["settings"]);
     });
 });
+
+describe("queryKeys.effectiveNetwork", () => {
+    test("returns ['effective-network']", () => {
+        expect(queryKeys.effectiveNetwork()).toEqual(["effective-network"]);
+    });
+});

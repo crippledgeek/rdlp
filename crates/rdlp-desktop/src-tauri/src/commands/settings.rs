@@ -14,6 +14,7 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::error::AppError;
 use crate::state::{AppSettings, AppState, SettingsValidationError};
+use rdlp_types::EffectiveNetwork;
 use rdlp_types::boundary::{Action, Subject};
 
 /// Retrieve the current application settings.
@@ -42,6 +43,25 @@ pub async fn settings(state: State<'_, AppState>) -> Result<AppSettings, AppErro
         .clone();
 
     Ok(settings)
+}
+
+/// The network/download values the engine runs with when an
+/// [`AppSettings`] field is `None` (inherit).
+///
+/// Resolves the client's base [`Config`](rdlp_types::Config) — `config.toml`
+/// or the built-in defaults — through the single resolver
+/// `Config::effective_network()`, so the GUI's "inherit" placeholders show
+/// the value a download will actually use instead of carrying their own copy
+/// of the defaults (#611). The base config is loaded once per process, so
+/// the frontend caches this indefinitely.
+///
+/// # Errors
+///
+/// This function does not currently return errors but returns
+/// `Result` for forward-compatible IPC signatures.
+#[tauri::command]
+pub async fn effective_network(state: State<'_, AppState>) -> Result<EffectiveNetwork, AppError> {
+    Ok(state.client.config().effective_network())
 }
 
 /// Update application settings with new values.

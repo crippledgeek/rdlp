@@ -44,6 +44,7 @@ export const queryKeys = {
     },
     formats: (url: string) => ["formats", url] as const,
     settings: () => ["settings"] as const,
+    effectiveNetwork: () => ["effective-network"] as const,
     thumbnail: {
         proxy: (url: string | null | undefined) => ["proxy-thumbnail", url] as const,
     },

@@ -5,6 +5,7 @@ import { useState } from "react";
 import { extractErrorMessage } from "@/api/invokeClient";
 import { useQuery } from "@tanstack/react-query";
 import { settingsQueryOptions, updateSettings } from "@/api/settings";
+import { effectiveNetworkQueryOptions } from "@/api/effectiveNetwork";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { GeneralSection } from "./sections/GeneralSection";
@@ -47,7 +48,11 @@ function validateSettings(draft: AppSettings): string | null {
 }
 
 export function SettingsView() {
-    const { data: settings, isLoading } = useQuery(settingsQueryOptions());
+    const { data: settings, error: settingsError } = useQuery(settingsQueryOptions());
+    // The values an empty (inherit) field resolves to — the sections derive
+    // their placeholders from this instead of carrying a copy of the defaults
+    // (#611). Fetched in parallel with the settings; both gate the form.
+    const { data: defaults, error: defaultsError } = useQuery(effectiveNetworkQueryOptions());
     // Track edits as a partial overlay on top of server data.
     // null = no edits yet, show server data as-is.
     const [edits, setEdits] = useState<Partial<AppSettings> | null>(null);
@@ -57,7 +62,20 @@ export function SettingsView() {
     // Computed draft: server data merged with local edits
     const draft = settings ? { ...settings, ...edits } : null;
 
-    if (isLoading || !draft) {
+    const loadError = settingsError ?? defaultsError;
+    if (loadError) {
+        return (
+            <div className="max-w-2xl mx-auto px-4 py-6">
+                <Alert variant="destructive">
+                    <AlertDescription>
+                        Failed to load settings: {extractErrorMessage(loadError)}
+                    </AlertDescription>
+                </Alert>
+            </div>
+        );
+    }
+
+    if (!draft || !defaults) {
         return (
             <div className="flex items-center justify-center h-full">
                 <p className="text-[13px] text-[var(--text-muted)] animate-pulse">Loading settings…</p>
@@ -98,10 +116,10 @@ export function SettingsView() {
                 <GeneralSection draft={draft} onChange={handleChange} />
                 <OutputSection draft={draft} onChange={handleChange} />
                 <PostProcessSection draft={draft} onChange={handleChange} />
-                <DownloadSection draft={draft} onChange={handleChange} />
+                <DownloadSection draft={draft} defaults={defaults} onChange={handleChange} />
                 <SubtitlesSection draft={draft} onChange={handleChange} />
                 <NormalizationSection draft={draft} onChange={handleChange} />
-                <NetworkSection draft={draft} onChange={handleChange} />
+                <NetworkSection draft={draft} defaults={defaults} onChange={handleChange} />
                 <SystemSection />
 
                 {/* Save */}

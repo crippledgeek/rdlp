@@ -6,10 +6,17 @@
 import { Gauge } from "lucide-react";
 import { NumericField } from "@/views/settings/NumericField";
 import { bytesToMibDisplay, mibDisplayToBytes } from "@/views/settings/byteUnits";
-import type { AppSettings } from "@/types";
+import { withInheritHint } from "@/views/settings/inheritHint";
+import type { AppSettings, EffectiveNetwork } from "@/types";
 
 interface Props {
     draft: AppSettings;
+    /**
+     * The values the engine runs with when a field is left empty (inherit),
+     * served over IPC. Every placeholder below derives from it — none is a
+     * literal (#611; enforced by `scripts/check-effective-network-drift.sh`).
+     */
+    defaults: EffectiveNetwork;
     onChange: (update: Partial<AppSettings>) => void;
 }
 
@@ -31,8 +38,8 @@ interface Props {
  * field EMPTY for a sub-MiB value instead: there is no `value` prop for the clamp to act
  * on, so the misleading "1" never appears and a no-op focus/blur stays a no-op. The
  * placeholder/helper text carry the true byte count so the state stays visible, and stay
- * distinguishable from a genuinely unset (`null`) field, which keeps the existing
- * "inherit default" placeholder.
+ * distinguishable from a genuinely unset (`null`) field, which keeps the inherited-value
+ * placeholder.
  */
 function isSubMibBytes(bytes: number): boolean {
     return bytesToMibDisplay(bytes) === 0;
@@ -45,21 +52,22 @@ function byteFieldValue(bytes: number | null): number | null {
     return bytesToMibDisplay(bytes);
 }
 
-function byteFieldPlaceholder(bytes: number | null, unsetPlaceholder: string): string {
+/** Placeholder for a byte field: the true byte count when sub-MiB, else the inherited value in MiB. */
+function byteFieldPlaceholder(bytes: number | null, inheritedBytes: number): string {
     if (bytes !== null && isSubMibBytes(bytes)) {
         return `${bytes.toLocaleString()} B`;
     }
-    return unsetPlaceholder;
+    return String(bytesToMibDisplay(inheritedBytes));
 }
 
-function byteFieldHelper(bytes: number | null, defaultHelper: string): string {
+function byteFieldHelper(bytes: number | null, helper: string): string {
     if (bytes !== null && isSubMibBytes(bytes)) {
         return `Currently set to ${bytes.toLocaleString()} bytes via the settings file (below 1 MiB, so this field shows it as blank). Entering a value here replaces it with a whole-MiB size.`;
     }
-    return defaultHelper;
+    return helper;
 }
 
-export function DownloadSection({ draft, onChange }: Props) {
+export function DownloadSection({ draft, defaults, onChange }: Props) {
     return (
         <section
             id="settings-download"
@@ -73,9 +81,9 @@ export function DownloadSection({ draft, onChange }: Props) {
             <div className="grid grid-cols-2 gap-x-4 gap-y-3">
                 <NumericField
                     id="concurrent-fragments"
-                    placeholder="8"
+                    placeholder={String(defaults.concurrent_fragments)}
                     label="Concurrent Fragments"
-                    helper="Parallel fragment downloads. Higher uses more memory. Default 8."
+                    helper={withInheritHint("Parallel fragment downloads. Higher uses more memory.")}
                     value={draft.concurrent_fragments}
                     minValue={1}
                     maxValue={64}
@@ -83,9 +91,9 @@ export function DownloadSection({ draft, onChange }: Props) {
                 />
                 <NumericField
                     id="hls-head-probe-timeout"
-                    placeholder="5"
+                    placeholder={String(defaults.hls_head_probe_timeout_secs)}
                     label="HLS Probe Timeout"
-                    helper="Timeout for the HLS HEAD probe. Default 5."
+                    helper={withInheritHint("Timeout for the HLS HEAD probe.")}
                     value={draft.hls_head_probe_timeout}
                     minValue={1}
                     maxValue={300}
@@ -94,11 +102,13 @@ export function DownloadSection({ draft, onChange }: Props) {
                 />
                 <NumericField
                     id="buffer-size"
-                    placeholder={byteFieldPlaceholder(draft.buffer_size, "2")}
+                    placeholder={byteFieldPlaceholder(draft.buffer_size, defaults.buffer_size)}
                     label="Buffer Size (MiB)"
                     helper={byteFieldHelper(
                         draft.buffer_size,
-                        "Download buffer per connection. Default 2 MiB. Values below 1 MiB can be set in the settings file.",
+                        withInheritHint(
+                            "Download buffer per connection. Values below 1 MiB can be set in the settings file.",
+                        ),
                     )}
                     value={byteFieldValue(draft.buffer_size)}
                     minValue={1}
@@ -110,11 +120,11 @@ export function DownloadSection({ draft, onChange }: Props) {
                 />
                 <NumericField
                     id="parallel-threshold"
-                    placeholder={byteFieldPlaceholder(draft.parallel_threshold, "10")}
+                    placeholder={byteFieldPlaceholder(draft.parallel_threshold, defaults.parallel_threshold)}
                     label="Parallel Threshold (MiB)"
                     helper={byteFieldHelper(
                         draft.parallel_threshold,
-                        "Files at least this large are downloaded in parallel chunks. Default 10 MiB.",
+                        withInheritHint("Files at least this large are downloaded in parallel chunks."),
                     )}
                     value={byteFieldValue(draft.parallel_threshold)}
                     minValue={1}

@@ -254,6 +254,7 @@ pub fn run() {
             commands::formats::formats,
             commands::formats::validate_format_expression,
             commands::settings::settings,
+            commands::settings::effective_network,
             commands::settings::update_settings,
             commands::settings::pick_directory,
             commands::settings::reveal_in_folder,
