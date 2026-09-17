@@ -126,6 +126,10 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::ThreeGp,
             ContainerFormat::M4v,
             ContainerFormat::F4v,
+            // `flvenc.c` `flv_audio_codec_ids` tags AAC (FLV_CODECID_AAC);
+            // `nut.c` reaches AAC through `ff_codec_wav_tags` (0x00ff).
+            ContainerFormat::Flv,
+            ContainerFormat::Nut,
         ],
         aliases: &[],
     },
@@ -145,6 +149,8 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Mp3,
             // Flv's muxer declares mp3 as its default audio codec.
             ContainerFormat::Flv,
+            // `ff_nut_audio_extra_tags` carries MP3 explicitly.
+            ContainerFormat::Nut,
         ],
         aliases: &[],
     },
@@ -161,6 +167,8 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::WebM,
             ContainerFormat::Ogg,
             ContainerFormat::Opus,
+            // `ff_nut_audio_extra_tags` carries OPUS.
+            ContainerFormat::Nut,
         ],
         aliases: &[],
     },
@@ -187,6 +195,8 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Mkv,
             ContainerFormat::Ogg,
             ContainerFormat::Flac,
+            // `ff_codec_wav_tags` 0xF1AC, reached by `ff_nut_codec_tags`.
+            ContainerFormat::Nut,
         ],
         aliases: &[],
     },
@@ -212,6 +222,8 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Avi,
             ContainerFormat::Ts,
             ContainerFormat::Ac3,
+            // `ff_codec_wav_tags` 0x2000, reached by `ff_nut_codec_tags`.
+            ContainerFormat::Nut,
         ],
         aliases: &[],
     },
@@ -224,6 +236,8 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Mov,
             ContainerFormat::Mkv,
             ContainerFormat::Ts,
+            // `ff_codec_wav_tags` (E-AC-3 shares AC-3's 0x2000), via NUT.
+            ContainerFormat::Nut,
         ],
         aliases: &[],
     },
@@ -231,7 +245,8 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
         codec: CodecName::from_static("dts"),
         display_name: "DTS",
         encoders: &[(AudioEncoderName::from_static("dca"), "DTS (built-in)")],
-        supported_containers: &[ContainerFormat::Mkv],
+        // `ff_codec_wav_tags` 0x2001, reached by `ff_nut_codec_tags`.
+        supported_containers: &[ContainerFormat::Mkv, ContainerFormat::Nut],
         aliases: &[],
     },
     AudioCodecEntry {
@@ -244,6 +259,8 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             // Mpg/Vob's muxers both declare mp2 as their default audio codec.
             ContainerFormat::Mpg,
             ContainerFormat::Vob,
+            // `ff_codec_wav_tags` 0x0050, reached by `ff_nut_codec_tags`.
+            ContainerFormat::Nut,
         ],
         aliases: &[],
     },
@@ -275,6 +292,8 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             // audio codec (caught by the sweep test, not the review's table).
             ContainerFormat::Mxf,
             ContainerFormat::Dv,
+            // `ff_nut_audio_tags` carries every PCM layout natively.
+            ContainerFormat::Nut,
         ],
         aliases: &[CodecName::from_static("pcm")],
     },
@@ -297,7 +316,12 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             AudioEncoderName::from_static("pcm_s16be"),
             "PCM 16-bit big-endian (built-in)",
         )],
-        supported_containers: &[ContainerFormat::Aiff, ContainerFormat::Caf],
+        // `ff_nut_audio_tags` carries every PCM layout natively.
+        supported_containers: &[
+            ContainerFormat::Aiff,
+            ContainerFormat::Caf,
+            ContainerFormat::Nut,
+        ],
         aliases: &[],
     },
     AudioCodecEntry {
@@ -307,7 +331,12 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             AudioEncoderName::from_static("wavpack"),
             "WavPack (built-in)",
         )],
-        supported_containers: &[ContainerFormat::Mkv, ContainerFormat::Wv],
+        // `ff_nut_audio_extra_tags` carries WAVPACK.
+        supported_containers: &[
+            ContainerFormat::Mkv,
+            ContainerFormat::Wv,
+            ContainerFormat::Nut,
+        ],
         aliases: &[],
     },
     // WMA had no compatibility-matrix row at all; `.wma`/`.wmv`/`.asf` all
@@ -329,6 +358,8 @@ static AUDIO_CODEC_PREFERENCES: &[AudioCodecEntry] = &[
             ContainerFormat::Wma,
             ContainerFormat::Wmv,
             ContainerFormat::Asf,
+            // `ff_codec_wav_tags` 0x0161, reached by `ff_nut_codec_tags`.
+            ContainerFormat::Nut,
         ],
         aliases: &[],
     },
@@ -1257,6 +1288,63 @@ mod tests {
                     row.codec()
                 );
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod matrix_soundness {
+    use super::*;
+    use strum::IntoEnumIterator;
+
+    /// Every cell of `AUDIO_CODEC_PREFERENCES` must be a pairing the linked
+    /// muxer actually accepts, as judged by the same tri-state oracle the
+    /// remux path enforces with (#633). The matrix is deliberately narrower
+    /// than the muxers — it lists sensible targets, not every representable
+    /// one — but it must never be *wider*: a cell the muxer rejects routes a
+    /// user to a mux that fails (#627 found `Flv`/`Nut` missing; this sweep
+    /// found five listed cells the oracle rejected, fixed by teaching the
+    /// #633 evidence table what `mpegtsenc.c` and `oggenc.c` implement).
+    #[test]
+    fn every_matrix_cell_is_accepted_by_its_muxer() {
+        crate::ffmpeg::ensure_init().expect("ffmpeg init");
+        let mut rejected = Vec::new();
+        for entry in AUDIO_CODEC_PREFERENCES {
+            for container in ContainerFormat::iter() {
+                let listed = entry.supported_containers.contains(&container);
+                if listed
+                    && !muxer_defaults::muxer_can_represent(
+                        container,
+                        &entry.codec,
+                        codec_registry::MediaKind::Audio,
+                    )
+                {
+                    rejected.push(format!("{}/{}", entry.codec.as_str(), container.as_ext()));
+                }
+            }
+        }
+        assert!(
+            rejected.is_empty(),
+            "matrix cells the muxer rejects: {rejected:?}"
+        );
+    }
+
+    /// #627's two named gaps, pinned so they cannot be dropped by a later
+    /// "tidy" of the table.
+    #[test]
+    fn flv_carries_aac_and_nut_is_codec_agnostic() {
+        let aac = &CodecName::AAC;
+        assert!(container_supports_audio_codec(ContainerFormat::Flv, aac));
+        for codec in [
+            "aac", "mp3", "opus", "vorbis", "flac", "ac3", "eac3", "dts", "mp2",
+        ] {
+            assert!(
+                container_supports_audio_codec(
+                    ContainerFormat::Nut,
+                    &CodecName::from_static(codec)
+                ),
+                "nut/{codec}"
+            );
         }
     }
 }

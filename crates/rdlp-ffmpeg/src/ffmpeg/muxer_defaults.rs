@@ -255,6 +255,19 @@ pub const KNOWN_UNDECLARED_SUPPORT: &[(ContainerFormat, AVCodecID)] = &[
     // `mp2` as its default audio codec and exposes AAC through neither a tag
     // table nor `query_codec`.
     (ContainerFormat::Ts, AVCodecID::AV_CODEC_ID_AAC),
+    // Same mechanism, same file: `mpegtsenc.c` `get_pes_stream_type` maps MP3
+    // to `STREAM_TYPE_AUDIO_MPEG1/2` (`case AV_CODEC_ID_MP3`, next to MP2) and
+    // AC-3 / E-AC-3 to `STREAM_TYPE_ATSC_AUDIO_AC3` / `_EAC3` (or private
+    // data under `MPEGTS_FLAG_SYSTEM_B`), declaring none of them.
+    (ContainerFormat::Ts, AVCodecID::AV_CODEC_ID_MP3),
+    (ContainerFormat::Ts, AVCodecID::AV_CODEC_ID_AC3),
+    (ContainerFormat::Ts, AVCodecID::AV_CODEC_ID_EAC3),
+    // `oggenc.c` `ogg_init` hard-codes its accepted set — vorbis, theora,
+    // speex, flac, opus, vp8 — and rejects everything else with EINVAL, but
+    // has no `codec_tag` table and no `query_codec`, so only its declared
+    // default (vorbis) is visible through the two evidence channels.
+    (ContainerFormat::Ogg, AVCodecID::AV_CODEC_ID_FLAC),
+    (ContainerFormat::Ogg, AVCodecID::AV_CODEC_ID_OPUS),
 ];
 
 /// The [`KNOWN_UNDECLARED_SUPPORT`] rows as `(container, codec name)`, for the
