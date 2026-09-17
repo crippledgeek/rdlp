@@ -123,7 +123,11 @@ pub fn write_sine_audio(output: &Path, spec: &SineAudio) -> Result<()> {
 
     // Source graph. `asetnsamples` delivers exactly the encoder's frame size
     // (AAC and friends reject anything else with EINVAL); `p=0` lets the last,
-    // shorter frame through so the tone ends where `duration` says.
+    // shorter frame through — libavcodec/encode.c admits exactly one
+    // undersized final frame for fixed-frame-size encoders — so the tone ends
+    // where `duration` says. A `frame_size()` of 0 means the encoder declares
+    // AV_CODEC_CAP_VARIABLE_FRAME_SIZE and accepts any count; 1024 is then
+    // just a chunk size.
     let frame_size = if encoder.frame_size() > 0 {
         encoder.frame_size()
     } else {
