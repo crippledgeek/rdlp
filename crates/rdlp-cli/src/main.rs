@@ -323,11 +323,11 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
             Ok(response) => {
                 if args.dump_json {
                     // Data on stdout, like `--dump-json` for extraction.
-                    println!("{}", search_report(&response, true)?);
+                    println!("{}", search_json(&response)?);
                 } else if response.results.is_empty() {
                     eprintln!("No results found for '{query_text}'.");
                 } else {
-                    eprint!("{}", search_report(&response, false)?);
+                    eprint!("{}", search_text(&response));
                 }
             }
             Err(e) => fail_with(Action::new("search"), &e, verbose),
@@ -504,26 +504,28 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
     result
 }
 
-/// A search page as the CLI reports it: `json` is the whole
-/// `SearchPageResponse` (the `--dump-json` contract, one object), else the
-/// numbered listing for a terminal.
-fn search_report(response: &rdlp_api::SearchPageResponse, json: bool) -> anyhow::Result<String> {
+/// A search page as `--dump-json` reports it: the whole `SearchPageResponse`,
+/// one object, deserialisable with the same type.
+fn search_json(response: &rdlp_api::SearchPageResponse) -> Result<String> {
+    serde_json::to_string_pretty(response).context("failed to serialize search page to JSON")
+}
+
+/// A search page as the terminal listing reports it.
+fn search_text(response: &rdlp_api::SearchPageResponse) -> String {
     use std::fmt::Write as _;
 
-    if json {
-        return Ok(serde_json::to_string_pretty(response)?);
-    }
-    let page_info = if response.has_more {
-        format!(" (page {}, more available)", response.page)
+    let more = if response.has_more {
+        ", more available"
     } else {
-        format!(" (page {})", response.page)
+        ""
     };
     let mut out = String::new();
     // Writing to a String cannot fail; the results are discarded as such.
     let _ = writeln!(
         out,
-        "Found {} results{page_info}:\n",
-        response.results.len()
+        "Found {} results (page {}{more}):\n",
+        response.results.len(),
+        response.page
     );
     for (i, r) in response.results.iter().enumerate() {
         let _ = writeln!(out, "{:>3}. {}", i + 1, sanitize_for_terminal(&r.title));
@@ -544,7 +546,7 @@ fn search_report(response: &rdlp_api::SearchPageResponse, json: bool) -> anyhow:
         }
         let _ = writeln!(out);
     }
-    Ok(out)
+    out
 }
 
 #[cfg(test)]
@@ -572,16 +574,32 @@ mod tests {
             has_more: true,
             total_estimate: None,
         };
-        let json = search_report(&response, true).unwrap();
+        let json = search_json(&response).unwrap();
         let back: rdlp_api::SearchPageResponse = serde_json::from_str(&json).unwrap();
         assert_eq!(back, response);
+    }
 
-        let text = search_report(&response, false).unwrap();
-        assert!(
-            text.starts_with("Found 1 results (page 1, more available):"),
-            "{text}"
-        );
-        assert!(text.contains("  1. One"), "{text}");
+    /// The terminal listing, byte for byte (the blank line after the
+    /// heading, the suffixes, the trailing newline), as a reviewed snapshot.
+    #[test]
+    fn search_text_snapshot() {
+        let response = rdlp_api::SearchPageResponse {
+            results: vec![rdlp_api::SearchResultPreview {
+                video_url: "https://x.test/v/1".into(),
+                title: "One".into(),
+                thumbnail_url: None,
+                duration: Some(61.0),
+                uploader: Some("up".into()),
+                uploader_url: None,
+                actors: vec![],
+                view_count: Some(7),
+                upload_date: None,
+            }],
+            page: 1,
+            has_more: true,
+            total_estimate: None,
+        };
+        insta::assert_snapshot!(search_text(&response));
     }
 
     /// `default_filter` builds its directive with `Level`'s `Display`, which
