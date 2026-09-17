@@ -98,8 +98,8 @@ pub fn load_archive(path: &Path) -> HashSet<String> {
     // unlocked read — better than a hard error here, since the archive
     // is best-effort tracking, not security-critical state. Named through
     // the fs4 trait because std 1.89 added an inherent `File::lock_shared`
-    // that shadows it on newer toolchains — a bare call would resolve above
-    // the 1.88 floor (`clippy::incompatible_msrv`).
+    // that a bare method call would pick over the trait; naming the trait
+    // makes it unambiguous which implementation runs.
     let _lock = FileExt::lock_shared(&file).ok();
 
     BufReader::new(&file)

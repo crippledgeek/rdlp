@@ -45,7 +45,7 @@ resolver = "2"
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.90"
 authors = ["rdlp contributors"]
 license = "MIT OR Apache-2.0"
 
@@ -114,6 +114,7 @@ serde_json = "1.0"
 serde_with = { version = "3.18", default-features = false, features = ["macros"] }
 m3u8-rs = "6.0"  # HLS playlist parser
 dash-mpd = { version = "0.20", default-features = false }  # DASH MPD parser
+netscape-cookie-file-parser = "0.3"  # Netscape/curl cookies.txt parser
 
 # Error handling
 anyhow = "1.0"

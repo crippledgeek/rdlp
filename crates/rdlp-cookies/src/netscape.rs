@@ -1,28 +1,25 @@
-//! Netscape/Mozilla cookie file parser.
+//! Netscape/Mozilla cookie file loader.
 //!
-//! Parses the standard Netscape cookie format used by browsers and tools
-//! like `curl`, `wget`, and browser cookie export extensions.
+//! Loads the Netscape cookie format used by browsers and tools like `curl`,
+//! `wget`, and browser cookie export extensions
+//! (`domain\tinclude_subdomains\tpath\tsecure\texpiry\tname\tvalue`, with
+//! curl's `#HttpOnly_` line marker) into a [`CookieStore`].
 //!
-//! Format: `domain\tinclude_subdomains\tpath\tsecure\texpiry\tname\tvalue`
+//! Parsing is delegated to [`netscape_cookie_file_parser`], which follows the
+//! yt-dlp / `http.cookiejar.MozillaCookieJar` reference semantics: seven
+//! fields (curl's legacy six-field and missing-path records are normalised
+//! to seven), a decimal `expiry`, no control octets in name or value,
+//! `#HttpOnly_` as cookie metadata rather than a comment, one leading dot
+//! stripped from the domain (RFC 6265 §5.2.3 ignores it anyway), and raw
+//! bytes throughout so one non-UTF-8 line cannot abort the whole file.
 
 use std::path::Path;
 
 use log::trace;
+use netscape_cookie_file_parser::{Cookie, NetscapeCookieParser};
 use wreq::cookie::CookieStore;
 
 use crate::util;
-
-/// A parsed cookie from a Netscape cookie file.
-#[derive(Debug)]
-struct NetscapeCookie {
-    domain: String,
-    _include_subdomains: bool,
-    path: String,
-    secure: bool,
-    _expiry: u64,
-    name: String,
-    value: String,
-}
 
 /// Parse a Netscape-format cookie file and insert cookies into the jar.
 ///
@@ -34,37 +31,26 @@ pub(crate) fn load_cookie_file(
 ) -> Result<usize, std::io::Error> {
     // Safe: sync cookie helper — async callers wrap in spawn_blocking (see rdlp-cookies/src/lib.rs).
     #[allow(clippy::disallowed_methods)]
-    let content = std::fs::read_to_string(path)?;
-    Ok(load_cookie_string(&content, jar))
+    let content = std::fs::read(path)?;
+    Ok(load_cookies(&content, jar))
 }
 
-/// Parse cookie string content and insert into jar.
+/// Parse cookie file content and insert into jar.
 ///
-/// Returns the number of cookies loaded.
-fn load_cookie_string(content: &str, jar: &impl CookieStore) -> usize {
+/// Malformed records are skipped (logged at `trace` by line number only —
+/// the line holds cookie values). Reading from `&[u8]` cannot fail, so every
+/// error the parser yields here is a malformed record, never I/O. Returns the
+/// number of cookies loaded.
+fn load_cookies(content: &[u8], jar: &impl CookieStore) -> usize {
     let mut count = 0;
 
-    for line in content.lines() {
-        let line = line.trim();
-
-        // Skip empty lines
-        if line.is_empty() {
-            continue;
-        }
-
-        // Handle #HttpOnly_ prefix (valid cookie with httponly flag)
-        let line = if let Some(stripped) = line.strip_prefix("#HttpOnly_") {
-            stripped
-        } else if line.starts_with('#') {
-            // Regular comment
-            continue;
-        } else {
-            line
-        };
-
-        let Some(cookie) = parse_cookie_line(line) else {
-            trace!("Skipping malformed cookie line: {line}");
-            continue;
+    for record in NetscapeCookieParser::new(content) {
+        let cookie = match record {
+            Ok(cookie) => cookie,
+            Err(e) => {
+                trace!("Skipping malformed cookie line {}: {:?}", e.line, e.kind);
+                continue;
+            }
         };
         if insert_cookie(&cookie, jar) {
             count += 1;
@@ -74,48 +60,29 @@ fn load_cookie_string(content: &str, jar: &impl CookieStore) -> usize {
     count
 }
 
-/// Parse a single Netscape cookie line.
-#[allow(clippy::indexing_slicing)] // all accesses guarded by the len() < 7 check above
-fn parse_cookie_line(line: &str) -> Option<NetscapeCookie> {
-    let fields: Vec<&str> = line.split('\t').collect();
-    if fields.len() < 7 {
-        return None;
-    }
-
-    let domain = fields[0].to_string();
-    let include_subdomains = fields[1].eq_ignore_ascii_case("TRUE");
-    let path = fields[2].to_string();
-    let secure = fields[3].eq_ignore_ascii_case("TRUE");
-    let expiry = fields[4].parse().unwrap_or(0);
-    let name = fields[5].to_string();
-    let value = fields[6].to_string();
-
-    // Skip empty names
-    if name.is_empty() {
-        return None;
-    }
-
-    Some(NetscapeCookie {
-        domain,
-        _include_subdomains: include_subdomains,
-        path,
-        secure,
-        _expiry: expiry,
-        name,
-        value,
-    })
-}
-
 /// Insert a parsed cookie into the wreq jar.
-fn insert_cookie(cookie: &NetscapeCookie, jar: &impl CookieStore) -> bool {
+///
+/// Empty names are skipped. The parser keeps fields as raw bytes; a cookie
+/// with a non-UTF-8 field is skipped rather than decoded lossily, because a
+/// `U+FFFD` would be stored and sent as the cookie's value.
+fn insert_cookie(cookie: &Cookie, jar: &impl CookieStore) -> bool {
+    if cookie.name.is_empty() {
+        return false;
+    }
+    let fields =
+        [&cookie.domain, &cookie.name, &cookie.value, &cookie.path].map(|f| str::from_utf8(f));
+    let [Ok(domain), Ok(name), Ok(value), Ok(path)] = fields else {
+        trace!("Skipping cookie with a non-UTF-8 field");
+        return false;
+    };
     util::insert_cookie_into_jar(
         jar,
-        &cookie.domain,
-        &cookie.name,
-        &cookie.value,
-        &cookie.path,
+        domain,
+        name,
+        value,
+        path,
         cookie.secure,
-        false,
+        cookie.http_only,
     )
 }
 
@@ -151,7 +118,7 @@ mod tests {
     fn test_parse_basic_cookie() {
         let jar = make_jar();
         let content = ".example.com\tTRUE\t/\tTRUE\t0\tsession\tabc123";
-        let count = load_cookie_string(content, &*jar);
+        let count = load_cookies(content.as_bytes(), &*jar);
         assert_eq!(count, 1);
 
         let uri: Uri = "https://example.com/".parse().unwrap();
@@ -164,7 +131,7 @@ mod tests {
     fn test_skip_comments_and_empty_lines() {
         let jar = make_jar();
         let content = "# Netscape HTTP Cookie File\n\n# comment\n.example.com\tTRUE\t/\tFALSE\t0\tname\tvalue\n";
-        let count = load_cookie_string(content, &*jar);
+        let count = load_cookies(content.as_bytes(), &*jar);
         assert_eq!(count, 1);
     }
 
@@ -175,7 +142,7 @@ mod tests {
 .example.com\tTRUE\t/\tTRUE\t0\ta\t1
 .example.com\tTRUE\t/\tTRUE\t0\tb\t2
 .other.com\tTRUE\t/\tFALSE\t0\tc\t3";
-        let count = load_cookie_string(content, &*jar);
+        let count = load_cookies(content.as_bytes(), &*jar);
         assert_eq!(count, 3);
     }
 
@@ -183,7 +150,7 @@ mod tests {
     fn test_malformed_line_skipped() {
         let jar = make_jar();
         let content = "not\tenough\tfields";
-        let count = load_cookie_string(content, &*jar);
+        let count = load_cookies(content.as_bytes(), &*jar);
         assert_eq!(count, 0);
     }
 
@@ -191,8 +158,76 @@ mod tests {
     fn test_empty_name_skipped() {
         let jar = make_jar();
         let content = ".example.com\tTRUE\t/\tFALSE\t0\t\tvalue";
-        let count = load_cookie_string(content, &*jar);
+        let count = load_cookies(content.as_bytes(), &*jar);
         assert_eq!(count, 0);
+    }
+
+    /// A `CookieStore` that records every `Set-Cookie` header it is given,
+    /// so attributes the real jar does not echo back (`HttpOnly`) can be
+    /// asserted on.
+    #[derive(Default)]
+    struct RecordingJar(std::sync::Mutex<Vec<String>>);
+
+    impl CookieStore for RecordingJar {
+        fn set_cookies(
+            &self,
+            cookie_headers: &mut dyn Iterator<Item = &wreq::header::HeaderValue>,
+            _uri: &Uri,
+        ) {
+            let mut seen = self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            seen.extend(cookie_headers.filter_map(|hv| hv.to_str().ok().map(str::to_owned)));
+        }
+
+        fn cookies(&self, _uri: &Uri) -> wreq::cookie::Cookies {
+            wreq::cookie::Cookies::Empty
+        }
+    }
+
+    #[test]
+    fn httponly_prefix_sets_the_httponly_attribute() {
+        let jar = RecordingJar::default();
+        let content = "#HttpOnly_.example.com\tTRUE\t/\tTRUE\t0\tsid\tsecret\n\
+                       .example.com\tTRUE\t/\tTRUE\t0\tplain\tvalue";
+        assert_eq!(load_cookies(content.as_bytes(), &jar), 2);
+
+        let seen = jar
+            .0
+            .into_inner()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let sid = seen
+            .iter()
+            .find(|h| h.starts_with("sid="))
+            .expect("sid stored");
+        assert!(sid.contains("; HttpOnly"), "{sid}");
+        let plain = seen
+            .iter()
+            .find(|h| h.starts_with("plain="))
+            .expect("plain stored");
+        assert!(!plain.contains("HttpOnly"), "{plain}");
+    }
+
+    #[test]
+    fn a_non_utf8_line_does_not_abort_the_rest_of_the_file() {
+        // `read_to_string` used to fail the whole file on one such byte.
+        let jar = make_jar();
+        let mut content = b".example.com\tTRUE\t/\tTRUE\t0\tfirst\t1\n".to_vec();
+        content.extend_from_slice(b".example.com\tTRUE\t/\tTRUE\t0\tlatin\t\xe9\n");
+        content.extend_from_slice(b".example.com\tTRUE\t/\tTRUE\t0\tlast\t3\n");
+
+        let count = load_cookies(&content, &*jar);
+
+        // The non-UTF-8 cookie is skipped (not stored lossily); its
+        // neighbours still load.
+        assert_eq!(count, 2);
+        let uri: Uri = "https://example.com/".parse().unwrap();
+        let cookie_str = cookies_string(&jar.cookies(&uri)).expect("cookies present");
+        assert!(
+            cookie_str.contains("first=1") && cookie_str.contains("last=3"),
+            "{cookie_str}"
+        );
     }
 
     #[test]
@@ -200,7 +235,7 @@ mod tests {
         let jar = make_jar();
         // Some exporters use #HttpOnly_ prefix on the domain
         let content = "#HttpOnly_.example.com\tTRUE\t/\tTRUE\t0\thttponly_cookie\tsecret";
-        let count = load_cookie_string(content, &*jar);
+        let count = load_cookies(content.as_bytes(), &*jar);
         assert_eq!(count, 1);
 
         let uri: Uri = "https://example.com/".parse().unwrap();

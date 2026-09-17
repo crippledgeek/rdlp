@@ -460,10 +460,10 @@ impl TempRegistry {
                             // We got the lock → orphaned. Unlock before deleting
                             // so the OS can clean up the lock state. Named
                             // through the fs4 trait, not `f.unlock()`: std grew
-                            // an inherent `File::unlock` in 1.89 that shadows
-                            // the trait method on newer toolchains, so the bare
-                            // call resolves to an API above the 1.88 floor
-                            // (`clippy::incompatible_msrv`).
+                            // an inherent `File::unlock` in 1.89 that a bare
+                            // method call would pick over the trait; naming the
+                            // trait makes it unambiguous which implementation
+                            // runs.
                             let _ = FileExt::unlock(&f);
                             false // not held by another process
                         }

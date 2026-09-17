@@ -4621,6 +4621,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "netscape-cookie-file-parser"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "21a5401d0712ddbaacc66eb2be0a15985dddee909efc6f6ed83d83abfa26b942"
+
+[[package]]
 name = "new_debug_unreachable"
 version = "1.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6355,6 +6361,7 @@ dependencies = [
  "base64 0.22.1",
  "cbc 0.1.2",
  "log",
+ "netscape-cookie-file-parser",
  "pbkdf2",
  "rdlp-core",
  "rdlp-redact",
@@ -6510,6 +6517,7 @@ dependencies = [
  "rdlp-core",
  "rdlp-types",
  "serde",
+ "serde_json",
  "strum",
  "tempfile",
  "thiserror 2.0.18",

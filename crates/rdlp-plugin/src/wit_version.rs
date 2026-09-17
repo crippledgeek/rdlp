@@ -12,7 +12,8 @@
 /// Walks the bytes via `while let` slice patterns rather than `[idx]` or
 /// `.get(idx)` — `indexing_slicing` is warned for this crate's library code
 /// (see `lib.rs`) and `slice::get` is not yet const-stable at this crate's
-/// MSRV (1.88) — AND iteratively rather than one-byte-per-recursive-call:
+/// MSRV (`rust-version` in the root Cargo.toml) — AND iteratively rather than
+/// one-byte-per-recursive-call:
 /// a recursive walk hits rustc's const-eval stack-frame cap on a realistic
 /// `.wit` file (measured: a ~154-byte leading header already failed with
 /// `E0080 reached the configured maximum number of stack frames`; `.wit`

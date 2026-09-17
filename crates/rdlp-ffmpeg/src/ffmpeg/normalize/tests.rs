@@ -208,14 +208,92 @@ fn test_parse_loudnorm_json_missing_field() {
 }
 
 #[test]
-fn test_extract_json_value() {
-    let text = r#""input_i" : "-24.50""#;
-    assert!((extract_json_value(text, "input_i").unwrap() - (-24.5)).abs() < 0.01);
+fn parse_loudnorm_json_ignores_keys_that_merely_contain_a_wanted_key() {
+    // Pins that lookup keys on the exact member name, not on `input_i`
+    // occurring anywhere in the text.
+    let lines = vec![
+        "{\n".to_string(),
+        "\t\"pre_input_i\" : \"1.00\",\n".to_string(),
+        "\t\"input_i\" : \"-24.50\",\n".to_string(),
+        "\t\"input_tp\" : \"-3.20\",\n".to_string(),
+        "\t\"input_lra\" : \"8.30\",\n".to_string(),
+        "\t\"input_thresh\" : \"-35.10\",\n".to_string(),
+        "\t\"target_offset\" : \"0.50\"\n".to_string(),
+        "}\n".to_string(),
+    ];
 
-    let text = r#""target_offset" : "0.50""#;
-    assert!((extract_json_value(text, "target_offset").unwrap() - 0.5).abs() < 0.01);
+    let m = parse_loudnorm_json(&lines).unwrap();
+    assert!((m.input_i - (-24.5)).abs() < 0.01);
+}
 
-    assert!(extract_json_value(text, "nonexistent").is_none());
+#[test]
+fn parse_loudnorm_json_finds_the_block_among_unrelated_log_lines() {
+    // The capture guard collects every INFO line FFmpeg logs while the graph
+    // is alive, so the block is surrounded by unrelated text, including a
+    // brace that is not the start of the block.
+    let lines = vec![
+        "[aformat @ 0x1] auto-inserting {resample}\n".to_string(),
+        "[Parsed_loudnorm_0 @ 0x2] \n".to_string(),
+        "{\n".to_string(),
+        "\t\"input_i\" : \"-24.50\",\n".to_string(),
+        "\t\"input_tp\" : \"-3.20\",\n".to_string(),
+        "\t\"input_lra\" : \"8.30\",\n".to_string(),
+        "\t\"input_thresh\" : \"-35.10\",\n".to_string(),
+        "\t\"output_i\" : \"-16.00\",\n".to_string(),
+        "\t\"output_tp\" : \"-1.50\",\n".to_string(),
+        "\t\"output_lra\" : \"7.20\",\n".to_string(),
+        "\t\"output_thresh\" : \"-26.60\",\n".to_string(),
+        "\t\"normalization_type\" : \"dynamic\",\n".to_string(),
+        "\t\"target_offset\" : \"0.50\"\n".to_string(),
+        "}\n".to_string(),
+        "[out @ 0x3] EOF\n".to_string(),
+    ];
+
+    let m = parse_loudnorm_json(&lines).unwrap();
+    assert!((m.input_tp - (-3.2)).abs() < 0.01);
+    assert!((m.target_offset - 0.5).abs() < 0.01);
+}
+
+#[test]
+fn parse_loudnorm_json_rejects_a_non_numeric_value() {
+    let lines = vec![
+        "{ \"input_i\" : \"loud\", \"input_tp\" : \"-3.20\", \"input_lra\" : \"8.30\", \
+         \"input_thresh\" : \"-35.10\", \"target_offset\" : \"0.50\" }"
+            .to_string(),
+    ];
+
+    let err = parse_loudnorm_json(&lines).expect_err("non-numeric input_i must fail");
+    assert!(err.to_string().contains("\"loud\""), "{err}");
+}
+
+#[test]
+fn parse_loudnorm_json_reports_the_real_blocks_error_not_a_later_stray_brace() {
+    let lines = vec![
+        "{ \"input_i\" : \"-24.50\", \"input_tp\" : \"-3.20\", \"input_lra\" : \"8.30\", \
+         \"input_thresh\" : \"-35.10\" }\n"
+            .to_string(),
+        "[out @ 0x3] flushing {buffered}\n".to_string(),
+    ];
+
+    let err = parse_loudnorm_json(&lines).expect_err("target_offset is missing");
+    assert!(err.to_string().contains("target_offset"), "{err}");
+}
+
+#[test]
+fn parse_loudnorm_json_accepts_the_inf_ffmpeg_prints_for_silence() {
+    // ebur128 reports -HUGE_VAL for silent input and the peak is
+    // 20*log10(0); vsnprintf("%.2f") renders both as `-inf`.
+    let lines = vec![
+        "{ \"input_i\" : \"-inf\", \"input_tp\" : \"-inf\", \"input_lra\" : \"0.00\", \
+         \"input_thresh\" : \"-inf\", \"target_offset\" : \"+0.50\" }"
+            .to_string(),
+    ];
+
+    let m = parse_loudnorm_json(&lines).unwrap();
+    assert!(m.input_i.is_infinite() && m.input_i.is_sign_negative());
+    assert!(m.input_tp.is_infinite() && m.input_tp.is_sign_negative());
+    assert!(m.input_thresh.is_infinite() && m.input_thresh.is_sign_negative());
+    assert!((m.target_offset - 0.5).abs() < 0.01);
 }
 
 #[test]
