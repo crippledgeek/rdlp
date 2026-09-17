@@ -30,6 +30,7 @@ pub mod browser_emulation;
 pub mod browser_type;
 pub mod config;
 pub mod container;
+pub mod effective_network;
 #[cfg(test)]
 mod enum_test_support;
 pub mod extractor_name;
@@ -61,6 +62,7 @@ pub use browser_emulation::BrowserEmulation;
 pub use browser_type::BrowserType;
 pub use config::{Config, ConfigValidationError};
 pub use container::ContainerFormat;
+pub use effective_network::EffectiveNetwork;
 pub use extractor_name::ExtractorName;
 pub use fixup_policy::FixupPolicy;
 pub use format::{

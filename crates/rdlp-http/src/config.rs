@@ -1,26 +1,7 @@
 //! HTTP client configuration
 
 use crate::DEFAULT_USER_AGENT;
-use rdlp_types::BrowserEmulation;
-
-/// Default idle keep-alive socket eviction timeout, in seconds.
-///
-/// Set intentionally **below** common server keep-alive timeouts (nginx default
-/// `keepalive_timeout` is 75s; many CDN edges use 60s) so the pool evicts an
-/// idle connection *before* the server silently closes it. Otherwise hyper hands
-/// back a dead socket on reuse and returns "connection closed before message
-/// completed" (`IncompleteMessage`), forcing an avoidable retry.
-///
-/// This is the common-case trigger only; it is not the sole defence. hyper-util
-/// auto-retries once when a pooled connection is found closed before any bytes
-/// are written, and rdlp's `with_retry` / `download_chunk_with_retry` layers
-/// cover residual mid-transfer truncation — those MUST stay in place. Operators
-/// can override per `Config::pool_idle_timeout` (CLI: `--pool-idle-timeout`).
-///
-/// Reference: reqwest/Go both default to 90s; lowering below the server's
-/// keep-alive is the nginx-documented client-side mitigation. PRD 2026-06-02
-/// item 3 / research §F-E.
-const DEFAULT_POOL_IDLE_TIMEOUT_SECS: u64 = 60;
+use rdlp_types::{BrowserEmulation, EffectiveNetwork};
 
 /// Maximum redirect hops followed before a request fails.
 ///
@@ -33,11 +14,18 @@ const DEFAULT_MAX_REDIRECTS: usize = 10;
 /// MUST stay below nginx's default `keepalive_timeout` (75s) so the pool evicts
 /// an idle socket before the server closes it. Bumping the default past a server
 /// keep-alive re-opens the "connection closed before message completed" race, so
-/// this fails the build rather than shipping the regression.
+/// this fails the build rather than shipping the regression. The value itself
+/// lives on `EffectiveNetwork::DEFAULT`, with the rationale on its field doc.
 const _: () = assert!(
-    DEFAULT_POOL_IDLE_TIMEOUT_SECS < 75,
+    EffectiveNetwork::DEFAULT.pool_idle_timeout_secs < 75,
     "default pool-idle timeout must stay below nginx's 75s keepalive_timeout"
 );
+
+/// Map the operator-facing `0 = disable idle eviction` sentinel onto the
+/// `Option` wreq's `pool_idle_timeout` takes.
+const fn pool_idle_from_secs(secs: u64) -> Option<u64> {
+    if secs == 0 { None } else { Some(secs) }
+}
 
 /// Configuration for HTTP client behavior
 ///
@@ -70,8 +58,9 @@ pub struct HttpClientConfig {
 
     /// Idle connection timeout in seconds. `None` disables idle eviction
     /// entirely (wired to `wreq::ClientBuilder::pool_idle_timeout(None)`).
-    /// Defaults to `DEFAULT_POOL_IDLE_TIMEOUT_SECS` (60s) — see that const for
-    /// why it sits below typical server keep-alive timeouts.
+    /// Defaults to `EffectiveNetwork::DEFAULT.pool_idle_timeout_secs` — see
+    /// that field's doc for why it sits below typical server keep-alive
+    /// timeouts.
     pub pool_idle_timeout_secs: Option<u64>,
 
     /// TCP keepalive interval in seconds
@@ -93,13 +82,14 @@ pub struct HttpClientConfig {
 
 impl Default for HttpClientConfig {
     fn default() -> Self {
+        let net = EffectiveNetwork::DEFAULT;
         Self {
             user_agent: DEFAULT_USER_AGENT.to_string(),
             emulation: BrowserEmulation::default(),
-            connect_timeout_secs: 30,
-            read_timeout_secs: 60,
+            connect_timeout_secs: net.socket_timeout_secs,
+            read_timeout_secs: net.read_timeout_secs,
             pool_max_idle_per_host: 10,
-            pool_idle_timeout_secs: Some(DEFAULT_POOL_IDLE_TIMEOUT_SECS),
+            pool_idle_timeout_secs: pool_idle_from_secs(net.pool_idle_timeout_secs),
             tcp_keepalive_secs: 60,
             tcp_nodelay: true,
             proxy: None,
@@ -115,7 +105,11 @@ impl HttpClientConfig {
         Self::default()
     }
 
-    /// Create config from rdlp-types Config
+    /// Create config from rdlp-types Config.
+    ///
+    /// The timeouts come from [`rdlp_types::Config::effective_network`] — the
+    /// one place `None` collapses to a default — so this crate holds no
+    /// fallback of its own.
     #[must_use]
     pub fn from_rdlp_config(config: &rdlp_types::Config) -> Self {
         let mut http_config = Self::default();
@@ -124,16 +118,10 @@ impl HttpClientConfig {
             http_config.user_agent.clone_from(user_agent);
         }
 
-        if let Some(timeout) = config.socket_timeout {
-            http_config.connect_timeout_secs = timeout;
-        }
-        if let Some(timeout) = config.read_timeout {
-            http_config.read_timeout_secs = timeout;
-        }
-        if let Some(timeout) = config.pool_idle_timeout {
-            // 0 is the user-facing sentinel for "disable eviction".
-            http_config.pool_idle_timeout_secs = if timeout == 0 { None } else { Some(timeout) };
-        }
+        let net = config.effective_network();
+        http_config.connect_timeout_secs = net.socket_timeout_secs;
+        http_config.read_timeout_secs = net.read_timeout_secs;
+        http_config.pool_idle_timeout_secs = pool_idle_from_secs(net.pool_idle_timeout_secs);
 
         http_config.emulation = config.browser_emulation.clone();
         http_config.proxy.clone_from(&config.proxy);
@@ -231,8 +219,14 @@ mod tests {
     fn test_default_config() {
         let config = HttpClientConfig::default();
         assert_eq!(config.user_agent, DEFAULT_USER_AGENT);
-        assert_eq!(config.connect_timeout_secs, 30);
-        assert_eq!(config.read_timeout_secs, 60);
+        assert_eq!(
+            config.connect_timeout_secs,
+            EffectiveNetwork::DEFAULT.socket_timeout_secs
+        );
+        assert_eq!(
+            config.read_timeout_secs,
+            EffectiveNetwork::DEFAULT.read_timeout_secs
+        );
         assert!(config.tcp_nodelay);
         assert!(config.proxy.is_none());
         assert!(matches!(config.emulation, BrowserEmulation::ChromeLatest));
@@ -266,11 +260,11 @@ mod tests {
     }
 
     #[test]
-    fn default_pool_idle_timeout_is_some_60() {
+    fn default_pool_idle_timeout_is_the_effective_network_default() {
         let config = HttpClientConfig::default();
         assert_eq!(
             config.pool_idle_timeout_secs,
-            Some(DEFAULT_POOL_IDLE_TIMEOUT_SECS)
+            Some(EffectiveNetwork::DEFAULT.pool_idle_timeout_secs)
         );
     }
 
@@ -297,14 +291,17 @@ mod tests {
         );
     }
 
+    /// The override value deliberately differs from
+    /// `EffectiveNetwork::DEFAULT.pool_idle_timeout_secs`; equal to it, this
+    /// test could not tell an honoured `Some` from an applied default.
     #[test]
     fn from_rdlp_config_maps_pool_idle_timeout_positive() {
         let cfg = rdlp_types::Config {
-            pool_idle_timeout: Some(60),
+            pool_idle_timeout: Some(45),
             ..rdlp_types::Config::default()
         };
         let http = HttpClientConfig::from_rdlp_config(&cfg);
-        assert_eq!(http.pool_idle_timeout_secs, Some(60));
+        assert_eq!(http.pool_idle_timeout_secs, Some(45));
     }
 
     #[test]
@@ -316,11 +313,21 @@ mod tests {
             ..rdlp_types::Config::default()
         };
         let http = HttpClientConfig::from_rdlp_config(&cfg);
-        assert_eq!(http.connect_timeout_secs, 30);
-        assert_eq!(http.read_timeout_secs, 60);
-        assert_eq!(
-            http.pool_idle_timeout_secs,
-            Some(DEFAULT_POOL_IDLE_TIMEOUT_SECS)
-        );
+        let d = EffectiveNetwork::DEFAULT;
+        assert_eq!(http.connect_timeout_secs, d.socket_timeout_secs);
+        assert_eq!(http.read_timeout_secs, d.read_timeout_secs);
+        assert_eq!(http.pool_idle_timeout_secs, Some(d.pool_idle_timeout_secs));
+    }
+
+    /// `socket_timeout` (connect axis) must reach the client config, not just
+    /// the read/pool axes the sibling tests cover.
+    #[test]
+    fn from_rdlp_config_maps_socket_timeout_to_connect() {
+        let cfg = rdlp_types::Config {
+            socket_timeout: Some(7),
+            ..rdlp_types::Config::default()
+        };
+        let http = HttpClientConfig::from_rdlp_config(&cfg);
+        assert_eq!(http.connect_timeout_secs, 7);
     }
 }

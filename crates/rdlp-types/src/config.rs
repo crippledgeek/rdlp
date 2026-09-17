@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 use crate::browser_emulation::BrowserEmulation;
 use crate::browser_type::BrowserType;
+use crate::effective_network::EffectiveNetwork;
 use crate::playlist_items::PlaylistItems;
 use crate::postprocess::PostProcess;
 use crate::subtitle_format::SubtitleFormat;
@@ -240,7 +241,8 @@ pub struct Config {
     /// Exponential backoff multiplier (default: 2.0)
     pub retry_backoff_multiplier: f64,
 
-    /// Buffer size for downloads (bytes)
+    /// Buffer size for downloads (bytes). Default:
+    /// `buffer_size` on [`EffectiveNetwork::DEFAULT`].
     pub buffer_size: usize,
 
     // === Network options ===
@@ -249,7 +251,8 @@ pub struct Config {
 
     /// Connect-axis timeout in seconds (TCP + TLS handshake).
     ///
-    /// Default: 30. Range validation enforces 1..=300 if set.
+    /// Default: `socket_timeout_secs` on [`EffectiveNetwork::DEFAULT`]. Range
+    /// validation enforces 1..=300 if set.
     ///
     /// Named `socket_timeout` for historical compatibility with the
     /// pre-1.0 single-knob model; the actual semantics are connect-only.
@@ -259,18 +262,17 @@ pub struct Config {
 
     /// Read-axis timeout in seconds (per-read inactivity, not total).
     ///
-    /// Default: 60. Range: 1..=600.
+    /// `None` here in [`Config::default()`]; [`Config::effective_network`]
+    /// resolves it to `read_timeout_secs` on [`EffectiveNetwork::DEFAULT`].
+    /// Range: 1..=600.
     #[serde(default)]
     pub read_timeout: Option<u64>,
 
-    /// Pool idle-connection timeout in seconds.
+    /// Pool idle-connection timeout in seconds. Range: 0..=3600.
     ///
-    /// Default: 60. Range: 0..=3600.
-    ///
-    /// The default is NOT stored here — this field is `None` in
-    /// `Config::default()`, and `HttpClientConfig::from_rdlp_config` supplies
-    /// `DEFAULT_POOL_IDLE_TIMEOUT_SECS` when it is unset. See
-    /// `rdlp-http/src/config.rs` for that const and why its value is what it is.
+    /// `None` here in [`Config::default()`]; [`Config::effective_network`]
+    /// resolves it to `pool_idle_timeout_secs` on [`EffectiveNetwork::DEFAULT`],
+    /// whose doc explains why the value sits below server keep-alive timeouts.
     ///
     /// `0` is a sentinel meaning "disable idle eviction entirely" — wired
     /// through to wreq/reqwest as `pool_idle_timeout(None)`. Any positive
@@ -283,20 +285,26 @@ pub struct Config {
     pub pool_idle_timeout: Option<u64>,
 
     /// Total download timeout in seconds — the entire download of one
-    /// file/format must complete within this. Default: 3600 (1 hour).
-    /// Range: 1..=86400. Unset keeps the downloader default.
+    /// file/format must complete within this. Range: 1..=86400.
+    ///
+    /// `None` here in [`Config::default()`]; [`Config::effective_network`]
+    /// resolves it to `download_timeout_secs` on [`EffectiveNetwork::DEFAULT`].
     #[serde(default)]
     pub download_timeout: Option<u64>,
 
     /// Merge (mux/concat) operation timeout in seconds — the chunk/segment
-    /// merge must complete within this. Default: 1800 (30 min).
-    /// Range: 1..=86400. Unset keeps the downloader default.
+    /// merge must complete within this. Range: 1..=86400.
+    ///
+    /// `None` here in [`Config::default()`]; [`Config::effective_network`]
+    /// resolves it to `merge_timeout_secs` on [`EffectiveNetwork::DEFAULT`].
     #[serde(default)]
     pub merge_timeout: Option<u64>,
 
     /// Wall-clock cap on a single HEAD probe used to detect content-length on
     /// non-HLS formats. The operation is a single HEAD request with a
-    /// Range-GET fallback.
+    /// Range-GET fallback. `None` resolves through
+    /// [`Config::effective_network`] to
+    /// `hls_head_probe_timeout_secs` on [`EffectiveNetwork::DEFAULT`].
     /// Validated post-load by `Config::validate()`: must be 1..=300 seconds.
     pub hls_head_probe_timeout: Option<u64>,
 
@@ -313,8 +321,8 @@ pub struct Config {
     /// Minimum file size in bytes at which the HTTP downloader switches from
     /// sequential to parallel chunked download. Below this, parallel fan-out
     /// overhead (HEAD probes, chunk-merge step) outweighs the throughput gain.
-    /// `None` falls back to the downloader's default
-    /// (`DEFAULT_PARALLEL_THRESHOLD_BYTES`, currently 10 MiB).
+    /// `None` resolves through [`Config::effective_network`] to
+    /// `parallel_threshold` on [`EffectiveNetwork::DEFAULT`].
     /// Validated post-load by `Config::validate()`: must be `1..=1_073_741_824` bytes (1 GiB).
     pub parallel_threshold: Option<u64>,
 
@@ -560,25 +568,25 @@ impl Default for Config {
             audio_multistreams: false,
 
             // Download options
-            concurrent_fragments: 8,
+            concurrent_fragments: EffectiveNetwork::DEFAULT.concurrent_fragments,
             rate_limit: None,
             retries: 10,
             fragment_retries: 10,
             retry_initial_delay_ms: 1000,  // 1 second
             retry_max_delay_ms: 60000,     // 60 seconds
             retry_backoff_multiplier: 2.0, // Double delay each retry
-            buffer_size: 2 * 1024 * 1024,  // 2 MB - larger buffer for faster downloads
+            buffer_size: EffectiveNetwork::DEFAULT.buffer_size,
 
             // Network options
             proxy: None,
-            socket_timeout: Some(30),
+            socket_timeout: Some(EffectiveNetwork::DEFAULT.socket_timeout_secs),
             read_timeout: None,
             pool_idle_timeout: None,
             download_timeout: None,
             merge_timeout: None,
-            hls_head_probe_timeout: Some(5),
+            hls_head_probe_timeout: Some(EffectiveNetwork::DEFAULT.hls_head_probe_timeout_secs),
             hls_expansion_timeout: None,
-            parallel_threshold: Some(10 * 1024 * 1024),
+            parallel_threshold: Some(EffectiveNetwork::DEFAULT.parallel_threshold),
             max_fragment_bytes: Some(DEFAULT_MAX_FRAGMENT_BYTES),
             max_metadata_extras: None,
             max_metadata_value_bytes: None,
@@ -654,6 +662,31 @@ impl Default for Config {
 }
 
 impl Config {
+    /// Materialise the network/download settings a runtime consumer reads.
+    ///
+    /// The single resolution step for the nine fields: every `None`
+    /// (inherit) collapses to its [`EffectiveNetwork::DEFAULT`] value, every
+    /// `Some(x)` to `x`, and the two concrete fields pass through. rdlp-http,
+    /// rdlp-downloader and rdlp-extractor read these values from here rather
+    /// than each carrying an `unwrap_or(<literal>)` (#611).
+    #[must_use]
+    pub fn effective_network(&self) -> EffectiveNetwork {
+        let d = EffectiveNetwork::DEFAULT;
+        EffectiveNetwork {
+            socket_timeout_secs: self.socket_timeout.unwrap_or(d.socket_timeout_secs),
+            read_timeout_secs: self.read_timeout.unwrap_or(d.read_timeout_secs),
+            pool_idle_timeout_secs: self.pool_idle_timeout.unwrap_or(d.pool_idle_timeout_secs),
+            download_timeout_secs: self.download_timeout.unwrap_or(d.download_timeout_secs),
+            merge_timeout_secs: self.merge_timeout.unwrap_or(d.merge_timeout_secs),
+            concurrent_fragments: self.concurrent_fragments,
+            buffer_size: self.buffer_size,
+            parallel_threshold: self.parallel_threshold.unwrap_or(d.parallel_threshold),
+            hls_head_probe_timeout_secs: self
+                .hls_head_probe_timeout
+                .unwrap_or(d.hls_head_probe_timeout_secs),
+        }
+    }
+
     /// The resolved progress-bar decision: an explicit `progress` wins;
     /// otherwise the bar follows `!quiet`. The CLI's `-o -` exception stores
     /// `Some(false)` so stdout streaming is never drawn over.

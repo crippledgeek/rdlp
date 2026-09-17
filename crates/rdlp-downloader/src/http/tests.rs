@@ -703,9 +703,12 @@ fn with_parallel_threshold_sets_config_field() {
 }
 
 #[test]
-fn default_parallel_threshold_is_10_mib() {
+fn default_parallel_threshold_is_the_effective_network_default() {
     let downloader = HttpDownloader::new();
-    assert_eq!(downloader.config.parallel_threshold, 10 * 1024 * 1024);
+    assert_eq!(
+        downloader.config.parallel_threshold,
+        rdlp_types::EffectiveNetwork::DEFAULT.parallel_threshold
+    );
 }
 
 #[test]

@@ -5,16 +5,12 @@
 
 use crate::chunking::ChunkSizeStrategy;
 use rdlp_core::RetryConfig;
+use rdlp_types::EffectiveNetwork;
 use std::time::Duration;
 
 // =============================================================================
 // Constants
 // =============================================================================
-
-/// Default minimum file size to enable parallel downloads (10 MiB).
-/// Used when `Config::parallel_threshold` is `None` and as the
-/// `DownloaderConfig::default()` value.
-pub(super) const DEFAULT_PARALLEL_THRESHOLD_BYTES: u64 = 10 * 1024 * 1024;
 
 /// Size of the F3 initial range probe used to detect `Content-Length` and range support.
 /// The body is discarded; only headers are consulted.
@@ -31,20 +27,10 @@ pub(crate) const PROBE_WINDOW_BYTES: u64 = 256 * 1024;
 /// Progress callback update interval
 pub(super) const PROGRESS_UPDATE_INTERVAL: Duration = Duration::from_millis(100);
 
-/// Default buffer size for I/O operations (2 MB)
-const DEFAULT_BUFFER_SIZE: usize = 2 * 1024 * 1024;
-
-/// Maximum concurrent connections cap
+/// Cap on the CPU-derived concurrent-connection count `default()` computes.
+/// A cap, not a default: the default value itself is
+/// `EffectiveNetwork::DEFAULT.concurrent_fragments`.
 const MAX_CONCURRENT_CONNECTIONS: usize = 8;
-
-/// Default per-read idle timeout (60 seconds)
-const DEFAULT_READ_TIMEOUT: Duration = Duration::from_secs(60);
-
-/// Default total download timeout (1 hour)
-const DEFAULT_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(3600);
-
-/// Default merge operation timeout (30 minutes)
-const DEFAULT_MERGE_TIMEOUT: Duration = Duration::from_secs(1800);
 
 /// [`rdlp_types::config::DEFAULT_MAX_FRAGMENT_BYTES`] as the validated cap
 /// type `rdlp_http::read_body_capped` takes, used when
@@ -86,7 +72,7 @@ pub struct DownloaderConfig {
     pub concurrent_fragments: usize,
     pub chunk_strategy: ChunkSizeStrategy,
     /// Minimum file size at which `download_to_file` switches to parallel chunked
-    /// download. Defaults to `DEFAULT_PARALLEL_THRESHOLD_BYTES` (10 MiB).
+    /// download. Defaults to `EffectiveNetwork::DEFAULT.parallel_threshold`.
     pub parallel_threshold: u64,
     /// Ceiling on a single fragment/segment body (#569). Defaults to
     /// `DEFAULT_MAX_FRAGMENT_BYTES` (512 MiB). Read by both the
@@ -116,17 +102,18 @@ impl Default for DownloaderConfig {
         let concurrent_fragments = std::thread::available_parallelism()
             .map_or(4, |n| n.get().min(MAX_CONCURRENT_CONNECTIONS));
 
+        let net = EffectiveNetwork::DEFAULT;
         Self {
-            buffer_size: DEFAULT_BUFFER_SIZE,
+            buffer_size: net.buffer_size,
             retry_config: RetryConfig::default_config(),
             fragment_retry_config: RetryConfig::default_config(),
             concurrent_fragments,
             chunk_strategy: ChunkSizeStrategy::Auto,
-            parallel_threshold: DEFAULT_PARALLEL_THRESHOLD_BYTES,
+            parallel_threshold: net.parallel_threshold,
             max_fragment_bytes: DEFAULT_MAX_FRAGMENT_BODY_CAP,
-            read_timeout: DEFAULT_READ_TIMEOUT,
-            download_timeout: DEFAULT_DOWNLOAD_TIMEOUT,
-            merge_timeout: DEFAULT_MERGE_TIMEOUT,
+            read_timeout: Duration::from_secs(net.read_timeout_secs),
+            download_timeout: Duration::from_secs(net.download_timeout_secs),
+            merge_timeout: Duration::from_secs(net.merge_timeout_secs),
             adaptive: true,
         }
     }

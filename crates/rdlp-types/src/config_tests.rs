@@ -11,7 +11,10 @@ fn test_default_config() {
     assert_eq!(config.output_template, "%(title|Unknown)s [%(id)s].%(ext)s");
     assert!(config.format.is_none());
     assert!(config.continue_downloads);
-    assert_eq!(config.concurrent_fragments, 8);
+    assert_eq!(
+        config.concurrent_fragments,
+        crate::EffectiveNetwork::DEFAULT.concurrent_fragments
+    );
 }
 
 #[test]
@@ -780,9 +783,12 @@ fn test_validate_concurrent_fragments_accepts_64_boundary() {
 }
 
 #[test]
-fn test_default_parallel_threshold_is_10_mib() {
+fn test_default_parallel_threshold_is_the_effective_network_default() {
     let config = Config::default();
-    assert_eq!(config.parallel_threshold, Some(10 * 1024 * 1024));
+    assert_eq!(
+        config.parallel_threshold,
+        Some(crate::EffectiveNetwork::DEFAULT.parallel_threshold)
+    );
 }
 
 #[test]
@@ -1145,4 +1151,98 @@ fn progress_key_deserializes_and_is_absent_by_default() {
     assert_eq!(c.progress, Some(false));
     let c: Config = toml::from_str("").expect("valid toml");
     assert_eq!(c.progress, None);
+}
+
+// =============================================================================
+// EffectiveNetwork resolution (#611)
+// =============================================================================
+
+/// The default `Config` materialises to exactly the single owner of the
+/// nine network defaults.
+#[test]
+fn default_config_resolves_to_effective_network_default() {
+    assert_eq!(
+        Config::default().effective_network(),
+        crate::EffectiveNetwork::DEFAULT
+    );
+}
+
+/// Every `None` (inherit) resolves to its `DEFAULT` field. Destructured
+/// without `..` so adding a field to `EffectiveNetwork` fails this test until
+/// the resolver and the assertion cover it.
+#[test]
+fn effective_network_none_fields_resolve_to_default() {
+    let config = Config {
+        socket_timeout: None,
+        read_timeout: None,
+        pool_idle_timeout: None,
+        download_timeout: None,
+        merge_timeout: None,
+        parallel_threshold: None,
+        hls_head_probe_timeout: None,
+        ..Config::default()
+    };
+    let d = crate::EffectiveNetwork::DEFAULT;
+    let crate::EffectiveNetwork {
+        socket_timeout_secs,
+        read_timeout_secs,
+        pool_idle_timeout_secs,
+        download_timeout_secs,
+        merge_timeout_secs,
+        concurrent_fragments,
+        buffer_size,
+        parallel_threshold,
+        hls_head_probe_timeout_secs,
+    } = config.effective_network();
+    assert_eq!(socket_timeout_secs, d.socket_timeout_secs);
+    assert_eq!(read_timeout_secs, d.read_timeout_secs);
+    assert_eq!(pool_idle_timeout_secs, d.pool_idle_timeout_secs);
+    assert_eq!(download_timeout_secs, d.download_timeout_secs);
+    assert_eq!(merge_timeout_secs, d.merge_timeout_secs);
+    assert_eq!(concurrent_fragments, d.concurrent_fragments);
+    assert_eq!(buffer_size, d.buffer_size);
+    assert_eq!(parallel_threshold, d.parallel_threshold);
+    assert_eq!(hls_head_probe_timeout_secs, d.hls_head_probe_timeout_secs);
+}
+
+/// Every `Some(x)` (and every concrete field) resolves to `x`, not to the
+/// default. Values are chosen to differ from every `DEFAULT` field so a
+/// resolver that ignored one `Some` would be caught.
+#[test]
+fn effective_network_some_fields_resolve_to_their_value() {
+    let config = Config {
+        socket_timeout: Some(11),
+        read_timeout: Some(12),
+        pool_idle_timeout: Some(0),
+        download_timeout: Some(14),
+        merge_timeout: Some(15),
+        concurrent_fragments: 3,
+        buffer_size: 4096,
+        parallel_threshold: Some(17),
+        hls_head_probe_timeout: Some(18),
+        ..Config::default()
+    };
+    let crate::EffectiveNetwork {
+        socket_timeout_secs,
+        read_timeout_secs,
+        pool_idle_timeout_secs,
+        download_timeout_secs,
+        merge_timeout_secs,
+        concurrent_fragments,
+        buffer_size,
+        parallel_threshold,
+        hls_head_probe_timeout_secs,
+    } = config.effective_network();
+    assert_eq!(socket_timeout_secs, 11);
+    assert_eq!(read_timeout_secs, 12);
+    assert_eq!(
+        pool_idle_timeout_secs, 0,
+        "0 is the disable sentinel and must survive"
+    );
+    assert_eq!(download_timeout_secs, 14);
+    assert_eq!(merge_timeout_secs, 15);
+    assert_eq!(concurrent_fragments, 3);
+    assert_eq!(buffer_size, 4096);
+    assert_eq!(parallel_threshold, 17);
+    assert_eq!(hls_head_probe_timeout_secs, 18);
 }

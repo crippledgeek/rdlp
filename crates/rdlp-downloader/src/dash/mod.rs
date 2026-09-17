@@ -13,11 +13,10 @@ pub use errors::DashError;
 
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use rdlp_core::{DownloadStats, Downloader, ProgressCallback, Result, RetryConfig};
-use rdlp_types::Format;
+use rdlp_types::{EffectiveNetwork, Format};
 
 use crate::http::HttpDownloader;
 
@@ -32,30 +31,20 @@ pub struct DashDownloader {
     concurrent_segments: usize,
     buffer_size: usize,
     retry_config: Arc<RetryConfig>,
-    #[allow(dead_code)]
-    expected_size: Option<u64>,
-    #[allow(dead_code)]
-    download_timeout: Duration,
-    #[allow(dead_code)]
-    merge_timeout: Duration,
-    #[allow(dead_code)]
-    max_segment_failures: usize,
 }
 
 impl DashDownloader {
-    /// Construct a new `DashDownloader` with default settings (8 concurrent
-    /// segments, 2 MiB buffer, 1 h download timeout, 30 min mux timeout).
+    /// Construct a new `DashDownloader` whose concurrency and buffer size are
+    /// `EffectiveNetwork::DEFAULT`'s. Timeouts live on the inner
+    /// [`HttpDownloader`], which the segment fetcher reads directly.
     #[must_use]
     pub fn new() -> Self {
+        let net = EffectiveNetwork::DEFAULT;
         Self {
             http_downloader: HttpDownloader::new(),
-            concurrent_segments: 8,
-            buffer_size: 2 * 1024 * 1024,
+            concurrent_segments: net.concurrent_fragments,
+            buffer_size: net.buffer_size,
             retry_config: Arc::new(RetryConfig::default_config()),
-            expected_size: None,
-            download_timeout: Duration::from_secs(3600), // 1 hour
-            merge_timeout: Duration::from_secs(1800),    // 30 min
-            max_segment_failures: 3,
         }
     }
 
