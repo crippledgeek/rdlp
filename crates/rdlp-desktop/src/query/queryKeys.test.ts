@@ -106,3 +106,9 @@ describe("queryKeys.effectiveNetwork", () => {
         expect(queryKeys.effectiveNetwork()).toEqual(["effective-network"]);
     });
 });
+
+describe("queryKeys.builtinNetworkDefaults", () => {
+    test("returns ['builtin-network-defaults']", () => {
+        expect(queryKeys.builtinNetworkDefaults()).toEqual(["builtin-network-defaults"]);
+    });
+});

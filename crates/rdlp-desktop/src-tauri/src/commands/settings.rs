@@ -64,6 +64,24 @@ pub async fn effective_network(state: State<'_, AppState>) -> Result<EffectiveNe
     Ok(state.client.config().effective_network())
 }
 
+/// The built-in network/download defaults, `EffectiveNetwork::DEFAULT`,
+/// before any `config.toml` layering.
+///
+/// Distinct from [`effective_network`]: that is what an empty field
+/// *inherits*; this is what the GUI *seeds* when the inherited value cannot
+/// express the user's intent — e.g. re-enabling idle-connection eviction
+/// when the base configuration has disabled it with the `0` sentinel. Serving
+/// it over IPC keeps the desktop free of its own copy of the number (#611).
+///
+/// # Errors
+///
+/// This function does not currently return errors but returns
+/// `Result` for forward-compatible IPC signatures.
+#[tauri::command]
+pub async fn builtin_network_defaults() -> Result<EffectiveNetwork, AppError> {
+    Ok(EffectiveNetwork::DEFAULT)
+}
+
 /// Update application settings with new values.
 ///
 /// Validates security-sensitive fields (cookies path traversal, proxy URL)

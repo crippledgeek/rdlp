@@ -19,3 +19,21 @@ export const effectiveNetworkStub: EffectiveNetwork = {
     parallel_threshold: 11 * BYTES_PER_MIB,
     hls_head_probe_timeout_secs: 6,
 };
+
+/**
+ * A stub for the BUILT-IN defaults (`EffectiveNetwork::DEFAULT`, served by
+ * `builtin_network_defaults`). Distinct from `effectiveNetworkStub` in every
+ * field so a component that reads the effective value where the built-in one
+ * is required (or vice versa) fails its assertion.
+ */
+export const builtinNetworkStub: EffectiveNetwork = {
+    socket_timeout_secs: 41,
+    read_timeout_secs: 72,
+    pool_idle_timeout_secs: 61,
+    download_timeout_secs: 3701,
+    merge_timeout_secs: 1901,
+    concurrent_fragments: 12,
+    buffer_size: 4 * BYTES_PER_MIB,
+    parallel_threshold: 13 * BYTES_PER_MIB,
+    hls_head_probe_timeout_secs: 7,
+};
