@@ -17,7 +17,8 @@
 //! - [`select_audio_encoder_for_container`] — best default encoder for a container
 
 use rdlp_types::ContainerFormat;
-use rdlp_types::media_name::{AudioEncoder, AudioEncoderName, CodecName};
+use rdlp_types::RecodeAudioMode;
+use rdlp_types::media_name::{AudioCodecOrEncoderName, AudioEncoder, AudioEncoderName, CodecName};
 use serde::{Deserialize, Serialize};
 
 use crate::ffmpeg::container_default::{ContainerDefault, Policy};
@@ -399,19 +400,47 @@ pub fn preferred_audio_encoder(codec: &str) -> Option<AudioEncoderName> {
     AUDIO_REGISTRY.preferred_encoder(codec)
 }
 
-/// Resolves an audio encoder name.
+/// Resolves an operator's audio request to an encoder.
 ///
-/// Accepts either a codec name (e.g., "aac") or a direct encoder name
-/// (e.g., "`libfdk_aac`"). For codec names, returns the best available encoder
-/// via [`preferred_audio_encoder`]. For encoder names, checks availability
-/// directly and returns the static str if available.
+/// The request is either a codec name (e.g., "aac") or a direct encoder name
+/// (e.g., "`libfdk_aac`") — [`AudioCodecOrEncoderName`] carries exactly that
+/// ambiguity, and this is the one point where it is resolved, against the
+/// linked build. For codec names, returns the best available encoder via
+/// [`preferred_audio_encoder`]; for encoder names, checks availability
+/// directly. The order is codec-first, deliberately — see
+/// `Registry::resolve` (#649).
 ///
 /// Returns `None` if no encoder can be resolved or is available.
 ///
 /// Requires [`super::ensure_init`] to have been called first.
 #[must_use]
-pub fn resolve_audio_encoder(input: &str) -> Option<AudioEncoderName> {
-    AUDIO_REGISTRY.resolve(input)
+pub fn resolve_audio_encoder(request: &AudioCodecOrEncoderName) -> Option<AudioEncoderName> {
+    AUDIO_REGISTRY.resolve(request.as_str())
+}
+
+/// Pre-flight an operator's `recode_audio` request against the linked build.
+///
+/// An unknown codec/encoder name then fails at the configuration boundary
+/// with a clear message rather than deep inside a recode (#649). Mirrors the
+/// wording of `FFmpeg`'s own `find_codec` failure (`Unknown encoder '%s'`).
+///
+/// `None` (not specified), `Copy` and `Auto` have nothing to check.
+///
+/// # Errors
+///
+/// The message to show the operator when the name resolves to no available
+/// encoder.
+pub fn validate_recode_audio(mode: Option<&RecodeAudioMode>) -> std::result::Result<(), String> {
+    match mode {
+        Some(RecodeAudioMode::Encoder { name }) if resolve_audio_encoder(name).is_none() => {
+            Err(format!(
+                "unknown audio codec or encoder '{name}' (not in this FFmpeg build); \
+                 valid values are copy, auto, a codec name such as aac or opus, or an \
+                 encoder name such as libopus"
+            ))
+        }
+        _ => Ok(()),
+    }
 }
 
 /// Returns all available encoders for a given audio codec name, in preference order.
@@ -731,7 +760,7 @@ mod tests {
 
     #[test]
     fn resolve_encoder_by_codec_name() {
-        let enc = resolve_audio_encoder("aac");
+        let enc = resolve_audio_encoder(&req("aac"));
         assert!(enc.is_some(), "should resolve aac codec");
     }
 
@@ -748,7 +777,7 @@ mod tests {
         );
     }
 
-    /// CRITICAL-8 regression guard: `resolve_audio_encoder("pcm")` must
+    /// CRITICAL-8 regression guard: `resolve_audio_encoder(&req("pcm"))` must
     /// resolve via the `pcm_s16le` row's alias, not fall through to `None`.
     /// `pcm_s16le` is a built-in `FFmpeg` encoder present in every build (the
     /// same assumption `audio_only_containers_get_their_own_codec_not_aac`
@@ -756,7 +785,7 @@ mod tests {
     #[test]
     fn resolve_encoder_by_alias_pcm() {
         ensure_init_for_test();
-        assert_eq!(resolve_audio_encoder("pcm").name(), Some("pcm_s16le"));
+        assert_eq!(resolve_audio_encoder(&req("pcm")).name(), Some("pcm_s16le"));
         assert_eq!(preferred_audio_encoder("pcm").name(), Some("pcm_s16le"));
     }
 
@@ -773,11 +802,11 @@ mod tests {
         crate::ffmpeg::ensure_init().expect("ffmpeg init");
         if is_audio_encoder_available(&AudioEncoderName::from_static("libmp3lame")) {
             assert_eq!(
-                resolve_audio_encoder("libmp3lame").name(),
+                resolve_audio_encoder(&req("libmp3lame")).name(),
                 Some("libmp3lame")
             );
         } else {
-            assert_eq!(resolve_audio_encoder("libmp3lame"), None);
+            assert_eq!(resolve_audio_encoder(&req("libmp3lame")), None);
         }
     }
 
@@ -856,9 +885,54 @@ mod tests {
         ));
     }
 
+    /// The operator's request type, built the way the CLI builds it.
+    fn req(name: &str) -> AudioCodecOrEncoderName {
+        AudioCodecOrEncoderName::new(name).unwrap()
+    }
+
+    /// #649: for a name that is both a codec and a native encoder, the codec
+    /// preference wins — `opus` resolves to `libopus`, never to the native
+    /// `opus` encoder (experimental, `libavcodec/opus/enc.c`), which is what
+    /// `FFmpeg`'s encoder-name-first `-c:a` would land on. Pinned so a
+    /// "parity" flip cannot silently degrade the request. Gated on libopus
+    /// being linked; a build without it has no better answer to prefer.
+    #[test]
+    fn codec_name_that_is_also_a_native_encoder_resolves_to_the_preferred_encoder() {
+        ensure_init_for_test();
+        if is_audio_encoder_available(&AudioEncoderName::from_static("libopus")) {
+            assert_eq!(resolve_audio_encoder(&req("opus")).name(), Some("libopus"));
+        }
+        if is_audio_encoder_available(&AudioEncoderName::from_static("libvorbis")) {
+            assert_eq!(
+                resolve_audio_encoder(&req("vorbis")).name(),
+                Some("libvorbis")
+            );
+        }
+    }
+
+    /// #649: the pre-flight refuses an unknown name with an actionable
+    /// message and passes everything that has nothing to check.
+    #[test]
+    fn validate_recode_audio_refuses_only_an_unresolvable_name() {
+        ensure_init_for_test();
+        assert_eq!(validate_recode_audio(None), Ok(()));
+        assert_eq!(validate_recode_audio(Some(&RecodeAudioMode::Copy)), Ok(()));
+        assert_eq!(validate_recode_audio(Some(&RecodeAudioMode::Auto)), Ok(()));
+        let known = RecodeAudioMode::Encoder { name: req("pcm") };
+        assert_eq!(validate_recode_audio(Some(&known)), Ok(()));
+        let unknown = RecodeAudioMode::Encoder {
+            name: req("nonexistent_codec_xyz"),
+        };
+        let err = validate_recode_audio(Some(&unknown)).unwrap_err();
+        assert!(
+            err.contains("nonexistent_codec_xyz") && err.contains("copy, auto"),
+            "{err}"
+        );
+    }
+
     #[test]
     fn unknown_codec_resolve_returns_none() {
-        assert!(resolve_audio_encoder("nonexistent_codec_xyz").is_none());
+        assert!(resolve_audio_encoder(&req("nonexistent_codec_xyz")).is_none());
     }
 
     #[test]
@@ -870,11 +944,11 @@ mod tests {
         // unavailable branch of the iterator chain.
         if is_audio_encoder_available(&AudioEncoderName::from_static("libfdk_aac")) {
             assert_eq!(
-                resolve_audio_encoder("libfdk_aac").name(),
+                resolve_audio_encoder(&req("libfdk_aac")).name(),
                 Some("libfdk_aac")
             );
         } else {
-            assert_eq!(resolve_audio_encoder("libfdk_aac"), None);
+            assert_eq!(resolve_audio_encoder(&req("libfdk_aac")), None);
         }
     }
 
@@ -1082,7 +1156,7 @@ mod tests {
     #[test]
     fn explicit_resolution_still_returns_the_experimental_encoder() {
         ensure_init_for_test();
-        let enc = resolve_audio_encoder("dts");
+        let enc = resolve_audio_encoder(&req("dts"));
         assert_eq!(enc.name(), Some("dca"));
     }
 

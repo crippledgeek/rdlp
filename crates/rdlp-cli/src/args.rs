@@ -366,10 +366,11 @@ pub struct Args {
     #[arg(long, value_name = "FMT", value_parser = non_blank, help_heading = HELP_HEADING_RECODE, hide_short_help = true)]
     pub recode_container: Option<String>,
 
-    /// Audio mode during video recode: copy (default), auto, or an encoder name
-    /// (e.g., libopus, aac, libmp3lame).
-    /// `copy` copies audio unchanged; `auto` selects the best encoder for the
-    /// target container; any other value is treated as an explicit encoder name.
+    /// Audio mode during video recode: copy, auto, or a codec/encoder name
+    /// (e.g., aac, libopus, libmp3lame).
+    /// Unspecified: copy when the target container carries the codec, else
+    /// re-encode. `copy` demands a copy and refuses if impossible; `auto`
+    /// selects the best encoder for the target container.
     //
     // Deliberately no clap `default_value`: absent must mean "not specified on
     // the command line" so a `recode_audio` set in the config file survives. A

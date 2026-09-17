@@ -109,7 +109,11 @@ export function DownloadConfig() {
             recodeCodec: "",
             recodeContainerOverride: "",
             videoEncoder: "",
-            recodeAudioMode: "copy",
+            // "default" = not specified: rdlp copies the audio when the target
+            // carries its codec and re-encodes otherwise. A form default is not
+            // an explicit demand (#645) — only a chosen "Copy" is refused when
+            // impossible.
+            recodeAudioMode: "default",
             recodeThreads: "",
             recodePreset: "",
             recodeDeadline: "",
@@ -154,7 +158,7 @@ export function DownloadConfig() {
                         ? { mode: "copy" as const }
                         : value.recodeAudioMode === "auto"
                         ? { mode: "auto" as const }
-                        : value.recodeAudioMode
+                        : value.recodeAudioMode && value.recodeAudioMode !== "default"
                         ? { mode: "encoder" as const, name: value.recodeAudioMode }
                         : null,
                     recodeThreads: value.recodeThreads ? Number(value.recodeThreads) : null,
@@ -417,7 +421,7 @@ export function DownloadConfig() {
                                         if (!val) {
                                             form.setFieldValue("videoEncoder", "");
                                             form.setFieldValue("recodeContainerOverride", "");
-                                            form.setFieldValue("recodeAudioMode", "copy");
+                                            form.setFieldValue("recodeAudioMode", "default");
                                         }
                                     }}
                                     aria-label="Recode video codec"
@@ -499,6 +503,7 @@ export function DownloadConfig() {
                                         </SelectTrigger>
                                         <SelectPopover>
                                             <SelectListBox>
+                                                <SelectItem id="default" textValue="Default">Default</SelectItem>
                                                 <SelectItem id="copy" textValue="Copy">Copy</SelectItem>
                                                 <SelectItem id="auto" textValue="Auto">Auto</SelectItem>
                                                 {expertMode && audioCodecs.map((c) => (

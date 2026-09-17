@@ -230,6 +230,31 @@ pub enum PostProcessError {
         alternative: rdlp_types::ContainerFormat,
     },
 
+    /// The operator explicitly asked for the audio to be stream-copied, and
+    /// the target container cannot carry that codec.
+    ///
+    /// An rdlp *policy* refusal (#645): copy was a demand, not a preference,
+    /// so it is not quietly turned into a re-encode. Modelled on the muxers'
+    /// own header-time refusals, which name what the container accepts
+    /// (`matroskaenc.c`: "Only VP8 or VP9 or AV1 video and Vorbis or Opus
+    /// audio … are supported for `WebM`"; `mpegenc.c`: "Must be one of mp1,
+    /// mp2, …"). Unspecified audio handling takes the re-encode route instead
+    /// and never produces this.
+    #[error(
+        "{container} cannot carry {codec} audio, so the requested audio stream copy is \
+         impossible; {container} carries {accepted}. Choose automatic audio re-encoding \
+         instead, or a different target container"
+    )]
+    ExplicitAudioCopyRefused {
+        /// The target container the operator asked for.
+        container: rdlp_types::ContainerFormat,
+        /// The source's audio codec, as `FFmpeg` names it (e.g. `aac`).
+        codec: String,
+        /// The audio codecs the container does carry, comma-separated, or
+        /// "no audio at all" — rendered here so the message stays one line.
+        accepted: String,
+    },
+
     /// Catch-all for errors with context chains from internal operations.
     #[error(transparent)]
     Other(#[from] anyhow::Error),
@@ -252,8 +277,9 @@ impl PostProcessError {
         }
     }
 
-    /// True if this is the audio-only-container policy refusal (#577),
-    /// including when it arrives wrapped in [`Self::Other`].
+    /// True if this is a policy refusal — the audio-only-container one (#577)
+    /// or the explicit-audio-copy one (#645) — including when it arrives
+    /// wrapped in [`Self::Other`].
     ///
     /// The distinction callers need: this is rdlp declining a *request* it can
     /// see is wrong, not a failure to carry one out. The input was never
@@ -266,14 +292,16 @@ impl PostProcessError {
     /// The `Other` arm is not defensive: `remux_sync` and friends return
     /// `anyhow::Result`, so the typed variant reaches the async wrapper's
     /// `Result<_, PostProcessError>` through `#[from] anyhow::Error` and lands
-    /// as `Other(anyhow(AudioOnlyContainerRejectsVideo))` every time.
+    /// as `Other(anyhow(<the variant>))` every time.
     #[must_use]
-    pub fn is_audio_only_container_refusal(&self) -> bool {
+    pub fn is_policy_refusal(&self) -> bool {
         match self {
-            Self::AudioOnlyContainerRejectsVideo { .. } => true,
+            Self::AudioOnlyContainerRejectsVideo { .. } | Self::ExplicitAudioCopyRefused { .. } => {
+                true
+            }
             Self::Other(e) => e
                 .downcast_ref::<Self>()
-                .is_some_and(Self::is_audio_only_container_refusal),
+                .is_some_and(Self::is_policy_refusal),
             _ => false,
         }
     }

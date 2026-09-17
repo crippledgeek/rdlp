@@ -1,11 +1,22 @@
 //! Audio handling mode for video recode operations.
 
+use std::str::FromStr;
+
 use serde::{Deserialize, Serialize};
 
-/// How to handle audio during video recode.
+use crate::media_name::{AudioCodecOrEncoderName, InvalidMediaName};
+
+/// How to handle audio during video recode, when the operator said.
 ///
 /// Collapses the audio copy/encoder decision into a single discriminated type,
 /// eliminating the two-field interaction matrix.
+///
+/// There is deliberately no `Default`: the field that carries this is
+/// `Option<RecodeAudioMode>`, where `None` means *not specified* — rdlp then
+/// copies the audio when the target container carries its codec and re-encodes
+/// otherwise. An explicit [`Copy`](Self::Copy) is a demand, and an impossible
+/// demand is refused rather than quietly re-encoded (#645). A `Default` of
+/// `Copy` on a plain field made the two indistinguishable.
 ///
 /// # Examples
 ///
@@ -13,55 +24,50 @@ use serde::{Deserialize, Serialize};
 /// use rdlp_types::RecodeAudioMode;
 /// use serde_json;
 ///
-/// // Default is Copy
-/// let mode = RecodeAudioMode::default();
-/// assert_eq!(mode, RecodeAudioMode::Copy);
-///
 /// // Serde roundtrip
 /// let json = serde_json::to_string(&RecodeAudioMode::Copy).unwrap();
 /// assert_eq!(json, r#"{"mode":"copy"}"#);
 ///
-/// let encoder = RecodeAudioMode::Encoder { name: "libopus".to_string() };
+/// let encoder: RecodeAudioMode = "libopus".parse().unwrap();
 /// let json = serde_json::to_string(&encoder).unwrap();
 /// assert_eq!(json, r#"{"mode":"encoder","name":"libopus"}"#);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "mode")]
 pub enum RecodeAudioMode {
-    /// Stream copy audio unchanged (default).
-    #[default]
+    /// Stream copy audio unchanged; refuse if the target cannot carry it.
     Copy,
     /// Auto-select best encoder for the output container.
     Auto,
-    /// Use a specific encoder (e.g., "`libfdk_aac`", "libopus").
+    /// Use a specific codec or encoder (e.g., "`libfdk_aac`", "libopus", "aac").
     Encoder {
-        /// `FFmpeg` encoder name (e.g., "`libfdk_aac`", "libopus").
-        name: String,
+        /// The codec or encoder name; which one is resolved against the
+        /// linked `FFmpeg` build. Kept exactly as typed — `FFmpeg` matches
+        /// encoder names exactly, so `libOpus` must survive unchanged.
+        name: AudioCodecOrEncoderName,
     },
 }
 
-impl From<&str> for RecodeAudioMode {
-    /// Parses the `--recode-audio` vocabulary: `copy`, `auto`, or an `FFmpeg`
+impl FromStr for RecodeAudioMode {
+    type Err = InvalidMediaName;
+
+    /// Parses the `--recode-audio` vocabulary: `copy`, `auto`, or a codec /
     /// encoder name.
-    ///
-    /// `From` rather than `FromStr` because the conversion cannot fail — any
-    /// string that is not a mode keyword *is* an encoder name, and whether that
-    /// encoder exists is `FFmpeg`'s question to answer, not this type's.
     ///
     /// The two mode keywords are matched case-insensitively, matching every
     /// other format vocabulary in this crate (which gets it from
-    /// `#[strum(ascii_case_insensitive)]`). The encoder name is preserved
-    /// verbatim — `FFmpeg` matches encoder names exactly, so `libOpus` must
-    /// survive unchanged.
-    fn from(value: &str) -> Self {
+    /// `#[strum(ascii_case_insensitive)]`). Anything else is a name, validated
+    /// for shape here (#649) — whether that name exists is `FFmpeg`'s question
+    /// to answer, at the boundary that can ask it.
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
         if value.eq_ignore_ascii_case("copy") {
-            Self::Copy
+            Ok(Self::Copy)
         } else if value.eq_ignore_ascii_case("auto") {
-            Self::Auto
+            Ok(Self::Auto)
         } else {
-            Self::Encoder {
-                name: value.to_owned(),
-            }
+            Ok(Self::Encoder {
+                name: AudioCodecOrEncoderName::new(value)?,
+            })
         }
     }
 }
@@ -70,23 +76,27 @@ impl From<&str> for RecodeAudioMode {
 mod tests {
     use super::*;
 
-    #[test]
-    fn from_maps_the_mode_keywords_case_insensitively() {
-        for spelling in ["copy", "COPY", "Copy", "cOpY"] {
-            assert_eq!(RecodeAudioMode::from(spelling), RecodeAudioMode::Copy);
-        }
-        for spelling in ["auto", "AUTO", "Auto"] {
-            assert_eq!(RecodeAudioMode::from(spelling), RecodeAudioMode::Auto);
+    fn encoder(name: &str) -> RecodeAudioMode {
+        RecodeAudioMode::Encoder {
+            name: AudioCodecOrEncoderName::new(name).unwrap(),
         }
     }
 
     #[test]
-    fn from_preserves_encoder_name_case() {
+    fn parse_maps_the_mode_keywords_case_insensitively() {
+        for spelling in ["copy", "COPY", "Copy", "cOpY"] {
+            assert_eq!(spelling.parse(), Ok(RecodeAudioMode::Copy));
+        }
+        for spelling in ["auto", "AUTO", "Auto"] {
+            assert_eq!(spelling.parse(), Ok(RecodeAudioMode::Auto));
+        }
+    }
+
+    #[test]
+    fn parse_preserves_encoder_name_case() {
         assert_eq!(
-            RecodeAudioMode::from("libOpus"),
-            RecodeAudioMode::Encoder {
-                name: "libOpus".to_string()
-            },
+            "libOpus".parse(),
+            Ok(encoder("libOpus")),
             "FFmpeg matches encoder names exactly; case must not be folded"
         );
     }
@@ -94,21 +104,26 @@ mod tests {
     /// A keyword with surrounding content is an encoder name, not a mode —
     /// the match is on the whole value, never a substring.
     #[test]
-    fn from_does_not_match_keywords_as_substrings() {
+    fn parse_does_not_match_keywords_as_substrings() {
         for name in ["copycat", "autotune", "libcopy", "copy2"] {
             assert_eq!(
-                RecodeAudioMode::from(name),
-                RecodeAudioMode::Encoder {
-                    name: name.to_string()
-                },
+                name.parse(),
+                Ok(encoder(name)),
                 "{name} must be treated as an encoder name"
             );
         }
     }
 
+    /// #649: a malformed value fails at the boundary with the name-shape
+    /// error, not deep inside `FFmpeg`.
     #[test]
-    fn default_is_copy() {
-        assert_eq!(RecodeAudioMode::default(), RecodeAudioMode::Copy);
+    fn parse_rejects_a_malformed_name() {
+        for bad in ["", " ", "lib opus", "aac;rm -rf"] {
+            assert!(
+                bad.parse::<RecodeAudioMode>().is_err(),
+                "{bad:?} must not parse"
+            );
+        }
     }
 
     #[test]
@@ -129,11 +144,10 @@ mod tests {
         assert_eq!(mode, parsed);
     }
 
+    /// The wire form is unchanged by typing the name (#649).
     #[test]
     fn serde_encoder_roundtrip() {
-        let mode = RecodeAudioMode::Encoder {
-            name: "libfdk_aac".to_string(),
-        };
+        let mode = encoder("libfdk_aac");
         let json = serde_json::to_string(&mode).unwrap();
         assert_eq!(json, r#"{"mode":"encoder","name":"libfdk_aac"}"#);
         let parsed: RecodeAudioMode = serde_json::from_str(&json).unwrap();
@@ -141,12 +155,9 @@ mod tests {
     }
 
     #[test]
-    fn serde_encoder_libopus_roundtrip() {
-        let mode = RecodeAudioMode::Encoder {
-            name: "libopus".to_string(),
-        };
-        let json = serde_json::to_string(&mode).unwrap();
-        let parsed: RecodeAudioMode = serde_json::from_str(&json).unwrap();
-        assert_eq!(mode, parsed);
+    fn serde_encoder_rejects_a_malformed_name_on_the_wire() {
+        assert!(
+            serde_json::from_str::<RecodeAudioMode>(r#"{"mode":"encoder","name":""}"#).is_err()
+        );
     }
 }

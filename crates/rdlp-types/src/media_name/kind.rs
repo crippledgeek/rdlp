@@ -45,6 +45,19 @@ declare_kinds! {
     /// both a codec and an encoder, `libfdk_aac` is only an encoder.
     Codec => "codec name",
 
+    /// An operator-supplied audio request that is legitimately *either* a
+    /// codec name (`"aac"`, `"opus"`) *or* a literal encoder name
+    /// (`"libfdk_aac"`, `"libopus"`) — the `--recode-audio=<name>` slot.
+    ///
+    /// The ambiguity is the value's nature, not a typing gap: `FFmpeg`'s own
+    /// `-c:a` accepts both (`fftools/ffmpeg_opt.c`, `find_codec`: encoder
+    /// lookup, then codec-descriptor lookup), and yt-dlp's `--audio-format`
+    /// maps a codec word to a curated encoder. Which vocabulary a given value
+    /// belongs to is only knowable against the linked `FFmpeg` build, so it is
+    /// resolved there (`resolve_audio_encoder`), never here. `retag` into
+    /// [`Codec`] or [`AudioEncoder`] at that resolution point, not before.
+    AudioCodecOrEncoder => "audio codec or encoder name",
+
     /// The name of an audio encoder to invoke — `"aac"`, `"libfdk_aac"`,
     /// `"libopus"`, `"libmp3lame"`.
     ///
