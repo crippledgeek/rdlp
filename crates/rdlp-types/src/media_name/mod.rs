@@ -135,7 +135,7 @@ use std::marker::PhantomData;
 mod identity;
 mod kind;
 
-pub use identity::{CodecIdentity, CodecKind, PlainName, SampleEntryCode, codec_identity};
+pub use identity::{CodecIdentity, CodecKind, codec_identity};
 pub use kind::{AudioEncoder, Codec, Rfc6381, VideoEncoder};
 
 /// An `FFmpeg` codec descriptor name (`h264`, `pcm_s16le`). See [`Codec`].

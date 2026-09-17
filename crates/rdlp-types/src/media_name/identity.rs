@@ -68,7 +68,7 @@ impl CodecIdentity {
 /// `token` is an RFC 6381 codec string (`avc1.640028`, `mp4a.40.2`, `Opus`),
 /// the bare sample-entry code (`hev1`), or a plain `FFmpeg` codec-ID name or
 /// common alias (`h264`, `avc`, `h265`, `hevc`, `aac`). The first dotted
-/// component is parsed as a [`SampleEntryCode`], else as a [`PlainName`];
+/// component is parsed as a `SampleEntryCode`, else as a `PlainName`;
 /// each is an enum, so the vocabulary is closed and exact — never a
 /// substring — while the function stays open: an unrecognised token is
 /// `None`, not a default.
@@ -108,7 +108,7 @@ impl CodecToken {
 /// RFC 6381 §3.3 puts one first in a `codecs` token). Case-insensitive on
 /// parse — `Opus` and `fLaC` are registered with capitals.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SampleEntryCode {
+enum SampleEntryCode {
     /// `avc1`–`avc4`: Advanced Video Coding.
     Avc,
     /// `dva1` / `dvav`: AVC-based Dolby Vision.
@@ -177,7 +177,7 @@ impl SampleEntryCode {
 /// (`hls-h264-fallback`, `hls-av1-url`) — `FFmpeg` codec-ID names plus the
 /// common spellings `avc` / `h265` / `ac3` / `eac3`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PlainName {
+enum PlainName {
     /// `h264`, `avc`.
     H264,
     /// `hevc`, `h265`.
