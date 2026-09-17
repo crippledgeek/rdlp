@@ -109,6 +109,14 @@ pub fn write_sine_audio(output: &Path, spec: &SineAudio) -> Result<()> {
         FFmpegRunner::set_global_header_flag(unsafe { encoder.as_mut_ptr() });
     }
     let mut encoder = encoder.open_as(enc_codec)?;
+    // Re-read after open, as the production path does: avcodec_open2 may
+    // replace an encoder's time_base (libavcodec/encode.c fills it only when
+    // unset, but that is the encoder's contract to keep, not ours).
+    // SAFETY: a valid opened encoder context.
+    let enc_time_base = unsafe {
+        let tb = (*encoder.as_ptr()).time_base;
+        ffmpeg_the_third::Rational(tb.num, tb.den)
+    };
     // SAFETY: a valid opened encoder context.
     FFmpegRunner::copy_encoder_params_to_stream(&mut octx, ost_index, unsafe { encoder.as_ptr() });
     octx.write_header()?;

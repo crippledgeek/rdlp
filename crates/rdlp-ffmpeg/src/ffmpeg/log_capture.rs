@@ -390,7 +390,9 @@ unsafe extern "C" fn capture_callback(
     // `AV_LOG_C(x)` colour bits live above the low byte; av_log_default_callback
     // masks them (`level &= 0xff` for non-negative levels) before comparing, and
     // so must every compare here, or a coloured ERROR line would be misread as
-    // less important than INFO.
+    // less important than INFO. The raw value still goes to the default
+    // callback below, which uses those bits as its tint.
+    let raw_level = level;
     let level = if level >= 0 { level & 0xff } else { level };
     // Capture/forward only AV_LOG_INFO (32) and more important (lower values).
     let level_ok = level <= ffmpeg_the_third::ffi::AV_LOG_INFO;
@@ -409,7 +411,7 @@ unsafe extern "C" fn capture_callback(
     if !has_capture && forwarder.is_none() {
         if passes_suppress_ceiling(level) {
             unsafe {
-                ffmpeg_the_third::ffi::av_log_default_callback(avcl, level, fmt, vl);
+                ffmpeg_the_third::ffi::av_log_default_callback(avcl, raw_level, fmt, vl);
             }
         }
         return;
