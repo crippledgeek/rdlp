@@ -124,13 +124,27 @@ impl Default for RetryConfig {
 #[must_use]
 pub const fn is_retryable_error(error: &RdlpError) -> bool {
     match error {
-        // Structured HTTP errors: retry 5xx and 429, not other 4xx
-        RdlpError::Http { status, .. } => *status == 429 || *status >= 500,
-        // Network and I/O errors are generally retryable (transient)
-        RdlpError::Network { .. } | RdlpError::Io(_) => true,
+        RdlpError::Http { status, .. } => is_retryable_status(*status),
+        RdlpError::Network { .. } | RdlpError::Io(_) => TRANSPORT_FAILURE_IS_RETRYABLE,
         _ => false,
     }
 }
+
+/// Whether an HTTP status is worth retrying: 5xx and 429, never another 4xx.
+///
+/// A 403/404 will not become a 200. This is the status half of
+/// [`is_retryable_error`], exposed so a caller holding a bare status — the
+/// desktop thumbnail proxy — applies the same rule instead of restating it.
+#[must_use]
+pub const fn is_retryable_status(status: u16) -> bool {
+    status == 429 || status >= 500
+}
+
+/// A transport failure (refused, reset, timeout, DNS) is retried.
+///
+/// Transient by nature. Named so the sites that classify a transport error
+/// before it becomes an [`RdlpError`] cite the rule rather than a literal.
+pub const TRANSPORT_FAILURE_IS_RETRYABLE: bool = true;
 
 #[cfg(test)]
 #[allow(
@@ -144,6 +158,35 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    /// The status half of the policy: 5xx and 429 retry; other 4xx do not.
+    /// `is_retryable_error` must agree with it (one rule, not two).
+    #[test]
+    fn retryable_status_is_5xx_or_429_and_the_error_predicate_agrees() {
+        for (status, expect) in [
+            (500, true),
+            (503, true),
+            (429, true),
+            (404, false),
+            (403, false),
+            (200, false),
+        ] {
+            assert_eq!(is_retryable_status(status), expect, "{status}");
+            let err = RdlpError::Http {
+                status,
+                reason: "x".into(),
+            };
+            assert_eq!(is_retryable_error(&err), expect, "{status} via error");
+        }
+        let transport = RdlpError::Network {
+            message: "connection reset".into(),
+            url: None,
+        };
+        assert_eq!(
+            is_retryable_error(&transport),
+            TRANSPORT_FAILURE_IS_RETRYABLE
+        );
+    }
 
     #[test]
     fn test_default_config() {
