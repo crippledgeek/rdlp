@@ -9,6 +9,7 @@ use crate::cancel::CancelDisposition;
 use crate::errors::RdlpApiError;
 use crate::events::Event;
 use crate::result::DownloadResult;
+use rdlp_types::boundary::{Action, Outcome, outcome_record};
 use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tokio::sync::mpsc;
@@ -75,14 +76,20 @@ fn task_join_error(join_err: &tokio::task::JoinError) -> RdlpApiError {
     if join_err.is_panic() {
         // ERROR: a panicking task is an internal bug.
         let reason = rdlp_redact::redact_str(&join_err.to_string());
-        log::error!("download: action=download outcome=panicked reason={reason}");
+        log::error!(
+            "{}",
+            outcome_record(&Action::new("download"), Outcome::Panicked, &reason)
+        );
         RdlpApiError::IoError {
             message: format!("Download task panicked: {reason}"),
         }
     } else {
         // DEBUG: an aborted task or a runtime shutting down mid-download is
         // ordinary, and was previously reported to the caller as a panic.
-        log::debug!("download: action=download outcome=cancelled reason={join_err}");
+        log::debug!(
+            "{}",
+            outcome_record(&Action::new("download"), Outcome::Cancelled, join_err)
+        );
         RdlpApiError::IoError {
             message: format!("Download task cancelled: {join_err}"),
         }

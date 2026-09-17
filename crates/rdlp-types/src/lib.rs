@@ -56,7 +56,7 @@ pub mod vpx_deadline;
 
 // Re-export main types
 pub use audio_format::AudioFormat;
-pub use boundary::{Action, Subject};
+pub use boundary::{Action, Outcome, Subject};
 pub use browser_emulation::BrowserEmulation;
 pub use browser_type::BrowserType;
 pub use config::{Config, ConfigValidationError};
