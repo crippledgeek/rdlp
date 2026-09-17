@@ -23,6 +23,9 @@ uuid = { version = "1", features = ["v4"] }
 mp4ameta = "0.13"
 
 [dev-dependencies]
+# In-process media fixtures (`rdlp_ffmpeg::test_support`) — tests never
+# spawn an ffmpeg binary.
+rdlp-ffmpeg = { path = "../rdlp-ffmpeg", features = ["test-support"] }
 tokio = { workspace = true, features = ["test-util", "macros", "rt-multi-thread"] }
 tempfile = { workspace = true }
 strum = { workspace = true }

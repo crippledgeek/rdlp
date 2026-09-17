@@ -49,7 +49,7 @@ pub(crate) mod container_default;
 mod dts_synth;
 pub(crate) use dts_synth::DtsSynthesizer;
 mod encoding_tag;
-pub use encoding_tag::{audio_tag_component, encoding_tool_tag};
+pub use encoding_tag::{encoding_tool_components, encoding_tool_tag, stream_tag_component};
 mod ffi_helpers;
 pub mod fixup;
 pub mod log_capture;
@@ -77,7 +77,9 @@ pub mod speed_controls;
 #[doc(hidden)]
 pub mod test_support;
 mod thumbnail;
-pub use thumbnail::{supports_thumbnail_embed, uses_native_attachment};
+pub use thumbnail::{
+    supports_thumbnail_embed, uses_metadata_block_picture, uses_native_attachment,
+};
 mod transcode;
 pub use speed_controls::{
     SpeedControlError, default_codec_for_container, resolve_recode_encoder, validate_speed_controls,

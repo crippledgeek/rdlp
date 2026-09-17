@@ -207,7 +207,6 @@ impl FFmpegRunner {
 
         let opts = RemuxOptions {
             faststart,
-            output_format: None,
             encoding_tool_override,
         };
 
@@ -265,8 +264,13 @@ impl FFmpegRunner {
                 // on disk via `avio_open` — a codec-tag rejection here must
                 // not leave that empty file behind as if a fixup remux had
                 // run and produced nothing.
-                let ost_idx = Self::add_stream_copy(&mut octx, ist.parameters(), "for fixup")
-                    .inspect_err(|_| cleanup_partial_output(&output))?;
+                let ost_idx = Self::add_stream_copy(
+                    &mut octx,
+                    ist.parameters(),
+                    ist.disposition(),
+                    "for fixup",
+                )
+                .inspect_err(|_| cleanup_partial_output(&output))?;
                 octx.stream_mut(ost_idx)
                     .expect("just-added stream")
                     .set_metadata(ist.metadata().to_owned());

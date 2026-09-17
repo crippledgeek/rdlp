@@ -173,7 +173,13 @@ async fn jpeg_and_png_are_accepted_by_every_supported_container() {
     // list with ogg/opus: the gate would still (correctly) answer `true` for
     // jpeg/png here via the baseline, which says nothing about whether the
     // embed works — asserting on it would test the wrong mechanism.
-    let containers = ["mp4", "m4a", "m4v", "mov", "mkv", "mka", "mp3", "flac"];
+    // `mka` is deliberately absent too: it declares no video codec
+    // (`matroskaenc.c`, the audio muxer's `video_codec = NONE`), so it
+    // cannot carry a cover as a *stream*; rdlp embeds into it — and into
+    // `mkv` — as a Matroska attachment (`uses_native_attachment`), a path
+    // this predicate does not model. See
+    // `containers_without_a_video_codec_refuse_every_cover_stream` below.
+    let containers = ["mp4", "m4a", "m4v", "mov", "mkv", "mp3", "flac"];
 
     for format in ["jpg", "png"] {
         let img = make_image(dir.path(), format);
@@ -242,6 +248,39 @@ async fn webp_is_still_refused_by_mp4_family() {
                 .await
                 .expect("query must succeed"),
             "{container} must still refuse webp — this is the #525 mux failure"
+        );
+    }
+}
+
+/// Containers that cannot carry a cover *stream* say so, whatever the codec.
+/// `wav`/`aac`/`ac3` declare no video codec and `mux.c`'s `init_muxer`
+/// refuses any video stream there; `mka` embeds covers as attachments;
+/// `ogg`/`opus` declare Theora but `ogg_init` refuses every codec outside
+/// Vorbis/Theora/Speex/FLAC/Opus/VP8 (their covers are a
+/// `METADATA_BLOCK_PICTURE` field). The jpeg/png baseline must not override
+/// any of that: before this pin, a cover-bearing `.m4a` remuxed to `.wav` or
+/// `.opus` was waved through to `avformat_write_header`, which then failed
+/// with the muxer's raw error.
+///
+/// Built in-process — no `ffmpeg` binary involved.
+#[tokio::test]
+async fn containers_that_cannot_carry_a_cover_stream_refuse_it() {
+    let dir = tempfile::TempDir::new().unwrap();
+    let png = dir.path().join("cover.png");
+    rdlp_ffmpeg::test_support::write_still_png(
+        &png,
+        &rdlp_ffmpeg::test_support::StillImage::default(),
+    )
+    .expect("png fixture");
+    let runner = FFmpegRunner::new().expect("FFmpeg");
+
+    for container in ["wav", "aac", "ac3", "mka", "ogg", "opus"] {
+        assert!(
+            !runner
+                .container_accepts_image_codec(container, &png)
+                .await
+                .expect("query must succeed"),
+            "{container} cannot carry a cover stream and must say so"
         );
     }
 }

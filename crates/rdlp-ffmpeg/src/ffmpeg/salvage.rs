@@ -243,8 +243,13 @@ pub fn salvage_remux_sync(input: &Path) -> anyhow::Result<PathBuf> {
     // nothing.
     let stream_count = ictx.streams().count();
     for ist in ictx.streams() {
-        let ost_idx = FFmpegRunner::add_stream_copy(&mut octx, ist.parameters(), "for salvage")
-            .inspect_err(|_| cleanup_partial_output(&salvage_path))?;
+        let ost_idx = FFmpegRunner::add_stream_copy(
+            &mut octx,
+            ist.parameters(),
+            ist.disposition(),
+            "for salvage",
+        )
+        .inspect_err(|_| cleanup_partial_output(&salvage_path))?;
         // Per-stream metadata must travel with the stream: for an
         // attachment, Matroska's muxer hard-requires a "mimetype" tag
         // (`matroskaenc.c`'s `mkv_write_attachments` rejects the whole

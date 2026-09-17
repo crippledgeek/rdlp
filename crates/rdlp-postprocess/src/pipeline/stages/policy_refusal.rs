@@ -35,7 +35,7 @@ pub fn keep_download_on_policy_refusal(
     msg: &mut PipelineMessage,
     stage: &'static str,
 ) {
-    if !error.is_audio_only_container_refusal() {
+    if !error.is_policy_refusal() {
         return;
     }
     msg.tracker.preserve_current_files();

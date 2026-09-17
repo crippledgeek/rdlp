@@ -141,9 +141,20 @@ impl FFmpegRunner {
         cancel: Option<&CancellationToken>,
     ) -> anyhow::Result<()> {
         if opts.remux_only {
+            // Same components the pipeline carries downstream (#626): both
+            // streams copied, or `none` where the source has no audio.
+            let components = crate::ffmpeg::encoding_tag::encoding_tool_components(
+                (true, None),
+                (
+                    opts.audio_copy,
+                    opts.audio_codec
+                        .as_ref()
+                        .map(rdlp_types::media_name::MediaName::as_str),
+                ),
+            );
             let remux_opts = RemuxOptions {
                 faststart: crate::ffmpeg::options::faststart_for_output(output),
-                ..Default::default()
+                encoding_tool_override: Some(components),
             };
             Ok(Self::remux_sync(input, output, &remux_opts, progress_fn)
                 .map_err(|e| PostProcessError::ffmpeg_failed(format!("{e:#}")))?)

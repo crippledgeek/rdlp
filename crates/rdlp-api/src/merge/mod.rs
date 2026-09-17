@@ -145,7 +145,7 @@ impl MergeOverrides for PostProcessOptions {
             config.postprocess.recode_container = Some(v);
         }
         if let Some(ref v) = self.recode_audio {
-            config.postprocess.recode_audio = v.clone();
+            config.postprocess.recode_audio = Some(v.clone());
         }
         if let Some(v) = self.recode_threads {
             config.postprocess.recode_threads = Some(v);

@@ -128,6 +128,12 @@ pub struct PostProcess {
     /// Re-encode video to this container format.
     pub recode_video: Option<ContainerFormat>,
     /// Remux (container-only copy) to this format.
+    ///
+    /// Promises both the container and its canonical extension: an input
+    /// already carrying that extension is left alone; anything else —
+    /// including an alias spelling such as `.matroska` — is remuxed, which
+    /// is what produces the canonical name (see
+    /// [`ContainerFormat::is_canonical_ext`], #619).
     pub remux_container: Option<ContainerFormat>,
     /// Preferred output container when merging separate streams.
     pub merge_output_format: Option<ContainerFormat>,
@@ -178,8 +184,15 @@ pub struct PostProcess {
     /// `InvalidMediaName` message instead of silently reaching the recode
     /// stage as a would-be empty encoder name (#642).
     pub video_encoder: Option<VideoEncoderName>,
-    /// How to handle audio during video recode.
-    pub recode_audio: RecodeAudioMode,
+    /// How to handle audio during video recode, if the operator said.
+    ///
+    /// `None` — not specified — is not the same as `Some(Copy)`: unspecified,
+    /// rdlp copies the audio when the target container carries its codec and
+    /// re-encodes (with a warning) when it does not; an explicit `Copy` is a
+    /// demand, refused when impossible (#645). Every layer above this one
+    /// (CLI flag, API request, desktop IPC) already carried the `Option`; it
+    /// used to collapse here.
+    pub recode_audio: Option<RecodeAudioMode>,
     /// Override the output container for recode (independent of `recode_video`).
     pub recode_container: Option<ContainerFormat>,
     /// Encoder thread count for video recode. `None` = auto-detect at startup
@@ -282,7 +295,7 @@ impl Default for PostProcess {
             normalize_boost: false,
             normalize_boost_db: None,
             video_encoder: None,
-            recode_audio: RecodeAudioMode::default(),
+            recode_audio: None,
             recode_container: None,
             recode_threads: None,
             recode_preset: None,
@@ -511,5 +524,34 @@ mod tests {
         assert_eq!(pp.recode_deadline, None);
         assert_eq!(pp.recode_cpu_used, None);
         assert_eq!(pp.recode_speed_level, None);
+    }
+
+    /// #645: `recode_audio` round-trips through `config.toml` with its
+    /// specified-ness intact — absent stays `None` (and serialises back to
+    /// absent), a written `copy` stays an explicit `Some(Copy)`, and the
+    /// encoder form's wire shape is unchanged by typing the name (#649).
+    #[test]
+    fn recode_audio_toml_roundtrip_keeps_unspecified_distinct_from_copy() {
+        let unspecified: PostProcess = toml::from_str("").unwrap();
+        assert_eq!(unspecified.recode_audio, None);
+        let written = toml::to_string(&unspecified).unwrap();
+        assert!(
+            !written.contains("recode_audio"),
+            "an unspecified mode must not be materialised: {written}"
+        );
+
+        let explicit: PostProcess = toml::from_str("recode_audio = { mode = \"copy\" }").unwrap();
+        assert_eq!(explicit.recode_audio, Some(RecodeAudioMode::Copy));
+        let back: PostProcess = toml::from_str(&toml::to_string(&explicit).unwrap()).unwrap();
+        assert_eq!(back.recode_audio, Some(RecodeAudioMode::Copy));
+
+        let encoder: PostProcess =
+            toml::from_str("recode_audio = { mode = \"encoder\", name = \"libopus\" }").unwrap();
+        assert_eq!(
+            encoder.recode_audio,
+            Some(RecodeAudioMode::Encoder {
+                name: "libopus".parse().unwrap()
+            })
+        );
     }
 }

@@ -136,13 +136,17 @@ mod identity;
 mod kind;
 
 pub use identity::{CodecIdentity, CodecKind, codec_identity};
-pub use kind::{AudioEncoder, Codec, Rfc6381, VideoEncoder};
+pub use kind::{AudioCodecOrEncoder, AudioEncoder, Codec, Rfc6381, VideoEncoder};
 
 /// An `FFmpeg` codec descriptor name (`h264`, `pcm_s16le`). See [`Codec`].
 pub type CodecName = MediaName<Codec>;
 
 /// An audio encoder to invoke (`libfdk_aac`, `libopus`). See [`AudioEncoder`].
 pub type AudioEncoderName = MediaName<AudioEncoder>;
+
+/// An operator's audio request — a codec or an encoder name, resolved
+/// against the linked `FFmpeg` build. See [`AudioCodecOrEncoder`].
+pub type AudioCodecOrEncoderName = MediaName<AudioCodecOrEncoder>;
 
 /// A video encoder to invoke (`libx264`, `libsvtav1`). See [`VideoEncoder`].
 pub type VideoEncoderName = MediaName<VideoEncoder>;

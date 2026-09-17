@@ -182,7 +182,8 @@ impl FFmpegRunner {
                 // mattered).
                 if let Err(e) = Self::resolve_and_apply_codec_tag(
                     (*ofmt_ctx).oformat,
-                    (*out_stream).codecpar.cast_const(),
+                    out_stream,
+                    (*in_stream).disposition,
                 ) {
                     ffi::avformat_close_input(&mut media_ctx);
                     ffi::avformat_close_input(&mut thumb_ctx);

@@ -117,21 +117,6 @@ impl MergeStage {
         None
     }
 
-    /// Build the mux options for a resolved output container.
-    ///
-    /// Exists as a named function so the faststart decision is observable in a
-    /// test. Inlined into `process()` it was unreachable without a real `FFmpeg`
-    /// run, which let #539 ship: a test could assert `supports_faststart()` on
-    /// a container it supplied itself and never touch the production
-    /// expression at all.
-    fn merge_opts(output_format: ContainerFormat, encoding_tool: Option<String>) -> RemuxOptions {
-        RemuxOptions {
-            faststart: output_format.supports_faststart(),
-            encoding_tool_override: encoding_tool,
-            ..Default::default()
-        }
-    }
-
     /// Sanitize a codec string per yt-dlp's normalisation.
     ///
     /// `avc1.640028` → `avc1`; `vp09.00.30.08` → `vp9`; `mp4a.40.2` → `mp4a`;
@@ -232,7 +217,7 @@ impl PipelineStage for MergeStage {
         // Use tracker.temp_path — no naming collision possible.
         let output_path = msg.tracker.temp_path(&video_file, output_format.as_ext());
 
-        let opts = Self::merge_opts(output_format, msg.encoding_tool.clone());
+        let opts = RemuxOptions::for_container(output_format, msg.encoding_tool.clone());
 
         let stage_callback = msg.callback_factory.as_ref().map(|f| f(self.name()));
         let _log_bridge = stage_callback
@@ -349,7 +334,7 @@ mod tests {
             // predicate with a value this test supplied, and would stay green
             // if the stage hardcoded `faststart: false`.
             assert_eq!(
-                MergeStage::merge_opts(resolved, None).faststart,
+                RemuxOptions::for_container(resolved, None).faststart,
                 want,
                 "merge faststart for {container:?} must follow supports_faststart()"
             );

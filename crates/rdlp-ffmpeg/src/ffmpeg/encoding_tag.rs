@@ -98,24 +98,47 @@ pub unsafe fn set_encoding_tool_ffi_if_missing(
     }
 }
 
-/// Component string for the `encoding_tool` tag's audio segment.
+/// Component string for one stream of the `encoding_tool` tag.
 ///
-/// `audio_copy` takes precedence over `audio_codec` — matches the documented
-/// contract on `VideoConvertOptions` (`audio_copy` wins when both are set: a
-/// stream copy happens even if `audio_codec` names an encoder). A resolved
-/// codec name is only consulted when `audio_copy` is `false`; otherwise
-/// `audio_copy` distinguishes a genuine stream copy (`"copy"`) from no audio
-/// stream at all (`"none"`) — a video-only source must resolve here, not
-/// stamp a false `"copy"`.
+/// The tag names the *tool* that produced each stream (Matroska
+/// `WritingApp`, MP4 `©too`), so a stream copy says `copy` — never the
+/// encoder that might have been used, and never the codec that happens to
+/// be inside (`FFmpeg` itself writes no `encoder` tag for a copied stream:
+/// `fftools/ffmpeg_mux_init.c`, `set_encoder_id` is only reached when
+/// `ost->enc` is set). `copy` takes precedence over `encoder` — matches the
+/// documented contract on `VideoConvertOptions` (`audio_copy` wins when both
+/// are set). A resolved encoder name is only consulted when `copy` is
+/// `false`; otherwise `copy` distinguishes a genuine stream copy (`"copy"`)
+/// from no such stream at all (`"none"`) — a video-only source must resolve
+/// here, not stamp a false `"copy"`.
 #[must_use]
-pub const fn audio_tag_component(audio_copy: bool, audio_codec: Option<&str>) -> &str {
-    if audio_copy {
+pub const fn stream_tag_component(copy: bool, encoder: Option<&str>) -> &str {
+    if copy {
         "copy"
-    } else if let Some(codec) = audio_codec {
-        codec
+    } else if let Some(encoder) = encoder {
+        encoder
     } else {
         "none"
     }
+}
+
+/// The `encoding_tool` components of a video conversion.
+///
+/// The single place the `"<video> + <audio>"` pair is assembled, so the tag
+/// written into the file and the tag carried to downstream stages cannot
+/// disagree (#626: they did — a remux stamped `libx264` for a video it never
+/// encoded). Each `(copy, encoder)` pair follows [`stream_tag_component`];
+/// the transcode path passes the encoder it actually opened.
+#[must_use]
+pub fn encoding_tool_components(
+    video: (bool, Option<&str>),
+    audio: (bool, Option<&str>),
+) -> String {
+    format!(
+        "{} + {}",
+        stream_tag_component(video.0, video.1),
+        stream_tag_component(audio.0, audio.1)
+    )
 }
 
 /// Set the `encoder` per-stream tag on a high-level output stream.
@@ -162,11 +185,36 @@ mod tests {
     /// case where `audio_copy` must win over a resolved codec name (matches
     /// `VideoConvertOptions`'s documented precedence).
     #[test]
-    fn audio_tag_component_matrix() {
-        assert_eq!(audio_tag_component(false, None), "none");
-        assert_eq!(audio_tag_component(true, None), "copy");
-        assert_eq!(audio_tag_component(false, Some("libopus")), "libopus");
-        // `audio_copy` wins even when a codec name is also present.
-        assert_eq!(audio_tag_component(true, Some("libopus")), "copy");
+    fn stream_tag_component_matrix() {
+        assert_eq!(stream_tag_component(false, None), "none");
+        assert_eq!(stream_tag_component(true, None), "copy");
+        assert_eq!(stream_tag_component(false, Some("libopus")), "libopus");
+        // `copy` wins even when an encoder name is also present.
+        assert_eq!(stream_tag_component(true, Some("libopus")), "copy");
+    }
+
+    /// #626: a remux stream-copies the video, so `video_codec` is `None` and
+    /// the old `unwrap_or("libx264")` fallback claimed an encoder that never
+    /// ran, for a codec that might not even be H.264. The tag names tools,
+    /// not codecs (Matroska `WritingApp`, MP4 `©too`; `FFmpeg` writes no
+    /// `encoder` for a copied stream — `ffmpeg_mux_init.c:1440`), so a copy
+    /// says `copy`, exactly as the audio half already does.
+    #[test]
+    fn encoding_tool_components_remux_says_copy_not_libx264() {
+        // A remux: video copied, audio copied.
+        assert_eq!(
+            encoding_tool_components((true, None), (true, None)),
+            "copy + copy"
+        );
+        // A remux of a video-only source.
+        assert_eq!(
+            encoding_tool_components((true, None), (false, None)),
+            "copy + none"
+        );
+        // A transcode names the encoders that ran.
+        assert_eq!(
+            encoding_tool_components((false, Some("libvpx-vp9")), (false, Some("libopus"))),
+            "libvpx-vp9 + libopus"
+        );
     }
 }

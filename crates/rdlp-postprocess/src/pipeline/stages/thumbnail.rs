@@ -154,6 +154,13 @@ impl ThumbnailStage {
         ContainerFormat::from_str(extension).is_ok_and(rdlp_ffmpeg::uses_native_attachment)
     }
 
+    /// Whether `extension`'s container carries the cover as a
+    /// `METADATA_BLOCK_PICTURE` field (Ogg/Opus). Thin wrapper over
+    /// `rdlp_ffmpeg::uses_metadata_block_picture`.
+    fn uses_metadata_block_picture(extension: &str) -> bool {
+        ContainerFormat::from_str(extension).is_ok_and(rdlp_ffmpeg::uses_metadata_block_picture)
+    }
+
     /// Whether `extension`'s container can carry an embedded thumbnail at all.
     /// Thin wrapper over `rdlp_ffmpeg::supports_thumbnail_embed` (#533).
     fn supports_thumbnail(extension: &str) -> bool {
@@ -178,7 +185,7 @@ impl ThumbnailStage {
     ///
     /// MP3 gets the same conservative treatment as a deliberate *policy*
     /// carve-out, layered on top of (not a correction to) the capability
-    /// query below — see [`Self::mp3_apic_renders_natively`] for why "the
+    /// query below — see [`Self::is_jpeg_or_png`] for why "the
     /// muxer can store it" and "a player renders it" are different
     /// questions for `ID3v2` `APIC` covers, same as they were for Matroska
     /// attachments in #530.
@@ -210,6 +217,22 @@ impl ThumbnailStage {
             };
         }
 
+        // Ogg/Opus: neither Ogg (RFC 3533) nor Vorbis I nor RFC 7845 defines
+        // any image support, so a cover can never be a stream there and the
+        // stream-codec query below has no bearing. rdlp embeds one as the
+        // Xiph *proposed* `METADATA_BLOCK_PICTURE` VorbisComment field
+        // (#531; FLAC's picture-block layout, RFC 9639 §8.8, base64) — a
+        // convention readers honour, not a spec feature — so the same
+        // conservative jpeg/png policy as mp3 applies.
+        if Self::uses_metadata_block_picture(extension) {
+            return if Self::is_jpeg_or_png(thumbnail_file).await {
+                thumbnail_file.to_path_buf()
+            } else {
+                self.transcode_thumbnail_to_jpg(msg, extension, thumbnail_file)
+                    .await
+            };
+        }
+
         // MP3 policy carve-out (#549 follow-up): `container_accepts_image_codec`'s
         // `> 0` fix (#549) makes mp3's own `query_codec` callback (`mp3enc.c`)
         // correctly report every image mime it lists — gif/jpeg/png/tiff/bmp/webp
@@ -221,7 +244,7 @@ impl ThumbnailStage {
         // readers, so mp3 mirrors the same conservative policy rather than
         // trusting the widened capability query at face value.
         if ContainerFormat::from_str(extension) == Ok(ContainerFormat::Mp3)
-            && !Self::mp3_apic_renders_natively(thumbnail_file).await
+            && !Self::is_jpeg_or_png(thumbnail_file).await
         {
             return self
                 .transcode_thumbnail_to_jpg(msg, extension, thumbnail_file)
@@ -249,8 +272,8 @@ impl ThumbnailStage {
     }
 
     /// Whether `thumbnail_file`'s content is a format this policy treats as a
-    /// verified-safe mp3 `ID3v2` `APIC` cover — a **conservative product
-    /// decision**, not an `FFmpeg`-verified capability like
+    /// verified-safe mp3 `ID3v2` `APIC` / Ogg `METADATA_BLOCK_PICTURE` cover —
+    /// a **conservative product decision**, not an `FFmpeg`-verified capability like
     /// [`Self::mkv_attachment_renders_natively`]'s Matroska read-back table.
     ///
     /// Only `jpeg`/`png` are accepted; everything else is normalized.
@@ -279,7 +302,7 @@ impl ThumbnailStage {
     /// #530 is the precedent for those being different questions. A read
     /// failure or unrecognized signature answers `false`, the same safe
     /// direction.
-    async fn mp3_apic_renders_natively(thumbnail_file: &Path) -> bool {
+    async fn is_jpeg_or_png(thumbnail_file: &Path) -> bool {
         let Ok(bytes) = tokio::fs::read(thumbnail_file).await else {
             return false;
         };
@@ -503,17 +526,14 @@ impl PipelineStage for ThumbnailStage {
         let (media_file, extension) = if supports_thumbnail {
             (media_file, extension)
         } else {
-            let remuxed_path = msg.tracker.temp_path(&media_file, "mp4");
+            let target = ContainerFormat::Mp4;
+            let remuxed_path = msg.tracker.temp_path(&media_file, target.as_ext());
             debug!(
-                "ThumbnailStage: auto-remuxing {} → mp4 for thumbnail embedding",
+                "ThumbnailStage: auto-remuxing {} → {target} for thumbnail embedding",
                 media_file.display()
             );
 
-            let opts = RemuxOptions {
-                faststart: true,
-                encoding_tool_override: msg.encoding_tool.clone(),
-                ..Default::default()
-            };
+            let opts = RemuxOptions::for_container(target, msg.encoding_tool.clone());
             match self
                 .ffmpeg
                 .remux(&media_file, &remuxed_path, &opts, None)
@@ -521,7 +541,7 @@ impl PipelineStage for ThumbnailStage {
             {
                 Ok(()) => {
                     msg.tracker.replace(vec![remuxed_path.clone()]);
-                    (remuxed_path, "mp4".to_string())
+                    (remuxed_path, target.as_ext().to_string())
                 }
                 Err(e) => {
                     warn!("ThumbnailStage: auto-remux to MP4 failed, skipping: {e}");

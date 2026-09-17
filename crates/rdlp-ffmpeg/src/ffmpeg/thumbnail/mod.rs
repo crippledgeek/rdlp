@@ -47,7 +47,9 @@ use rdlp_types::ContainerFormat;
 use crate::error::{PostProcessError, Result};
 
 use self::embed_strategy::ThumbnailEmbedStrategy;
-pub use self::embed_strategy::{supports_thumbnail_embed, uses_native_attachment};
+pub use self::embed_strategy::{
+    supports_thumbnail_embed, uses_metadata_block_picture, uses_native_attachment,
+};
 use super::ffi_helpers::cleanup_partial_output;
 use super::{FFmpegRunner, ensure_init};
 
@@ -150,44 +152,10 @@ impl FFmpegRunner {
             return Ok(false);
         }
 
-        // Baseline: JPEG and PNG embed successfully in every container rdlp
-        // supports, verified end to end. `avformat_query_codec` does NOT report
-        // that for every muxer: per `avformat.c`, it dispatches to the muxer's
-        // own `query_codec` callback first when one exists, falling back to
-        // the `codec_tag` table only when it doesn't (see the matching
-        // description in `ffi_helpers/mod.rs::resolve_codec_tag`). flac and
-        // m4a carry neither a `query_codec` callback nor a `codec_tag` table
-        // entry for MJPEG/PNG, so the raw query reports "cannot store" for
-        // images they demonstrably do store; trusting it alone would
-        // re-encode a lossless PNG cover to lossy JPEG on those containers.
-        // (mp3's `query_codec` callback also answers MJPEG/PNG — via the
-        // `APIC` tag, a positive, non-`1` value — so the `> 0` query below
-        // already resolves it correctly without this baseline; the baseline
-        // still short-circuits it harmlessly first.)
-        //
-        // So the query below only ever WIDENS this baseline; it can never
-        // narrow the answer below what is known to work.
-        if matches!(
-            codec_id,
-            ffmpeg_the_third::codec::Id::MJPEG | ffmpeg_the_third::codec::Id::PNG
-        ) {
-            return Ok(true);
-        }
-
-        // SAFETY: `ofmt` is the non-null static descriptor returned above and
-        // remains valid for the process lifetime. `avformat_query_codec` only
-        // reads that descriptor (its `query_codec` callback and/or its
-        // codec-tag tables, per the dispatch order noted above) — no
-        // allocation, no ownership transfer, no mutation.
-        let query = unsafe {
-            ffmpeg_the_third::ffi::avformat_query_codec(
-                ofmt,
-                codec_id.into(),
-                ffmpeg_the_third::ffi::FF_COMPLIANCE_NORMAL,
-            )
-        };
-
-        Ok(query > 0)
+        Ok(super::ffi_helpers::oformat_can_carry_cover_image(
+            ofmt,
+            codec_id.into(),
+        ))
     }
 
     /// Embed a thumbnail image into a media file via stream copy (remux).
@@ -241,7 +209,7 @@ impl FFmpegRunner {
     /// - **OGG/Opus**: Map all streams; thumbnail carried as a
     ///   `METADATA_BLOCK_PICTURE` metadata field, no video stream added (#531)
     #[allow(clippy::too_many_lines)]
-    fn embed_thumbnail_sync(
+    pub(crate) fn embed_thumbnail_sync(
         media: &Path,
         thumbnail: &Path,
         output: &Path,
@@ -349,8 +317,13 @@ impl FFmpegRunner {
             // disk via `avio_open` — a codec-tag rejection here must not
             // leave that empty file behind as if a thumbnail embed had run
             // and produced nothing.
-            let ost_idx = Self::add_stream_copy(&mut octx, ist.parameters(), "for thumbnail embed")
-                .inspect_err(|_| cleanup_partial_output(output))?;
+            let ost_idx = Self::add_stream_copy(
+                &mut octx,
+                ist.parameters(),
+                ist.disposition(),
+                "for thumbnail embed",
+            )
+            .inspect_err(|_| cleanup_partial_output(output))?;
             octx.stream_mut(ost_idx)
                 .expect("just-added stream")
                 .set_metadata(ist.metadata().to_owned());
@@ -376,14 +349,19 @@ impl FFmpegRunner {
         let thumb_ost_index = if is_ogg_opus {
             None
         } else {
-            let ost_idx = Self::add_stream_copy(&mut octx, thumb_ist.parameters(), "for thumbnail")
-                .inspect_err(|_| cleanup_partial_output(output))?;
+            // The image file's own stream carries no disposition; it becomes
+            // cover art here, and `add_stream_copy` resolves its tag as one.
+            let ost_idx = Self::add_stream_copy(
+                &mut octx,
+                thumb_ist.parameters(),
+                ffmpeg_the_third::format::stream::Disposition::ATTACHED_PIC,
+                "for thumbnail",
+            )
+            .inspect_err(|_| cleanup_partial_output(output))?;
             {
                 let mut thumb_ost = octx
                     .stream_mut(ost_idx)
                     .expect("just-added thumbnail stream");
-                // SAFETY: thumb_ost is a valid output stream in a live output context.
-                Self::set_attached_pic_disposition(unsafe { thumb_ost.as_mut_ptr() });
 
                 // For MP3: set ID3v2 metadata on the thumbnail stream
                 if is_mp3 {

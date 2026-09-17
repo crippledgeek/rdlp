@@ -336,7 +336,11 @@ pub fn merge_config(
     // config file survives an invocation that does not mention it (#540). The
     // vocabulary itself is `RecodeAudioMode`'s to define, not the CLI's.
     if let Some(recode_audio) = &args.recode_audio {
-        config.postprocess.recode_audio = RecodeAudioMode::from(recode_audio.as_str());
+        config.postprocess.recode_audio = Some(
+            recode_audio
+                .parse::<RecodeAudioMode>()
+                .map_err(|e| anyhow::anyhow!("invalid --recode-audio: {e}"))?,
+        );
     }
 
     // Audio normalization: --normalize-boost / --normalize-boost-db implies --loudnorm
@@ -446,6 +450,15 @@ pub fn merge_config(
         config.postprocess.recode_speed_level,
     )
     .map_err(|e| anyhow::anyhow!("invalid recode speed control: {e}"))?;
+
+    // A codec/encoder name in `--recode-audio` (or config.toml) fails here,
+    // at the boundary, rather than deep inside a recode (#649).
+    if rdlp_ffmpeg::ffmpeg::init_ok() {
+        rdlp_ffmpeg::ffmpeg::audio_encoder_registry::validate_recode_audio(
+            config.postprocess.recode_audio.as_ref(),
+        )
+        .map_err(|e| anyhow::anyhow!("invalid recode audio mode: {e}"))?;
+    }
 
     // Validate final config
     config

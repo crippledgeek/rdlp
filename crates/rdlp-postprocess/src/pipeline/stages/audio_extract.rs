@@ -252,7 +252,7 @@ mod tests {
 
     /// The `wav` row carries **no** encoder name — `extract_audio` defers to
     /// the muxer's PCM default — which is why the shared extract helper takes
-    /// a `fallback_codec`. Without it `audio_tag_component` would see
+    /// a `fallback_codec`. Without it `stream_tag_component` would see
     /// `(copy: false, encoder: None)` and tag the file `"none"`, losing the
     /// codec that the pre-#637 inline code recorded. Pins the shape the
     /// fallback exists to preserve.
@@ -269,7 +269,7 @@ mod tests {
 
         // Without the fallback the tag degrades to "none"...
         assert_eq!(
-            rdlp_ffmpeg::ffmpeg::audio_tag_component(
+            rdlp_ffmpeg::ffmpeg::stream_tag_component(
                 opts.copy,
                 opts.encoder_name
                     .as_ref()
@@ -279,7 +279,7 @@ mod tests {
         );
         // ...and with it, the codec name is recorded, as before #637.
         assert_eq!(
-            rdlp_ffmpeg::ffmpeg::audio_tag_component(opts.copy, Some("wav")),
+            rdlp_ffmpeg::ffmpeg::stream_tag_component(opts.copy, Some("wav")),
             "wav"
         );
     }

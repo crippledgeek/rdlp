@@ -14,14 +14,12 @@
 //! `resolve_audio_params`. Free functions rather than more methods on
 //! `RecodeStage`, so the `impl` block is not split across files.
 
-use log::{debug, warn};
-
-use rdlp_ffmpeg::ffmpeg::source::{Audio, SourceAudio, muxer_decides};
-use rdlp_ffmpeg::{AudioExtractOptions, FFmpegRunner, PostProcessError};
-use rdlp_types::media_name::CodecName;
-use rdlp_types::{AudioEncoderName, ContainerFormat, RecodeAudioMode};
+use rdlp_ffmpeg::ffmpeg::source::SourceAudio;
+use rdlp_ffmpeg::{AudioExtractOptions, FFmpegRunner};
+use rdlp_types::ContainerFormat;
 
 use super::audio_convert;
+use super::policy_refusal::keep_download_on_policy_refusal;
 use super::recode::RecodeStage;
 use crate::pipeline::PipelineMessage;
 
@@ -56,7 +54,16 @@ pub(super) async fn recode_audio_only(
     let target_ext = target.as_ext();
 
     let recode_audio = RecodeStage::resolve_recode_audio_mode(&msg);
-    let (audio_copy, encoder_name) = resolve_audio_only_params(&recode_audio, target, audio)?;
+    let (audio_copy, encoder_name) =
+        match RecodeStage::resolve_audio_params(recode_audio.as_ref(), target, audio) {
+            Ok(params) => params,
+            Err(e) => {
+                keep_download_on_policy_refusal(&e, &mut msg, STAGE_NAME);
+                return Err(
+                    anyhow::Error::new(e).context("recode stage failed for audio-only source")
+                );
+            }
+        };
 
     let output_path = msg.tracker.temp_path(&input_file, target_ext);
     let opts = AudioExtractOptions {
@@ -69,7 +76,7 @@ pub(super) async fn recode_audio_only(
     };
     let summary = format!(
         "Recode: audio-only source, container={target_ext}, audio={}",
-        rdlp_ffmpeg::ffmpeg::audio_tag_component(
+        rdlp_ffmpeg::ffmpeg::stream_tag_component(
             opts.copy,
             opts.encoder_name
                 .as_ref()
@@ -97,94 +104,11 @@ pub(super) async fn recode_audio_only(
     Ok(msg)
 }
 
-/// Decide copy-vs-encode for an audio-only source, and which encoder.
-///
-/// Split out of [`recode_audio_only`] so the three-tier decision is
-/// testable without running a mux.
-pub(super) fn resolve_audio_only_params(
-    recode_audio: &RecodeAudioMode,
-    target: ContainerFormat,
-    audio: &SourceAudio,
-) -> Result<(bool, Option<AudioEncoderName>), PostProcessError> {
-    let target_ext = target.as_ext();
-
-    if muxer_decides::<Audio>(target).eval(audio) {
-        debug!("RecodeStage: audio-only source → {target_ext} (stream copy)");
-        return Ok((true, None));
-    }
-
-    // `Copy` is the default audio mode (`RecodeAudioMode::Copy` is
-    // `#[default]`), and for a video recode the muxer can usually meet it.
-    // Here it provably cannot: the target has already told us it does not
-    // represent this codec, so honouring `Copy` would hand it a stream it
-    // rejects and fail with a bare "Invalid argument" from `write_header`.
-    // Falling back to the container's own default is what ffmpeg and
-    // yt-dlp's `FFmpegVideoConvertorPP` both do — copy is a preference,
-    // and an impossible preference yields to a working conversion.
-    //
-    // This is `warn!`, not `debug!`: it overrides something the user asked
-    // for, and the conversion can be lossy in a way they did not choose —
-    // a FLAC audio-only source into WebM is re-encoded to Opus, turning a
-    // lossless input into a lossy output. The two neighbouring overrides
-    // in `resolve_audio_params` are both `warn!` and are strictly less
-    // consequential than this one.
-    let effective = match recode_audio {
-        RecodeAudioMode::Copy => RecodeAudioMode::Auto,
-        other => other.clone(),
-    };
-
-    let (audio_copy, encoder_name) =
-        RecodeStage::resolve_audio_params(&effective, target, audio.is_present())?;
-
-    if matches!(recode_audio, RecodeAudioMode::Copy) && !audio_copy && audio.is_present() {
-        // Two things this message is careful about.
-        //
-        // It does not name `--recode-audio=copy`: copy is also the default,
-        // and `resolve_recode_audio_mode` forces it when `normalize_audio` is
-        // on, so naming the flag would contradict that function's own "forcing
-        // audio copy mode" warning for a user who never passed it.
-        //
-        // And it says rdlp cannot *confirm* the container carries the codec,
-        // not that the container cannot — because for MPEG-TS the latter is
-        // false. mpegts does carry AAC; rdlp declines the copy only because
-        // the muxer advertises it through neither a codec-tag table nor
-        // `query_codec`, so `oformat_can_represent` has no positive evidence
-        // (#633). Claiming a container limitation that does not exist would
-        // undercut the point of promoting this to `warn!`.
-        //
-        // Gated on `is_present` so a source with no audio at all does not warn
-        // about a codec it does not have, immediately before failing with
-        // `NoAudioStream`.
-        warn!(
-            "RecodeStage: cannot confirm {target_ext} carries {}, so it cannot be \
-             stream-copied safely; re-encoding to {} instead (this may be lossy)",
-            audio
-                .name()
-                .map_or("the source audio codec", CodecName::as_str),
-            encoder_name.as_ref().map_or(
-                "the container default",
-                rdlp_types::media_name::MediaName::as_str
-            ),
-        );
-    }
-
-    if !audio_copy {
-        debug!(
-            "RecodeStage: audio-only source → {target_ext} (re-encoding to {})",
-            encoder_name.as_ref().map_or(
-                "container default",
-                rdlp_types::media_name::MediaName::as_str
-            ),
-        );
-    }
-
-    Ok((audio_copy, encoder_name))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rdlp_ffmpeg::ffmpeg::source::Source;
+    use rdlp_ffmpeg::ffmpeg::source::{Audio, Source, muxer_decides};
+    use rdlp_types::CodecName;
 
     /// Builds a [`SourceAudio`] whose codec is named.
     fn audio_codec(name: &'static str) -> SourceAudio {
@@ -208,31 +132,28 @@ mod tests {
     }
 
     /// Tier 1: the container carries the codec, so copy — and report no
-    /// encoder, which is what makes `encoding_tool` read "copy".
+    /// encoder, which is what makes `encoding_tool` read "copy". The
+    /// audio-only route shares `RecodeStage::resolve_audio_params` (#645);
+    /// these pin it from this route's angle with the mode unspecified.
     #[test]
     fn audio_only_params_copy_when_representable() {
         rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
-        let (copy, encoder) = resolve_audio_only_params(
-            &RecodeAudioMode::Copy,
-            ContainerFormat::Mkv,
-            &audio_codec("aac"),
-        )
-        .expect("mkv carries aac");
+        let (copy, encoder) =
+            RecodeStage::resolve_audio_params(None, ContainerFormat::Mkv, &audio_codec("aac"))
+                .expect("mkv carries aac");
         assert!(copy);
         assert_eq!(encoder, None);
     }
 
-    /// Tier 2: `WebM` cannot carry AAC, so an impossible `Copy` yields to the
-    /// container's own default rather than failing at `write_header`.
+    /// Tier 2: `WebM` cannot carry AAC, so with no mode specified the copy
+    /// preference yields to the container's own default rather than failing
+    /// at `write_header`.
     #[test]
     fn audio_only_params_downgrade_impossible_copy_to_the_container_default() {
         rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
-        let (copy, encoder) = resolve_audio_only_params(
-            &RecodeAudioMode::Copy,
-            ContainerFormat::WebM,
-            &audio_codec("aac"),
-        )
-        .expect("webm resolves an encoder");
+        let (copy, encoder) =
+            RecodeStage::resolve_audio_params(None, ContainerFormat::WebM, &audio_codec("aac"))
+                .expect("webm resolves an encoder");
         assert!(!copy, "webm cannot stream-copy aac");
         assert!(
             encoder.is_some_and(|e| e.as_str().contains("opus") || e.as_str().contains("vorbis")),
@@ -245,12 +166,9 @@ mod tests {
     #[test]
     fn audio_only_params_reencode_when_the_codec_is_unnamed() {
         rdlp_ffmpeg::ffmpeg::ensure_init().expect("ffmpeg init");
-        let (copy, encoder) = resolve_audio_only_params(
-            &RecodeAudioMode::Copy,
-            ContainerFormat::Mkv,
-            &audio_unnamed(),
-        )
-        .expect("mkv resolves an encoder");
+        let (copy, encoder) =
+            RecodeStage::resolve_audio_params(None, ContainerFormat::Mkv, &audio_unnamed())
+                .expect("mkv resolves an encoder");
         assert!(!copy);
         assert!(encoder.is_some(), "an unnamed codec still re-encodes");
     }

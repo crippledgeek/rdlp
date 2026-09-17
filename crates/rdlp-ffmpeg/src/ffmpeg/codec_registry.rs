@@ -170,6 +170,21 @@ impl<R: CodecRow + 'static> Registry<R> {
     /// Codec names go through [`Self::preferred_encoder`]; anything else is
     /// matched against the table's encoder names and then gated on availability.
     ///
+    /// **Codec-first is deliberate** (#649). `FFmpeg`'s `-c:a` resolves the
+    /// other way round — `fftools/ffmpeg_opt.c` `find_codec` tries
+    /// `avcodec_find_encoder_by_name` before the codec descriptor — but for
+    /// the names that are *both* (`aac`, `opus`, `vorbis`, `flac`) that order
+    /// lands on the native encoder of the same name, and for `opus` and
+    /// `vorbis` the native encoder is experimental (`libavcodec/opus/enc.c`,
+    /// `vorbisenc.c`; `avcodec_open2` refuses it without
+    /// `-strict experimental`). `FFmpeg`'s own *descriptor* tier prefers a
+    /// non-experimental encoder for the id (`avcodec_find_encoder`), and
+    /// yt-dlp's `--audio-format` table maps `opus` → `libopus`,
+    /// `vorbis` → `libvorbis`. Asking the codec preference first yields what
+    /// both of those produce; a name that is only an encoder (`libfdk_aac`)
+    /// is unaffected, and a literal native encoder is still reachable by its
+    /// name when no codec row claims it.
+    ///
     /// Requires [`super::ensure_init`] to have been called first.
     #[must_use]
     pub fn resolve(&self, input: &str) -> Option<MediaName<R::Encoder>> {

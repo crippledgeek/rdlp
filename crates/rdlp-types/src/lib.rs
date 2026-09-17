@@ -68,7 +68,8 @@ pub use format::{
 };
 pub use info_dict::{Chapter, InfoDict, Subtitle, Thumbnail};
 pub use media_name::{
-    AudioEncoderName, CodecName, InvalidMediaName, Rfc6381Codec, VideoEncoderName,
+    AudioCodecOrEncoderName, AudioEncoderName, CodecName, InvalidMediaName, Rfc6381Codec,
+    VideoEncoderName,
 };
 pub use parse_error::ParseEnumError;
 pub use playlist_items::{PlaylistItems, PlaylistItemsError};

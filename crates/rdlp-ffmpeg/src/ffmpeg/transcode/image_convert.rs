@@ -79,7 +79,7 @@ impl FFmpegRunner {
     }
 
     /// Decode the first video frame of `src` and encode it as baseline MJPEG to `dst`.
-    fn transcode_image_sync(src: &Path, dst: &Path) -> anyhow::Result<()> {
+    pub(crate) fn transcode_image_sync(src: &Path, dst: &Path) -> anyhow::Result<()> {
         ensure_init()?;
 
         // FFmpeg's still-image decoders are chatty at info/warning level about

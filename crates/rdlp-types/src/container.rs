@@ -200,6 +200,29 @@ impl ContainerFormat {
         }
     }
 
+    /// Whether `ext` is this container's canonical extension — the one its
+    /// `FFmpeg` muxer declares and the one rdlp names its outputs with.
+    ///
+    /// The "is this file already in the target container?" question that
+    /// remux and recode ask before doing any work. Alias spellings parse to
+    /// the same variant (`matroska` → [`Mkv`](Self::Mkv), `quicktime` →
+    /// [`Mov`](Self::Mov), `mpegts` → [`Ts`](Self::Ts)) but are muxer *names*,
+    /// not extensions: no muxer declares them (`matroskaenc.c` → `mkv`,
+    /// `movenc.c` → `mov`, `mpegtsenc.c` → `ts,m2t,m2ts,mts`) and
+    /// `av_guess_format` cannot resolve a file named that way. So a
+    /// `.matroska` input is *not* already in `mkv` for this purpose: the
+    /// remux that runs is what produces the canonical `.mkv` — the same
+    /// mechanism yt-dlp uses (`resolve_mapping` compares extension tokens,
+    /// and `replace_extension` renames only as a side effect of running).
+    /// `--remux=<c>` therefore promises both the container and its canonical
+    /// extension (#619). The ASF family is the one place a *distinct*
+    /// spelling is also a declared extension (`asfenc.c`: `asf,wmv,wma`),
+    /// which is why those are separate variants (#538).
+    #[must_use]
+    pub const fn is_canonical_ext(self, ext: &str) -> bool {
+        ext.eq_ignore_ascii_case(self.as_ext())
+    }
+
     /// Derive the container from a filesystem path's extension.
     ///
     /// The single place a path becomes a `ContainerFormat`. Honours everything

@@ -998,7 +998,7 @@ fn test_merge_config_recode_audio_mode_is_case_insensitive() {
             merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
         assert_eq!(
             config.postprocess.recode_audio,
-            RecodeAudioMode::Copy,
+            Some(RecodeAudioMode::Copy),
             "--recode-audio={spelling} must mean Copy"
         );
     }
@@ -1010,10 +1010,42 @@ fn test_merge_config_recode_audio_mode_is_case_insensitive() {
             merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
         assert_eq!(
             config.postprocess.recode_audio,
-            RecodeAudioMode::Auto,
+            Some(RecodeAudioMode::Auto),
             "--recode-audio={spelling} must mean Auto"
         );
     }
+}
+
+/// The operator's `--recode-audio=<name>` request, typed as the CLI types it.
+fn audio_request(name: &str) -> RecodeAudioMode {
+    RecodeAudioMode::Encoder {
+        name: rdlp_types::AudioCodecOrEncoderName::new(name).expect("valid name"),
+    }
+}
+
+/// #645: no flag and no config value leaves the mode *unspecified* — not
+/// `Copy`. The distinction is what lets an impossible copy re-encode by
+/// default and be refused when demanded.
+#[test]
+fn test_merge_config_recode_audio_unspecified_is_none_not_copy() {
+    let config = merge_config(&default_args(), Config::default(), no_interactive())
+        .expect("merge should succeed");
+    assert_eq!(config.postprocess.recode_audio, None);
+}
+
+/// #649: a name the linked build cannot resolve fails at the boundary with a
+/// message that names it, instead of surfacing from inside a recode.
+#[test]
+fn test_merge_config_recode_audio_unknown_name_is_refused_at_the_boundary() {
+    let mut args = default_args();
+    args.recode_audio = Some("definitely_not_an_encoder_xyz".to_string());
+    let err = merge_config(&args, Config::default(), no_interactive())
+        .expect_err("an unknown name must not merge");
+    let msg = format!("{err:#}");
+    assert!(
+        msg.contains("recode audio") && msg.contains("definitely_not_an_encoder_xyz"),
+        "{msg}"
+    );
 }
 
 /// An explicit encoder name must survive verbatim — case-folding the mode
@@ -1026,9 +1058,7 @@ fn test_merge_config_recode_audio_encoder_name_preserved() {
         merge_config(&args, Config::default(), no_interactive()).expect("merge should succeed");
     assert_eq!(
         config.postprocess.recode_audio,
-        RecodeAudioMode::Encoder {
-            name: "libOpus".to_string()
-        },
+        Some(audio_request("libOpus")),
         "encoder names are passed to FFmpeg verbatim and must not be lowercased"
     );
 }
@@ -1044,17 +1074,13 @@ fn test_merge_config_recode_audio_encoder_name_preserved() {
 fn test_merge_config_file_recode_audio_survives_when_flag_omitted() {
     let args = default_args(); // no --recode-audio passed
     let mut file_config = Config::default();
-    file_config.postprocess.recode_audio = RecodeAudioMode::Encoder {
-        name: "libopus".to_string(),
-    };
+    file_config.postprocess.recode_audio = Some(audio_request("libopus"));
 
     let merged = merge_config(&args, file_config, no_interactive()).expect("merge should succeed");
 
     assert_eq!(
         merged.postprocess.recode_audio,
-        RecodeAudioMode::Encoder {
-            name: "libopus".to_string()
-        },
+        Some(audio_request("libopus")),
         "config.toml's recode_audio must not be clobbered by the CLI default"
     );
 }
@@ -1113,9 +1139,7 @@ fn test_merge_config_file_fixup_survives_when_flag_omitted() {
 #[test]
 fn test_merge_config_explicit_recode_audio_overrides_file() {
     let mut file_config = Config::default();
-    file_config.postprocess.recode_audio = RecodeAudioMode::Encoder {
-        name: "libopus".to_string(),
-    };
+    file_config.postprocess.recode_audio = Some(audio_request("libopus"));
 
     let mut args = default_args();
     args.recode_audio = Some("copy".to_string());
@@ -1123,18 +1147,18 @@ fn test_merge_config_explicit_recode_audio_overrides_file() {
         merge_config(&args, file_config.clone(), no_interactive()).expect("merge should succeed");
     assert_eq!(
         merged.postprocess.recode_audio,
-        RecodeAudioMode::Copy,
+        Some(RecodeAudioMode::Copy),
         "an explicit --recode-audio=copy must override the config file"
     );
 
+    // `aac` rather than `libfdk_aac`: the pre-flight (#649) rejects a name
+    // the linked build cannot resolve, and libfdk_aac is nonfree.
     let mut args = default_args();
-    args.recode_audio = Some("libfdk_aac".to_string());
+    args.recode_audio = Some("aac".to_string());
     let merged = merge_config(&args, file_config, no_interactive()).expect("merge should succeed");
     assert_eq!(
         merged.postprocess.recode_audio,
-        RecodeAudioMode::Encoder {
-            name: "libfdk_aac".to_string()
-        },
+        Some(audio_request("aac")),
         "an explicit encoder must override the config file"
     );
 }
