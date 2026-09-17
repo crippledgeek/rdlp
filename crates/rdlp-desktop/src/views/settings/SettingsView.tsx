@@ -6,6 +6,7 @@ import { extractErrorMessage } from "@/api/invokeClient";
 import { useQuery } from "@tanstack/react-query";
 import { settingsQueryOptions, updateSettings } from "@/api/settings";
 import { builtinNetworkDefaultsQueryOptions, effectiveNetworkQueryOptions } from "@/api/effectiveNetwork";
+import { effectiveNormalizeQueryOptions } from "@/api/effectiveNormalize";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { GeneralSection } from "./sections/GeneralSection";
@@ -65,7 +66,15 @@ export function SettingsView() {
     // Computed draft: server data merged with local edits
     const draft = settings ? { ...settings, ...edits } : null;
 
-    const loadError = settingsError ?? defaultsError ?? builtinError;
+    // The normalization values for the DRAFT'S preset — re-fetched when the
+    // preset changes, because the I/TP/LRA defaults are preset-dependent
+    // (#611). `keepPreviousData` in the options holds the last payload while
+    // the next loads, so a preset switch never blanks the placeholders.
+    const { data: normalize, error: normalizeError } = useQuery(
+        effectiveNormalizeQueryOptions(draft?.loudnorm_preset ?? null),
+    );
+
+    const loadError = settingsError ?? defaultsError ?? builtinError ?? normalizeError;
     if (loadError) {
         return (
             <div className="max-w-2xl mx-auto px-4 py-6">
@@ -78,7 +87,7 @@ export function SettingsView() {
         );
     }
 
-    if (!draft || !defaults || !builtin) {
+    if (!draft || !defaults || !builtin || !normalize) {
         return (
             <div className="flex items-center justify-center h-full">
                 <p className="text-[13px] text-[var(--text-muted)] animate-pulse">Loading settings…</p>
@@ -121,7 +130,7 @@ export function SettingsView() {
                 <PostProcessSection draft={draft} onChange={handleChange} />
                 <DownloadSection draft={draft} defaults={defaults} onChange={handleChange} />
                 <SubtitlesSection draft={draft} onChange={handleChange} />
-                <NormalizationSection draft={draft} onChange={handleChange} />
+                <NormalizationSection draft={draft} effective={normalize} onChange={handleChange} />
                 <NetworkSection draft={draft} defaults={defaults} builtin={builtin} onChange={handleChange} />
                 <SystemSection />
 

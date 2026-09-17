@@ -14,16 +14,34 @@ import {
 } from "@/components/ui/select";
 import { ToggleButton } from "react-aria-components";
 import { cn } from "@/lib/utils";
-import type { AppSettings } from "@/types";
+import type { AppSettings, EffectiveNormalize, LoudnormPreset } from "@/types";
 
 const NONE_KEY = "none";
 
+/** Every preset the engine knows, in the order the Select lists them. */
+const PRESETS: readonly { id: LoudnormPreset; label: string }[] = [
+    { id: "streaming", label: "Streaming" },
+    { id: "broadcast", label: "Broadcast" },
+    { id: "loud", label: "Loud" },
+];
+
+/** Title-case a wire preset for the inherit entry's label. */
+function presetLabel(preset: LoudnormPreset): string {
+    return PRESETS.find((p) => p.id === preset)?.label ?? preset;
+}
+
 interface Props {
     draft: AppSettings;
+    /**
+     * What an empty (inherit) field resolves to, for the DRAFT'S preset —
+     * fetched over IPC (`effective_normalize`). Every numeric placeholder
+     * here derives from it; the section holds no copy of a default (#611).
+     */
+    effective: EffectiveNormalize;
     onChange: (update: Partial<AppSettings>) => void;
 }
 
-export function NormalizationSection({ draft, onChange }: Props) {
+export function NormalizationSection({ draft, effective, onChange }: Props) {
     return (
         <section id="settings-normalization" aria-labelledby="settings-normalization-heading" className="settings-panel">
             <h3 id="settings-normalization-heading" className="settings-panel-title">
@@ -90,7 +108,7 @@ export function NormalizationSection({ draft, onChange }: Props) {
                                     step="0.1"
                                     min="-30"
                                     max="0"
-                                    placeholder="-1.0"
+                                    placeholder={String(effective.peak_target_db)}
                                     value={draft.audio_gain_target ?? ""}
                                     onChange={(e) =>
                                         onChange({ audio_gain_target: e.target.value ? Number(e.target.value) : null })
@@ -108,7 +126,9 @@ export function NormalizationSection({ draft, onChange }: Props) {
                                     <Select
                                         selectedKey={draft.loudnorm_preset ?? NONE_KEY}
                                         onSelectionChange={(key) =>
-                                            onChange({ loudnorm_preset: key === NONE_KEY ? null : String(key) })
+                                            onChange({
+                                                loudnorm_preset: key === NONE_KEY ? null : (String(key) as LoudnormPreset),
+                                            })
                                         }
                                     >
                                         <SelectTrigger className="w-full text-sm">
@@ -116,19 +136,20 @@ export function NormalizationSection({ draft, onChange }: Props) {
                                         </SelectTrigger>
                                         <SelectPopover>
                                             <SelectListBox>
-                                                <SelectItem id={NONE_KEY}>Default (Streaming)</SelectItem>
-                                                <SelectItem id="streaming">Streaming (-14 LUFS)</SelectItem>
-                                                <SelectItem id="broadcast">Broadcast (-23 LUFS)</SelectItem>
-                                                <SelectItem id="loud">Loud (-11 LUFS)</SelectItem>
+                                                {/* The inherit entry names the preset the engine resolved to, not a typed default. */}
+                                                <SelectItem id={NONE_KEY}>{`Default (${presetLabel(effective.preset)})`}</SelectItem>
+                                                {PRESETS.map(({ id, label }) => (
+                                                    <SelectItem key={id} id={id}>{label}</SelectItem>
+                                                ))}
                                             </SelectListBox>
                                         </SelectPopover>
                                     </Select>
                                 </div>
                                 <div className="grid grid-cols-3 gap-2">
                                     {[
-                                        { id: "loudnorm-target-i", label: "Loudness (LUFS)", field: "loudnorm_target_i" as const, placeholder: "-14.0" },
-                                        { id: "loudnorm-target-tp", label: "True Peak (dBTP)", field: "loudnorm_target_tp" as const, placeholder: "-1.0" },
-                                        { id: "loudnorm-target-lra", label: "Range (LU)", field: "loudnorm_target_lra" as const, placeholder: "11.0" },
+                                        { id: "loudnorm-target-i", label: "Loudness (LUFS)", field: "loudnorm_target_i" as const, placeholder: String(effective.target_i) },
+                                        { id: "loudnorm-target-tp", label: "True Peak (dBTP)", field: "loudnorm_target_tp" as const, placeholder: String(effective.target_tp) },
+                                        { id: "loudnorm-target-lra", label: "Range (LU)", field: "loudnorm_target_lra" as const, placeholder: String(effective.target_lra) },
                                     ].map(({ id, label, field, placeholder }) => (
                                         <div key={id}>
                                             <Label htmlFor={id} className="text-[11px] text-muted-foreground mb-1 block">{label}</Label>
@@ -190,7 +211,7 @@ export function NormalizationSection({ draft, onChange }: Props) {
                                     step="0.5"
                                     min="0"
                                     max="30"
-                                    placeholder="12.0"
+                                    placeholder={String(effective.boost_gain_db)}
                                     value={draft.normalize_boost_db ?? ""}
                                     onChange={(e) =>
                                         onChange({ normalize_boost_db: e.target.value ? Number(e.target.value) : null })

@@ -68,16 +68,17 @@ jobs:
         # stale mirror.
         run: bash scripts/check-ts-enum-drift.sh
 
-      - name: Check EffectiveNetwork Rust / TypeScript drift and literal placeholders
-        # #611: the nine network/download defaults have one owner
-        # (rdlp_types::EffectiveNetwork::DEFAULT) and reach the desktop over
-        # IPC. (a) The TS `interface EffectiveNetwork` must carry exactly the
-        # Rust struct's fields; (b) the settings sections must derive every
-        # numeric placeholder from that payload, never a literal copy.
-        run: bash scripts/check-effective-network-drift.sh
+      - name: Check EffectiveNetwork / EffectiveNormalize Rust / TypeScript drift and literal placeholders
+        # #611: the network/download and normalization defaults each have one
+        # owner in rdlp_types (EffectiveNetwork::DEFAULT; EffectiveNormalize +
+        # LoudnormPreset::targets) and reach the desktop over IPC. (a) Each TS
+        # interface must carry exactly its Rust struct's fields; (b) the
+        # settings sections must derive every numeric placeholder from that
+        # payload, never a literal copy.
+        run: bash scripts/check-effective-config-drift.sh
 
-      - name: Verify the EffectiveNetwork drift gate still fires
-        run: bash scripts/check-effective-network-drift.sh --self-test
+      - name: Verify the effective-config drift gate still fires
+        run: bash scripts/check-effective-config-drift.sh --self-test
 
       - name: Check no directory-sweep deletion
         # #558: deleting files found by scanning a directory cannot tell "a file

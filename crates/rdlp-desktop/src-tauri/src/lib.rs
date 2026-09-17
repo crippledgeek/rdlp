@@ -256,6 +256,7 @@ pub fn run() {
             commands::settings::settings,
             commands::settings::effective_network,
             commands::settings::builtin_network_defaults,
+            commands::settings::effective_normalize,
             commands::settings::update_settings,
             commands::settings::pick_directory,
             commands::settings::reveal_in_folder,

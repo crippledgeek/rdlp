@@ -14,7 +14,7 @@ interface Props {
     /**
      * The values the engine runs with when a field is left empty (inherit),
      * served over IPC. Every placeholder below derives from it — none is a
-     * literal (#611; enforced by `scripts/check-effective-network-drift.sh`).
+     * literal (#611; enforced by `scripts/check-effective-config-drift.sh`).
      */
     defaults: EffectiveNetwork;
     onChange: (update: Partial<AppSettings>) => void;

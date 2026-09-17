@@ -14,8 +14,8 @@ use tauri_plugin_dialog::DialogExt;
 
 use crate::error::AppError;
 use crate::state::{AppSettings, AppState, SettingsValidationError};
-use rdlp_types::EffectiveNetwork;
 use rdlp_types::boundary::{Action, Subject};
+use rdlp_types::{EffectiveNetwork, EffectiveNormalize, LoudnormPreset, PostProcess};
 
 /// Retrieve the current application settings.
 ///
@@ -80,6 +80,48 @@ pub async fn effective_network(state: State<'_, AppState>) -> Result<EffectiveNe
 #[tauri::command]
 pub async fn builtin_network_defaults() -> Result<EffectiveNetwork, AppError> {
     Ok(EffectiveNetwork::DEFAULT)
+}
+
+/// The normalization values the engine runs with for a given preset when the
+/// [`AppSettings`] target fields are `None` (inherit).
+///
+/// The I/TP/LRA defaults are PRESET-DEPENDENT, so the GUI cannot fetch this
+/// once: it passes the draft's preset (`None` = inherit the base config's),
+/// and the payload carries the resolved preset plus the six values for it.
+/// Resolves through the single resolver `PostProcess::effective_normalize`
+/// on the client's base [`PostProcess`] with the preset overlaid, so the
+/// Settings placeholders show the value a download will actually use — the
+/// previous hand-copied placeholders were Streaming-only and wrong under
+/// `Loud`/`Broadcast` (#611).
+///
+/// # Errors
+///
+/// This function does not currently return errors but returns
+/// `Result` for forward-compatible IPC signatures.
+#[tauri::command]
+pub async fn effective_normalize(
+    preset: Option<LoudnormPreset>,
+    state: State<'_, AppState>,
+) -> Result<EffectiveNormalize, AppError> {
+    Ok(resolve_effective_normalize(
+        &state.client.config().postprocess,
+        preset,
+    ))
+}
+
+/// Overlay `preset` on the base post-process config and resolve it.
+///
+/// Pure so the command's one decision — "the draft's preset wins over the
+/// base's, and `None` inherits" — is testable without managed `State`.
+fn resolve_effective_normalize(
+    base: &PostProcess,
+    preset: Option<LoudnormPreset>,
+) -> EffectiveNormalize {
+    PostProcess {
+        loudnorm_preset: preset.or(base.loudnorm_preset),
+        ..base.clone()
+    }
+    .effective_normalize()
 }
 
 /// Update application settings with new values.
@@ -267,10 +309,42 @@ pub async fn reveal_in_folder(path: String) -> Result<(), AppError> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used)]
+// float_cmp: the resolver propagates the owner's constants unchanged, so exact
+// equality is the oracle; an epsilon would accept a drifted value.
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::float_cmp)]
 mod tests {
-    use super::reveal_off_runtime;
+    use super::{resolve_effective_normalize, reveal_off_runtime};
     use crate::error::AppError;
+    use rdlp_types::{LoudnormPreset, PostProcess};
+
+    /// `None` inherits the base config's preset; `Some` overlays it. The
+    /// payload's targets follow whichever preset won, which is what makes
+    /// the GUI's I/TP/LRA placeholders correct under a non-Streaming preset.
+    #[test]
+    fn effective_normalize_overlays_the_draft_preset_on_the_base() {
+        let base = PostProcess {
+            loudnorm_preset: Some(LoudnormPreset::Broadcast),
+            ..PostProcess::default()
+        };
+
+        let inherited = resolve_effective_normalize(&base, None);
+        assert_eq!(inherited.preset, LoudnormPreset::Broadcast);
+        assert_eq!(
+            inherited.target_lra,
+            LoudnormPreset::Broadcast.targets().range_lu
+        );
+
+        let overlaid = resolve_effective_normalize(&base, Some(LoudnormPreset::Loud));
+        assert_eq!(overlaid.preset, LoudnormPreset::Loud);
+        assert_eq!(
+            overlaid.target_i,
+            LoudnormPreset::Loud.targets().integrated_lufs
+        );
+
+        // An unset base falls to the type's default, like the engine does.
+        let unset = resolve_effective_normalize(&PostProcess::default(), None);
+        assert_eq!(unset.preset, LoudnormPreset::default());
+    }
 
     /// A blocking closure that itself starts a runtime must survive.
     ///

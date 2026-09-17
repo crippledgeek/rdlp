@@ -1,0 +1,89 @@
+import { describe, it, expect, vi } from "vitest";
+import { fireEvent, render, screen } from "@/test/test-utils";
+import { NormalizationSection } from "./NormalizationSection";
+import { effectiveNormalizeLoudStub, effectiveNormalizeStub } from "@/test/effectiveNormalizeStub";
+import type { AppSettings } from "@/types";
+
+const baseDraft = {
+    normalize_audio: true,
+    loudnorm: true,
+    audio_gain_target: null,
+    loudnorm_preset: null,
+    loudnorm_target_i: null,
+    loudnorm_target_tp: null,
+    loudnorm_target_lra: null,
+    loudnorm_dynamic: false,
+    loudnorm_precompress: false,
+    normalize_boost: true,
+    normalize_boost_db: null,
+} as unknown as AppSettings;
+
+// #611: the placeholder is the "inherit" hint, so it must state the value the
+// engine actually uses for the DRAFT'S preset. That arrives over IPC as the
+// `EffectiveNormalize` payload (owner: `rdlp_types::EffectiveNormalize` +
+// `LoudnormPreset::targets()`, resolved by `PostProcess::effective_normalize`).
+// The stubs' values differ from the real defaults, so a leftover literal fails.
+describe("NormalizationSection — placeholders derive from the effective-normalize payload", () => {
+    it("every loudnorm target placeholder is the payload's value", () => {
+        render(<NormalizationSection draft={baseDraft} effective={effectiveNormalizeStub} onChange={vi.fn()} />);
+        const stub = effectiveNormalizeStub;
+        expect(screen.getByLabelText(/loudness \(lufs\)/i)).toHaveAttribute("placeholder", String(stub.target_i));
+        expect(screen.getByLabelText(/true peak \(dbtp\)/i)).toHaveAttribute("placeholder", String(stub.target_tp));
+        expect(screen.getByLabelText(/range \(lu\)/i)).toHaveAttribute("placeholder", String(stub.target_lra));
+        expect(screen.getByLabelText(/boost gain/i)).toHaveAttribute("placeholder", String(stub.boost_gain_db));
+    });
+
+    it("the peak target placeholder is the payload's value in peak mode", () => {
+        const draft = { ...baseDraft, loudnorm: false };
+        render(<NormalizationSection draft={draft} effective={effectiveNormalizeStub} onChange={vi.fn()} />);
+        expect(screen.getByLabelText(/peak target/i)).toHaveAttribute(
+            "placeholder",
+            String(effectiveNormalizeStub.peak_target_db),
+        );
+    });
+
+    // The I/TP/LRA defaults are preset-dependent. Before #611 the hints were
+    // Streaming-only literals, so they were WRONG under Loud/Broadcast.
+    it("switching the preset changes the loudnorm target placeholders", () => {
+        const { rerender } = render(
+            <NormalizationSection draft={baseDraft} effective={effectiveNormalizeStub} onChange={vi.fn()} />,
+        );
+        expect(screen.getByLabelText(/loudness \(lufs\)/i)).toHaveAttribute(
+            "placeholder",
+            String(effectiveNormalizeStub.target_i),
+        );
+        rerender(
+            <NormalizationSection
+                draft={{ ...baseDraft, loudnorm_preset: "loud" }}
+                effective={effectiveNormalizeLoudStub}
+                onChange={vi.fn()}
+            />,
+        );
+        expect(screen.getByLabelText(/loudness \(lufs\)/i)).toHaveAttribute(
+            "placeholder",
+            String(effectiveNormalizeLoudStub.target_i),
+        );
+        expect(screen.getByLabelText(/range \(lu\)/i)).toHaveAttribute(
+            "placeholder",
+            String(effectiveNormalizeLoudStub.target_lra),
+        );
+    });
+
+    // With no preset chosen, the Select's inherit entry names the preset the
+    // engine actually resolved to — from the payload, not a typed "Streaming".
+    it("the inherit entry of the preset Select names the payload's resolved preset", () => {
+        render(<NormalizationSection draft={baseDraft} effective={effectiveNormalizeStub} onChange={vi.fn()} />);
+        expect(screen.getByRole("combobox")).toHaveTextContent(/default \(broadcast\)/i);
+    });
+
+    it("choosing a preset commits its wire value; choosing the inherit entry commits null", () => {
+        const onChange = vi.fn();
+        render(<NormalizationSection draft={baseDraft} effective={effectiveNormalizeStub} onChange={onChange} />);
+        fireEvent.pointerDown(screen.getByRole("combobox"));
+        fireEvent.click(screen.getByRole("option", { name: /^loud$/i }));
+        expect(onChange).toHaveBeenCalledWith({ loudnorm_preset: "loud" });
+        fireEvent.pointerDown(screen.getByRole("combobox"));
+        fireEvent.click(screen.getByRole("option", { name: /default/i }));
+        expect(onChange).toHaveBeenCalledWith({ loudnorm_preset: null });
+    });
+});

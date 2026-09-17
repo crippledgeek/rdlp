@@ -291,6 +291,12 @@ export type AudioFormat =
 export type SubtitleFormat = "srt" | "vtt" | "ass" | "ssa" | "lrc";
 
 /**
+ * Loudnorm presets matching Rust `LoudnormPreset` (#[serde(rename_all = "lowercase")]).
+ * `scripts/check-ts-enum-drift.sh` fails the build if this union and the enum diverge.
+ */
+export type LoudnormPreset = "broadcast" | "streaming" | "loud";
+
+/**
  * Frontend-supplied download options.
  *
  * Uses camelCase because the Rust struct has #[serde(rename_all = "camelCase")].
@@ -310,7 +316,7 @@ export interface DownloadOptions {
     recodeVideo: ContainerFormat | null;
     normalizeAudio: boolean | null;
     loudnorm: boolean | null;
-    loudnormPreset: string | null;
+    loudnormPreset: LoudnormPreset | null;
     loudnormTargetI: number | null;
     loudnormTargetTp: number | null;
     loudnormTargetLra: number | null;
@@ -452,7 +458,7 @@ export interface AppSettings {
     normalize_audio: boolean;
     audio_gain_target: number | null;
     loudnorm: boolean;
-    loudnorm_preset: string | null;
+    loudnorm_preset: LoudnormPreset | null;
     loudnorm_target_i: number | null;
     loudnorm_target_tp: number | null;
     loudnorm_target_lra: number | null;
@@ -478,7 +484,7 @@ export interface AppSettings {
  * The resolved network/download settings the engine actually runs with when
  * an `AppSettings` field is `null` (inherit). Mirrors
  * `rdlp_types::EffectiveNetwork` field-for-field (snake_case — default serde);
- * `scripts/check-effective-network-drift.sh` fails the build if the two key
+ * `scripts/check-effective-config-drift.sh` fails the build if the two key
  * sets diverge.
  *
  * Served by the `effective_network` command. The Settings UI derives every
@@ -498,6 +504,32 @@ export interface EffectiveNetwork {
     /** Bytes. */
     parallel_threshold: number;
     hls_head_probe_timeout_secs: number;
+}
+
+/**
+ * The resolved normalization settings for a given preset, as the engine
+ * runs them when an `AppSettings` target field is `null` (inherit). Mirrors
+ * `rdlp_types::EffectiveNormalize` field-for-field (snake_case — default
+ * serde); `scripts/check-effective-config-drift.sh` fails the build if the
+ * two key sets diverge.
+ *
+ * Served by the `effective_normalize` command, keyed by the draft's preset:
+ * the I/TP/LRA values are preset-dependent, which is why the Settings UI
+ * cannot hold one copy of them (#611).
+ */
+export interface EffectiveNormalize {
+    /** The preset in force — the draft's, or the one the base config resolved to. */
+    preset: LoudnormPreset;
+    /** LUFS. */
+    target_i: number;
+    /** dBTP. */
+    target_tp: number;
+    /** LU. */
+    target_lra: number;
+    /** dBFS, peak mode. */
+    peak_target_db: number;
+    /** dB, limiter-boost fallback. */
+    boost_gain_db: number;
 }
 
 // ========== Error Types ==========
