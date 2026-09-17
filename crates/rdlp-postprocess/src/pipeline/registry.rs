@@ -15,7 +15,7 @@
 //! ```
 //!
 //! `cleanup_stale()` tries a non-blocking exclusive lock on the sidecar
-//! ([`try_lock_exclusive`]). If the lock is already held, the temp is still
+//! (`try_lock_exclusive`). If the lock is already held, the temp is still
 //! live in another rdlp process and is left alone. If the lock is acquired,
 //! the owner has crashed and the temp is safe to delete.
 //!
@@ -433,7 +433,7 @@ impl TempRegistry {
     ///
     /// A file is considered stale (and safe to delete) when:
     /// 1. It matches the `*.rdlp-tmp-*` naming pattern, AND
-    /// 2. Its `.lock` sidecar is either absent OR [`try_lock_exclusive`]
+    /// 2. Its `.lock` sidecar is either absent OR `try_lock_exclusive`
     ///    acquires it (meaning no process holds it).
     ///
     /// If the lock is held elsewhere, the temp is in active
