@@ -388,7 +388,7 @@ fn registry_blocks(ip: Ipv4Addr) -> bool {
 ///
 /// Five `std` predicates decide the prefix families; three of them replaced
 /// hand-rolled equivalents (`is_unique_local` and `is_unicast_link_local` are
-/// stable since 1.84, below this crate's 1.88 MSRV, and `is_multicast` was
+/// stable since 1.84, below the workspace MSRV, and `is_multicast` was
 /// always available). `is_loopback` and `is_unspecified` were already `std`.
 /// The tunnel prefixes reached through `embedded_ipv4s` are still matched by
 /// hand, because `std` has no notion of them.

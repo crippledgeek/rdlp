@@ -6,15 +6,17 @@
 //! curl's `#HttpOnly_` line marker) into a [`CookieStore`].
 //!
 //! Parsing is delegated to [`netscape_cookie_file_parser`], which follows the
-//! yt-dlp / `http.cookiejar.MozillaCookieJar` reference semantics: exactly
-//! seven fields, a decimal `expiry`, `#HttpOnly_` as cookie metadata rather
-//! than a comment, and raw bytes throughout so one non-UTF-8 line cannot
-//! abort the whole file.
+//! yt-dlp / `http.cookiejar.MozillaCookieJar` reference semantics: seven
+//! fields (curl's legacy six-field and missing-path records are normalised
+//! to seven), a decimal `expiry`, no control octets in name or value,
+//! `#HttpOnly_` as cookie metadata rather than a comment, one leading dot
+//! stripped from the domain (RFC 6265 §5.2.3 ignores it anyway), and raw
+//! bytes throughout so one non-UTF-8 line cannot abort the whole file.
 
 use std::path::Path;
 
 use log::trace;
-use netscape_cookie_file_parser::{Cookie, NetscapeCookieParser, ParseErrorKind};
+use netscape_cookie_file_parser::{Cookie, NetscapeCookieParser};
 use wreq::cookie::CookieStore;
 
 use crate::util;
@@ -36,7 +38,9 @@ pub(crate) fn load_cookie_file(
 /// Parse cookie file content and insert into jar.
 ///
 /// Malformed records are skipped (logged at `trace` by line number only —
-/// the line holds cookie values). Returns the number of cookies loaded.
+/// the line holds cookie values). Reading from `&[u8]` cannot fail, so every
+/// error the parser yields here is a malformed record, never I/O. Returns the
+/// number of cookies loaded.
 fn load_cookies(content: &[u8], jar: &impl CookieStore) -> usize {
     let mut count = 0;
 
@@ -45,9 +49,6 @@ fn load_cookies(content: &[u8], jar: &impl CookieStore) -> usize {
             Ok(cookie) => cookie,
             Err(e) => {
                 trace!("Skipping malformed cookie line {}: {:?}", e.line, e.kind);
-                // A `&[u8]` reader cannot fail, so this is the only `Io` this
-                // loop can see; nothing to abort.
-                debug_assert!(!matches!(e.kind, ParseErrorKind::Io(_)));
                 continue;
             }
         };

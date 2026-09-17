@@ -267,6 +267,19 @@ fn parse_loudnorm_json_rejects_a_non_numeric_value() {
 }
 
 #[test]
+fn parse_loudnorm_json_reports_the_real_blocks_error_not_a_later_stray_brace() {
+    let lines = vec![
+        "{ \"input_i\" : \"-24.50\", \"input_tp\" : \"-3.20\", \"input_lra\" : \"8.30\", \
+         \"input_thresh\" : \"-35.10\" }\n"
+            .to_string(),
+        "[out @ 0x3] flushing {buffered}\n".to_string(),
+    ];
+
+    let err = parse_loudnorm_json(&lines).expect_err("target_offset is missing");
+    assert!(err.to_string().contains("target_offset"), "{err}");
+}
+
+#[test]
 fn parse_loudnorm_json_accepts_the_inf_ffmpeg_prints_for_silence() {
     // ebur128 reports -HUGE_VAL for silent input and the peak is
     // 20*log10(0); vsnprintf("%.2f") renders both as `-inf`.

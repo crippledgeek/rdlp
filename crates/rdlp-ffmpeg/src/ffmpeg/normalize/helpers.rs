@@ -173,7 +173,7 @@ impl From<LoudnormJson> for LoudnormMeasurements {
 /// Deserialize `FFmpeg`'s string-encoded `"%.2f"` number as an `f64` (see
 /// [`LoudnormJson`] for the exact text `FFmpeg` produces).
 fn f64_from_str<'de, D: Deserializer<'de>>(deserializer: D) -> std::result::Result<f64, D::Error> {
-    let s = <&str>::deserialize(deserializer)?;
+    let s = String::deserialize(deserializer)?;
     s.parse()
         .map_err(|e| serde::de::Error::custom(format!("{s:?} is not a loudnorm number: {e}")))
 }
@@ -183,21 +183,28 @@ fn f64_from_str<'de, D: Deserializer<'de>>(deserializer: D) -> std::result::Resu
 /// The capture holds every line `FFmpeg` logged while the graph was alive, so
 /// the block is embedded in unrelated text. Each `{` is offered to
 /// `serde_json` as a candidate start; the deserializer stops at the end of
-/// the object and ignores what follows, so no brace matching is needed. The
-/// error of the last candidate is reported when none parses — for a block
-/// with a missing or malformed member that is serde's own message naming it.
+/// the object and ignores what follows, so no brace matching is needed. When
+/// none parses, the error that got furthest into its candidate is reported:
+/// a stray `{` in an unrelated line fails on its first token, whereas the
+/// real block with a missing or malformed member fails deep inside it, so
+/// serde's own message naming that member is the one surfaced.
 pub(super) fn parse_loudnorm_json(lines: &[String]) -> Result<LoudnormMeasurements> {
     let full_text = lines.concat();
-    let mut last_err = None;
+    let mut deepest_err: Option<serde_json::Error> = None;
     for (pos, _) in full_text.match_indices('{') {
         let mut de = serde_json::Deserializer::from_str(full_text.get(pos..).unwrap_or_default());
         match LoudnormJson::deserialize(&mut de) {
             Ok(j) => return Ok(j.into()),
-            Err(e) => last_err = Some(e),
+            Err(e) => {
+                let depth = |e: &serde_json::Error| (e.line(), e.column());
+                if deepest_err.as_ref().is_none_or(|d| depth(&e) > depth(d)) {
+                    deepest_err = Some(e);
+                }
+            }
         }
     }
     Err(PostProcessError::NormalizationFailed {
-        message: last_err.map_or_else(
+        message: deepest_err.map_or_else(
             || "no JSON block in loudnorm output".to_owned(),
             |e| format!("malformed loudnorm JSON: {e}"),
         ),

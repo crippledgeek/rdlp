@@ -461,9 +461,9 @@ impl TempRegistry {
                             // so the OS can clean up the lock state. Named
                             // through the fs4 trait, not `f.unlock()`: std grew
                             // an inherent `File::unlock` in 1.89 that shadows
-                            // the trait method on newer toolchains, so the bare
-                            // call resolves to an API above the 1.88 floor
-                            // (`clippy::incompatible_msrv`).
+                            // the trait method; naming the trait keeps the call
+                            // on fs4 for every toolchain the workspace floor
+                            // admits instead of flipping with the compiler.
                             let _ = FileExt::unlock(&f);
                             false // not held by another process
                         }
