@@ -11,7 +11,9 @@ use rdlp_plugin::PluginError;
 use rdlp_plugin::manifest::{Manifest, validate_plugin_name};
 use rdlp_plugin::trust_store::{IdentityCheck, TrustStore};
 use rdlp_types::Config;
-use std::path::{Path, PathBuf};
+use serde::Serialize;
+use std::fmt::Write as _;
+use std::path::PathBuf;
 
 /// Reject path-traversing or otherwise unsafe plugin names BEFORE any
 /// `dir.join(name)` / `remove_dir_all` operation. Gives the user a clear
@@ -68,61 +70,201 @@ enum Hint {
     SeeInfo,
 }
 
-/// One line for the trust column: the binary's verdict (read under the
-/// size cap, signature verified), then the recorded identity checked
-/// against the one the manifest presents (`identity`), with the way
-/// forward. A binary the loader would refuse gets no trust hint.
-fn trust_state(
-    verified: Result<&IdentityCheck, &PluginError>,
-    name: &str,
-    identity: &str,
-    hint: Hint,
-) -> String {
-    match verified {
-        Err(e @ PluginError::SignatureInvalid { .. }) => {
-            format!("SIGNATURE INVALID — {e}; not loaded whatever the trust state")
+/// The binary's verdict (read under the size cap, signature verified),
+/// then the recorded identity checked against the one the manifest
+/// presents. What `--json` emits under `trust`, tagged by `state`.
+#[derive(Debug, Serialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+enum TrustVerdict {
+    /// Recorded identity matches the manifest's.
+    Trusted,
+    /// No entry for this plugin name yet.
+    Untrusted,
+    /// An entry exists under another identity.
+    IdentityChanged {
+        /// The identity on file.
+        recorded: String,
+    },
+    /// The signature over `plugin.wasm` does not verify.
+    SignatureInvalid {
+        /// The verifier's reason.
+        reason: String,
+    },
+    /// The binary could not be read under the cap.
+    NotLoaded {
+        /// The loader's reason.
+        reason: String,
+    },
+}
+
+impl TrustVerdict {
+    fn of(verified: Result<IdentityCheck, PluginError>) -> Self {
+        match verified {
+            Ok(IdentityCheck::Match) => Self::Trusted,
+            Ok(IdentityCheck::NewName) => Self::Untrusted,
+            Ok(IdentityCheck::Mismatch { recorded, .. }) => Self::IdentityChanged { recorded },
+            Err(e @ PluginError::SignatureInvalid { .. }) => Self::SignatureInvalid {
+                reason: e.to_string(),
+            },
+            Err(e) => Self::NotLoaded {
+                reason: e.to_string(),
+            },
         }
-        Err(e) => format!("NOT LOADED — {e}"),
-        Ok(IdentityCheck::Match) => "TRUSTED".into(),
-        Ok(IdentityCheck::NewName) => match hint {
-            Hint::Inline => format!("UNTRUSTED — {}", trust_hint(identity)),
-            Hint::SeeInfo => format!("UNTRUSTED (see `rdlp plugin info {name}`)"),
-        },
-        Ok(IdentityCheck::Mismatch { recorded, .. }) => format!(
-            "IDENTITY CHANGED — recorded {recorded}; after verifying the publisher, \
-             run `rdlp plugin retrust {name}`"
-        ),
     }
 }
 
-/// The manifest's own publisher identity, and its trust state in `trust`
-/// after the same signature check the loader performs over
-/// `<plugin_dir>/plugin.wasm`.
-fn identity_and_state(
-    m: &Manifest,
-    plugin_dir: &Path,
-    trust: &TrustStore,
-    hint: Hint,
-) -> (String, String) {
-    let identity = m.signature.identity_string();
-    let verified = rdlp_plugin::signature::verify_file(m, &plugin_dir.join("plugin.wasm"));
-    let check = trust.check_identity_match(&m.name, &identity);
-    let state = trust_state(verified.as_ref().map(|_| &check), &m.name, &identity, hint);
-    (identity, state)
+/// One line for the trust column, with the way forward. A binary the
+/// loader would refuse gets no trust hint.
+fn trust_state(verdict: &TrustVerdict, name: &str, identity: &str, hint: Hint) -> String {
+    match verdict {
+        TrustVerdict::Trusted => "TRUSTED".into(),
+        TrustVerdict::Untrusted => match hint {
+            Hint::Inline => format!("UNTRUSTED — {}", trust_hint(identity)),
+            Hint::SeeInfo => format!("UNTRUSTED (see `rdlp plugin info {name}`)"),
+        },
+        TrustVerdict::IdentityChanged { recorded } => format!(
+            "IDENTITY CHANGED — recorded {recorded}; after verifying the publisher, \
+             run `rdlp plugin retrust {name}`"
+        ),
+        TrustVerdict::SignatureInvalid { reason } => {
+            format!("SIGNATURE INVALID — {reason}; not loaded whatever the trust state")
+        }
+        TrustVerdict::NotLoaded { reason } => format!("NOT LOADED — {reason}"),
+    }
 }
 
-/// `rdlp plugin list` — list all installed plugins with their trust state.
+/// Everything `plugin list` / `plugin info` report about one installed
+/// plugin — the text renderings and `--json` are views of this. Fields are
+/// only ever added, so a script may depend on the ones it reads.
+#[derive(Debug, Serialize)]
+struct PluginReport {
+    name: String,
+    version: String,
+    wit_version: String,
+    priority: u32,
+    matches: Vec<String>,
+    claims_override: Vec<String>,
+    capabilities: Vec<String>,
+    /// `Signature::identity_string()` — the `--trust-publisher` value.
+    identity: String,
+    trust: TrustVerdict,
+    /// From the trust entry, when there is one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approved_capabilities: Option<Vec<String>>,
+    origin: PathBuf,
+}
+
+impl PluginReport {
+    /// The report for the manifest `m` installed at `plugin_dir`, after
+    /// the same signature check the loader performs over its `plugin.wasm`.
+    fn of(m: Manifest, plugin_dir: PathBuf, trust: &TrustStore) -> Self {
+        let identity = m.signature.identity_string();
+        let verified = rdlp_plugin::signature::verify_file(&m, &plugin_dir.join("plugin.wasm"))
+            .map(|_| trust.check_identity_match(&m.name, &identity));
+        let approved_capabilities = trust
+            .lookup(&m.name)
+            .map(|e| e.approved_capabilities.iter().cloned().collect());
+        Self {
+            name: m.name,
+            version: m.version,
+            wit_version: m.wit_version,
+            priority: m.priority,
+            matches: m.matches,
+            claims_override: m.claims_override,
+            capabilities: m.capabilities,
+            identity,
+            trust: TrustVerdict::of(verified),
+            approved_capabilities,
+            origin: plugin_dir,
+        }
+    }
+
+    /// The `plugin list` line.
+    fn line(&self) -> String {
+        format!(
+            "{}  v{}  identity={}  caps=[{}]  {}",
+            self.name,
+            self.version,
+            self.identity,
+            self.capabilities.join(", "),
+            trust_state(&self.trust, &self.name, &self.identity, Hint::SeeInfo)
+        )
+    }
+
+    /// The `plugin info` block: the report's own serialisation, one
+    /// labelled line (or bullet list) per field in [`LABELS`] order.
+    fn block(&self) -> String {
+        let mut out = String::new();
+        let Ok(serde_json::Value::Object(fields)) = serde_json::to_value(self) else {
+            unreachable!("PluginReport serialises to an object")
+        };
+        for (key, label) in LABELS {
+            // Writing to a String cannot fail; the results are discarded as such.
+            match fields.get(*key) {
+                None => {}
+                Some(serde_json::Value::Array(items)) => {
+                    if items.is_empty() {
+                        continue;
+                    }
+                    let _ = writeln!(out, "{label}:");
+                    for item in items {
+                        let _ = writeln!(out, "  - {}", scalar(item));
+                    }
+                }
+                Some(serde_json::Value::Object(_)) => {
+                    let _ = writeln!(
+                        out,
+                        "{label}: {}",
+                        trust_state(&self.trust, &self.name, &self.identity, Hint::Inline)
+                    );
+                }
+                Some(value) => {
+                    let _ = writeln!(out, "{label}: {}", scalar(value));
+                }
+            }
+        }
+        out
+    }
+}
+
+/// The `plugin info` label for each serialised [`PluginReport`] field, in
+/// the order the block prints them. Every field must appear here — a
+/// test fails otherwise — so a field added to the report reaches the text
+/// rendering as well as `--json`.
+const LABELS: &[(&str, &str)] = &[
+    ("name", "Plugin"),
+    ("version", "Version"),
+    ("wit_version", "WIT version"),
+    ("priority", "Priority"),
+    ("matches", "Match patterns"),
+    ("claims_override", "Claims override"),
+    ("capabilities", "Capabilities"),
+    ("identity", "Identity"),
+    ("trust", "Trust state"),
+    ("approved_capabilities", "Approved capabilities"),
+    ("origin", "Origin"),
+];
+
+/// A JSON scalar as the block prints it: strings bare, the rest as JSON.
+fn scalar(value: &serde_json::Value) -> String {
+    value
+        .as_str()
+        .map_or_else(|| value.to_string(), str::to_owned)
+}
+
+/// `rdlp plugin list` — list all installed plugins with their trust state;
+/// `--json` prints one array of the objects `plugin info --json` prints.
 ///
 /// # Errors
 ///
 /// Returns an error if the trust store cannot be opened.
-pub fn run_list(config: &Config) -> Result<()> {
+pub fn run_list(config: &Config, json: bool) -> Result<()> {
     let trust = TrustStore::open(trust_store_path()?)?;
-    if config.plugin_directories.is_empty() {
+    if config.plugin_directories.is_empty() && !json {
         println!("(no plugin directories configured; set Config::plugin_directories)");
         return Ok(());
     }
-    let mut found = 0usize;
+    let mut reports = Vec::new();
     for dir in &config.plugin_directories {
         #[allow(clippy::disallowed_methods)] // startup/CLI commands — sync I/O is acceptable
         let Ok(entries) = std::fs::read_dir(dir) else {
@@ -130,74 +272,51 @@ pub fn run_list(config: &Config) -> Result<()> {
         };
         for entry in entries.flatten() {
             let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
             let manifest_path = path.join("plugin.toml");
-            if !manifest_path.exists() {
+            if !path.is_dir() || !manifest_path.exists() {
                 continue;
             }
             match rdlp_plugin::manifest::parse_manifest_file(&manifest_path) {
-                Ok(m) => {
-                    found += 1;
-                    let (identity, state) = identity_and_state(&m, &path, &trust, Hint::SeeInfo);
-                    println!(
-                        "{}  v{}  identity={identity}  caps=[{}]  {state}",
-                        m.name,
-                        m.version,
-                        m.capabilities.join(", ")
-                    );
-                }
-                Err(e) => {
-                    println!("{}  ERROR: {e}", path.display());
-                }
+                Ok(m) => reports.push(PluginReport::of(m, path, &trust)),
+                // Not a plugin the host could load either; kept off stdout in
+                // JSON mode so the array stays one shape.
+                Err(e) => eprintln!("{}  ERROR: {e}", path.display()),
             }
         }
     }
-    if found == 0 {
+    if json {
+        println!("{}", serde_json::to_string_pretty(&reports)?);
+    } else if reports.is_empty() {
         println!("(no plugins installed)");
+    } else {
+        for r in &reports {
+            println!("{}", r.line());
+        }
     }
     Ok(())
 }
 
-/// `rdlp plugin info <name>` — show detailed info for a specific plugin.
+/// `rdlp plugin info <name>` — show detailed info for a specific plugin;
+/// `--json` prints the same as one object.
 ///
 /// # Errors
 ///
-/// Returns an error if the plugin name is invalid or the manifest cannot be parsed.
-pub fn run_info(name: &str, config: &Config) -> Result<()> {
+/// Returns an error if the plugin name is invalid, the plugin is not
+/// installed, or the manifest cannot be parsed.
+pub fn run_info(name: &str, config: &Config, json: bool) -> Result<()> {
     require_valid_name(name)?;
-    if let Some(plugin_dir) = installed_plugin_dir(name, config) {
-        let m = rdlp_plugin::manifest::parse_manifest_file(&plugin_dir.join("plugin.toml"))?;
-        let trust = TrustStore::open(trust_store_path()?)?;
-        let trust_entry = trust.lookup(name);
-
-        println!("Plugin: {}", m.name);
-        println!("Version: {}", m.version);
-        println!("WIT version: {}", m.wit_version);
-        println!("Priority: {}", m.priority);
-        println!("Match patterns:");
-        for p in &m.matches {
-            println!("  - {p}");
-        }
-        if !m.claims_override.is_empty() {
-            println!("Claims override:");
-            for h in &m.claims_override {
-                println!("  - {h}");
-            }
-        }
-        println!("Capabilities: {}", m.capabilities.join(", "));
-        let (identity, state) = identity_and_state(&m, &plugin_dir, &trust, Hint::Inline);
-        println!("Identity: {identity}");
-        println!("Trust state: {state}");
-        if let Some(e) = trust_entry {
-            let caps: Vec<_> = e.approved_capabilities.iter().cloned().collect();
-            println!("Approved capabilities: {}", caps.join(", "));
-        }
-        println!("Origin: {}", plugin_dir.display());
-        return Ok(());
+    let plugin_dir = installed_plugin_dir(name, config).ok_or_else(|| {
+        anyhow::anyhow!("plugin '{name}' not found in any configured plugin directory")
+    })?;
+    let m = rdlp_plugin::manifest::parse_manifest_file(&plugin_dir.join("plugin.toml"))?;
+    let trust = TrustStore::open(trust_store_path()?)?;
+    let report = PluginReport::of(m, plugin_dir, &trust);
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        print!("{}", report.block());
     }
-    anyhow::bail!("plugin '{name}' not found in any configured plugin directory")
+    Ok(())
 }
 
 /// The directory of the installed plugin `name`: the first configured
@@ -362,6 +481,107 @@ fn write_disabled(path: &PathBuf, list: &[String]) -> Result<()> {
 mod tests {
     use super::*;
     use rdlp_plugin::trust_store::IdentityCheck;
+    use serde_json::json;
+
+    /// The `--json` trust object is tagged by `state` so a script can
+    /// switch on one string; the extra field per state is named.
+    #[test]
+    fn trust_verdict_serialises_as_a_state_tagged_object() {
+        assert_eq!(
+            serde_json::to_value(TrustVerdict::Trusted).unwrap(),
+            json!({"state": "trusted"})
+        );
+        assert_eq!(
+            serde_json::to_value(TrustVerdict::IdentityChanged {
+                recorded: "ed25519:0000".into()
+            })
+            .unwrap(),
+            json!({"state": "identity_changed", "recorded": "ed25519:0000"})
+        );
+        assert_eq!(
+            serde_json::to_value(TrustVerdict::SignatureInvalid {
+                reason: "bad".into()
+            })
+            .unwrap(),
+            json!({"state": "signature_invalid", "reason": "bad"})
+        );
+    }
+
+    fn report() -> PluginReport {
+        PluginReport {
+            name: "foo".into(),
+            version: "0.1.0".into(),
+            wit_version: "0.5.2".into(),
+            priority: 150,
+            matches: vec!["*://*.foo.test/*".into()],
+            claims_override: vec![],
+            capabilities: vec!["fetch".into(), "log".into()],
+            identity: ID.into(),
+            trust: TrustVerdict::Untrusted,
+            approved_capabilities: None,
+            origin: "/p/foo".into(),
+        }
+    }
+
+    /// The text block is rendered from the same serialisation `--json`
+    /// prints, through the label table: a field added to the report must
+    /// be labelled, and then appears in both renderings.
+    #[test]
+    fn every_serialised_report_field_has_a_text_label() {
+        let v = serde_json::to_value(report()).unwrap();
+        let keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
+        let unlabelled: Vec<&str> = keys
+            .iter()
+            .copied()
+            .filter(|k| !LABELS.iter().any(|(key, _)| key == k))
+            .collect();
+        assert!(unlabelled.is_empty(), "add these to LABELS: {unlabelled:?}");
+    }
+
+    #[test]
+    fn block_renders_the_labelled_fields_in_table_order() {
+        let block = report().block();
+        let lines: Vec<&str> = block.lines().collect();
+        assert_eq!(lines.first(), Some(&"Plugin: foo"));
+        assert!(lines.contains(&"Match patterns:"), "{block}");
+        assert!(lines.contains(&"  - *://*.foo.test/*"), "{block}");
+        assert!(
+            !block.contains("Claims override"),
+            "empty lists are omitted: {block}"
+        );
+        assert!(block.contains(&format!("Identity: {ID}")), "{block}");
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("Trust state: UNTRUSTED")),
+            "{block}"
+        );
+        assert_eq!(lines.last(), Some(&"Origin: /p/foo"));
+    }
+
+    /// The report a script depends on carries the identity verbatim and
+    /// the trust verdict as an object; it never carries the human hint.
+    #[test]
+    fn plugin_report_json_carries_identity_and_structured_trust() {
+        let report = PluginReport {
+            name: "foo".into(),
+            version: "0.1.0".into(),
+            wit_version: "0.5.2".into(),
+            priority: 150,
+            matches: vec!["*://*.foo.test/*".into()],
+            claims_override: vec![],
+            capabilities: vec!["fetch".into(), "log".into()],
+            identity: ID.into(),
+            trust: TrustVerdict::Untrusted,
+            approved_capabilities: None,
+            origin: "/p/foo".into(),
+        };
+        let v = serde_json::to_value(&report).unwrap();
+        assert_eq!(v.get("identity"), Some(&json!(ID)));
+        assert_eq!(v.pointer("/trust/state"), Some(&json!("untrusted")));
+        assert_eq!(v.get("capabilities"), Some(&json!(["fetch", "log"])));
+        assert!(!v.to_string().contains("--trust-publisher"));
+    }
 
     const ID: &str = "ed25519:838282c38f97f6b28c8a8d9a272a415f9f7c2db422d6435d8e8dd7865df8e523";
 
@@ -378,7 +598,7 @@ mod tests {
 
     #[test]
     fn trust_state_of_a_new_name_is_untrusted_with_the_hint() {
-        let line = trust_state(Ok(&IdentityCheck::NewName), "foo", ID, Hint::Inline);
+        let line = trust_state(&TrustVerdict::Untrusted, "foo", ID, Hint::Inline);
         assert!(line.starts_with("UNTRUSTED"), "{line}");
         assert!(line.contains("--trust-publisher"), "{line}");
         assert!(line.contains(ID), "the identity reaches the line: {line}");
@@ -388,7 +608,7 @@ mod tests {
     /// at `info` instead of repeating 64 hex characters inside a hint.
     #[test]
     fn trust_state_for_list_points_at_info_instead_of_repeating_the_identity() {
-        let line = trust_state(Ok(&IdentityCheck::NewName), "foo", ID, Hint::SeeInfo);
+        let line = trust_state(&TrustVerdict::Untrusted, "foo", ID, Hint::SeeInfo);
         assert_eq!(line, "UNTRUSTED (see `rdlp plugin info foo`)");
     }
 
@@ -397,10 +617,10 @@ mod tests {
     #[test]
     fn trust_state_of_an_invalid_signature_names_it_and_gives_no_trust_hint() {
         let line = trust_state(
-            Err(&rdlp_plugin::PluginError::SignatureInvalid {
+            &TrustVerdict::of(Err(PluginError::SignatureInvalid {
                 plugin: "foo".into(),
                 reason: "bad sig".into(),
-            }),
+            })),
             "foo",
             ID,
             Hint::Inline,
@@ -416,11 +636,11 @@ mod tests {
     #[test]
     fn trust_state_of_a_size_refusal_is_not_loaded_not_signature_invalid() {
         let line = trust_state(
-            Err(&rdlp_plugin::PluginError::WasmTooLarge {
+            &TrustVerdict::of(Err(PluginError::WasmTooLarge {
                 path: "/p/plugin.wasm".into(),
                 bytes: 1,
                 max: 0,
-            }),
+            })),
             "foo",
             ID,
             Hint::Inline,
@@ -433,7 +653,7 @@ mod tests {
     #[test]
     fn trust_state_of_a_match_is_trusted() {
         assert_eq!(
-            trust_state(Ok(&IdentityCheck::Match), "foo", ID, Hint::Inline),
+            trust_state(&TrustVerdict::Trusted, "foo", ID, Hint::Inline),
             "TRUSTED"
         );
     }
@@ -443,10 +663,10 @@ mod tests {
     #[test]
     fn trust_state_of_a_mismatch_names_the_recorded_identity_and_retrust() {
         let line = trust_state(
-            Ok(&IdentityCheck::Mismatch {
+            &TrustVerdict::of(Ok(IdentityCheck::Mismatch {
                 recorded: "ed25519:0000".into(),
                 presented: ID.into(),
-            }),
+            })),
             "foo",
             ID,
             Hint::Inline,

@@ -135,3 +135,64 @@ fn run_disable_rejects_invalid_name() {
         }
     });
 }
+
+/// `plugin info --json` is the contract a script or harness reads the
+/// publisher identity from; `plugin list --json` is one array of the same
+/// objects. Both are checked through `serde_json`, against the identity
+/// the host computes for the signed plugin on disk.
+#[test]
+fn plugin_info_and_list_json_report_the_identity_the_host_computes() {
+    use rdlp_plugin::test_support::{SignedPluginSpec, write_signed_plugin_fresh_key};
+
+    with_isolated_xdg(|tmpdir| {
+        let plugins = tmpdir.join("plugins");
+        let identity = write_signed_plugin_fresh_key(
+            &plugins.join("foo"),
+            &SignedPluginSpec {
+                capabilities: &["log"],
+                ..SignedPluginSpec::stub("foo", b"\0asm not a component, never compiled")
+            },
+        );
+        let config = tmpdir.join("rdlp.toml");
+        std::fs::write(
+            &config,
+            format!("plugin_directories = [{:?}]\n", plugins.to_str().unwrap()),
+        )
+        .unwrap();
+        let rdlp = |args: &[&str]| {
+            let out = std::process::Command::new(env!("CARGO_BIN_EXE_rdlp"))
+                .arg("--config-location")
+                .arg(&config)
+                .args(args)
+                .output()
+                .expect("spawn rdlp");
+            assert!(
+                out.status.success(),
+                "{}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            serde_json::from_slice::<serde_json::Value>(&out.stdout).expect("stdout is JSON")
+        };
+
+        let info = rdlp(&["plugin", "info", "foo", "--json"]);
+        assert_eq!(info.get("identity"), Some(&serde_json::json!(identity)));
+        assert_eq!(
+            info.pointer("/trust/state"),
+            Some(&serde_json::json!("untrusted"))
+        );
+        assert_eq!(info.get("capabilities"), Some(&serde_json::json!(["log"])));
+
+        let list = rdlp(&["plugin", "list", "--json"]);
+        let names: Vec<&str> = list
+            .as_array()
+            .expect("an array")
+            .iter()
+            .filter_map(|p| p.get("name").and_then(serde_json::Value::as_str))
+            .collect();
+        assert_eq!(names, ["foo"]);
+        assert_eq!(
+            list.pointer("/0/identity"),
+            Some(&serde_json::json!(identity))
+        );
+    });
+}

@@ -53,6 +53,9 @@ wiremock = "0.6"
 async-trait = { workspace = true }
 regex = { workspace = true }
 rdlp-plugin-manifest = { path = "../rdlp-plugin-manifest" }
+# `test_support::write_signed_plugin_fresh_key` — a signed plugin on disk
+# for the `plugin info --json` / `plugin list --json` contract tests.
+rdlp-plugin = { path = "../rdlp-plugin", features = ["test-support"] }
 testing_logger = "0.1.1"
 
 # `indexing_slicing`, `pedantic`, and `nursery` are applied binary-only

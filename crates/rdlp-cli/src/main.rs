@@ -157,8 +157,8 @@ async fn async_main(exit_signal: Arc<AtomicU8>) -> Result<()> {
     // Plugin management subcommands — handle before any download logic.
     if let Some(PluginSubcommand::Plugin(plugin_args)) = args.plugin {
         match plugin_args.cmd {
-            PluginCmd::List => plugin_cmd::run_list(&config)?,
-            PluginCmd::Info { name } => plugin_cmd::run_info(&name, &config)?,
+            PluginCmd::List { json } => plugin_cmd::run_list(&config, json)?,
+            PluginCmd::Info { name, json } => plugin_cmd::run_info(&name, &config, json)?,
             PluginCmd::Retrust { name } => plugin_cmd::run_retrust(&name, &config)?,
             PluginCmd::Disable { name } => plugin_cmd::run_disable(&name)?,
             PluginCmd::Enable { name } => plugin_cmd::run_enable(&name)?,
