@@ -316,7 +316,7 @@ impl FFmpegRunner {
             ost_time_base.denominator(),
         );
 
-        let log_suppress = LogSuppressGuard::error_level();
+        let log_suppress = LogSuppressGuard::at(ffmpeg_the_third::log::Level::Error);
 
         // Compute the starting sample offset from the input's format-level
         // start_time.  When the source has a non-zero start (e.g. HLS downloads

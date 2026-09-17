@@ -96,7 +96,7 @@ pub(super) fn run_analysis_decode_loop(
 
     // Suppress FFmpeg's C-level decoder error spam during decode loop —
     // we handle errors at the Rust level with rate-limited warnings.
-    let _log_suppress = LogSuppressGuard::new();
+    let _log_suppress = LogSuppressGuard::at(ffmpeg_the_third::log::Level::Fatal);
 
     for result in ictx.packets() {
         crate::ffmpeg::transcode::check_cancelled(cancel)?;

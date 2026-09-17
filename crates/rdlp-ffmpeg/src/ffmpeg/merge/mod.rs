@@ -94,7 +94,7 @@ impl FFmpegRunner {
 
         // Suppress FFmpeg's internal muxer trace/debug spam (e.g. matroska "Writing block"
         // messages) while keeping actual errors visible.
-        let _log_suppress = LogSuppressGuard::error_level();
+        let _log_suppress = LogSuppressGuard::at(ffmpeg_the_third::log::Level::Error);
 
         // MKV: use raw FFI with proper stream property copying for VLC compatibility.
         // The key is copying avg_frame_rate which sets Matroska's "Default duration" element.

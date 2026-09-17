@@ -84,7 +84,8 @@ impl FFmpegRunner {
 
         // FFmpeg's still-image decoders are chatty at info/warning level about
         // things like unsupported ICC profiles; we only care about hard failures.
-        let _suppress = super::super::log_capture::LogSuppressGuard::error_level();
+        let _suppress =
+            super::super::log_capture::LogSuppressGuard::at(ffmpeg_the_third::log::Level::Error);
 
         let mut ictx = ffmpeg_the_third::format::input(src)
             .map_err(PostProcessError::from)
