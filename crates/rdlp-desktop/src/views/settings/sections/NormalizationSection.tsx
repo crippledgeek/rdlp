@@ -14,21 +14,16 @@ import {
 } from "@/components/ui/select";
 import { ToggleButton } from "react-aria-components";
 import { cn } from "@/lib/utils";
-import type { AppSettings, EffectiveNormalize, LoudnormPreset } from "@/types";
+import type { AppSettings, EffectiveNormalize, LoudnormPreset, LoudnormPresetInfo } from "@/types";
 
 const NONE_KEY = "none";
 
-/** Every preset the engine knows, in the order the Select lists them. */
-const PRESETS: readonly { id: LoudnormPreset; label: string }[] = [
-    { id: "streaming", label: "Streaming" },
-    { id: "broadcast", label: "Broadcast" },
-    { id: "loud", label: "Loud" },
-];
-
-/** Title-case a wire preset for the inherit entry's label. */
-function presetLabel(preset: LoudnormPreset): string {
-    return PRESETS.find((p) => p.id === preset)?.label ?? preset;
-}
+/** Display name per wire preset — UI text, not a default value. */
+const PRESET_NAMES: Record<LoudnormPreset, string> = {
+    streaming: "Streaming",
+    broadcast: "Broadcast",
+    loud: "Loud",
+};
 
 interface Props {
     draft: AppSettings;
@@ -38,10 +33,15 @@ interface Props {
      * here derives from it; the section holds no copy of a default (#611).
      */
     effective: EffectiveNormalize;
+    /**
+     * Every preset with its targets (`loudnorm_presets`), in the engine's
+     * order. The picker's items and their `(−N LUFS)` labels derive from it.
+     */
+    presets: LoudnormPresetInfo[];
     onChange: (update: Partial<AppSettings>) => void;
 }
 
-export function NormalizationSection({ draft, effective, onChange }: Props) {
+export function NormalizationSection({ draft, effective, presets, onChange }: Props) {
     return (
         <section id="settings-normalization" aria-labelledby="settings-normalization-heading" className="settings-panel">
             <h3 id="settings-normalization-heading" className="settings-panel-title">
@@ -137,9 +137,11 @@ export function NormalizationSection({ draft, effective, onChange }: Props) {
                                         <SelectPopover>
                                             <SelectListBox>
                                                 {/* The inherit entry names the preset the engine resolved to, not a typed default. */}
-                                                <SelectItem id={NONE_KEY}>{`Default (${presetLabel(effective.preset)})`}</SelectItem>
-                                                {PRESETS.map(({ id, label }) => (
-                                                    <SelectItem key={id} id={id}>{label}</SelectItem>
+                                                <SelectItem id={NONE_KEY}>{`Default (${PRESET_NAMES[effective.preset]})`}</SelectItem>
+                                                {presets.map(({ preset, targets }) => (
+                                                    <SelectItem key={preset} id={preset}>
+                                                        {`${PRESET_NAMES[preset]} (${targets.integrated_lufs} LUFS)`}
+                                                    </SelectItem>
                                                 ))}
                                             </SelectListBox>
                                         </SelectPopover>

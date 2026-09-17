@@ -72,7 +72,7 @@ pub use format::{
     Codec, Format, FormatSelectError, FormatSelector, FormatSorter, Fragment, format_select,
 };
 pub use info_dict::{Chapter, InfoDict, Subtitle, Thumbnail};
-pub use loudnorm_preset::{LoudnormPreset, LoudnormTargets};
+pub use loudnorm_preset::{LoudnormPreset, LoudnormPresetInfo, LoudnormTargets};
 pub use media_name::{
     AudioCodecOrEncoderName, AudioEncoderName, CodecName, InvalidMediaName, Rfc6381Codec,
     VideoEncoderName,

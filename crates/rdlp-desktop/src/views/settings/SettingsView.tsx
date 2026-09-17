@@ -6,7 +6,7 @@ import { extractErrorMessage } from "@/api/invokeClient";
 import { useQuery } from "@tanstack/react-query";
 import { settingsQueryOptions, updateSettings } from "@/api/settings";
 import { builtinNetworkDefaultsQueryOptions, effectiveNetworkQueryOptions } from "@/api/effectiveNetwork";
-import { effectiveNormalizeQueryOptions } from "@/api/effectiveNormalize";
+import { effectiveNormalizeQueryOptions, loudnormPresetsQueryOptions } from "@/api/effectiveNormalize";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { GeneralSection } from "./sections/GeneralSection";
@@ -74,7 +74,10 @@ export function SettingsView() {
         effectiveNormalizeQueryOptions(draft?.loudnorm_preset ?? null),
     );
 
-    const loadError = settingsError ?? defaultsError ?? builtinError ?? normalizeError;
+    // The preset catalogue for the picker's per-item labels (#611).
+    const { data: presets, error: presetsError } = useQuery(loudnormPresetsQueryOptions());
+
+    const loadError = settingsError ?? defaultsError ?? builtinError ?? normalizeError ?? presetsError;
     if (loadError) {
         return (
             <div className="max-w-2xl mx-auto px-4 py-6">
@@ -87,7 +90,7 @@ export function SettingsView() {
         );
     }
 
-    if (!draft || !defaults || !builtin || !normalize) {
+    if (!draft || !defaults || !builtin || !normalize || !presets) {
         return (
             <div className="flex items-center justify-center h-full">
                 <p className="text-[13px] text-[var(--text-muted)] animate-pulse">Loading settings…</p>
@@ -130,7 +133,7 @@ export function SettingsView() {
                 <PostProcessSection draft={draft} onChange={handleChange} />
                 <DownloadSection draft={draft} defaults={defaults} onChange={handleChange} />
                 <SubtitlesSection draft={draft} onChange={handleChange} />
-                <NormalizationSection draft={draft} effective={normalize} onChange={handleChange} />
+                <NormalizationSection draft={draft} effective={normalize} presets={presets} onChange={handleChange} />
                 <NetworkSection draft={draft} defaults={defaults} builtin={builtin} onChange={handleChange} />
                 <SystemSection />
 

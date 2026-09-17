@@ -3,7 +3,7 @@
 
 import { describe, it, expect, vi } from "vitest";
 import { QueryClient, keepPreviousData } from "@tanstack/react-query";
-import { effectiveNormalizeQueryOptions } from "./effectiveNormalize";
+import { effectiveNormalizeQueryOptions, loudnormPresetsQueryOptions } from "./effectiveNormalize";
 import { queryKeys } from "../query/queryKeys";
 import { invokeTyped } from "./invokeClient";
 
@@ -33,5 +33,22 @@ describe("effectiveNormalizeQueryOptions", () => {
         invokeMock.mockResolvedValueOnce({});
         await new QueryClient().fetchQuery(effectiveNormalizeQueryOptions("broadcast"));
         expect(invokeMock).toHaveBeenCalledWith("effective_normalize", { preset: "broadcast" });
+    });
+});
+
+describe("loudnormPresetsQueryOptions", () => {
+    it("uses its own centralized query key", () => {
+        expect(loudnormPresetsQueryOptions().queryKey).toEqual(queryKeys.loudnormPresets());
+    });
+
+    it("never goes stale — compile-time constants", () => {
+        expect(loudnormPresetsQueryOptions().staleTime).toBe(Infinity);
+    });
+
+    it("invokes the loudnorm_presets command", async () => {
+        const invokeMock = vi.mocked(invokeTyped);
+        invokeMock.mockResolvedValueOnce([]);
+        await new QueryClient().fetchQuery(loudnormPresetsQueryOptions());
+        expect(invokeMock).toHaveBeenCalledWith("loudnorm_presets");
     });
 });

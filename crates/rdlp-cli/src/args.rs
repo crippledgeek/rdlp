@@ -103,7 +103,6 @@ fn video_encoder_name(value: &str) -> Result<rdlp_types::VideoEncoderName, Strin
 /// vocabulary is the type's to define, not the CLI's — after the same blank
 /// rejection every string-valued flag gets. A rejection renders as
 /// `unsupported loudnorm preset: <value>` under clap's usage line.
-///
 fn loudnorm_preset(value: &str) -> Result<LoudnormPreset, String> {
     reject_blank(value)?.parse().map_err(|e| format!("{e}"))
 }

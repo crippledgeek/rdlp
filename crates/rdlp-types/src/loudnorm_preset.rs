@@ -21,7 +21,7 @@ fn loudnorm_preset_parse_err(input: &str) -> ParseEnumError {
 /// A named struct rather than the `(f64, f64, f64)` tuple it replaces: three
 /// same-typed values in a fixed order are exactly the shape that lets a
 /// caller swap true-peak and loudness-range without a compile error.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
 pub struct LoudnormTargets {
     /// Integrated loudness target (`loudnorm=I=`), in LUFS.
     pub integrated_lufs: f64,
@@ -29,6 +29,20 @@ pub struct LoudnormTargets {
     pub true_peak_dbtp: f64,
     /// Loudness range target (`loudnorm=LRA=`), in LU.
     pub range_lu: f64,
+}
+
+/// One preset paired with its targets — the catalogue row a GUI renders as
+/// `"Broadcast (-23 LUFS)"`.
+///
+/// Served over IPC by the desktop's `loudnorm_presets` command from
+/// [`LoudnormPreset::describe_all`], so the per-item numbers in a preset
+/// picker come from the owner rather than a typed copy (#611).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct LoudnormPresetInfo {
+    /// The preset, in its lowercase wire spelling.
+    pub preset: LoudnormPreset,
+    /// Its I/TP/LRA targets.
+    pub targets: LoudnormTargets,
 }
 
 /// Loudnorm target presets for common delivery targets.
@@ -101,6 +115,15 @@ impl LoudnormPreset {
     /// to the `EnumIter` order by a test.
     pub const ALL: [Self; 3] = [Self::Broadcast, Self::Streaming, Self::Loud];
 
+    /// Every preset with its targets, in [`Self::ALL`] order.
+    #[must_use]
+    pub fn describe_all() -> [LoudnormPresetInfo; 3] {
+        Self::ALL.map(|preset| LoudnormPresetInfo {
+            preset,
+            targets: preset.targets(),
+        })
+    }
+
     /// The I/TP/LRA targets this preset stands for. See the type-level doc
     /// for where each number comes from.
     #[must_use]
@@ -172,6 +195,10 @@ mod tests {
         );
     }
 
+    /// `ALL` is hand-written so `strum`-free crates can iterate it; this pins
+    /// it to the real variant set two ways — `EnumIter` (order and count) and
+    /// an exhaustive `match` that stops compiling when a variant is added
+    /// without a row in `ALL` being considered.
     #[test]
     fn all_lists_every_variant_in_declaration_order() {
         use strum::IntoEnumIterator;
@@ -179,6 +206,38 @@ mod tests {
             LoudnormPreset::ALL.to_vec(),
             LoudnormPreset::iter().collect::<Vec<_>>()
         );
+        for preset in LoudnormPreset::iter() {
+            let listed = match preset {
+                LoudnormPreset::Broadcast | LoudnormPreset::Streaming | LoudnormPreset::Loud => {
+                    LoudnormPreset::ALL.contains(&preset)
+                }
+            };
+            assert!(listed, "{preset:?} missing from ALL");
+        }
+    }
+
+    /// The catalogue is `ALL` zipped with `targets()`, and its wire shape is
+    /// the field names verbatim with the preset in lowercase.
+    #[test]
+    fn describe_all_pairs_each_preset_with_its_own_targets() {
+        let rows = LoudnormPreset::describe_all();
+        assert_eq!(rows.len(), LoudnormPreset::ALL.len());
+        for (row, preset) in rows.iter().zip(LoudnormPreset::ALL) {
+            assert_eq!(row.preset, preset);
+            assert_eq!(row.targets, preset.targets());
+        }
+        let first = rows.first().copied().expect("three rows");
+        let json = serde_json::to_value(first).expect("serialize");
+        assert_eq!(json.get("preset"), Some(&"broadcast".into()));
+        let targets = json
+            .get("targets")
+            .and_then(serde_json::Value::as_object)
+            .expect("targets object");
+        assert_eq!(
+            targets.get("integrated_lufs"),
+            Some(&LoudnormPreset::Broadcast.targets().integrated_lufs.into())
+        );
+        assert_eq!(targets.len(), 3, "exactly three targets on the wire");
     }
 
     #[test]

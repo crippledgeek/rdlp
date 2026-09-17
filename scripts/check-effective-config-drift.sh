@@ -3,9 +3,11 @@
 # config structs, and their consumers, have not drifted from the Rust owners
 # of the defaults (#611).
 #
-# Two struct/interface pairs today: `EffectiveNetwork` (the nine
-# network/download defaults) and `EffectiveNormalize` (the preset-dependent
-# normalization defaults). Add a row to PAIRS for the next one.
+# Four struct/interface pairs today: `EffectiveNetwork` (the nine
+# network/download defaults), `EffectiveNormalize` (the preset-dependent
+# normalization defaults), and the preset catalogue `LoudnormPresetInfo` /
+# `LoudnormTargets` served to the preset picker. Add a row to PAIRS for the
+# next one.
 #
 # Two invariants:
 #
@@ -59,6 +61,8 @@ TS_FILE="crates/rdlp-desktop/src/types/index.ts"
 PAIRS=(
     "crates/rdlp-types/src/effective_network.rs:EffectiveNetwork"
     "crates/rdlp-types/src/effective_normalize.rs:EffectiveNormalize"
+    "crates/rdlp-types/src/loudnorm_preset.rs:LoudnormTargets"
+    "crates/rdlp-types/src/loudnorm_preset.rs:LoudnormPresetInfo"
 )
 
 SECTION_FILES=(

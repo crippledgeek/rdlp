@@ -48,6 +48,7 @@ export const queryKeys = {
     builtinNetworkDefaults: () => ["builtin-network-defaults"] as const,
     /** Keyed by preset: the I/TP/LRA values differ per preset (`null` = inherit). */
     effectiveNormalize: (preset: LoudnormPreset | null) => ["effective-normalize", preset] as const,
+    loudnormPresets: () => ["loudnorm-presets"] as const,
     thumbnail: {
         proxy: (url: string | null | undefined) => ["proxy-thumbnail", url] as const,
     },

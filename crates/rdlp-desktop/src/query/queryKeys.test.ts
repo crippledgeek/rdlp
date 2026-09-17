@@ -120,3 +120,9 @@ describe("queryKeys.effectiveNormalize", () => {
         expect(queryKeys.effectiveNormalize("loud")).not.toEqual(queryKeys.effectiveNormalize("broadcast"));
     });
 });
+
+describe("queryKeys.loudnormPresets", () => {
+    test("returns ['loudnorm-presets']", () => {
+        expect(queryKeys.loudnormPresets()).toEqual(["loudnorm-presets"]);
+    });
+});

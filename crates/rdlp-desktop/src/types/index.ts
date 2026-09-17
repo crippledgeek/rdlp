@@ -532,6 +532,30 @@ export interface EffectiveNormalize {
     boost_gain_db: number;
 }
 
+/**
+ * The three `loudnorm` targets of one preset. Mirrors
+ * `rdlp_types::LoudnormTargets` field-for-field (drift-gated by
+ * `scripts/check-effective-config-drift.sh`).
+ */
+export interface LoudnormTargets {
+    /** LUFS. */
+    integrated_lufs: number;
+    /** dBTP. */
+    true_peak_dbtp: number;
+    /** LU. */
+    range_lu: number;
+}
+
+/**
+ * One row of the preset catalogue served by `loudnorm_presets`. Mirrors
+ * `rdlp_types::LoudnormPresetInfo` (drift-gated). The preset picker renders
+ * its per-item `"(−N LUFS)"` labels from this, not from a typed copy (#611).
+ */
+export interface LoudnormPresetInfo {
+    preset: LoudnormPreset;
+    targets: LoudnormTargets;
+}
+
 // ========== Error Types ==========
 
 /**

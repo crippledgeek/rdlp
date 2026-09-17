@@ -15,7 +15,9 @@ use tauri_plugin_dialog::DialogExt;
 use crate::error::AppError;
 use crate::state::{AppSettings, AppState, SettingsValidationError};
 use rdlp_types::boundary::{Action, Subject};
-use rdlp_types::{EffectiveNetwork, EffectiveNormalize, LoudnormPreset, PostProcess};
+use rdlp_types::{
+    EffectiveNetwork, EffectiveNormalize, LoudnormPreset, LoudnormPresetInfo, PostProcess,
+};
 
 /// Retrieve the current application settings.
 ///
@@ -107,6 +109,22 @@ pub async fn effective_normalize(
         &state.client.config().postprocess,
         preset,
     ))
+}
+
+/// Every loudnorm preset with its I/TP/LRA targets, for the preset picker.
+///
+/// The picker's per-item labels (`"Broadcast (-23 LUFS)"`) read these values
+/// rather than carrying a copy; the list is `LoudnormPreset::describe_all()`,
+/// exhaustive by construction (#611). Compile-time constants — the frontend
+/// caches this indefinitely.
+///
+/// # Errors
+///
+/// This function does not currently return errors but returns
+/// `Result` for forward-compatible IPC signatures.
+#[tauri::command]
+pub async fn loudnorm_presets() -> Result<Vec<LoudnormPresetInfo>, AppError> {
+    Ok(LoudnormPreset::describe_all().to_vec())
 }
 
 /// Overlay `preset` on the base post-process config and resolve it.

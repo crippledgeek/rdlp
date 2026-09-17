@@ -8,7 +8,70 @@ use std::path::{Component, PathBuf};
 
 use log::{info, warn};
 use rdlp_types::{AudioFormat, BrowserType, ContainerFormat, LoudnormPreset, SubtitleFormat};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
+
+/// Deserialize a typed `Option<enum>` field of `settings.json` leniently: an
+/// unrecognised spelling costs THAT field only (it becomes `None` = inherit)
+/// and is logged with the field name and the rejected value, instead of
+/// failing the whole document.
+///
+/// Why: serde's derive rejects the entire file on one bad variant, and
+/// `parse_and_validate` then falls back to `Self::default()` — discarding
+/// `output_dir`, cookies, proxy and every other setting the user had made. A
+/// hand-edited `"default_remux": "avi3"` or a preset spelling from a newer
+/// build must not do that. `None` is the exact remedy the rest of this design
+/// already gives an invalid field (see `reset_invalid_field`).
+///
+/// One generic helper for every such field (`ContainerFormat`, `AudioFormat`,
+/// `SubtitleFormat`, `LoudnormPreset`, `BrowserType`) rather than a per-type
+/// copy: the per-field shims below only supply the field name, which serde
+/// does not pass to a `deserialize_with` function.
+///
+/// The rejected value is rendered as JSON (`serde_json::Value`'s `Display`),
+/// so control characters arrive escaped; these are enum spellings, not URLs,
+/// so no redaction applies.
+fn lenient_option<'de, D, T>(deserializer: D, field: &'static str) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    let Some(raw) = Option::<serde_json::Value>::deserialize(deserializer)? else {
+        return Ok(None);
+    };
+    match T::deserialize(raw.clone()) {
+        Ok(value) => Ok(Some(value)),
+        Err(e) => {
+            warn!("settings.json: ignoring {field} = {raw} ({e}); the field inherits its default");
+            Ok(None)
+        }
+    }
+}
+
+/// Per-field shims naming the field for [`lenient_option`]'s log line.
+macro_rules! lenient_field {
+    ($fn_name:ident, $field:literal, $ty:ty) => {
+        fn $fn_name<'de, D: Deserializer<'de>>(d: D) -> Result<Option<$ty>, D::Error> {
+            lenient_option::<D, $ty>(d, $field)
+        }
+    };
+}
+lenient_field!(lenient_default_remux, "default_remux", ContainerFormat);
+lenient_field!(
+    lenient_default_extract_audio,
+    "default_extract_audio",
+    AudioFormat
+);
+lenient_field!(
+    lenient_default_subtitle_format,
+    "default_subtitle_format",
+    SubtitleFormat
+);
+lenient_field!(lenient_loudnorm_preset, "loudnorm_preset", LoudnormPreset);
+lenient_field!(
+    lenient_cookies_from_browser,
+    "cookies_from_browser",
+    BrowserType
+);
 
 /// Application settings that persist between sessions.
 ///
@@ -24,10 +87,13 @@ pub struct AppSettings {
     /// Directory where downloaded files are saved.
     pub output_dir: PathBuf,
     /// Default container format for remuxing (e.g. Mp4, Mkv).
+    #[serde(default, deserialize_with = "lenient_default_remux")]
     pub default_remux: Option<ContainerFormat>,
     /// Default audio extraction format (e.g. Mp3, Opus).
+    #[serde(default, deserialize_with = "lenient_default_extract_audio")]
     pub default_extract_audio: Option<AudioFormat>,
     /// Default subtitle format (e.g. Srt, Vtt).
+    #[serde(default, deserialize_with = "lenient_default_subtitle_format")]
     pub default_subtitle_format: Option<SubtitleFormat>,
     /// Default subtitle language codes (e.g. `["en", "sv"]`).
     pub default_subtitle_langs: Vec<String>,
@@ -47,7 +113,7 @@ pub struct AppSettings {
     pub loudnorm: bool,
     /// Loudnorm preset. `None` = inherit the engine's resolved preset
     /// (`PostProcess::effective_normalize`); wire form is the lowercase name.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_loudnorm_preset")]
     pub loudnorm_preset: Option<LoudnormPreset>,
     /// Custom target integrated loudness in LUFS (overrides preset).
     #[serde(default)]
@@ -77,7 +143,7 @@ pub struct AppSettings {
     #[serde(default)]
     pub audio_gain_target: Option<f64>,
     /// Browser to extract cookies from for age-gated content.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "lenient_cookies_from_browser")]
     pub cookies_from_browser: Option<BrowserType>,
     /// Path to a Netscape-format cookies file.
     ///
@@ -1037,6 +1103,64 @@ mod tests {
 
     /// Settings JSON that predates the normalization fields (i.e. produced
     /// by an older version of the application) MUST deserialize without
+    /// An unrecognised spelling in ONE typed `Option<enum>` field must cost that
+    /// field only — never the whole file. Before the lenient deserializer, serde
+    /// rejected the entire document and `parse_and_validate` fell back to
+    /// `Self::default()`, silently discarding `output_dir`, cookies, proxy and
+    /// every other setting the user had made (#611 review).
+    #[test]
+    fn unknown_enum_spellings_cost_only_their_own_field() {
+        testing_logger::setup();
+        let json = r#"{
+            "output_dir": "/tmp/lenient-enum-fixture",
+            "default_remux": "avi3",
+            "default_extract_audio": "mp3",
+            "default_subtitle_format": null,
+            "default_subtitle_langs": ["sv"],
+            "embed_thumbnail": false,
+            "embed_metadata": true,
+            "verbose": false,
+            "default_search_provider": null,
+            "loudnorm_preset": "quiet"
+        }"#;
+
+        let settings =
+            AppSettings::parse_and_validate(json, std::path::Path::new("/tmp/settings.json"));
+
+        assert_eq!(
+            settings.output_dir,
+            PathBuf::from("/tmp/lenient-enum-fixture"),
+            "every OTHER field must survive"
+        );
+        assert_eq!(settings.default_subtitle_langs, vec!["sv"]);
+        assert!(settings.embed_metadata);
+        assert_eq!(settings.default_extract_audio, Some(AudioFormat::Mp3));
+        assert!(settings.default_remux.is_none(), "the bad value inherits");
+        assert!(settings.loudnorm_preset.is_none(), "the bad value inherits");
+
+        // One WARN per rejected field, naming the field AND the rejected value,
+        // so the user can find the typo. Filtered on this test's own values:
+        // the capture buffer is process-global (sibling tests log into it too).
+        testing_logger::validate(|captured| {
+            let warns: Vec<&str> = captured
+                .iter()
+                .filter(|l| l.level == log::Level::Warn)
+                .map(|l| l.body.as_str())
+                .collect();
+            // (rejected value, field the warn must name)
+            for (value, field) in [
+                ("\"avi3\"", "default_remux"),
+                ("\"quiet\"", "loudnorm_preset"),
+            ] {
+                let hits: Vec<&&str> = warns.iter().filter(|b| b.contains(value)).collect();
+                let [only] = hits.as_slice() else {
+                    panic!("exactly one warn for {field} ({value}); got {hits:?} in {warns:?}");
+                };
+                assert!(only.contains(field), "names the field {field}: {only}");
+            }
+        });
+    }
+
     /// error, with all normalization fields falling back to their defaults.
     #[test]
     fn test_load_legacy_settings_without_normalization_fields() {
